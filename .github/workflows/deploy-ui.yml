@@ -120,47 +120,65 @@ jobs:
             echo "OK — zone and Pages project share account ${CF_ACCOUNT_ID}"
           fi
 
-      - name: Ensure DNS CNAME (relay → <project>.pages.dev, proxied)
+      - name: Ensure DNS CNAME (relay → project's actual *.pages.dev, proxied)
         env:
           CF_API_TOKEN: ${{ secrets.CF_RELAY_API_KEY }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           api="https://api.cloudflare.com/client/v4"
           auth=( -H "Authorization: Bearer ${CF_API_TOKEN}" )
-          record_target="${PAGES_PROJECT}.pages.dev"
+
+          # The project name in our account is ${PAGES_PROJECT}, but the
+          # *.pages.dev hostname is allocated from a single global namespace
+          # and may have been suffixed (e.g. relay-ui-ani.pages.dev) when the
+          # bare name was already taken. Always source the real hostname
+          # from the Pages API, never assume it.
+          project_json=$(curl -fsS \
+            "${api}/accounts/${CF_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}" \
+            "${auth[@]}")
+          record_target=$(echo "$project_json" | jq -r '.result.subdomain // empty')
+          if [ -z "$record_target" ]; then
+            echo "Could not read .result.subdomain from Pages project response"; exit 1
+          fi
+          echo "Pages project ${PAGES_PROJECT} hostname: ${record_target}"
 
           zone_id=$(curl -fsS "${api}/zones?name=${ZONE_NAME}" "${auth[@]}" \
             | jq -r '.result[0].id // empty')
           [ -n "$zone_id" ] || { echo "Zone ${ZONE_NAME} not found"; exit 1; }
 
-          # Prefer any Pages-managed record (meta.managed_by_apps=true) that
-          # is already in place — Pages manages it for us. Only create our
-          # own record if there's nothing pointing at relay.averrow.com.
           records_json=$(curl -fsS \
             "${api}/zones/${zone_id}/dns_records?name=${CUSTOM_DOMAIN}" \
             "${auth[@]}")
           count=$(echo "$records_json" | jq -r '.result | length')
-          managed_exists=0
-          for i in $(seq 0 $((count - 1))); do
-            managed=$(echo "$records_json" | jq -r ".result[$i].meta.managed_by_apps // false")
-            if [ "$managed" = "true" ]; then managed_exists=1; fi
-          done
 
-          if [ "$count" -gt 0 ] && [ "$managed_exists" = "1" ]; then
-            echo "Pages-managed DNS already in place for ${CUSTOM_DOMAIN}; leaving it alone"
-            exit 0
-          fi
-          if [ "$count" -gt 0 ]; then
-            echo "An existing record is present and unmanaged; leaving it alone (heal step would have removed it)"
-            exit 0
-          fi
-
-          echo "Creating CNAME ${CUSTOM_DOMAIN} → ${record_target} (proxied)"
           payload=$(jq -n \
             --arg name "${CUSTOM_DOMAIN}" \
             --arg content "${record_target}" \
             '{type:"CNAME", name:$name, content:$content, proxied:true, ttl:1}')
-          curl -fsS -X POST "${api}/zones/${zone_id}/dns_records" \
+
+          if [ "$count" = "0" ]; then
+            echo "Creating CNAME ${CUSTOM_DOMAIN} → ${record_target}"
+            curl -fsS -X POST "${api}/zones/${zone_id}/dns_records" \
+              "${auth[@]}" -H "Content-Type: application/json" \
+              --data "${payload}" | jq '.success'
+            exit 0
+          fi
+
+          # If any existing record already points at the right hostname,
+          # leave it alone (covers both manual and Pages-managed records).
+          # Otherwise replace whatever's there with the correct target.
+          existing_id=$(echo "$records_json" | jq -r '.result[0].id')
+          existing_type=$(echo "$records_json" | jq -r '.result[0].type')
+          existing_content=$(echo "$records_json" | jq -r '.result[0].content')
+
+          if [ "$existing_type" = "CNAME" ] && [ "$existing_content" = "$record_target" ]; then
+            echo "CNAME ${CUSTOM_DOMAIN} → ${record_target} already in place"
+            exit 0
+          fi
+
+          echo "Replacing stale record (${existing_type} → ${existing_content}) with CNAME → ${record_target}"
+          curl -fsS -X PUT "${api}/zones/${zone_id}/dns_records/${existing_id}" \
             "${auth[@]}" -H "Content-Type: application/json" \
             --data "${payload}" | jq '.success'
 
