@@ -38,6 +38,43 @@ jobs:
         working-directory: packages/relay-worker
         run: pnpm typecheck
 
+      - name: Ensure DNS record (relay-api.averrow.com → proxied placeholder)
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_RELAY_API_KEY }}
+          ZONE_NAME: averrow.com
+          RECORD_NAME: relay-api.averrow.com
+          RECORD_TYPE: AAAA
+          RECORD_CONTENT: "100::"
+        run: |
+          set -euo pipefail
+          api="https://api.cloudflare.com/client/v4"
+          auth=( -H "Authorization: Bearer ${CF_API_TOKEN}" )
+
+          zone_id=$(curl -fsS "${api}/zones?name=${ZONE_NAME}" "${auth[@]}" \
+            | jq -r '.result[0].id // empty')
+          [ -n "$zone_id" ] || { echo "Zone ${ZONE_NAME} not found"; exit 1; }
+
+          existing_id=$(curl -fsS "${api}/zones/${zone_id}/dns_records?name=${RECORD_NAME}&type=${RECORD_TYPE}" "${auth[@]}" \
+            | jq -r '.result[0].id // empty')
+
+          payload=$(jq -n \
+            --arg type "${RECORD_TYPE}" \
+            --arg name "${RECORD_NAME}" \
+            --arg content "${RECORD_CONTENT}" \
+            '{type:$type, name:$name, content:$content, proxied:true, ttl:1}')
+
+          if [ -n "$existing_id" ]; then
+            echo "Updating existing ${RECORD_TYPE} record (id=${existing_id})"
+            curl -fsS -X PUT "${api}/zones/${zone_id}/dns_records/${existing_id}" \
+              "${auth[@]}" -H "Content-Type: application/json" \
+              --data "${payload}" | jq '.success'
+          else
+            echo "Creating ${RECORD_TYPE} record for ${RECORD_NAME}"
+            curl -fsS -X POST "${api}/zones/${zone_id}/dns_records" \
+              "${auth[@]}" -H "Content-Type: application/json" \
+              --data "${payload}" | jq '.success'
+          fi
+
       - name: Deploy to Cloudflare
         uses: cloudflare/wrangler-action@v3
         with:
