@@ -17,22 +17,26 @@ export function authRoutes() {
   const app = new Hono<{ Bindings: Env }>();
 
   // ---- Google OAuth ----
+  // Both routes use @hono/oauth-providers/google. The middleware uses
+  // `redirect_uri` for both initiating the flow and for the code-exchange
+  // step, and Google requires both to match the value registered in the
+  // Cloud Console (`/auth/google/callback`). Without an explicit
+  // redirect_uri the middleware defaults to the current request URL,
+  // which on /auth/google would be /auth/google (no callback path) —
+  // hence the redirect_uri_mismatch.
+  const googleOptions = (c: { req: { url: string }; env: Env }) => ({
+    client_id: c.env.GOOGLE_ID,
+    client_secret: c.env.GOOGLE_SECRET,
+    scope: ['openid', 'email', 'profile'],
+    redirect_uri: `${new URL(c.req.url).origin}/auth/google/callback`,
+  });
+
   app.use('/auth/google', async (c, next) => {
-    const middleware = googleAuth({
-      client_id: c.env.GOOGLE_ID,
-      client_secret: c.env.GOOGLE_SECRET,
-      scope: ['openid', 'email', 'profile'],
-    });
-    return middleware(c, next);
+    return googleAuth(googleOptions(c))(c, next);
   });
 
   app.use('/auth/google/callback', async (c, next) => {
-    const middleware = googleAuth({
-      client_id: c.env.GOOGLE_ID,
-      client_secret: c.env.GOOGLE_SECRET,
-      scope: ['openid', 'email', 'profile'],
-    });
-    return middleware(c, next);
+    return googleAuth(googleOptions(c))(c, next);
   });
 
   app.get('/auth/google/callback', async (c) => {
