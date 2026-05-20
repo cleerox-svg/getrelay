@@ -41,17 +41,30 @@ export function MessageBubble({ msg, mine, onLongPress }: Props) {
 
   const recalled = !!msg.deletedAt;
   const isPing = msg.type === 'ping';
-  const tint = mine ? 'var(--accent)' : 'var(--surface)';
+  const bg = isPing
+    ? 'transparent'
+    : recalled
+      ? 'transparent'
+      : mine
+        ? 'var(--accent)'
+        : 'var(--surface)';
+  const fg = mine && !recalled && !isPing ? '#FFFFFF' : 'var(--text)';
+  const metaColor = mine && !recalled && !isPing ? 'rgba(255, 255, 255, 0.85)' : 'var(--text-dim)';
 
   const shouldShake = isPing && !mine && !recalled;
   const bubbleClass = `fade-in${shouldShake ? ' ping-shake' : ''}`;
+
+  // iMessage tail-style asymmetric radius — flatter on the sender's side.
+  const radius = mine
+    ? '18px 18px 6px 18px'
+    : '18px 18px 18px 6px';
 
   return (
     <div
       style={{
         display: 'flex',
         justifyContent: mine ? 'flex-end' : 'flex-start',
-        padding: '4px 12px',
+        padding: '3px 12px',
       }}
     >
       <div
@@ -64,10 +77,10 @@ export function MessageBubble({ msg, mine, onLongPress }: Props) {
         onTouchCancel={cancelPress}
         style={{
           maxWidth: '78%',
-          background: isPing ? 'transparent' : recalled ? 'transparent' : tint,
-          color: mine && !recalled && !isPing ? '#0A0A0E' : 'var(--text)',
-          borderRadius: 'var(--radius-lg)',
-          padding: isPing ? 0 : '10px 14px',
+          background: bg,
+          color: fg,
+          borderRadius: isPing ? 0 : radius,
+          padding: isPing ? 0 : '8px 12px',
           opacity: msg.pending ? 0.7 : 1,
           border: recalled ? '1px dashed var(--text-dim)' : 'none',
           transform: pressed ? 'scale(0.98)' : 'none',
@@ -81,26 +94,28 @@ export function MessageBubble({ msg, mine, onLongPress }: Props) {
             Message recalled
           </em>
         ) : (
-          <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.body}</div>
+          <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.3 }}>
+            {msg.body}
+          </div>
         )}
         <div
           style={{
             display: 'flex',
-            justifyContent: 'space-between',
+            justifyContent: 'flex-end',
             alignItems: 'center',
-            gap: 8,
-            marginTop: 6,
+            gap: 6,
+            marginTop: 4,
             fontSize: 11,
-            color: mine && !recalled && !isPing ? 'rgba(10,10,14,0.7)' : 'var(--text-dim)',
+            color: metaColor,
             paddingLeft: isPing ? 8 : 0,
             paddingRight: isPing ? 8 : 0,
           }}
         >
           <span>{formatTime(msg.ts)}</span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            {msg.editedAt && !recalled ? <span>edited</span> : null}
-            {mine && !recalled ? <Receipt delivered={msg.delivered} read={msg.read} /> : null}
-          </span>
+          {msg.editedAt && !recalled ? <span>· edited</span> : null}
+          {mine && !recalled ? (
+            <Receipt delivered={msg.delivered} read={msg.read} onAccent={!isPing} />
+          ) : null}
         </div>
       </div>
     </div>

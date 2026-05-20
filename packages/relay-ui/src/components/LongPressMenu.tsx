@@ -40,7 +40,7 @@ export function LongPressMenu({ open, onClose, actions }: Props) {
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          background: 'var(--surface-2)',
+          background: 'var(--bg)',
           width: '100%',
           maxWidth: 460,
           borderTopLeftRadius: 20,
@@ -60,28 +60,30 @@ export function LongPressMenu({ open, onClose, actions }: Props) {
             style={{
               display: 'block',
               width: '100%',
-              textAlign: 'left',
+              textAlign: 'center',
               padding: '16px 12px',
               borderRadius: 12,
-              color: a.destructive ? 'var(--accent)' : 'var(--text)',
+              color: a.destructive ? 'var(--ping)' : 'var(--accent)',
               fontWeight: 500,
+              fontSize: 17,
               opacity: a.disabled ? 0.4 : 1,
             }}
           >
             {a.label}
           </button>
         ))}
-        <div style={{ height: 1, background: 'rgba(255,255,255,0.08)', margin: '8px 12px' }} />
+        <div style={{ height: 1, background: 'var(--separator)', margin: '8px 12px' }} />
         <button
           onClick={onClose}
           style={{
             display: 'block',
             width: '100%',
-            textAlign: 'left',
+            textAlign: 'center',
             padding: '16px 12px',
             borderRadius: 12,
-            color: 'var(--text-dim)',
-            fontWeight: 500,
+            color: 'var(--accent)',
+            fontWeight: 700,
+            fontSize: 17,
           }}
         >
           Cancel

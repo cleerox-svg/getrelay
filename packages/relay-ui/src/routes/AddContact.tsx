@@ -41,12 +41,18 @@ export function AddContact() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <Link to="/chats" className="btn-ghost" style={{ minWidth: 'auto', padding: 8 }}>
-          ←
+        <Link to="/chats" className="btn-ghost" style={{ minWidth: 'auto', padding: 6 }}>
+          ‹ Chats
         </Link>
-        <h1>Add contact</h1>
+        <h1 style={{ flex: 1, textAlign: 'center', fontSize: 17, fontWeight: 600 }}>
+          Add Contact
+        </h1>
+        <span style={{ width: 60 }} />
       </header>
-      <form onSubmit={submit} style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <form
+        onSubmit={submit}
+        style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}
+      >
         <label style={{ color: 'var(--text-dim)', fontSize: 13 }}>Enter their PIN</label>
         <input
           className="input"
@@ -56,6 +62,7 @@ export function AddContact() {
             textTransform: 'uppercase',
             fontSize: 22,
             textAlign: 'center',
+            padding: '14px',
           }}
           autoFocus
           inputMode="text"
@@ -68,10 +75,10 @@ export function AddContact() {
           onChange={(e) => setRaw(e.target.value.toUpperCase())}
         />
         {error ? (
-          <div style={{ color: 'var(--accent)', fontSize: 14, textAlign: 'center' }}>{error}</div>
+          <div style={{ color: 'var(--ping)', fontSize: 14, textAlign: 'center' }}>{error}</div>
         ) : null}
         <button className="btn-primary" type="submit" disabled={!valid || busy}>
-          {busy ? 'Finding…' : 'Find →'}
+          {busy ? 'Finding…' : 'Find'}
         </button>
       </form>
     </div>
