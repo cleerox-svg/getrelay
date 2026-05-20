@@ -17,7 +17,6 @@ export function Contacts() {
   const me = useStore((s) => s.me);
   const contacts = useStore((s) => s.contacts);
   const loadContacts = useStore((s) => s.loadContacts);
-  const openOneToOne = useStore((s) => s.openOneToOne);
   const nav = useNavigate();
   const [query, setQuery] = useState('');
 
@@ -92,11 +91,8 @@ export function Contacts() {
               <ListItem
                 key={c.id}
                 link
-                chevronIos={false}
-                onClick={async () => {
-                  const chatId = await openOneToOne(c.id);
-                  nav(`/chats/${encodeURIComponent(chatId)}`);
-                }}
+                chevronIos={true}
+                onClick={() => nav(`/contacts/${encodeURIComponent(c.id)}`)}
                 media={
                   <Avatar
                     src={c.avatarUrl}

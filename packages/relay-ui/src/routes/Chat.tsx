@@ -356,7 +356,13 @@ export function Chat() {
       <Navbar
         title={
           <Link
-            to={isGroup ? `/chats/${encodeURIComponent(chatId)}` : '#'}
+            to={
+              isGroup
+                ? `/chats/${encodeURIComponent(chatId)}`
+                : chat?.peer
+                  ? `/contacts/${encodeURIComponent(chat.peer.id)}`
+                  : '#'
+            }
             className="flex items-center gap-2"
             style={{ textDecoration: 'none' }}
           >
