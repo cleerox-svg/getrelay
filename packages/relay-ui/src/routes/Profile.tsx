@@ -1,8 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import {
+  Block,
+  BlockTitle,
+  Button,
+  List,
+  ListInput,
+  ListItem,
+  Navbar,
+  NavbarBackLink,
+  Page,
+  Segmented,
+  SegmentedButton,
+} from 'konsta/react';
 import { Avatar } from '../components/Avatar';
 import { PinDisplay } from '../components/PinDisplay';
-import { SegmentedControl } from '../components/SegmentedControl';
 import { ApiError, api } from '../lib/api';
 import { useStore } from '../lib/store';
 import { getTheme, setTheme, type ThemeMode } from '../lib/theme';
@@ -87,204 +99,134 @@ export function Profile() {
   if (!me) return null;
 
   return (
-    <div className="app-shell" style={{ background: 'var(--surface)' }}>
-      <header className="app-header" style={{ background: 'var(--surface)' }}>
-        <Link to="/chats" className="btn-ghost" style={{ minWidth: 'auto', padding: 6 }}>
-          ‹ Chats
-        </Link>
-        <h1 style={{ flex: 1, textAlign: 'center', fontSize: 17, fontWeight: 600 }}>Profile</h1>
-        <span style={{ width: 60 }} />
-      </header>
+    <Page>
+      <Navbar
+        title="Profile"
+        left={<NavbarBackLink text="Chats" onClick={() => nav('/chats')} />}
+      />
 
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 0 32px' }}>
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: 8,
-            padding: 24,
-          }}
+      <Block className="flex flex-col items-center gap-2 !mt-4">
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading}
+          aria-label="Change profile picture"
+          className="rounded-full disabled:opacity-50"
         >
+          <Avatar src={me.avatarUrl} name={me.displayName} size={96} />
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          onChange={onPickAvatar}
+          hidden
+        />
+        <div className="flex gap-4 mt-1">
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
-            aria-label="Change profile picture"
-            style={{
-              minHeight: 'auto',
-              minWidth: 'auto',
-              padding: 0,
-              background: 'transparent',
-              borderRadius: 999,
-              opacity: uploading ? 0.5 : 1,
-              position: 'relative',
-            }}
+            className="text-sm font-medium"
+            style={{ color: 'var(--accent)' }}
           >
-            <Avatar src={me.avatarUrl} name={me.displayName} size={96} />
+            {uploading ? 'Uploading…' : me.avatarUrl ? 'Change photo' : 'Add photo'}
           </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            onChange={onPickAvatar}
-            hidden
-          />
-          <div style={{ display: 'flex', gap: 16 }}>
+          {me.avatarUrl ? (
             <button
-              onClick={() => fileInputRef.current?.click()}
+              onClick={clearAvatar}
               disabled={uploading}
-              style={{
-                color: 'var(--accent)',
-                fontSize: 14,
-                fontWeight: 500,
-                minHeight: 'auto',
-                minWidth: 'auto',
-                padding: '4px 8px',
-              }}
+              className="text-sm font-medium"
+              style={{ color: 'var(--ping)' }}
             >
-              {uploading ? 'Uploading…' : me.avatarUrl ? 'Change photo' : 'Add photo'}
+              Remove
             </button>
-            {me.avatarUrl ? (
-              <button
-                onClick={clearAvatar}
-                disabled={uploading}
-                style={{
-                  color: 'var(--ping)',
-                  fontSize: 14,
-                  fontWeight: 500,
-                  minHeight: 'auto',
-                  minWidth: 'auto',
-                  padding: '4px 8px',
-                }}
-              >
-                Remove
-              </button>
-            ) : null}
-          </div>
-          {avatarError ? (
-            <div style={{ color: 'var(--ping)', fontSize: 12 }}>{avatarError}</div>
-          ) : null}
-          <div style={{ fontSize: 22, fontWeight: 600, marginTop: 8 }}>{me.displayName}</div>
-          <div style={{ color: 'var(--text-dim)', fontSize: 14 }}>{me.email}</div>
-          {me.isAdmin ? (
-            <div
-              style={{
-                fontSize: 12,
-                color: 'var(--accent)',
-                fontWeight: 600,
-                marginTop: 4,
-              }}
-            >
-              ★ Platform admin
-            </div>
           ) : null}
         </div>
+        {avatarError ? (
+          <div className="text-xs" style={{ color: 'var(--ping)' }}>
+            {avatarError}
+          </div>
+        ) : null}
+        <div className="text-2xl font-semibold mt-2">{me.displayName}</div>
+        <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
+          {me.email}
+        </div>
+        {me.isAdmin ? (
+          <div className="text-xs font-semibold mt-1" style={{ color: 'var(--accent)' }}>
+            ★ Platform admin
+          </div>
+        ) : null}
+      </Block>
 
-        <div className="section-header">PIN (Username)</div>
-        <div className="list-section">
-          <div
-            className="list-row"
-            style={{ display: 'flex', justifyContent: 'space-between' }}
-          >
-            <PinDisplay pin={me.pin} />
+      <BlockTitle>PIN (Username)</BlockTitle>
+      <List strongIos insetIos>
+        <ListItem
+          title={<PinDisplay pin={me.pin} />}
+          after={
             <button
-              className="btn-ghost"
               onClick={() => navigator.clipboard.writeText(me.pin).catch(() => undefined)}
-              style={{ minHeight: 'auto', minWidth: 'auto', padding: '4px 8px', fontSize: 15 }}
+              className="text-sm font-medium"
+              style={{ color: 'var(--accent)' }}
             >
               Copy
             </button>
-          </div>
-        </div>
-
-        <div className="section-header">Display</div>
-        <div className="list-section">
-          <div className="list-row" style={{ display: 'block', padding: '10px 16px' }}>
-            <div style={{ color: 'var(--text-dim)', fontSize: 12, marginBottom: 2 }}>
-              Display name
-            </div>
-            <input
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              maxLength={64}
-              style={{
-                width: '100%',
-                background: 'transparent',
-                border: 0,
-                outline: 'none',
-                fontSize: 17,
-                padding: 0,
-              }}
-            />
-          </div>
-          <div className="list-row" style={{ display: 'block', padding: '10px 16px' }}>
-            <div style={{ color: 'var(--text-dim)', fontSize: 12, marginBottom: 2 }}>Status</div>
-            <input
-              value={statusMessage}
-              onChange={(e) => setStatusMessage(e.target.value)}
-              maxLength={140}
-              placeholder="What's your status?"
-              style={{
-                width: '100%',
-                background: 'transparent',
-                border: 0,
-                outline: 'none',
-                fontSize: 17,
-                padding: 0,
-              }}
-            />
-          </div>
-        </div>
-
-        <div style={{ padding: 16 }}>
-          <button className="btn-primary" onClick={save} disabled={saving}>
-            {saved ? 'Saved' : saving ? 'Saving…' : 'Save'}
-          </button>
-        </div>
-
-        <div className="section-header">Appearance</div>
-        <SegmentedControl
-          value={themeMode}
-          options={[
-            { value: 'auto',  label: 'Auto' },
-            { value: 'light', label: 'Light' },
-            { value: 'dark',  label: 'Dark' },
-          ]}
-          onChange={(v) => {
-            const next = v as ThemeMode;
-            setThemeMode(next);
-            setTheme(next);
-          }}
+          }
         />
-        <div
-          style={{
-            color: 'var(--text-dim)',
-            fontSize: 12,
-            padding: '0 16px',
-            marginTop: -4,
-          }}
-        >
+      </List>
+
+      <BlockTitle>Display</BlockTitle>
+      <List strongIos insetIos>
+        <ListInput
+          label="Display name"
+          type="text"
+          value={displayName}
+          maxLength={64}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDisplayName(e.target.value)}
+        />
+        <ListInput
+          label="Status"
+          type="text"
+          placeholder="What's your status?"
+          value={statusMessage}
+          maxLength={140}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setStatusMessage(e.target.value)}
+        />
+      </List>
+      <Block>
+        <Button onClick={save} disabled={saving}>
+          {saved ? 'Saved' : saving ? 'Saving…' : 'Save'}
+        </Button>
+      </Block>
+
+      <BlockTitle>Appearance</BlockTitle>
+      <Block strong inset className="!py-3">
+        <Segmented strong>
+          {(['auto', 'light', 'dark'] as ThemeMode[]).map((m) => (
+            <SegmentedButton
+              key={m}
+              active={themeMode === m}
+              onClick={() => {
+                setThemeMode(m);
+                setTheme(m);
+              }}
+            >
+              {m === 'auto' ? 'Auto' : m === 'light' ? 'Light' : 'Dark'}
+            </SegmentedButton>
+          ))}
+        </Segmented>
+        <div className="text-xs mt-2" style={{ color: 'var(--text-dim)' }}>
           Auto follows your device's setting.
         </div>
+      </Block>
 
-        <div style={{ padding: '24px 16px' }}>
-          <button
-            onClick={doSignout}
-            style={{
-              width: '100%',
-              background: 'var(--bg)',
-              color: 'var(--ping)',
-              padding: '14px 20px',
-              borderRadius: 'var(--radius-md)',
-              fontWeight: 500,
-              fontSize: 17,
-              border: '1px solid var(--separator)',
-            }}
-          >
-            Sign out
-          </button>
-        </div>
-      </div>
-    </div>
+      <Block className="mt-6">
+        <Button
+          outline
+          onClick={doSignout}
+          className="!border-red-500 !text-red-500"
+        >
+          Sign out
+        </Button>
+      </Block>
+    </Page>
   );
 }

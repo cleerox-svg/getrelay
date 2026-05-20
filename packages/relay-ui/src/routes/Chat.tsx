@@ -1,8 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import {
+  Actions,
+  ActionsButton,
+  ActionsGroup,
+  Icon,
+  Message,
+  Messagebar,
+  Messages,
+  MessagesTitle,
+  Navbar,
+  NavbarBackLink,
+  Page,
+} from 'konsta/react';
 import { Avatar } from '../components/Avatar';
-import { LongPressMenu } from '../components/LongPressMenu';
-import { MessageBubble } from '../components/MessageBubble';
+import { PingChip } from '../components/PingChip';
+import { Receipt } from '../components/Receipt';
 import { TypingDots } from '../components/TypingDots';
 import { useStore } from '../lib/store';
 import type { UiMessage } from '../lib/types';
@@ -11,7 +24,6 @@ function dayKey(ts: number): string {
   const d = new Date(ts);
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 }
-
 function dayLabel(ts: number): string {
   const d = new Date(ts);
   const today = new Date();
@@ -21,10 +33,14 @@ function dayLabel(ts: number): string {
   if (dayKey(ts) === dayKey(yesterday.getTime())) return 'Yesterday';
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
+function formatTime(ts: number): string {
+  return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
 
 export function Chat() {
   const params = useParams();
   const chatId = decodeURIComponent(params.id ?? '');
+  const nav = useNavigate();
   const me = useStore((s) => s.me);
   const chat = useStore((s) => s.chats.find((c) => c.id === chatId));
   const chatState = useStore((s) => s.byChat[chatId]);
@@ -41,10 +57,9 @@ export function Chat() {
 
   const [input, setInput] = useState('');
   const [editing, setEditing] = useState<UiMessage | null>(null);
-  const [menuFor, setMenuFor] = useState<UiMessage | null>(null);
+  const [actionsFor, setActionsFor] = useState<UiMessage | null>(null);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sentTypingRef = useRef(false);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     ensureChatState(chatId);
@@ -53,11 +68,6 @@ export function Chat() {
   }, [chatId, ensureChatState, subscribeChat, unsubscribeChat]);
 
   const messages = chatState?.messages ?? [];
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages.length]);
 
   useEffect(() => {
     if (!me) return;
@@ -76,8 +86,7 @@ export function Chat() {
       .map(([uid]) => (uid === chat?.peer?.id ? chat.peer.displayName : 'Someone'));
   }, [chatState, me, chat]);
 
-  function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  function submit() {
     const text = input.trim();
     if (!text) return;
     if (editing) {
@@ -108,216 +117,162 @@ export function Chat() {
     }, 2500);
   }
 
+  // Build messages array with day separators inserted as <MessagesTitle>.
+  const rendered: React.ReactNode[] = [];
+  let lastDay = '';
+  for (const m of messages) {
+    const k = dayKey(m.ts);
+    if (k !== lastDay) {
+      rendered.push(<MessagesTitle key={`day-${k}`}>{dayLabel(m.ts)}</MessagesTitle>);
+      lastDay = k;
+    }
+    const mine = m.from === me?.id;
+    const recalled = !!m.deletedAt;
+    const isPing = m.type === 'ping';
+    rendered.push(
+      <Message
+        key={m.id}
+        type={mine ? 'sent' : 'received'}
+        text={recalled || isPing ? undefined : (m.body ?? '')}
+        footer={
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+            <span>{formatTime(m.ts)}</span>
+            {m.editedAt && !recalled ? <span>· edited</span> : null}
+            {mine && !recalled ? (
+              <Receipt delivered={m.delivered} read={m.read} onAccent />
+            ) : null}
+          </span>
+        }
+        onClick={() => {
+          if (mine && !recalled) setActionsFor(m);
+        }}
+      >
+        {recalled ? (
+          <em style={{ color: 'var(--text-dim)' }}>Message recalled</em>
+        ) : isPing ? (
+          <PingChip />
+        ) : null}
+      </Message>,
+    );
+  }
+
   return (
-    <div className="app-shell">
-      <header className="app-header" style={{ gap: 10 }}>
-        <Link
-          to="/chats"
-          className="icon-btn"
-          aria-label="Back"
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}
-        >
-          <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
-            <path
-              d="M15 6l-6 6 6 6"
-              stroke="currentColor"
-              strokeWidth="2"
-              fill="none"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+    <Page>
+      <Navbar
+        title={
+          <span className="flex items-center gap-2">
+            <Avatar
+              src={chat?.peer?.avatarUrl ?? null}
+              name={chat?.peer?.displayName ?? chat?.subject ?? 'Chat'}
+              size={28}
+              online={peerOnline}
             />
-          </svg>
-        </Link>
-        <Avatar
-          src={chat?.peer?.avatarUrl ?? null}
-          name={chat?.peer?.displayName ?? chat?.subject ?? 'Chat'}
-          size={32}
-          online={peerOnline}
-        />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              fontWeight: 600,
-              fontSize: 16,
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-            }}
-          >
-            {chat?.peer?.displayName ?? chat?.subject ?? 'Chat'}
-          </div>
-          <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>
-            {peerOnline ? 'online' : chat?.peer?.pin ?? ''}
-          </div>
-        </div>
-      </header>
+            <span className="flex flex-col leading-tight">
+              <span className="text-base font-semibold">
+                {chat?.peer?.displayName ?? chat?.subject ?? 'Chat'}
+              </span>
+              <span className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
+                {peerOnline ? 'online' : chat?.peer?.pin ?? ''}
+              </span>
+            </span>
+          </span>
+        }
+        left={<NavbarBackLink text="Chats" onClick={() => nav('/chats')} />}
+      />
 
-      <div
-        ref={scrollRef}
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          padding: '8px 0',
-          background: 'var(--bg)',
-          WebkitOverflowScrolling: 'touch',
-        }}
-      >
-        {(() => {
-          const out: React.ReactNode[] = [];
-          let lastDay = '';
-          for (const m of messages) {
-            const k = dayKey(m.ts);
-            if (k !== lastDay) {
-              out.push(
-                <div
-                  key={`day-${k}`}
-                  style={{
-                    textAlign: 'center',
-                    color: 'var(--text-dim)',
-                    fontSize: 12,
-                    fontWeight: 600,
-                    padding: '12px 0 6px',
-                  }}
-                >
-                  {dayLabel(m.ts)}
-                </div>,
-              );
-              lastDay = k;
-            }
-            out.push(
-              <MessageBubble
-                key={m.id}
-                msg={m}
-                mine={m.from === me?.id}
-                onLongPress={(target) => setMenuFor(target)}
-              />,
-            );
-          }
-          return out;
-        })()}
-        {typingNames.length > 0 ? <TypingDots name={typingNames[0]} /> : null}
-      </div>
+      <Messages>{rendered}</Messages>
+      {typingNames.length > 0 ? <TypingDots name={typingNames[0]} /> : null}
 
-      <form
-        onSubmit={onSubmit}
-        style={{
-          display: 'flex',
-          gap: 8,
-          padding: '10px 12px max(10px, env(safe-area-inset-bottom))',
-          borderTop: '1px solid var(--separator)',
-          background: 'var(--bg)',
-        }}
-      >
-        <input
-          className="input"
-          placeholder={editing ? 'Edit message' : 'Message'}
-          value={input}
-          onChange={(e) => onInputChange(e.target.value)}
-          maxLength={2000}
-          style={{ borderRadius: 999, background: 'var(--surface)' }}
-        />
-        <button
-          type="button"
-          onClick={() => sendPing(chatId)}
-          aria-label="Send PING"
-          style={{
-            background: 'var(--surface)',
-            color: 'var(--ping)',
-            borderRadius: 999,
-            width: 44,
-            height: 44,
-            minWidth: 44,
-            minHeight: 44,
-            fontWeight: 700,
-            fontSize: 20,
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 0,
-            flex: '0 0 auto',
-          }}
-        >
-          ⚡
-        </button>
-        <button
-          type="submit"
-          aria-label="Send"
-          style={{
-            background: 'var(--accent)',
-            color: '#FFFFFF',
-            borderRadius: 999,
-            width: 44,
-            height: 44,
-            minWidth: 44,
-            minHeight: 44,
-            fontWeight: 700,
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 0,
-            flex: '0 0 auto',
-            opacity: input.trim() ? 1 : 0.5,
-          }}
-          disabled={!input.trim()}
-        >
-          ↑
-        </button>
-      </form>
+      <Messagebar
+        placeholder={editing ? 'Edit message' : 'Message'}
+        value={input}
+        onInput={(e: React.FormEvent<HTMLTextAreaElement>) =>
+          onInputChange((e.target as HTMLTextAreaElement).value)
+        }
+        right={
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => sendPing(chatId)}
+              aria-label="Send PING"
+              className="px-2 text-xl"
+              style={{ color: 'var(--ping)' }}
+            >
+              ⚡
+            </button>
+            <button
+              type="button"
+              onClick={submit}
+              aria-label="Send"
+              disabled={!input.trim()}
+              className="px-3 font-semibold disabled:opacity-40"
+              style={{ color: 'var(--accent)' }}
+            >
+              Send
+            </button>
+          </div>
+        }
+      />
 
       {editing ? (
         <div
-          style={{
-            padding: 8,
-            textAlign: 'center',
-            color: 'var(--text-dim)',
-            fontSize: 12,
-            borderTop: '1px solid var(--separator)',
-          }}
+          className="px-4 py-2 text-center text-xs"
+          style={{ color: 'var(--text-dim)' }}
         >
-          Editing — press send to save.{' '}
+          Editing — Send saves.{' '}
           <button
             onClick={() => {
               setEditing(null);
               setInput('');
             }}
-            style={{ color: 'var(--accent)', minWidth: 'auto', minHeight: 'auto' }}
+            style={{ color: 'var(--accent)' }}
           >
             cancel
           </button>
         </div>
       ) : null}
 
-      <LongPressMenu
-        open={!!menuFor}
-        onClose={() => setMenuFor(null)}
-        actions={
-          menuFor
-            ? [
-                {
-                  label: 'Copy text',
-                  onClick: () => {
-                    if (menuFor.body) navigator.clipboard.writeText(menuFor.body).catch(() => undefined);
-                  },
-                  disabled: !menuFor.body,
-                },
-                {
-                  label: 'Edit',
-                  onClick: () => {
-                    setEditing(menuFor);
-                    setInput(menuFor.body ?? '');
-                  },
-                  disabled: menuFor.type !== 'text' || !!menuFor.deletedAt,
-                },
-                {
-                  label: 'Recall',
-                  destructive: true,
-                  onClick: () => recall(menuFor.id),
-                  disabled: !!menuFor.deletedAt,
-                },
-              ]
-            : []
-        }
-      />
-    </div>
+      <Actions opened={!!actionsFor} onBackdropClick={() => setActionsFor(null)}>
+        <ActionsGroup>
+          <ActionsButton
+            disabled={!actionsFor?.body}
+            onClick={() => {
+              if (actionsFor?.body)
+                navigator.clipboard.writeText(actionsFor.body).catch(() => undefined);
+              setActionsFor(null);
+            }}
+          >
+            Copy text
+          </ActionsButton>
+          <ActionsButton
+            disabled={actionsFor?.type !== 'text' || !!actionsFor?.deletedAt}
+            onClick={() => {
+              if (actionsFor) {
+                setEditing(actionsFor);
+                setInput(actionsFor.body ?? '');
+              }
+              setActionsFor(null);
+            }}
+          >
+            Edit
+          </ActionsButton>
+          <ActionsButton
+            className="!text-red-500"
+            disabled={!!actionsFor?.deletedAt}
+            onClick={() => {
+              if (actionsFor) recall(actionsFor.id);
+              setActionsFor(null);
+            }}
+          >
+            Recall
+          </ActionsButton>
+        </ActionsGroup>
+        <ActionsGroup>
+          <ActionsButton onClick={() => setActionsFor(null)} bold>
+            Cancel
+          </ActionsButton>
+        </ActionsGroup>
+      </Actions>
+    </Page>
   );
 }
