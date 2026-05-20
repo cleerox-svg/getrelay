@@ -201,7 +201,8 @@ export function Chat() {
           if (mine && !recalled) setActionsFor(m);
         }}
         style={{
-          alignSelf: 'stretch',
+          alignSelf: 'flex-start',
+          maxWidth: '85%',
           background: bg,
           color: fg,
           borderRadius: 16,
