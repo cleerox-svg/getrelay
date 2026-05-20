@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Dialog, DialogButton } from 'konsta/react';
+import { getInstallState } from '../lib/install';
 import {
   currentPushState,
   enablePush,
@@ -11,9 +12,30 @@ const DISMISS_KEY = 'relay.push.dismissed_at';
 const NEVER_KEY = 'relay.push.never';
 const SNOOZE_MS = 7 * 24 * 60 * 60 * 1000;
 
+const INSTALL_DISMISS_KEY = 'relay.install.dismissed_at';
+const INSTALL_NEVER_KEY = 'relay.install.never';
+
+function installPromptStillPending(): boolean {
+  const state = getInstallState();
+  if (state === 'installed' || state === 'unsupported') return false;
+  try {
+    if (localStorage.getItem(INSTALL_NEVER_KEY) === '1') return false;
+    const last = Number(localStorage.getItem(INSTALL_DISMISS_KEY) ?? 0);
+    // Treat as "actively showing" if dismissed less than 5 minutes ago
+    // — gives the user time to act on the install dialog without us
+    // stacking another prompt behind it.
+    if (Number.isFinite(last) && Date.now() - last < 5 * 60 * 1000) return true;
+    if (last === 0) return true; // never dismissed yet → install will show
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
 function shouldShow(state: PushState): boolean {
   if (state !== 'unsubscribed') return false;
   if (typeof Notification === 'undefined' || Notification.permission !== 'default') return false;
+  if (installPromptStillPending()) return false;
   try {
     if (localStorage.getItem(NEVER_KEY) === '1') return false;
     const lastRaw = localStorage.getItem(DISMISS_KEY);

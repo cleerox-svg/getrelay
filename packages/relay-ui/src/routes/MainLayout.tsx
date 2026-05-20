@@ -1,5 +1,6 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Tabbar, TabbarLink } from 'konsta/react';
+import { InstallPrompt } from '../components/InstallPrompt';
 import { PushPrompt } from '../components/PushPrompt';
 import { useStore } from '../lib/store';
 
@@ -19,6 +20,7 @@ export function MainLayout() {
   return (
     <>
       <Outlet />
+      <InstallPrompt />
       <PushPrompt />
       <Tabbar labels icons className="left-0 bottom-0 fixed">
         {TABS.map((t) => {
