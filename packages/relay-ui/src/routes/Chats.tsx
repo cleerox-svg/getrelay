@@ -3,16 +3,15 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   Block,
   Icon,
-  Link as KLink,
   List,
   ListItem,
   Navbar,
-  NavbarBackLink,
   Page,
   Segmented,
   SegmentedButton,
 } from 'konsta/react';
 import { Avatar } from '../components/Avatar';
+import { BrandTitle } from '../components/BrandTitle';
 import { useStore } from '../lib/store';
 
 function formatRelative(ts: number): string {
@@ -40,7 +39,7 @@ export function Chats() {
   return (
     <Page>
       <Navbar
-        title="Chats"
+        title={<BrandTitle />}
         left={
           <Link to="/profile" className="px-3">
             <Avatar src={me?.avatarUrl ?? null} name={me?.displayName ?? me?.email ?? 'Me'} size={30} />
@@ -62,9 +61,9 @@ export function Chats() {
             />
           </Link>
         }
-        large
-        transparent
       />
+
+      <h1 className="text-[34px] font-bold tracking-tight px-4 pt-3 pb-1">Chats</h1>
 
       <Block strong inset className="!mt-2">
         <Segmented strong>
