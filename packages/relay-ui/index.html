@@ -35,6 +35,17 @@
       rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600&display=swap"
     />
+    <script>
+      // Apply persisted theme override before paint so we don't flash the
+      // OS-default colors. Mirrors src/lib/theme.ts.
+      (function () {
+        try {
+          var t = localStorage.getItem('relay.theme');
+          if (t === 'light' || t === 'dark')
+            document.documentElement.setAttribute('data-theme', t);
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

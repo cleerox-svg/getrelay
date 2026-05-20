@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Avatar } from '../components/Avatar';
 import { PinDisplay } from '../components/PinDisplay';
+import { SegmentedControl } from '../components/SegmentedControl';
 import { ApiError, api } from '../lib/api';
 import { useStore } from '../lib/store';
+import { getTheme, setTheme, type ThemeMode } from '../lib/theme';
 
 export function Profile() {
   const me = useStore((s) => s.me);
@@ -15,8 +17,13 @@ export function Profile() {
   const [saved, setSaved] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [themeMode, setThemeMode] = useState<ThemeMode>('auto');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const nav = useNavigate();
+
+  useEffect(() => {
+    setThemeMode(getTheme());
+  }, []);
 
   useEffect(() => {
     setDisplayName(me?.displayName ?? '');
@@ -233,6 +240,31 @@ export function Profile() {
           <button className="btn-primary" onClick={save} disabled={saving}>
             {saved ? 'Saved' : saving ? 'Saving…' : 'Save'}
           </button>
+        </div>
+
+        <div className="section-header">Appearance</div>
+        <SegmentedControl
+          value={themeMode}
+          options={[
+            { value: 'auto',  label: 'Auto' },
+            { value: 'light', label: 'Light' },
+            { value: 'dark',  label: 'Dark' },
+          ]}
+          onChange={(v) => {
+            const next = v as ThemeMode;
+            setThemeMode(next);
+            setTheme(next);
+          }}
+        />
+        <div
+          style={{
+            color: 'var(--text-dim)',
+            fontSize: 12,
+            padding: '0 16px',
+            marginTop: -4,
+          }}
+        >
+          Auto follows your device's setting.
         </div>
 
         <div style={{ padding: '24px 16px' }}>
