@@ -5,6 +5,7 @@ import { wireWsToStore } from './lib/store';
 import { AddContact } from './routes/AddContact';
 import { Chat } from './routes/Chat';
 import { Chats } from './routes/Chats';
+import { ContactProfile } from './routes/ContactProfile';
 import { Contacts } from './routes/Contacts';
 import { MainLayout } from './routes/MainLayout';
 import { NewGroup } from './routes/NewGroup';
@@ -66,6 +67,7 @@ export function App() {
           <Route element={<RequireAuth />}>
             <Route path="/onboarding" element={<Onboarding />} />
             <Route path="/chats/:id" element={<Chat />} />
+            <Route path="/contacts/:id" element={<ContactProfile />} />
             <Route path="/add-contact" element={<AddContact />} />
             <Route path="/new-group" element={<NewGroup />} />
             <Route path="/profile" element={<Profile />} />
