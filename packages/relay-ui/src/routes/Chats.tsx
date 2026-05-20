@@ -1,6 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
+  Actions,
+  ActionsButton,
+  ActionsGroup,
   Block,
   Icon,
   List,
@@ -14,6 +17,7 @@ import { Avatar } from '../components/Avatar';
 import { BrandTitle } from '../components/BrandTitle';
 import { GroupAvatar } from '../components/GroupAvatar';
 import { useStore } from '../lib/store';
+import type { Chat } from '../lib/types';
 
 function formatRelative(ts: number): string {
   const d = new Date(ts);
@@ -30,8 +34,35 @@ export function Chats() {
   const chats = useStore((s) => s.chats);
   const presence = useStore((s) => s.presence);
   const loadChats = useStore((s) => s.loadChats);
+  const deleteChat = useStore((s) => s.deleteChat);
   const nav = useNavigate();
   const [section, setSection] = useState<'messages' | 'groups'>('messages');
+  const [actionsFor, setActionsFor] = useState<Chat | null>(null);
+  const pressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressFiredRef = useRef(false);
+
+  function onPressStart(c: Chat) {
+    longPressFiredRef.current = false;
+    if (pressTimerRef.current) clearTimeout(pressTimerRef.current);
+    pressTimerRef.current = setTimeout(() => {
+      longPressFiredRef.current = true;
+      setActionsFor(c);
+    }, 450);
+  }
+  function onPressEnd() {
+    if (pressTimerRef.current) {
+      clearTimeout(pressTimerRef.current);
+      pressTimerRef.current = null;
+    }
+  }
+  function onPressClick(c: Chat) {
+    // Long-press fired the menu — don't also navigate into the chat.
+    if (longPressFiredRef.current) {
+      longPressFiredRef.current = false;
+      return;
+    }
+    nav(`/chats/${encodeURIComponent(c.id)}`);
+  }
 
   useEffect(() => {
     loadChats();
@@ -122,7 +153,13 @@ export function Chats() {
                 key={c.id}
                 link
                 chevronIos={false}
-                onClick={() => nav(`/chats/${encodeURIComponent(c.id)}`)}
+                onClick={() => onPressClick(c)}
+                onMouseDown={() => onPressStart(c)}
+                onMouseUp={onPressEnd}
+                onMouseLeave={onPressEnd}
+                onTouchStart={() => onPressStart(c)}
+                onTouchEnd={onPressEnd}
+                onTouchCancel={onPressEnd}
                 media={
                   isGroup ? (
                     <GroupAvatar subject={c.subject ?? 'Group'} size={44} />
@@ -158,6 +195,25 @@ export function Chats() {
           </List>
         );
       })()}
+      <Actions opened={!!actionsFor} onBackdropClick={() => setActionsFor(null)}>
+        <ActionsGroup>
+          <ActionsButton
+            className="!text-red-500"
+            onClick={() => {
+              if (actionsFor)
+                deleteChat(actionsFor.id).catch(() => undefined);
+              setActionsFor(null);
+            }}
+          >
+            Delete chat
+          </ActionsButton>
+        </ActionsGroup>
+        <ActionsGroup>
+          <ActionsButton bold onClick={() => setActionsFor(null)}>
+            Cancel
+          </ActionsButton>
+        </ActionsGroup>
+      </Actions>
     </Page>
   );
 }
