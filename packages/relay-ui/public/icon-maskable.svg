@@ -1,6 +1,22 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" fill="#0A0A0E"/>
-  <!-- Maskable safe zone: 80% center (102.4..409.6). Glyph sized within it. -->
-  <path d="M200 176h96a72 72 0 0 1 0 144h-40l52 52h-56l-52-52v-28h88a24 24 0 0 0 0-48h-56v128h-32z"
-        fill="#FF5C2A"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#15172A"/>
+      <stop offset="1" stop-color="#080912"/>
+    </linearGradient>
+    <linearGradient id="a" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#E84C46"/>
+      <stop offset="1" stop-color="#A11A1A"/>
+    </linearGradient>
+  </defs>
+  <!-- Fill entire canvas (maskable: the platform crops it to a circle/squircle).
+       Keep the foreground inside the 80% safe zone (102..410). -->
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <g fill="url(#a)">
+    <polygon points="240,160 134,360 174,360 256,210"/>
+    <polygon points="272,160 378,360 338,360 256,210"/>
+    <polygon points="248,160 208,210 304,210"/>
+  </g>
+  <!-- Small BBM-blue dot inside safe zone, bottom-right corner -->
+  <circle cx="370" cy="370" r="18" fill="#0A84FF"/>
 </svg>

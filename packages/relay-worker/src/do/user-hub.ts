@@ -6,6 +6,7 @@ import {
   type NotifyKind,
   type OutboundKind,
 } from '../lib/outbound';
+import { pushToUser } from '../push';
 import { RateLimiter } from '../lib/rate-limit';
 import {
   type ClientMsg,
@@ -185,6 +186,13 @@ export class UserHub implements DurableObject {
       const persistKind: OutboundKind | null = outboundKindFor(kind);
       if (persistKind === null) return; // ephemeral — drop silently
       await insertOutboundEvent(this.env, userId, persistKind, payload);
+      // Best-effort Web Push only for message-bearing kinds; presence /
+      // read / delivered would just spam the notification tray.
+      if (kind === 'message_preview' || kind === 'ping') {
+        await pushToUser(this.env, userId, buildPushPayload(kind, payload)).catch(
+          () => undefined,
+        );
+      }
       return;
     }
 
@@ -385,6 +393,24 @@ export class UserHub implements DurableObject {
   private sendError(ws: WebSocket, code: ErrorCode): void {
     this.safeSend(ws, { t: 'error', code });
   }
+}
+
+function buildPushPayload(kind: 'message_preview' | 'ping', payload: unknown) {
+  const ev = payload as { chatId?: string; from?: string; body?: string | null };
+  if (kind === 'ping') {
+    return {
+      title: 'PING!!',
+      body: 'You got a ping.',
+      chatId: ev.chatId ?? '',
+      tag: ev.chatId ?? 'ping',
+    };
+  }
+  return {
+    title: 'New message',
+    body: (ev.body ?? '').slice(0, 140) || 'New message',
+    chatId: ev.chatId ?? '',
+    tag: ev.chatId ?? 'message',
+  };
 }
 
 async function readErrorCode(res: Response): Promise<ErrorCode> {

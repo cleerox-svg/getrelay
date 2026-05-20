@@ -8,3 +8,11 @@ JWT_SECRET=replace-me-with-32-bytes-of-random-base64
 
 # Comma-separated emails that get is_admin=1 promoted at sign-in.
 ADMIN_EMAILS=cleerox@gmail.com
+
+# Web Push (VAPID). Generate with:
+#   node scripts/gen-vapid.mjs
+# Then set these for local dev; for prod they are GitHub secrets that the
+# deploy workflow pushes as Wrangler secrets.
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_KEY=
+VAPID_SUBJECT=mailto:you@example.com

@@ -1,5 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" fill="#0A0A0E"/>
-  <path d="M176 144h112a80 80 0 0 1 0 160h-48l64 64h-64l-64-64v-32h96a32 32 0 0 0 0-64h-64v160h-32z"
-        fill="#FF5C2A"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#15172A"/>
+      <stop offset="1" stop-color="#080912"/>
+    </linearGradient>
+    <linearGradient id="a" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#E84C46"/>
+      <stop offset="1" stop-color="#A11A1A"/>
+    </linearGradient>
+  </defs>
+  <!-- BBM hint: blue chat bubble tail in bottom-right -->
+  <path d="M376 392 h66 a32 32 0 0 1 32 32 v54 a32 32 0 0 1-32 32 h-22 l-26 26 v-26 h-18 a32 32 0 0 1-32-32 v-54 a32 32 0 0 1 32-32 z"
+        fill="#0A84FF"/>
+
+  <!-- Averrow squircle -->
+  <rect x="16" y="16" width="448" height="448" rx="100" fill="url(#bg)"/>
+
+  <!-- A mark -->
+  <g fill="url(#a)">
+    <polygon points="232,96 96,384 144,384 248,176"/>
+    <polygon points="248,96 416,384 368,384 232,176"/>
+    <polygon points="240,96 192,176 288,176"/>
+  </g>
 </svg>

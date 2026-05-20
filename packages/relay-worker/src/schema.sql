@@ -89,3 +89,12 @@ CREATE TABLE IF NOT EXISTS outbound_events (
   consumed INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_outbound_user_pending ON outbound_events(user_id, consumed, created_at);
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  endpoint TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);

@@ -1,5 +1,28 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#0A0A0E"/>
-  <path d="M22 18h14a10 10 0 0 1 0 20h-6l8 8h-8l-8-8v-4h12a4 4 0 0 0 0-8H28v20h-6z"
-        fill="#FF5C2A"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#15172A"/>
+      <stop offset="1" stop-color="#080912"/>
+    </linearGradient>
+    <linearGradient id="a" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#E84C46"/>
+      <stop offset="1" stop-color="#A11A1A"/>
+    </linearGradient>
+  </defs>
+  <!-- Subtle BBM chat-bubble hint tucked behind, bottom-right -->
+  <path d="M48 50 h8 a4 4 0 0 1 4 4 v6 a4 4 0 0 1-4 4 h-2 l-3 3 v-3 h-3 a4 4 0 0 1-4-4 v-6 a4 4 0 0 1 4-4 z"
+        fill="#0A84FF"/>
+
+  <!-- Averrow squircle -->
+  <rect x="2" y="2" width="56" height="56" rx="13" fill="url(#bg)"/>
+
+  <!-- Averrow "A" mark with the upward arrow apex -->
+  <g fill="url(#a)">
+    <!-- Left leg -->
+    <polygon points="29,12 12,48 18,48 31,22"/>
+    <!-- Right leg -->
+    <polygon points="31,12 48,48 42,48 29,22"/>
+    <!-- Apex (small upward arrow / chevron) -->
+    <polygon points="30,12 24,22 36,22"/>
+  </g>
 </svg>
