@@ -139,13 +139,12 @@ async function deriveEcdhBits(
     false,
     [],
   );
-  // Cloudflare workers-types uses `$public` instead of the DOM spec's
-  // `public` for the ECDH derive algorithm.
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'ECDH', $public: remote } as unknown as { name: string; public: CryptoKey },
-    privateKey,
-    256,
-  );
+  // The workers-types declaration calls this `$public`, but the workerd
+  // runtime expects the W3C-standard `public` field. Use the runtime name
+  // and cast through `any` to silence the stale type.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ecdhAlg: any = { name: 'ECDH', public: remote };
+  const bits = await crypto.subtle.deriveBits(ecdhAlg, privateKey, 256);
   return new Uint8Array(bits);
 }
 
