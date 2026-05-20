@@ -1,5 +1,6 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Tabbar, TabbarLink } from 'konsta/react';
+import { PushPrompt } from '../components/PushPrompt';
 import { useStore } from '../lib/store';
 
 const TABS = [
@@ -18,6 +19,7 @@ export function MainLayout() {
   return (
     <>
       <Outlet />
+      <PushPrompt />
       <Tabbar labels icons className="left-0 bottom-0 fixed">
         {TABS.map((t) => {
           const Icon = t.icon;
