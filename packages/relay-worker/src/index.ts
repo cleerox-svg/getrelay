@@ -6,6 +6,7 @@ import { avatarsRoutes } from './avatars';
 import { meRoutes } from './me';
 import { contactsRoutes } from './contacts';
 import { chatsRoutes } from './chats';
+import { messagesRoutes } from './messages';
 
 export { ChatRoom } from './do/chat-room';
 export { UserHub } from './do/user-hub';
@@ -41,6 +42,7 @@ app.route('/', meRoutes());
 app.route('/', avatarsRoutes());
 app.route('/', contactsRoutes());
 app.route('/', chatsRoutes());
+app.route('/', messagesRoutes());
 
 // WebSocket upgrade — authenticates via cookie, forwards to the user's
 // UserHub DO with the user id/jti in headers.

@@ -27,6 +27,7 @@ interface AppState {
   openOneToOne: (contactId: string) => Promise<string>;
 
   ensureChatState: (chatId: string) => void;
+  loadChatHistory: (chatId: string) => Promise<void>;
   subscribeChat: (chatId: string) => void;
   unsubscribeChat: (chatId: string) => void;
 
@@ -114,6 +115,38 @@ export const useStore = create<AppState>((set, get) => ({
     set((s) => {
       ensureChat(s, chatId);
       return { byChat: { ...s.byChat } };
+    });
+  },
+
+  loadChatHistory: async (chatId) => {
+    const { messages } = await api.listChatMessages(chatId, { limit: 100 });
+    set((s) => {
+      const chat = ensureChat(s, chatId);
+      // Merge with any messages already in-memory (e.g. just-sent via WS)
+      // so we don't blow away local-only optimistic rows.
+      const merged: UiMessage[] = chat.messages.slice();
+      for (const m of messages) {
+        const ui: UiMessage = {
+          id: m.id,
+          chatId: m.chatId,
+          from: m.from,
+          sequence: m.sequence,
+          type: m.type,
+          body: m.body,
+          ts: m.ts,
+          editedAt: m.editedAt,
+          deletedAt: m.deletedAt,
+          delivered: m.delivered,
+          read: m.read,
+        };
+        const idx = merged.findIndex((x) => x.id === m.id);
+        if (idx >= 0) merged[idx] = { ...merged[idx], ...ui };
+        else merged.push(ui);
+      }
+      merged.sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0) || a.ts - b.ts);
+      chat.messages = merged;
+      chat.loaded = true;
+      return { byChat: { ...s.byChat, [chatId]: { ...chat } } };
     });
   },
 

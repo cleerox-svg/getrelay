@@ -77,6 +77,29 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ contactId }),
     }),
+  listChatMessages: (chatId: string, opts?: { before?: number; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (opts?.before != null) qs.set('before', String(opts.before));
+    if (opts?.limit != null) qs.set('limit', String(opts.limit));
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request<{ messages: HistoryMessage[]; hasMore: boolean }>(
+      `/chats/${encodeURIComponent(chatId)}/messages${suffix}`,
+    );
+  },
 };
+
+export interface HistoryMessage {
+  id: string;
+  chatId: string;
+  from: string;
+  sequence: number;
+  type: string;
+  body: string | null;
+  ts: number;
+  editedAt: number | null;
+  deletedAt: number | null;
+  delivered: boolean;
+  read: boolean;
+}
 
 export const GOOGLE_SIGNIN_URL = `${API_BASE}/auth/google`;
