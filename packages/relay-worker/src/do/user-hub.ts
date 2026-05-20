@@ -204,9 +204,8 @@ export class UserHub implements DurableObject {
     // device is currently focused so it isn't annoying for the user
     // actively reading the chat.
     if (kind === 'message_preview' || kind === 'ping') {
-      await pushToUser(this.env, userId, buildPushPayload(kind, payload)).catch(
-        () => undefined,
-      );
+      const pushPayload = await buildPushPayload(this.env, kind, payload);
+      await pushToUser(this.env, userId, pushPayload).catch(() => undefined);
     }
   }
 
@@ -402,21 +401,66 @@ export class UserHub implements DurableObject {
   }
 }
 
-function buildPushPayload(kind: 'message_preview' | 'ping', payload: unknown) {
-  const ev = payload as { chatId?: string; from?: string; body?: string | null };
+// Resolve the sender's display name and the chat type/subject so the
+// notification title is meaningful ("Bradey" or the group name) and the
+// body conveys who sent what.
+async function buildPushPayload(
+  env: Env,
+  kind: 'message_preview' | 'ping',
+  payload: unknown,
+) {
+  const ev = payload as {
+    chatId?: string;
+    from?: string;
+    body?: string | null;
+    mediaKey?: string | null;
+  };
+  const fromId = ev.from ?? '';
+  const chatId = ev.chatId ?? '';
+
+  const [sender, chat] = await Promise.all([
+    fromId
+      ? env.DB.prepare(`SELECT display_name FROM users WHERE id = ?`)
+          .bind(fromId)
+          .first<{ display_name: string }>()
+      : Promise.resolve(null),
+    chatId
+      ? env.DB.prepare(`SELECT type, subject FROM chats WHERE id = ?`)
+          .bind(chatId)
+          .first<{ type: '1to1' | 'group'; subject: string | null }>()
+      : Promise.resolve(null),
+  ]);
+
+  const senderName = sender?.display_name ?? 'Someone';
+  const isGroup = chat?.type === 'group';
+  const groupName = chat?.subject ?? 'Group';
+  const tag = chatId || (kind === 'ping' ? 'ping' : 'message');
+
   if (kind === 'ping') {
     return {
-      title: 'PING!!',
-      body: 'You got a ping.',
-      chatId: ev.chatId ?? '',
-      tag: ev.chatId ?? 'ping',
+      title: isGroup ? groupName : senderName,
+      body: isGroup ? `${senderName} sent a PING!!` : 'sent you a PING!!',
+      chatId,
+      tag,
     };
   }
+
+  // Media-only previews (no caption): icon + label so it reads at a glance.
+  const trimmed = (ev.body ?? '').trim();
+  let preview: string;
+  if (trimmed.length > 0) {
+    preview = trimmed.slice(0, 140);
+  } else if (ev.mediaKey) {
+    preview = /\.(mp4|webm|mov)$/i.test(ev.mediaKey) ? '🎬 Video' : '📷 Photo';
+  } else {
+    preview = 'New message';
+  }
+
   return {
-    title: 'New message',
-    body: (ev.body ?? '').slice(0, 140) || 'New message',
-    chatId: ev.chatId ?? '',
-    tag: ev.chatId ?? 'message',
+    title: isGroup ? groupName : senderName,
+    body: isGroup ? `${senderName}: ${preview}` : preview,
+    chatId,
+    tag,
   };
 }
 

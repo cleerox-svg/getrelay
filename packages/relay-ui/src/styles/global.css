@@ -9,10 +9,10 @@
   --accent: #007AFF;
   --ping: #FF3B30;
   --online: #34C759;
-  --receipt-d: #8E8E93;
+  --receipt-d: #6E6E73;
   --receipt-r: #007AFF;
   --text: #000000;
-  --text-dim: #8E8E93;
+  --text-dim: #6E6E73; /* WCAG AA-compatible against white */
   --bubble-them: #E5E5EA;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 }
@@ -65,8 +65,11 @@ body {
 }
 
 /* Konsta Messagebar's textarea inherits text color too. With body color
-   forced above, textarea inherits correctly. Belt-and-suspenders. */
+   forced above, textarea inherits correctly. Belt-and-suspenders: also
+   pin explicit color so Konsta's Tailwind utilities can't override it
+   with anything that looks dark on a light theme. */
 textarea,
 input {
-  color: inherit;
+  color: var(--text);
+  caret-color: var(--accent);
 }

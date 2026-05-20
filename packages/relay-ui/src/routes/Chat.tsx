@@ -506,7 +506,13 @@ export function Chat() {
 
       {emojiOpen ? (
         <Suspense fallback={null}>
-          <EmojiPicker open={emojiOpen} onSelect={insertEmoji} />
+          <EmojiPicker
+            open={emojiOpen}
+            onSelect={(e) => {
+              insertEmoji(e);
+              setEmojiOpen(false);
+            }}
+          />
         </Suspense>
       ) : null}
 
