@@ -143,5 +143,5 @@ jobs:
         with:
           apiToken: ${{ secrets.CF_RELAY_API_KEY }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: packages/relay-ui
-          command: pages deploy dist --project-name=${{ env.PAGES_PROJECT }} --branch=main --commit-dirty=true
+          wranglerVersion: "4.93.0"
+          command: pages deploy packages/relay-ui/dist --project-name=${{ env.PAGES_PROJECT }} --branch=main --commit-dirty=true
