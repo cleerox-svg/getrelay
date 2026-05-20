@@ -43,6 +43,9 @@ export function MessageBubble({ msg, mine, onLongPress }: Props) {
   const isPing = msg.type === 'ping';
   const tint = mine ? 'var(--accent)' : 'var(--surface)';
 
+  const shouldShake = isPing && !mine && !recalled;
+  const bubbleClass = `fade-in${shouldShake ? ' ping-shake' : ''}`;
+
   return (
     <div
       style={{
@@ -52,6 +55,7 @@ export function MessageBubble({ msg, mine, onLongPress }: Props) {
       }}
     >
       <div
+        className={bubbleClass}
         onMouseDown={startPress}
         onMouseUp={cancelPress}
         onMouseLeave={cancelPress}

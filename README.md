@@ -89,7 +89,7 @@ lands in Session 5.
 | 2 Contacts + Chats | shipped |
 | 3 Realtime: UserHub + ChatRoom | shipped |
 | 4 React PWA | shipped |
-| 5 Polish + deploy | pending |
+| 5 Polish + Pages deploy | shipped |
 
 ## Running the UI locally
 

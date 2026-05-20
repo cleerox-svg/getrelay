@@ -1,0 +1,151 @@
+name: Deploy relay-ui (Cloudflare Pages)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/relay-ui/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/deploy-ui.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-relay-ui
+  cancel-in-progress: false
+
+env:
+  PAGES_PROJECT: relay-ui
+  CUSTOM_DOMAIN: relay.averrow.com
+  ZONE_NAME: averrow.com
+  VITE_API_BASE_URL: https://relay-api.averrow.com
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck UI
+        working-directory: packages/relay-ui
+        run: pnpm typecheck
+
+      - name: Build UI (production)
+        working-directory: packages/relay-ui
+        env:
+          VITE_API_BASE_URL: ${{ env.VITE_API_BASE_URL }}
+        run: pnpm build
+
+      - name: Ensure Pages project exists
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_RELAY_API_KEY }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          api="https://api.cloudflare.com/client/v4"
+          auth=( -H "Authorization: Bearer ${CF_API_TOKEN}" )
+
+          http_code=$(curl -fsS -o /tmp/proj.json -w "%{http_code}" \
+            "${api}/accounts/${CF_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}" \
+            "${auth[@]}" || true)
+          if [ "$http_code" = "200" ]; then
+            echo "Pages project ${PAGES_PROJECT} exists"
+          else
+            echo "Creating Pages project ${PAGES_PROJECT}"
+            payload=$(jq -n \
+              --arg n "${PAGES_PROJECT}" \
+              '{name:$n, production_branch:"main"}')
+            curl -fsS -X POST \
+              "${api}/accounts/${CF_ACCOUNT_ID}/pages/projects" \
+              "${auth[@]}" -H "Content-Type: application/json" \
+              --data "${payload}" | jq '.success'
+          fi
+
+      - name: Ensure DNS CNAME (relay → <project>.pages.dev)
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_RELAY_API_KEY }}
+        run: |
+          set -euo pipefail
+          api="https://api.cloudflare.com/client/v4"
+          auth=( -H "Authorization: Bearer ${CF_API_TOKEN}" )
+          record_target="${PAGES_PROJECT}.pages.dev"
+
+          zone_id=$(curl -fsS "${api}/zones?name=${ZONE_NAME}" "${auth[@]}" \
+            | jq -r '.result[0].id // empty')
+          [ -n "$zone_id" ] || { echo "Zone ${ZONE_NAME} not found"; exit 1; }
+
+          existing=$(curl -fsS \
+            "${api}/zones/${zone_id}/dns_records?name=${CUSTOM_DOMAIN}" \
+            "${auth[@]}")
+          existing_id=$(echo "$existing" | jq -r '.result[0].id // empty')
+          existing_type=$(echo "$existing" | jq -r '.result[0].type // empty')
+          existing_content=$(echo "$existing" | jq -r '.result[0].content // empty')
+
+          payload=$(jq -n \
+            --arg name "${CUSTOM_DOMAIN}" \
+            --arg content "${record_target}" \
+            '{type:"CNAME", name:$name, content:$content, proxied:true, ttl:1}')
+
+          if [ -n "$existing_id" ] && [ "$existing_type" = "CNAME" ] && [ "$existing_content" = "$record_target" ]; then
+            echo "CNAME ${CUSTOM_DOMAIN} → ${record_target} already in place"
+          elif [ -n "$existing_id" ]; then
+            echo "Updating existing record (id=${existing_id})"
+            curl -fsS -X PUT "${api}/zones/${zone_id}/dns_records/${existing_id}" \
+              "${auth[@]}" -H "Content-Type: application/json" \
+              --data "${payload}" | jq '.success'
+          else
+            echo "Creating CNAME ${CUSTOM_DOMAIN} → ${record_target}"
+            curl -fsS -X POST "${api}/zones/${zone_id}/dns_records" \
+              "${auth[@]}" -H "Content-Type: application/json" \
+              --data "${payload}" | jq '.success'
+          fi
+
+      - name: Ensure custom domain binding (relay.averrow.com → Pages)
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_RELAY_API_KEY }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          api="https://api.cloudflare.com/client/v4"
+          auth=( -H "Authorization: Bearer ${CF_API_TOKEN}" )
+
+          domains_json=$(curl -fsS \
+            "${api}/accounts/${CF_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/domains" \
+            "${auth[@]}")
+
+          if echo "$domains_json" | jq -e --arg d "${CUSTOM_DOMAIN}" \
+              '.result[]? | select(.name == $d)' >/dev/null 2>&1; then
+            echo "Custom domain ${CUSTOM_DOMAIN} already bound to ${PAGES_PROJECT}"
+          else
+            echo "Binding ${CUSTOM_DOMAIN} to Pages project ${PAGES_PROJECT}"
+            curl -fsS -X POST \
+              "${api}/accounts/${CF_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/domains" \
+              "${auth[@]}" -H "Content-Type: application/json" \
+              --data "$(jq -n --arg n "${CUSTOM_DOMAIN}" '{name:$n}')" | jq '.success'
+          fi
+
+      - name: Deploy to Cloudflare Pages
+        working-directory: packages/relay-ui
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_RELAY_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler pages deploy dist \
+            --project-name="${PAGES_PROJECT}" \
+            --branch=main \
+            --commit-dirty=true

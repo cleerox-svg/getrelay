@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#0A0A0E"/>
+  <!-- Maskable safe zone: 80% center (102.4..409.6). Glyph sized within it. -->
+  <path d="M200 176h96a72 72 0 0 1 0 144h-40l52 52h-56l-52-52v-28h88a24 24 0 0 0 0-48h-56v128h-32z"
+        fill="#FF5C2A"/>
+</svg>
