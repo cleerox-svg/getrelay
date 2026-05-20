@@ -15,6 +15,60 @@ export function isPushSupported(): boolean {
   );
 }
 
+export function isIOS(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent;
+  return /iPad|iPhone|iPod/.test(ua) ||
+    // iPad Pro on iPadOS 13+ reports MacIntel + touch
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+export function isStandalonePwa(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (window.matchMedia?.('(display-mode: standalone)').matches) return true;
+  const navAsAny = navigator as unknown as { standalone?: boolean };
+  return navAsAny.standalone === true;
+}
+
+export function isInAppBrowser(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent;
+  // Common in-app browser markers: Snapchat, Instagram, Facebook, TikTok,
+  // LinkedIn, X, WhatsApp, Line, GSA (Google app).
+  return /FBAN|FBAV|Instagram|Snapchat|TikTok|Line|MicroMessenger|LinkedInApp|WhatsApp|GSA|Twitter/i.test(
+    ua,
+  );
+}
+
+// Chrome on iOS reports CriOS; Firefox iOS reports FxiOS; Edge iOS EdgiOS.
+// All of these are forced to use Apple's WebKit, which still gates Web
+// Push behind installation from Safari only (as of iOS 18).
+export function isIOSThirdPartyBrowser(): boolean {
+  if (typeof navigator === 'undefined' || !isIOS()) return false;
+  return /CriOS|FxiOS|EdgiOS|OPiOS|YaBrowser/i.test(navigator.userAgent);
+}
+
+export type PushBlocker =
+  | 'ok'
+  | 'ios_third_party_browser' // Chrome/Firefox/Edge etc. on iOS
+  | 'ios_not_installed'       // iOS Safari but not Add-to-Home-Screen yet
+  | 'ios_in_app_browser'      // iOS Snapchat / Instagram / etc.
+  | 'in_app_browser'          // Android in-app browser
+  | 'denied'
+  | 'unsupported';
+
+export function diagnosePush(state: PushState): PushBlocker {
+  if (state === 'denied') return 'denied';
+  if (isPushSupported()) return 'ok';
+  if (isIOS()) {
+    if (isInAppBrowser()) return 'ios_in_app_browser';
+    if (isIOSThirdPartyBrowser()) return 'ios_third_party_browser';
+    if (!isStandalonePwa()) return 'ios_not_installed';
+  }
+  if (isInAppBrowser()) return 'in_app_browser';
+  return 'unsupported';
+}
+
 export async function currentPushState(): Promise<PushState> {
   if (!isPushSupported()) return 'unsupported';
   if (Notification.permission === 'denied') return 'denied';

@@ -49,6 +49,15 @@ function ensureChat(state: AppState, chatId: string): ChatState {
   return fresh;
 }
 
+function compareMessages(a: UiMessage, b: UiMessage): number {
+  // Sort by timestamp first — both optimistic (sequence=null) and persisted
+  // messages have valid ts values, so this orders them correctly. Use
+  // sequence as a tiebreaker only when timestamps match (multiple persisted
+  // messages with the same created_at).
+  if (a.ts !== b.ts) return a.ts - b.ts;
+  return (a.sequence ?? 0) - (b.sequence ?? 0);
+}
+
 function upsertMessage(list: UiMessage[], msg: UiMessage): UiMessage[] {
   const idx = list.findIndex((m) => m.id === msg.id || (msg.tempId && m.tempId === msg.tempId));
   if (idx >= 0) {
@@ -57,7 +66,7 @@ function upsertMessage(list: UiMessage[], msg: UiMessage): UiMessage[] {
     next[idx] = merged as UiMessage;
     return next;
   }
-  return [...list, msg].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0) || a.ts - b.ts);
+  return [...list, msg].sort(compareMessages);
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -143,7 +152,7 @@ export const useStore = create<AppState>((set, get) => ({
         if (idx >= 0) merged[idx] = { ...merged[idx], ...ui };
         else merged.push(ui);
       }
-      merged.sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0) || a.ts - b.ts);
+      merged.sort(compareMessages);
       chat.messages = merged;
       chat.loaded = true;
       return { byChat: { ...s.byChat, [chatId]: { ...chat } } };

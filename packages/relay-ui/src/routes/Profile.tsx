@@ -18,9 +18,9 @@ import { PinDisplay } from '../components/PinDisplay';
 import { ApiError, api } from '../lib/api';
 import {
   currentPushState,
+  diagnosePush,
   disablePush,
   enablePush,
-  isPushSupported,
   type PushState,
 } from '../lib/push';
 import { useStore } from '../lib/store';
@@ -224,16 +224,65 @@ export function Profile() {
 
       <BlockTitle>Notifications</BlockTitle>
       <Block strong inset className="!py-4">
-        {!isPushSupported() ? (
-          <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
-            This browser doesn't support web push notifications.
-          </div>
-        ) : pushState === 'denied' ? (
-          <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
-            Notifications are blocked for this site. Enable them in your
-            browser's site settings, then refresh.
-          </div>
-        ) : (
+        {(() => {
+          const blocker = diagnosePush(pushState);
+          if (blocker === 'ios_in_app_browser') {
+            return (
+              <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
+                Push notifications can't run inside this in-app browser.
+                Tap the share / menu icon and choose <strong>Open in Safari</strong>,
+                then come back here.
+              </div>
+            );
+          }
+          if (blocker === 'ios_third_party_browser') {
+            return (
+              <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
+                On iOS, push notifications only work in <strong>Safari</strong> —
+                Apple blocks them in Chrome, Firefox, and other browsers (even
+                though they look like separate apps, they all run on Safari's
+                engine but without push access). Open
+                <code> relay.averrow.com </code>
+                in Safari, then tap <strong>Share → Add to Home Screen</strong> and
+                launch Relay from your Home Screen icon.
+              </div>
+            );
+          }
+          if (blocker === 'in_app_browser') {
+            return (
+              <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
+                Push notifications aren't available in this in-app browser.
+                Open <code>relay.averrow.com</code> in Chrome, Edge, or
+                Firefox to enable them.
+              </div>
+            );
+          }
+          if (blocker === 'ios_not_installed') {
+            return (
+              <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
+                On iOS, push notifications require installing Relay to your
+                Home Screen first. In Safari: tap the <strong>Share</strong>{' '}
+                button → <strong>Add to Home Screen</strong>. Then open Relay
+                from your Home Screen and try again.
+              </div>
+            );
+          }
+          if (blocker === 'denied') {
+            return (
+              <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
+                Notifications are blocked for this site. Enable them in your
+                browser's site settings, then refresh.
+              </div>
+            );
+          }
+          if (blocker === 'unsupported') {
+            return (
+              <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
+                This browser doesn't support web push notifications.
+              </div>
+            );
+          }
+          return (
           <>
             <div
               className="flex items-center justify-between gap-3"
@@ -266,13 +315,14 @@ export function Profile() {
                     : 'Enable'}
               </Button>
             </div>
-            {pushError ? (
-              <div className="text-xs mt-2" style={{ color: 'var(--ping)' }}>
-                {pushError}
-              </div>
-            ) : null}
-          </>
-        )}
+              {pushError ? (
+                <div className="text-xs mt-2" style={{ color: 'var(--ping)' }}>
+                  {pushError}
+                </div>
+              ) : null}
+            </>
+          );
+        })()}
       </Block>
 
       <BlockTitle>Appearance</BlockTitle>
