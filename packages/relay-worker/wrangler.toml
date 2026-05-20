@@ -1,0 +1,58 @@
+name = "relay-worker"
+main = "src/index.ts"
+compatibility_date = "2025-12-15"
+compatibility_flags = ["nodejs_compat"]
+
+# ----- D1 -----
+[[d1_databases]]
+binding = "DB"
+database_name = "relay-db"
+database_id = "166b7407-11eb-4031-bd44-563d268cc085"
+
+# ----- Durable Objects -----
+[[durable_objects.bindings]]
+name = "CHAT_ROOM"
+class_name = "ChatRoom"
+
+[[durable_objects.bindings]]
+name = "USER_HUB"
+class_name = "UserHub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ChatRoom", "UserHub"]
+
+# ----- Observability -----
+[observability]
+enabled = true
+
+# ----- Plain (non-secret) vars -----
+# Override per-environment below. Secrets (GOOGLE_ID, GOOGLE_SECRET,
+# JWT_SECRET) live in `wrangler secret put` or .dev.vars locally.
+[vars]
+APP_URL = "http://localhost:5173"
+AUTH_COOKIE_DOMAIN = ""
+
+# ----- Production environment -----
+[env.production]
+name = "relay-worker"
+routes = [
+  { pattern = "relay-api.averrow.com/*", zone_name = "averrow.com" }
+]
+
+[env.production.vars]
+APP_URL = "https://relay.averrow.com"
+AUTH_COOKIE_DOMAIN = ".averrow.com"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "relay-db"
+database_id = "166b7407-11eb-4031-bd44-563d268cc085"
+
+[[env.production.durable_objects.bindings]]
+name = "CHAT_ROOM"
+class_name = "ChatRoom"
+
+[[env.production.durable_objects.bindings]]
+name = "USER_HUB"
+class_name = "UserHub"
