@@ -1,7 +1,12 @@
 import { create } from 'zustand';
-import { api } from './api';
+import { api, API_BASE } from './api';
 import { ws } from './ws';
 import type { Chat, Contact, Me, ServerMsg, UiMessage } from './types';
+
+function mediaUrlFor(mediaKey: string | null | undefined): string | null {
+  if (!mediaKey) return null;
+  return `${API_BASE}/m/${encodeURIComponent(mediaKey)}`;
+}
 
 interface ChatState {
   messages: UiMessage[];
@@ -35,6 +40,7 @@ interface AppState {
 
   sendText: (chatId: string, body: string) => void;
   sendPing: (chatId: string) => void;
+  sendMedia: (chatId: string, mediaKey: string, mediaUrl: string, caption?: string) => void;
   sendTyping: (chatId: string, on: boolean) => void;
   markRead: (chatId: string, messageIds: string[]) => void;
   recall: (messageId: string) => void;
@@ -209,6 +215,40 @@ export const useStore = create<AppState>((set, get) => ({
     ws.send({ t: 'ping', chatId });
   },
 
+  sendMedia: (chatId, mediaKey, mediaUrl, caption) => {
+    const tempId = crypto.randomUUID();
+    set((s) => {
+      const chat = ensureChat(s, chatId);
+      const optimistic: UiMessage = {
+        id: tempId,
+        tempId,
+        chatId,
+        from: s.me?.id ?? '',
+        sequence: null,
+        type: 'image',
+        body: caption?.trim() || null,
+        mediaKey,
+        mediaUrl,
+        ts: Date.now(),
+        editedAt: null,
+        deletedAt: null,
+        delivered: false,
+        read: false,
+        pending: true,
+      };
+      chat.messages = upsertMessage(chat.messages, optimistic);
+      return { byChat: { ...s.byChat, [chatId]: { ...chat } } };
+    });
+    ws.send({
+      t: 'send',
+      tempId,
+      chatId,
+      type: 'image',
+      body: caption?.trim() || undefined,
+      mediaKey,
+    });
+  },
+
   sendTyping: (chatId, on) => {
     ws.send({ t: 'typing', chatId, on });
   },
@@ -255,6 +295,8 @@ export const useStore = create<AppState>((set, get) => ({
             sequence: msg.sequence,
             type: msg.type,
             body: msg.body,
+            mediaKey: msg.mediaKey ?? null,
+            mediaUrl: msg.mediaUrl ?? mediaUrlFor(msg.mediaKey),
             ts: msg.ts,
             editedAt: null,
             deletedAt: null,

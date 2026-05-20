@@ -6,6 +6,7 @@ import { avatarsRoutes } from './avatars';
 import { meRoutes } from './me';
 import { contactsRoutes } from './contacts';
 import { chatsRoutes } from './chats';
+import { mediaRoutes } from './media';
 import { messagesRoutes } from './messages';
 import { pushRoutes } from './push';
 
@@ -44,6 +45,7 @@ app.route('/', avatarsRoutes());
 app.route('/', contactsRoutes());
 app.route('/', chatsRoutes());
 app.route('/', messagesRoutes());
+app.route('/', mediaRoutes());
 app.route('/', pushRoutes());
 
 // WebSocket upgrade — authenticates via cookie, forwards to the user's

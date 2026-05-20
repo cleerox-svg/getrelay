@@ -2,7 +2,14 @@
 // See RELAY_BUILD_SPEC.md §9.
 
 export type ClientMsg =
-  | { t: 'send'; tempId: string; chatId: string; type: 'text' | 'ping'; body?: string }
+  | {
+      t: 'send';
+      tempId: string;
+      chatId: string;
+      type: 'text' | 'ping' | 'image';
+      body?: string;
+      mediaKey?: string;
+    }
   | { t: 'typing'; chatId: string; on: boolean }
   | { t: 'read'; chatId: string; messageIds: string[] }
   | { t: 'ping'; chatId: string }
@@ -21,6 +28,8 @@ export type ServerMsg =
       sequence: number;
       type: string;
       body: string | null;
+      mediaKey?: string | null;
+      mediaUrl?: string | null;
       ts: number;
     }
   | { t: 'delivered'; messageId: string; chatId: string; userId: string; ts: number }
