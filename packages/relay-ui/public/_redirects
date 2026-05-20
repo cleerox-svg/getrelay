@@ -1,0 +1,2 @@
+# React Router SPA fallback — every non-asset path serves index.html.
+/*    /index.html   200

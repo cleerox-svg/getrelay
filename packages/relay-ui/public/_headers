@@ -1,0 +1,12 @@
+# Service worker must not be cached at the edge — updates need to ship immediately.
+/sw.js
+  Cache-Control: no-cache, no-store, must-revalidate
+  Service-Worker-Allowed: /
+
+/manifest.webmanifest
+  Content-Type: application/manifest+json
+  Cache-Control: public, max-age=300
+
+# Hashed Vite assets — long cache.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

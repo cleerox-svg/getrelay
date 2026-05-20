@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#0A0A0E"/>
+  <g fill="#F2F2F5" font-family="Outfit, system-ui, sans-serif">
+    <text x="80" y="180" font-size="120" font-weight="700" letter-spacing="14">RELAY</text>
+    <rect x="82" y="208" width="280" height="6" fill="#FF5C2A"/>
+    <text x="80" y="320" font-size="44" font-weight="500" fill="#F2F2F5">Your PIN. Your line.</text>
+    <text x="80" y="380" font-size="44" font-weight="500" fill="#8A8A95">No phone number required.</text>
+  </g>
+  <g transform="translate(900,210)">
+    <rect width="220" height="220" rx="44" fill="#15151C"/>
+    <path d="M62 56h60a44 44 0 0 1 0 88h-26l34 34h-34l-34-34v-16h54a16 16 0 0 0 0-32h-30v76H62z"
+          fill="#FF5C2A"/>
+  </g>
+</svg>
