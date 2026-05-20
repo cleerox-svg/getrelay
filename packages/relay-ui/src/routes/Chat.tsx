@@ -393,6 +393,12 @@ export function Chat() {
   return (
     <Page>
       <Navbar
+        // Force fixed positioning so the navbar stays pinned during scroll
+        // even when iOS Safari's URL bar collapses (which changes the Page
+        // scroll-container height and breaks sticky-top in some cases).
+        // bgClassName is used for the inner toolbar background so the
+        // translucent style still works.
+        className="!fixed !top-0 !left-0 !right-0 !z-30"
         title={
           <Link
             to={
@@ -437,9 +443,12 @@ export function Chat() {
           display: 'flex',
           flexDirection: 'column',
           gap: 8,
-          // Big bottom pad so the final bubble clears the sticky Messagebar
-          // (~64px) and any home-bar safe area.
-          padding: '12px 16px calc(96px + env(safe-area-inset-bottom, 0px))',
+          // Top pad clears the fixed Navbar (44 px iOS toolbar + notch /
+          // status-bar safe area). Bottom pad clears the fixed Messagebar
+          // (~64 px) and the home-bar safe area.
+          padding:
+            'calc(56px + env(safe-area-inset-top, 0px)) 16px ' +
+            'calc(96px + env(safe-area-inset-bottom, 0px))',
         }}
       >
         {stacked}
