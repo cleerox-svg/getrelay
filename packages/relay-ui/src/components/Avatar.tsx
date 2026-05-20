@@ -17,10 +17,8 @@ function hashIndex(s: string, modulo: number): number {
 }
 
 function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return '?';
-  if (parts.length === 1) return (parts[0] ?? '').slice(0, 2).toUpperCase();
-  return ((parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '')).toUpperCase();
+  const first = name.trim()[0];
+  return first ? first.toUpperCase() : '?';
 }
 
 export function Avatar({ src, name, size = 40, online = false }: Props) {
@@ -64,8 +62,8 @@ export function Avatar({ src, name, size = 40, online = false }: Props) {
             alignItems: 'center',
             justifyContent: 'center',
             fontWeight: 600,
-            fontSize: Math.floor(size * 0.4),
-            letterSpacing: '0.02em',
+            fontSize: Math.floor(size * 0.46),
+            letterSpacing: 0,
           }}
         >
           {initials(label)}
