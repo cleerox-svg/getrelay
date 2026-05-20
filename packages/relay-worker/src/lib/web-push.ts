@@ -231,20 +231,25 @@ export async function sendPush(
   const headers = new Headers({
     'content-type': 'application/octet-stream',
     'content-encoding': 'aes128gcm',
-    ttl: '60',
+    // 24 h. A short TTL (e.g. 60s) is the most common reason FCM silently
+    // drops a push when the device is sleeping or offline.
+    ttl: '86400',
+    // FCM and Mozilla both honor this. `normal` lets the push wait when the
+    // device is dozing; `high` would force immediate wakeup.
+    urgency: 'normal',
     authorization: `vapid t=${jwt}, k=${keys.publicKey}`,
   });
 
   const res = await fetch(subscription.endpoint, {
     method: 'POST',
     headers,
-    body,
+    body: new Uint8Array(body), // copy so the fetch input is a plain BufferSource
   });
 
   let resBody: string | undefined;
   if (!res.ok) {
     try {
-      resBody = await res.text();
+      resBody = (await res.text()).slice(0, 400);
     } catch {
       /* ignore */
     }

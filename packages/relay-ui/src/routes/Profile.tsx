@@ -21,7 +21,9 @@ import {
   diagnosePush,
   disablePush,
   enablePush,
+  sendTestPush,
   type PushState,
+  type PushTestResult,
 } from '../lib/push';
 import { useStore } from '../lib/store';
 import { getTheme, setTheme, type ThemeMode } from '../lib/theme';
@@ -40,6 +42,8 @@ export function Profile() {
   const [pushState, setPushState] = useState<PushState>('unsubscribed');
   const [pushBusy, setPushBusy] = useState(false);
   const [pushError, setPushError] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<PushTestResult[] | null>(null);
+  const [testing, setTesting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const nav = useNavigate();
 
@@ -47,6 +51,20 @@ export function Profile() {
     setThemeMode(getTheme());
     currentPushState().then(setPushState).catch(() => undefined);
   }, []);
+
+  async function runPushTest() {
+    setTesting(true);
+    setTestResults(null);
+    setPushError(null);
+    try {
+      const results = await sendTestPush();
+      setTestResults(results);
+    } catch (err) {
+      setPushError(err instanceof Error ? err.message : 'failed');
+    } finally {
+      setTesting(false);
+    }
+  }
 
   async function togglePush() {
     setPushBusy(true);
@@ -318,6 +336,46 @@ export function Profile() {
               {pushError ? (
                 <div className="text-xs mt-2" style={{ color: 'var(--ping)' }}>
                   {pushError}
+                </div>
+              ) : null}
+              {pushState === 'subscribed' ? (
+                <div className="mt-3">
+                  <button
+                    onClick={runPushTest}
+                    disabled={testing}
+                    className="text-sm font-medium disabled:opacity-50"
+                    style={{ color: 'var(--accent)' }}
+                  >
+                    {testing ? 'Sending…' : 'Send test notification'}
+                  </button>
+                  {testResults ? (
+                    <div className="mt-2 text-[12px]" style={{ color: 'var(--text-dim)' }}>
+                      {testResults.length === 0 ? (
+                        <div>No subscriptions for this account.</div>
+                      ) : (
+                        testResults.map((r, i) => (
+                          <div key={i} style={{ marginTop: 4 }}>
+                            <span style={{ color: r.ok ? 'var(--online)' : 'var(--ping)' }}>
+                              {r.ok ? '✓' : '✗'}
+                            </span>{' '}
+                            <code>{r.endpointHost}</code> · HTTP {r.status}
+                            {r.body ? (
+                              <div
+                                style={{
+                                  marginLeft: 16,
+                                  marginTop: 2,
+                                  whiteSpace: 'pre-wrap',
+                                  wordBreak: 'break-word',
+                                }}
+                              >
+                                {r.body}
+                              </div>
+                            ) : null}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </>
