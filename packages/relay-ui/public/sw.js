@@ -6,7 +6,7 @@
 //  - Never intercept API calls (they go to relay-api.* — different origin).
 //  - Stale-while-revalidate for same-origin static assets.
 
-const SHELL_CACHE = 'relay-shell-v1';
+const SHELL_CACHE = 'relay-shell-v2';
 const SHELL_URLS = ['/', '/index.html', '/manifest.webmanifest', '/favicon.svg', '/icon.svg'];
 
 self.addEventListener('install', (event) => {
@@ -79,27 +79,42 @@ self.addEventListener('fetch', (event) => {
 // ---------- Web Push ----------
 
 self.addEventListener('push', (event) => {
-  let data = {};
-  try {
-    data = event.data ? event.data.json() : {};
-  } catch {
-    data = { body: event.data ? event.data.text() : '' };
-  }
-  const title = data.title || 'Relay';
-  const body = data.body || '';
-  const chatId = data.chatId || '';
-  const tag = data.tag || chatId || 'relay-message';
+  // showNotification MUST be called on every push event or Chrome will
+  // revoke the subscription after a few violations. So wrap everything
+  // in waitUntil with a fallback notification if anything throws.
+  const work = (async () => {
+    let data = {};
+    try {
+      data = event.data ? event.data.json() : {};
+    } catch {
+      data = { body: event.data ? event.data.text() : '' };
+    }
+    const title = data.title || 'Relay';
+    const body = data.body || '';
+    const chatId = data.chatId || '';
+    const tag = data.tag || chatId || 'relay-message';
 
-  event.waitUntil(
-    self.registration.showNotification(title, {
-      body,
-      tag,
-      renotify: true,
-      icon: '/icon.svg',
-      badge: '/icon.svg',
-      data: { chatId },
-    }),
-  );
+    try {
+      // Use PNG icons — Android Chrome silently drops SVG icons on the
+      // notification surface, so the notification can fail to render or
+      // appear without an icon. iOS PWA prefers PNG too.
+      await self.registration.showNotification(title, {
+        body,
+        tag,
+        renotify: true,
+        icon: '/icon-192.png',
+        badge: '/icon-192.png',
+        data: { chatId },
+      });
+    } catch (err) {
+      // Last-ditch fallback so Chrome doesn't revoke the sub.
+      await self.registration.showNotification('Relay', {
+        body: 'New activity',
+        tag: 'relay-fallback',
+      });
+    }
+  })();
+  event.waitUntil(work);
 });
 
 self.addEventListener('notificationclick', (event) => {
