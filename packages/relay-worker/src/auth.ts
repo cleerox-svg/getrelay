@@ -105,6 +105,7 @@ async function findOrCreateUser(
 ): Promise<string> {
   const adminFlag = isAdminEmail(env, g.email) ? 1 : 0;
 
+  // 1) Exact match on google_sub — returning user.
   const existing = await env.DB.prepare(
     `SELECT id, is_admin FROM users WHERE google_sub = ?`,
   ).bind(g.id).first<{ id: string; is_admin: number }>();
@@ -116,21 +117,37 @@ async function findOrCreateUser(
     return existing.id;
   }
 
-  // New user: create with a unique PIN.
+  // 2) Pending row claim — if a row was pre-seeded with
+  //    google_sub = 'pending:<email>' (see migrations/seed-contacts.sql),
+  //    adopt it. PIN + contact links from the seed survive intact.
+  const pending = await env.DB.prepare(
+    `SELECT id, is_admin FROM users
+     WHERE email = ? AND google_sub LIKE 'pending:%'`,
+  ).bind(g.email).first<{ id: string; is_admin: number }>();
+  if (pending) {
+    const nextAdmin = adminFlag || pending.is_admin ? 1 : 0;
+    await env.DB.prepare(
+      `UPDATE users SET google_sub = ?, is_admin = ? WHERE id = ?`,
+    ).bind(g.id, nextAdmin, pending.id).run();
+    return pending.id;
+  }
+
+  // 3) Brand-new sign-up. We deliberately don't persist the Google
+  //    profile picture — the avatar starts as initials and the user
+  //    can upload their own via POST /me/avatar.
   for (let attempt = 0; attempt < 5; attempt++) {
     const userId = crypto.randomUUID();
     const pin = generatePin(8);
     try {
       await env.DB.prepare(
         `INSERT INTO users
-         (id, google_sub, email, pin, display_name, avatar_url, created_at, is_admin)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, google_sub, email, pin, display_name, created_at, is_admin)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-        .bind(userId, g.id, g.email, pin, g.name || g.email, g.picture, Date.now(), adminFlag)
+        .bind(userId, g.id, g.email, pin, g.name || g.email, Date.now(), adminFlag)
         .run();
       return userId;
     } catch (err) {
-      // unique constraint on PIN → retry; on email or google_sub → race, lookup again
       const msg = String(err);
       if (msg.includes('UNIQUE') && msg.includes('pin')) continue;
       const racer = await env.DB.prepare(

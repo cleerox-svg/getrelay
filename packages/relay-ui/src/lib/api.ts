@@ -44,6 +44,27 @@ export const api = {
   updateMe: (body: { displayName?: string; statusMessage?: string }) =>
     request<{ ok: true }>('/me', { method: 'PATCH', body: JSON.stringify(body) }),
   signout: () => request<void>('/auth/signout', { method: 'POST' }),
+  uploadAvatar: async (file: File): Promise<{ ok: boolean; key: string }> => {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`${API_BASE}/me/avatar`, {
+      method: 'POST',
+      credentials: 'include',
+      body: form,
+    });
+    if (!res.ok) {
+      let code = 'http_error';
+      try {
+        const b = (await res.json()) as { error?: string };
+        if (b.error) code = b.error;
+      } catch {
+        /* ignore */
+      }
+      throw new ApiError(res.status, code);
+    }
+    return (await res.json()) as { ok: boolean; key: string };
+  },
+  removeAvatar: () => request<{ ok: true }>('/me/avatar', { method: 'DELETE' }),
   listContacts: () => request<{ contacts: Contact[] }>('/contacts'),
   addContact: (pin: string) =>
     request<{ ok: boolean; contactId: string }>('/contacts/add', {

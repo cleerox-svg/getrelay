@@ -38,6 +38,26 @@ jobs:
         working-directory: packages/relay-worker
         run: pnpm typecheck
 
+      - name: Ensure R2 bucket relay-avatars exists
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_RELAY_API_KEY }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          api="https://api.cloudflare.com/client/v4"
+          auth=( -H "Authorization: Bearer ${CF_API_TOKEN}" )
+          code=$(curl -fsS -o /tmp/r2.json -w "%{http_code}" \
+            "${api}/accounts/${CF_ACCOUNT_ID}/r2/buckets/relay-avatars" \
+            "${auth[@]}" || true)
+          if [ "$code" = "200" ]; then
+            echo "R2 bucket relay-avatars already exists"
+          else
+            echo "Creating R2 bucket relay-avatars"
+            curl -fsS -X POST "${api}/accounts/${CF_ACCOUNT_ID}/r2/buckets" \
+              "${auth[@]}" -H "Content-Type: application/json" \
+              --data '{"name":"relay-avatars"}' | jq '.success'
+          fi
+
       - name: Apply D1 schema + idempotent column adds
         working-directory: packages/relay-worker
         env:
