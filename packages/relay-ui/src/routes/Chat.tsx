@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Actions,
@@ -17,6 +17,10 @@ import { TypingDots } from '../components/TypingDots';
 import { ApiError, api } from '../lib/api';
 import { useStore } from '../lib/store';
 import type { UiMessage } from '../lib/types';
+
+// Lazy: emoji-mart's data + UI is ~110 KB gzip. Only fetch when the user
+// actually opens the picker.
+const EmojiPicker = lazy(() => import('../components/EmojiPicker'));
 
 function dayKey(ts: number): string {
   const d = new Date(ts);
@@ -66,10 +70,30 @@ export function Chat() {
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sentTypingRef = useRef(false);
   const messagebarRef = useRef<{ areaElRef: HTMLTextAreaElement | null } | null>(null);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+
+  function insertEmoji(emoji: string) {
+    const ta = messagebarRef.current?.areaElRef;
+    // No textarea yet, or picker is open and we want to keep the keyboard
+    // dismissed: just append at the end.
+    if (!ta || emojiOpen) {
+      setInput((prev) => prev + emoji);
+      return;
+    }
+    const start = ta.selectionStart ?? input.length;
+    const end = ta.selectionEnd ?? input.length;
+    const next = input.slice(0, start) + emoji + input.slice(end);
+    setInput(next);
+    requestAnimationFrame(() => {
+      const pos = start + emoji.length;
+      ta.focus();
+      ta.setSelectionRange(pos, pos);
+    });
+  }
 
   useEffect(() => {
     ensureChatState(chatId);
@@ -119,11 +143,26 @@ export function Chat() {
     if (unread.length > 0) markRead(chatId, unread);
   }, [messages, chatId, me, markRead]);
 
-  // Auto-scroll to bottom when messages or typing state changes.
+  // Auto-scroll to the most recent message when:
+  //   - the chat first mounts / route changes
+  //   - a new message arrives or one is sent
+  //   - someone starts/stops typing (so the dots stay visible)
+  // The bottom sentinel + scrollIntoView lets the browser pick the right
+  // ancestor (Konsta Page is the actual scroll container, so writing to
+  // scrollTop on an arbitrary inner div didn't work). Two RAFs so layout
+  // and image loads have a chance to settle before we measure.
   useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages.length, chatState?.typing]);
+    let cancelled = false;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (cancelled) return;
+        bottomRef.current?.scrollIntoView({ block: 'end' });
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [chatId, messages.length, JSON.stringify(chatState?.typing ?? {})]);
 
   const isGroup = chat?.type === 'group';
   const peerOnline = chat?.peer ? presence[chat.peer.id]?.online ?? false : false;
@@ -394,8 +433,6 @@ export function Chat() {
       />
 
       <div
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto"
         style={{
           display: 'flex',
           flexDirection: 'column',
@@ -412,7 +449,16 @@ export function Chat() {
             {uploadError}
           </div>
         ) : null}
+        {/* Sentinel scroll target — kept directly below the last message
+            so scrollIntoView always lands on the most recent thing. */}
+        <div ref={bottomRef} aria-hidden="true" />
       </div>
+
+      {emojiOpen ? (
+        <Suspense fallback={null}>
+          <EmojiPicker open={emojiOpen} onSelect={insertEmoji} />
+        </Suspense>
+      ) : null}
 
       <Messagebar
         // @ts-expect-error Konsta forwardRef returns { el, areaElRef }; types lag
@@ -446,6 +492,21 @@ export function Chat() {
                   />
                 </svg>
               )}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const ta = messagebarRef.current?.areaElRef;
+                // Dismiss the on-screen keyboard before opening so iOS /
+                // Android don't render the picker behind the keyboard.
+                if (!emojiOpen && ta) ta.blur();
+                setEmojiOpen((v) => !v);
+              }}
+              aria-label="Insert emoji"
+              className="px-1 text-xl"
+              style={{ color: emojiOpen ? 'var(--accent)' : 'var(--text-dim)' }}
+            >
+              😀
             </button>
             <button
               type="button"
