@@ -10,6 +10,7 @@ import {
   Page,
 } from 'konsta/react';
 import { Avatar } from '../components/Avatar';
+import { BrandTitle } from '../components/BrandTitle';
 import { useStore } from '../lib/store';
 
 export function Contacts() {
@@ -47,7 +48,7 @@ export function Contacts() {
   return (
     <Page>
       <Navbar
-        title="Contacts"
+        title={<BrandTitle />}
         left={
           <Link to="/profile" className="px-3">
             <Avatar src={me?.avatarUrl ?? null} name={me?.displayName ?? me?.email ?? 'Me'} size={30} />
@@ -64,9 +65,9 @@ export function Contacts() {
             />
           </Link>
         }
-        large
-        transparent
       />
+
+      <h1 className="text-[34px] font-bold tracking-tight px-4 pt-3 pb-1">Contacts</h1>
 
       <List strongIos insetIos>
         <ListInput
