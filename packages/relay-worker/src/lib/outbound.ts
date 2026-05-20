@@ -1,5 +1,7 @@
 import type { Env } from '../env';
 
+// Schema-aligned kinds — these are the values stored in outbound_events.kind
+// (matches the CHECK constraint in schema.sql).
 export type OutboundKind =
   | 'delivered'
   | 'read'
@@ -7,6 +9,27 @@ export type OutboundKind =
   | 'presence'
   | 'ping'
   | 'invite';
+
+// Wire kinds for DO-to-DO /notify calls. Ephemeral kinds ('typing',
+// 'recalled', 'edited') are best-effort: delivered live if the recipient
+// has a socket, dropped otherwise. Persistable kinds are mapped to
+// OutboundKind via outboundKindFor() when queuing.
+export type NotifyKind =
+  | OutboundKind
+  | 'typing'
+  | 'recalled'
+  | 'edited';
+
+export function outboundKindFor(kind: NotifyKind): OutboundKind | null {
+  switch (kind) {
+    case 'typing':
+    case 'recalled':
+    case 'edited':
+      return null; // ephemeral
+    default:
+      return kind;
+  }
+}
 
 export interface OutboundEvent {
   id: string;
@@ -66,4 +89,22 @@ export async function drainOutbound(env: Env, userId: string): Promise<OutboundE
     payload: JSON.parse(r.payload) as unknown,
     createdAt: r.created_at,
   }));
+}
+
+// Send an event to a recipient's UserHub. The UserHub decides whether the
+// recipient is online (forward to socket) or offline (persist via
+// insertOutboundEvent for drain on next connect, unless the kind is
+// ephemeral).
+export async function notifyUserHub(
+  env: Env,
+  recipientId: string,
+  kind: NotifyKind,
+  payload: unknown,
+): Promise<void> {
+  const stub = env.USER_HUB.get(env.USER_HUB.idFromName(recipientId));
+  await stub.fetch('https://do/notify', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ userId: recipientId, kind, payload }),
+  });
 }

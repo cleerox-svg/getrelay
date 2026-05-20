@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { Env } from './env';
-import { authRoutes } from './auth';
+import { authRoutes, readAuthedUser } from './auth';
 import { meRoutes } from './me';
 import { contactsRoutes } from './contacts';
 import { chatsRoutes } from './chats';
@@ -40,7 +40,21 @@ app.route('/', meRoutes());
 app.route('/', contactsRoutes());
 app.route('/', chatsRoutes());
 
-// Session 3 endpoint — WS upgrade to UserHub.
-app.get('/ws', (c) => c.text('not_implemented_yet', 501));
+// WebSocket upgrade — authenticates via cookie, forwards to the user's
+// UserHub DO with the user id/jti in headers.
+app.get('/ws', async (c) => {
+  if (c.req.header('Upgrade') !== 'websocket') {
+    return c.text('expected upgrade', 426);
+  }
+  const me = await readAuthedUser(c.env, c.req.raw);
+  if (!me) return c.text('unauthorized', 401);
+
+  const headers = new Headers(c.req.raw.headers);
+  headers.set('X-Relay-User-Id', me.id);
+  headers.set('X-Relay-Jti', me.jti);
+
+  const stub = c.env.USER_HUB.get(c.env.USER_HUB.idFromName(me.id));
+  return stub.fetch('https://do/ws', { method: 'GET', headers });
+});
 
 export default app;
