@@ -44,10 +44,20 @@ export interface Chat {
   id: string;
   type: '1to1' | 'group';
   subject: string | null;
+  memberCount?: number;
   peer: ChatPeer | null;
   lastMessage: ChatLastMessage | null;
   unreadCount: number;
   lastActivityAt: number;
+}
+
+export interface GroupMember {
+  id: string;
+  displayName: string;
+  pin: string;
+  avatarUrl: string | null;
+  online: boolean;
+  joinedAt: number;
 }
 
 export interface UiMessage {

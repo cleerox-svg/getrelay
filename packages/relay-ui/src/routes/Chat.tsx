@@ -4,16 +4,13 @@ import {
   Actions,
   ActionsButton,
   ActionsGroup,
-  Icon,
-  Message,
   Messagebar,
-  Messages,
-  MessagesTitle,
   Navbar,
   NavbarBackLink,
   Page,
 } from 'konsta/react';
 import { Avatar } from '../components/Avatar';
+import { GroupAvatar } from '../components/GroupAvatar';
 import { PingChip } from '../components/PingChip';
 import { Receipt } from '../components/Receipt';
 import { TypingDots } from '../components/TypingDots';
@@ -36,6 +33,8 @@ function dayLabel(ts: number): string {
 function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
+
+const MAX_TEXTAREA_HEIGHT = 140; // ~6 lines
 
 export function Chat() {
   const params = useParams();
@@ -65,6 +64,7 @@ export function Chat() {
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sentTypingRef = useRef(false);
   const messagebarRef = useRef<{ areaElRef: HTMLTextAreaElement | null } | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     ensureChatState(chatId);
@@ -73,13 +73,13 @@ export function Chat() {
     return () => unsubscribeChat(chatId);
   }, [chatId, ensureChatState, loadChatHistory, subscribeChat, unsubscribeChat]);
 
-  // Direct deep-links (refresh on /chats/:id) skip the chats list. Pull
-  // it so the navbar can resolve the peer's name + avatar.
   useEffect(() => {
     if (chats.length === 0) loadChats().catch(() => undefined);
   }, [chats.length, loadChats]);
 
-  // Hook Enter (without Shift) on the underlying textarea to send.
+  const submitRef = useRef(() => undefined as void);
+
+  // Enter (no shift) submits; Shift+Enter inserts a newline.
   useEffect(() => {
     const textarea = messagebarRef.current?.areaElRef;
     if (!textarea) return;
@@ -93,9 +93,16 @@ export function Chat() {
     return () => textarea.removeEventListener('keydown', onKey);
   });
 
-  // Keep a stable ref to the latest submit so the keydown handler always
-  // sees current state.
-  const submitRef = useRef(() => undefined as void);
+  // Auto-grow the textarea up to MAX_TEXTAREA_HEIGHT. Konsta defaults to a
+  // fixed h-8, which truncates multi-line input.
+  useEffect(() => {
+    const textarea = messagebarRef.current?.areaElRef;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    const next = Math.min(textarea.scrollHeight, MAX_TEXTAREA_HEIGHT);
+    textarea.style.height = `${next}px`;
+    textarea.style.overflowY = textarea.scrollHeight > MAX_TEXTAREA_HEIGHT ? 'auto' : 'hidden';
+  }, [input]);
 
   const messages = chatState?.messages ?? [];
 
@@ -107,6 +114,13 @@ export function Chat() {
     if (unread.length > 0) markRead(chatId, unread);
   }, [messages, chatId, me, markRead]);
 
+  // Auto-scroll to bottom when messages or typing state changes.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages.length, chatState?.typing]);
+
+  const isGroup = chat?.type === 'group';
   const peerOnline = chat?.peer ? presence[chat.peer.id]?.online ?? false : false;
 
   const typingNames = useMemo(() => {
@@ -148,42 +162,89 @@ export function Chat() {
     }, 2500);
   }
 
-  // Build messages array with day separators inserted as <MessagesTitle>.
-  const rendered: React.ReactNode[] = [];
+  // Single-column stacked bubbles: every message in chronological order,
+  // each bubble colored by sender. No left/right alignment.
+  const stacked: React.ReactNode[] = [];
   let lastDay = '';
   for (const m of messages) {
     const k = dayKey(m.ts);
     if (k !== lastDay) {
-      rendered.push(<MessagesTitle key={`day-${k}`}>{dayLabel(m.ts)}</MessagesTitle>);
+      stacked.push(
+        <div
+          key={`day-${k}`}
+          className="text-center text-xs font-medium py-2"
+          style={{ color: 'var(--text-dim)' }}
+        >
+          {dayLabel(m.ts)}
+        </div>,
+      );
       lastDay = k;
     }
     const mine = m.from === me?.id;
     const recalled = !!m.deletedAt;
     const isPing = m.type === 'ping';
-    rendered.push(
-      <Message
+    const bg = recalled
+      ? 'transparent'
+      : isPing
+        ? 'transparent'
+        : mine
+          ? 'var(--accent)'
+          : 'rgba(0,0,0,0.06)';
+    const fg = mine && !recalled && !isPing ? '#FFFFFF' : 'var(--text, #000)';
+    const metaColor =
+      mine && !recalled && !isPing ? 'rgba(255,255,255,0.85)' : 'var(--text-dim)';
+
+    stacked.push(
+      <div
         key={m.id}
-        type={mine ? 'sent' : 'received'}
-        text={recalled || isPing ? undefined : (m.body ?? '')}
-        footer={
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
-            <span>{formatTime(m.ts)}</span>
-            {m.editedAt && !recalled ? <span>· edited</span> : null}
-            {mine && !recalled ? (
-              <Receipt delivered={m.delivered} read={m.read} onAccent />
-            ) : null}
-          </span>
-        }
         onClick={() => {
           if (mine && !recalled) setActionsFor(m);
         }}
+        style={{
+          alignSelf: 'stretch',
+          background: bg,
+          color: fg,
+          borderRadius: 16,
+          padding: isPing ? 6 : '10px 14px',
+          border: recalled ? '1px dashed var(--text-dim)' : 'none',
+          opacity: m.pending ? 0.7 : 1,
+          cursor: mine && !recalled ? 'pointer' : 'default',
+        }}
       >
+        {isGroup && !mine && !recalled ? (
+          <div
+            className="text-[12px] font-semibold mb-0.5"
+            style={{ color: 'var(--accent)' }}
+          >
+            {/* Sender name placeholder — we currently only have ids in messages.
+                Group sender names land in v2 when we wire member info. */}
+            {m.from.slice(0, 6)}
+          </div>
+        ) : null}
+
         {recalled ? (
           <em style={{ color: 'var(--text-dim)' }}>Message recalled</em>
         ) : isPing ? (
-          <PingChip />
-        ) : null}
-      </Message>,
+          <div className="flex justify-center py-1">
+            <PingChip />
+          </div>
+        ) : (
+          <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.35 }}>
+            {m.body}
+          </div>
+        )}
+
+        <div
+          className="text-[11px] mt-1 flex items-center gap-1.5"
+          style={{ color: metaColor, justifyContent: 'flex-end' }}
+        >
+          <span>{formatTime(m.ts)}</span>
+          {m.editedAt && !recalled ? <span>· edited</span> : null}
+          {mine && !recalled ? (
+            <Receipt delivered={m.delivered} read={m.read} onAccent={!isPing} />
+          ) : null}
+        </div>
+      </div>,
     );
   }
 
@@ -191,28 +252,51 @@ export function Chat() {
     <Page>
       <Navbar
         title={
-          <span className="flex items-center gap-2">
-            <Avatar
-              src={chat?.peer?.avatarUrl ?? null}
-              name={chat?.peer?.displayName ?? chat?.subject ?? 'Chat'}
-              size={28}
-              online={peerOnline}
-            />
+          <Link
+            to={isGroup ? `/chats/${encodeURIComponent(chatId)}` : '#'}
+            className="flex items-center gap-2"
+            style={{ textDecoration: 'none' }}
+          >
+            {isGroup ? (
+              <GroupAvatar subject={chat?.subject ?? 'Group'} size={28} />
+            ) : (
+              <Avatar
+                src={chat?.peer?.avatarUrl ?? null}
+                name={chat?.peer?.displayName ?? chat?.subject ?? 'Chat'}
+                size={28}
+                online={peerOnline}
+              />
+            )}
             <span className="flex flex-col leading-tight">
-              <span className="text-base font-semibold">
-                {chat?.peer?.displayName ?? chat?.subject ?? 'Chat'}
+              <span className="text-base font-semibold" style={{ color: 'var(--text, #000)' }}>
+                {isGroup ? chat?.subject : chat?.peer?.displayName ?? 'Chat'}
               </span>
               <span className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
-                {peerOnline ? 'online' : chat?.peer?.pin ?? ''}
+                {isGroup
+                  ? `${chat?.memberCount ?? '–'} members`
+                  : peerOnline
+                    ? 'online'
+                    : chat?.peer?.pin ?? ''}
               </span>
             </span>
-          </span>
+          </Link>
         }
         left={<NavbarBackLink text="Chats" onClick={() => nav('/chats')} />}
       />
 
-      <Messages>{rendered}</Messages>
-      {typingNames.length > 0 ? <TypingDots name={typingNames[0]} /> : null}
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto"
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+          padding: '12px 16px 16px',
+        }}
+      >
+        {stacked}
+        {typingNames.length > 0 ? <TypingDots name={typingNames[0]} /> : null}
+      </div>
 
       <Messagebar
         // @ts-expect-error Konsta forwardRef returns { el, areaElRef }; types lag

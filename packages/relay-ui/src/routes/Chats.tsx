@@ -12,6 +12,7 @@ import {
 } from 'konsta/react';
 import { Avatar } from '../components/Avatar';
 import { BrandTitle } from '../components/BrandTitle';
+import { GroupAvatar } from '../components/GroupAvatar';
 import { useStore } from '../lib/store';
 
 function formatRelative(ts: number): string {
@@ -70,24 +71,45 @@ export function Chats() {
           <SegmentedButton active={section === 'messages'} onClick={() => setSection('messages')}>
             Messages
           </SegmentedButton>
-          <SegmentedButton
-            active={false}
-            onClick={() => undefined}
-            className="opacity-40 pointer-events-none"
-          >
+          <SegmentedButton active={section === 'groups'} onClick={() => setSection('groups')}>
             Groups
           </SegmentedButton>
         </Segmented>
       </Block>
 
-      {chats.length === 0 ? (
-        <Block className="text-center" style={{ color: 'var(--text-dim)' }}>
-          <div className="text-base mb-2">No chats yet</div>
-          <div className="text-sm">Tap + to add a contact by PIN.</div>
-        </Block>
-      ) : (
-        <List strongIos insetIos>
-          {chats.map((c) => {
+      {(() => {
+        const visible = chats.filter((c) =>
+          section === 'groups' ? c.type === 'group' : c.type === '1to1',
+        );
+        if (visible.length === 0) {
+          return (
+            <Block className="text-center" style={{ color: 'var(--text-dim)' }}>
+              {section === 'groups' ? (
+                <>
+                  <div className="text-base mb-2">No groups yet</div>
+                  <div className="text-sm mb-4">Create one to chat with a few people at once.</div>
+                  <Link to="/new-group" className="inline-block">
+                    <span
+                      className="inline-block px-4 py-2 rounded-full font-semibold"
+                      style={{ background: 'var(--accent)', color: '#FFFFFF' }}
+                    >
+                      New group
+                    </span>
+                  </Link>
+                </>
+              ) : (
+                <>
+                  <div className="text-base mb-2">No chats yet</div>
+                  <div className="text-sm">Tap + to add a contact by PIN.</div>
+                </>
+              )}
+            </Block>
+          );
+        }
+        return (
+          <List strongIos insetIos>
+            {visible.map((c) => {
+              const isGroup = c.type === 'group';
             const peerOnline = c.peer ? presence[c.peer.id]?.online ?? false : false;
             const last = c.lastMessage;
             const preview = last?.deletedAt
@@ -102,15 +124,19 @@ export function Chats() {
                 chevronIos={false}
                 onClick={() => nav(`/chats/${encodeURIComponent(c.id)}`)}
                 media={
-                  <Avatar
-                    src={c.peer?.avatarUrl ?? null}
-                    name={c.peer?.displayName ?? c.subject ?? 'Chat'}
-                    size={44}
-                    online={peerOnline}
-                  />
+                  isGroup ? (
+                    <GroupAvatar subject={c.subject ?? 'Group'} size={44} />
+                  ) : (
+                    <Avatar
+                      src={c.peer?.avatarUrl ?? null}
+                      name={c.peer?.displayName ?? c.subject ?? 'Chat'}
+                      size={44}
+                      online={peerOnline}
+                    />
+                  )
                 }
                 title={c.peer?.displayName ?? c.subject ?? 'Chat'}
-                text={preview || ' '}
+                text={preview || (isGroup ? `${c.memberCount ?? '–'} members` : ' ')}
                 after={
                   <div className="flex items-center gap-2">
                     <span className="text-xs" style={{ color: 'var(--text-dim)' }}>
@@ -129,8 +155,9 @@ export function Chats() {
               />
             );
           })}
-        </List>
-      )}
+          </List>
+        );
+      })()}
     </Page>
   );
 }

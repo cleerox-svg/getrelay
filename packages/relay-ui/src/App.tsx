@@ -7,6 +7,7 @@ import { Chat } from './routes/Chat';
 import { Chats } from './routes/Chats';
 import { Contacts } from './routes/Contacts';
 import { MainLayout } from './routes/MainLayout';
+import { NewGroup } from './routes/NewGroup';
 import { Onboarding } from './routes/Onboarding';
 import { Placeholder } from './routes/Placeholder';
 import { Profile } from './routes/Profile';
@@ -66,6 +67,7 @@ export function App() {
             <Route path="/onboarding" element={<Onboarding />} />
             <Route path="/chats/:id" element={<Chat />} />
             <Route path="/add-contact" element={<AddContact />} />
+            <Route path="/new-group" element={<NewGroup />} />
             <Route path="/profile" element={<Profile />} />
 
             <Route element={<MainLayout />}>

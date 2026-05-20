@@ -25,6 +25,8 @@ interface AppState {
 
   loadChats: () => Promise<void>;
   openOneToOne: (contactId: string) => Promise<string>;
+  createGroup: (subject: string, contactIds: string[]) => Promise<string>;
+  addGroupMembers: (chatId: string, contactIds: string[]) => Promise<number>;
 
   ensureChatState: (chatId: string) => void;
   loadChatHistory: (chatId: string) => Promise<void>;
@@ -118,6 +120,16 @@ export const useStore = create<AppState>((set, get) => ({
     const res = await api.openOneToOne(contactId);
     if (res.created) await get().loadChats();
     return res.id;
+  },
+  createGroup: async (subject, contactIds) => {
+    const res = await api.createGroup(subject, contactIds);
+    await get().loadChats();
+    return res.id;
+  },
+  addGroupMembers: async (chatId, contactIds) => {
+    const res = await api.addGroupMembers(chatId, contactIds);
+    await get().loadChats();
+    return res.added;
   },
 
   ensureChatState: (chatId) => {
