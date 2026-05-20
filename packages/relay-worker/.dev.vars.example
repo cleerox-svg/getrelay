@@ -1,0 +1,7 @@
+# Copy to .dev.vars (gitignored) and fill in.
+# These map to env vars at wrangler dev time and are NOT used in production
+# (production uses `wrangler secret put`).
+
+GOOGLE_ID=your-google-oauth-client-id.apps.googleusercontent.com
+GOOGLE_SECRET=your-google-oauth-client-secret
+JWT_SECRET=replace-me-with-32-bytes-of-random-base64
