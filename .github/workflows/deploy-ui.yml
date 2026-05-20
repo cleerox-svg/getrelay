@@ -75,43 +75,60 @@ jobs:
               --data "${payload}" | jq '.success'
           fi
 
-      - name: Ensure DNS CNAME (relay → <project>.pages.dev)
+      - name: Heal DNS — drop unmanaged CNAME and the binding that points to it
         env:
           CF_API_TOKEN: ${{ secrets.CF_RELAY_API_KEY }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           api="https://api.cloudflare.com/client/v4"
           auth=( -H "Authorization: Bearer ${CF_API_TOKEN}" )
-          record_target="${PAGES_PROJECT}.pages.dev"
 
           zone_id=$(curl -fsS "${api}/zones?name=${ZONE_NAME}" "${auth[@]}" \
             | jq -r '.result[0].id // empty')
           [ -n "$zone_id" ] || { echo "Zone ${ZONE_NAME} not found"; exit 1; }
 
-          existing=$(curl -fsS \
+          # Any DNS record for relay.averrow.com that *isn't* managed by a
+          # Cloudflare service (Pages, in our case) blocks Pages from
+          # creating its own managed routing — and a manual proxied CNAME
+          # to <project>.pages.dev triggers Error 1014 at request time
+          # (CNAME cross-user banned). Delete unmanaged records here so
+          # the next steps can let Pages own the DNS.
+          deleted_any=0
+          records_json=$(curl -fsS \
             "${api}/zones/${zone_id}/dns_records?name=${CUSTOM_DOMAIN}" \
             "${auth[@]}")
-          existing_id=$(echo "$existing" | jq -r '.result[0].id // empty')
-          existing_type=$(echo "$existing" | jq -r '.result[0].type // empty')
-          existing_content=$(echo "$existing" | jq -r '.result[0].content // empty')
+          count=$(echo "$records_json" | jq -r '.result | length')
+          for i in $(seq 0 $((count - 1))); do
+            rec_id=$(echo "$records_json"     | jq -r ".result[$i].id")
+            rec_type=$(echo "$records_json"   | jq -r ".result[$i].type")
+            rec_content=$(echo "$records_json" | jq -r ".result[$i].content")
+            managed=$(echo "$records_json"    | jq -r ".result[$i].meta.managed_by_apps // false")
+            if [ "$managed" = "true" ]; then
+              echo "Keeping managed record ${rec_id} (${rec_type} → ${rec_content})"
+            else
+              echo "Deleting unmanaged record ${rec_id} (${rec_type} → ${rec_content})"
+              curl -fsS -X DELETE "${api}/zones/${zone_id}/dns_records/${rec_id}" \
+                "${auth[@]}" | jq '.success'
+              deleted_any=1
+            fi
+          done
 
-          payload=$(jq -n \
-            --arg name "${CUSTOM_DOMAIN}" \
-            --arg content "${record_target}" \
-            '{type:"CNAME", name:$name, content:$content, proxied:true, ttl:1}')
-
-          if [ -n "$existing_id" ] && [ "$existing_type" = "CNAME" ] && [ "$existing_content" = "$record_target" ]; then
-            echo "CNAME ${CUSTOM_DOMAIN} → ${record_target} already in place"
-          elif [ -n "$existing_id" ]; then
-            echo "Updating existing record (id=${existing_id})"
-            curl -fsS -X PUT "${api}/zones/${zone_id}/dns_records/${existing_id}" \
-              "${auth[@]}" -H "Content-Type: application/json" \
-              --data "${payload}" | jq '.success'
-          else
-            echo "Creating CNAME ${CUSTOM_DOMAIN} → ${record_target}"
-            curl -fsS -X POST "${api}/zones/${zone_id}/dns_records" \
-              "${auth[@]}" -H "Content-Type: application/json" \
-              --data "${payload}" | jq '.success'
+          # If we just deleted an unmanaged record, the existing Pages
+          # custom-domain binding (if any) is bound to that stale DNS and
+          # won't auto-recreate. Drop the binding so the next step can
+          # re-add it cleanly and trigger Pages-managed DNS creation.
+          if [ "$deleted_any" = "1" ]; then
+            domains_json=$(curl -fsS \
+              "${api}/accounts/${CF_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/domains" \
+              "${auth[@]}")
+            if echo "$domains_json" | jq -e --arg d "${CUSTOM_DOMAIN}" \
+                '.result[]? | select(.name == $d)' >/dev/null 2>&1; then
+              echo "Removing stale binding for ${CUSTOM_DOMAIN}"
+              curl -fsS -X DELETE \
+                "${api}/accounts/${CF_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/domains/${CUSTOM_DOMAIN}" \
+                "${auth[@]}" | jq '.success'
+            fi
           fi
 
       - name: Ensure custom domain binding (relay.averrow.com → Pages)
