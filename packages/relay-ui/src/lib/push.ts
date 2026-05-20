@@ -1,5 +1,22 @@
 import { API_BASE } from './api';
 
+export interface PushTestResult {
+  endpointHost: string;
+  status: number;
+  ok: boolean;
+  body?: string;
+}
+
+export async function sendTestPush(): Promise<PushTestResult[]> {
+  const res = await fetch(`${API_BASE}/me/push/test`, {
+    method: 'POST',
+    credentials: 'include',
+  });
+  const json = (await res.json().catch(() => ({}))) as { results?: PushTestResult[]; error?: string };
+  if (!res.ok) throw new Error(json.error ?? `http_${res.status}`);
+  return json.results ?? [];
+}
+
 export type PushState =
   | 'unsupported'   // browser lacks ServiceWorker / PushManager
   | 'denied'        // user blocked notifications

@@ -43,6 +43,63 @@ export function pushRoutes() {
     return c.json({ ok: true });
   });
 
+  // POST /me/push/test — fires a synchronous test push to every
+  // subscription this user has and returns the raw push-service results
+  // (status + first 400 chars of body). Surfaces what the push service
+  // is actually saying so we can diagnose Android-vs-iOS issues from
+  // the UI without server logs.
+  app.post('/me/push/test', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const keys = vapidKeys(c.env);
+    if (!keys) return c.json({ error: 'vapid_not_configured' }, 503);
+
+    const rows = await c.env.DB.prepare(
+      `SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?`,
+    )
+      .bind(me.id)
+      .all<{ endpoint: string; p256dh: string; auth: string }>();
+    const subs = rows.results ?? [];
+    if (subs.length === 0) {
+      return c.json({ error: 'no_subscriptions' }, 404);
+    }
+
+    const payload = {
+      title: 'Relay test',
+      body: 'If you can see this, push is working on this device.',
+      chatId: '',
+      tag: 'relay-test',
+    };
+
+    const results = await Promise.all(
+      subs.map(async (s) => {
+        try {
+          const r = await sendPush(
+            { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
+            payload,
+            keys,
+          );
+          return {
+            endpointHost: new URL(s.endpoint).host,
+            status: r.status,
+            ok: r.ok,
+            body: r.body,
+          };
+        } catch (err) {
+          return {
+            endpointHost: safeHost(s.endpoint),
+            status: 0,
+            ok: false,
+            body: String(err).slice(0, 400),
+          };
+        }
+      }),
+    );
+
+    return c.json({ results });
+  });
+
   // DELETE /me/push/subscribe?endpoint=... — UI calls when user disables
   // notifications or the browser revokes the subscription.
   app.delete('/me/push/subscribe', async (c) => {
@@ -70,14 +127,20 @@ export function pushRoutes() {
 // Helper used by UserHub when the recipient has no live socket.
 export async function pushToUser(env: Env, userId: string, payload: unknown): Promise<void> {
   const keys = vapidKeys(env);
-  if (!keys) return; // not configured — no-op
+  if (!keys) {
+    console.warn('push: VAPID not configured; skipping');
+    return;
+  }
   const rows = await env.DB.prepare(
     `SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?`,
   )
     .bind(userId)
     .all<{ endpoint: string; p256dh: string; auth: string }>();
   const subs = rows.results ?? [];
-  if (subs.length === 0) return;
+  if (subs.length === 0) {
+    console.log('push: no subscriptions for', userId);
+    return;
+  }
 
   const results = await Promise.all(
     subs.map((s) =>
@@ -89,6 +152,15 @@ export async function pushToUser(env: Env, userId: string, payload: unknown): Pr
     ),
   );
 
+  for (const r of results) {
+    const host = safeHost(r.endpoint);
+    if (r.ok) {
+      console.log(`push: OK ${host} status=${r.status} user=${userId}`);
+    } else {
+      console.warn(`push: FAIL ${host} status=${r.status} user=${userId} body=${r.body ?? ''}`);
+    }
+  }
+
   // Drop subscriptions the push service says are gone (404/410). The
   // browser revoked them or the user uninstalled the PWA.
   const dead = results.filter((r) => r.status === 404 || r.status === 410).map((r) => r.endpoint);
@@ -99,6 +171,14 @@ export async function pushToUser(env: Env, userId: string, payload: unknown): Pr
     )
       .bind(...dead)
       .run();
+  }
+}
+
+function safeHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return 'unknown';
   }
 }
 
