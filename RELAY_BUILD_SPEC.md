@@ -1,9 +1,9 @@
-# Relay — Build Specification
+# Relay — Build Specification (v2)
 
 > **Project:** Relay — a BBM-inspired secure messenger
 > **Owner:** Claude Leroux, LRX Enterprises Inc.
-> **Stack:** Cloudflare Workers + D1 + Durable Objects + R2 + React PWA
-> **Heritage:** PIN-based identity, D/R receipts, PING!! — the iconic BBM UX, rebuilt for 2026
+> **Stack:** Cloudflare Workers (Hono) + D1 + Durable Objects (Hibernation API) + R2 + React PWA
+> **Heritage:** PIN-based identity, D/R receipts, PING!!, recall/edit — the BBM Consumer experience, rebuilt for 2026
 > **Deployment:**
 > &nbsp;&nbsp;&nbsp;&nbsp;UI:  `https://relay.averrow.com` (Cloudflare Pages)
 > &nbsp;&nbsp;&nbsp;&nbsp;API: `https://relay-api.averrow.com` (Cloudflare Worker)
@@ -12,7 +12,7 @@
 
 ## 1. BLUF
 
-Relay v0 = email magic link → 8-char PIN → 1:1 chat with D/R receipts + typing + PING. One Cloudflare Worker, one Durable Object class, D1 + R2 + WebSockets. Five Claude Code sessions to ship.
+Relay v0 = **Google OAuth → 8-char PIN → 1:1 chat with offline-aware D/R receipts + typing + PING + recall + edit**. One Cloudflare Worker, two Durable Object classes (`ChatRoom` per chat, `UserHub` per user — both hibernatable), D1 + R2 + WebSockets. Five Claude Code sessions to ship.
 
 ---
 
@@ -61,50 +61,54 @@ Minimal. Confident. No emoji bloat. Short labels. "Send" not "Send Message." "PI
 
 ## 4. v0 Scope (Session 1–5 ship target)
 
-1. Email magic-link authentication
-2. PIN generation (8-char Crockford base32, excludes I/L/O/U)
+1. **Google OAuth** sign-in (no phone, no password, no email magic link)
+2. PIN generation (8-char Crockford base32, excludes I/L/O/U) on first sign-in
 3. Add contact by PIN
-4. Create 1:1 chat
+4. Create 1:1 chat (deterministic ID — find-or-create is idempotent)
 5. WebSocket send/receive text messages
-6. **D** (Delivered) and **R** (Read) receipts
+6. **D** (Delivered) and **R** (Read) receipts — **with offline backfill** (D fires when the recipient comes back online, not only when both are online)
 7. Typing indicator
 8. **PING!!** nudge
-9. Mobile-first React PWA
+9. Message **recall** (sender removes a sent message)
+10. Message **edit** (sender corrects a sent message; shows "edited" tag)
+11. Display name + status message + avatar (Google profile photo URL on v0)
+12. Mobile-first React PWA
 
 ### Out of v0 scope (saved for v1+)
 
 - libsodium end-to-end encryption
 - Multi-device support
-- Group chats
+- Group chats (schema is ready; UI deferred)
 - Broadcast lists
-- Media (images, voice notes) via R2
-- Push notifications (FCM / APNs / Web Push)
-- QR code add-contact flow
+- Media (images, voice notes, files) via R2
+- Self-uploaded avatars to R2
+- Stickers
+- BBM Voice / Video (WebRTC signaling)
+- Push notifications (Web Push, then APNs / FCM)
+- QR-code add-contact
 
 ---
 
 ## 5. Information Architecture
 
 ```
-SignIn
-  │
-  ▼ (magic link)
-Onboarding (PIN reveal, set display name)
-  │
-  ▼
-Chats list ─── ⊕ ──► AddContact
-  │                    │
-  │                    ▼
-  │              (back to Chats list)
-  ▼
-Chat view
-  │
-  ├── ⋮ menu → Contact info / Block / Mute
-  └── ← back to Chats list
+SignIn ──[Google OAuth]──▶ Onboarding (first-time only: PIN reveal, edit display name)
+                                  │
+                                  ▼
+                          Chats list ─── ⊕ ──► AddContact
+                            │                    │
+                            │                    ▼
+                            │              (back to Chats list)
+                            ▼
+                          Chat view
+                            │
+                            ├── ⋮ menu → Contact info / Block / Mute
+                            ├── long-press on own msg → Recall / Edit / Copy
+                            └── ← back to Chats list
 
 Settings (top-right gear from Chats list)
   ├── My profile (display name, status, avatar)
-  ├── My PIN (copy, show QR)
+  ├── My PIN (copy, show QR — v1)
   └── Sign out
 ```
 
@@ -112,7 +116,27 @@ Settings (top-right gear from Chats list)
 
 ## 6. Wireframes (mobile-first, 390px target)
 
-### 6.1 Onboarding — PIN reveal
+### 6.1 Sign in
+
+```
+┌────────────────────────────┐
+│                            │
+│         RELAY              │
+│                            │
+│  ┌──────────────────────┐ │
+│  │ ▸ Continue with Google│ │   ← single big button
+│  └──────────────────────┘ │
+│                            │
+│  ─────────────────         │
+│                            │
+│  No phone number.          │
+│  No tracking.              │
+│  Just a PIN.               │
+│                            │
+└────────────────────────────┘
+```
+
+### 6.2 Onboarding — PIN reveal (first sign-in only)
 
 ```
 ┌────────────────────────────┐
@@ -132,27 +156,24 @@ Settings (top-right gear from Chats list)
 │   ┌──────────────────┐    │
 │   │   Copy PIN       │    │
 │   └──────────────────┘    │
-│   ┌──────────────────┐    │
-│   │   Show QR        │    │
-│   └──────────────────┘    │
 │                            │
 │   [Continue →]             │
 └────────────────────────────┘
 ```
 
-### 6.2 Chats list (home)
+### 6.3 Chats list (home)
 
 ```
 ┌────────────────────────────┐
-│ RELAY            ⊕   ⚙     │   ← top bar: add contact, settings
+│ RELAY            ⊕   ⚙     │
 │ ─────────────────────────  │
 │ Your PIN: 7K2A·9XQM    📋  │
 │                            │
 │ ● Banx          2:14 PM    │
-│   hey, you up?        D R  │   ← D R receipts inline
+│   hey, you up?        D R  │
 │ ─────────────────────────  │
 │ ○ Matthew       11:02 AM   │
-│   sent a PING!!       D    │   ← only D, not R yet
+│   sent a PING!!       D    │
 │ ─────────────────────────  │
 │ ○ Daniel        Yesterday  │
 │   barn 4 check at 6...  R  │
@@ -160,9 +181,9 @@ Settings (top-right gear from Chats list)
 └────────────────────────────┘
 ```
 
-Filled green dot = online. Hollow dot = offline.
+Filled green dot = online. Hollow dot = offline. The list is driven by the user's **UserHub** WebSocket emitting `preview` events.
 
-### 6.3 Chat view (the money screen)
+### 6.4 Chat view (the money screen)
 
 ```
 ┌────────────────────────────┐
@@ -177,7 +198,8 @@ Filled green dot = online. Hollow dot = offline.
 │                            │
 │         ┌────────────────┐ │
 │         │ yeah just in   │ │   ← outgoing (right, accent tint)
-│         │ 2:15 PM    D R │ │   ← D R right-aligned, mono
+│         │ 2:15 PM  edited│ │   ← shows when edited
+│         │           D R  │ │
 │         └────────────────┘ │
 │                            │
 │         ┌────────────────┐ │
@@ -185,7 +207,7 @@ Filled green dot = online. Hollow dot = offline.
 │         │ 2:15 PM    D   │ │
 │         └────────────────┘ │
 │                            │
-│  Banx is composing···      │   ← typing indicator, dim text
+│  Banx is composing···      │
 │                            │
 │ ─────────────────────────  │
 │ ┌──────────────────┬─┬──┐ │
@@ -194,7 +216,21 @@ Filled green dot = online. Hollow dot = offline.
 └────────────────────────────┘
 ```
 
-### 6.4 Add contact by PIN
+### 6.5 Long-press menu (own message)
+
+```
+         ┌────────────────────┐
+         │  Copy text         │
+         │  Edit              │
+         │  Recall            │
+         │  ─────────────     │
+         │  Cancel            │
+         └────────────────────┘
+```
+
+Recalled messages render in place as a dim italic line: *"Message recalled"* — same in sender and recipient UI.
+
+### 6.6 Add contact by PIN
 
 ```
 ┌────────────────────────────┐
@@ -203,7 +239,7 @@ Filled green dot = online. Hollow dot = offline.
 │                            │
 │  Enter their PIN           │
 │  ┌──────────────────┐     │
-│  │ ____ · ____      │     │   ← auto-format on input
+│  │ ____ · ____      │     │
 │  └──────────────────┘     │
 │                            │
 │  ──── or ────              │
@@ -216,29 +252,7 @@ Filled green dot = online. Hollow dot = offline.
 └────────────────────────────┘
 ```
 
-### 6.5 Sign in
-
-```
-┌────────────────────────────┐
-│                            │
-│         RELAY              │
-│                            │
-│   Sign in with your email  │
-│                            │
-│  ┌──────────────────────┐ │
-│  │ you@example.com      │ │
-│  └──────────────────────┘ │
-│                            │
-│  [Send magic link →]       │
-│                            │
-│  ─────────────────         │
-│                            │
-│  No phone number.          │
-│  No tracking.              │
-│  Just a PIN.               │
-│                            │
-└────────────────────────────┘
-```
+PIN input strips the middle dot before sending; API accepts unformatted PIN only.
 
 ---
 
@@ -249,28 +263,18 @@ Filled green dot = online. Hollow dot = offline.
 
 CREATE TABLE users (
   id TEXT PRIMARY KEY,
+  google_sub TEXT UNIQUE NOT NULL,
+  email TEXT UNIQUE NOT NULL,
   pin TEXT UNIQUE NOT NULL,
   display_name TEXT NOT NULL,
   status_message TEXT,
-  avatar_r2_key TEXT,
+  avatar_url TEXT,              -- external URL (Google photo) in v0
+  avatar_r2_key TEXT,           -- self-uploaded; v1
   created_at INTEGER NOT NULL,
   last_seen_at INTEGER
 );
 CREATE INDEX idx_users_pin ON users(pin);
-
-CREATE TABLE auth_emails (
-  user_id TEXT PRIMARY KEY REFERENCES users(id),
-  email TEXT UNIQUE NOT NULL,
-  verified INTEGER DEFAULT 0
-);
-CREATE INDEX idx_auth_email ON auth_emails(email);
-
-CREATE TABLE auth_tokens (
-  token TEXT PRIMARY KEY,
-  email TEXT NOT NULL,
-  expires_at INTEGER NOT NULL,
-  consumed INTEGER DEFAULT 0
-);
+CREATE INDEX idx_users_google_sub ON users(google_sub);
 
 CREATE TABLE sessions (
   jwt_id TEXT PRIMARY KEY,
@@ -292,7 +296,7 @@ CREATE TABLE contacts (
 CREATE INDEX idx_contacts_owner ON contacts(owner_id);
 
 CREATE TABLE chats (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY,                       -- same string used as DO name
   type TEXT NOT NULL CHECK(type IN ('1to1','group')),
   subject TEXT,
   created_by TEXT NOT NULL REFERENCES users(id),
@@ -313,215 +317,276 @@ CREATE TABLE messages (
   sender_id TEXT NOT NULL REFERENCES users(id),
   sequence INTEGER NOT NULL,
   message_type TEXT NOT NULL CHECK(message_type IN ('text','image','voice','ping','system')),
-  body TEXT,
+  body TEXT,                                 -- nullable: ping/system have no body
   media_r2_key TEXT,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  edited_at INTEGER,
+  deleted_at INTEGER                         -- soft delete for recall
 );
-CREATE INDEX idx_messages_chat ON messages(chat_id, sequence);
+CREATE UNIQUE INDEX idx_messages_chat_seq ON messages(chat_id, sequence);
 
 CREATE TABLE receipts (
   message_id TEXT NOT NULL REFERENCES messages(id),
   recipient_id TEXT NOT NULL REFERENCES users(id),
-  delivered_at INTEGER,
-  read_at INTEGER,
+  delivered_at INTEGER,                       -- NULL until recipient comes online
+  read_at INTEGER,                            -- NULL until recipient opens chat
   PRIMARY KEY (message_id, recipient_id)
 );
 CREATE INDEX idx_receipts_recipient ON receipts(recipient_id, read_at);
+CREATE INDEX idx_receipts_undelivered ON receipts(recipient_id, delivered_at) WHERE delivered_at IS NULL;
+
+CREATE TABLE outbound_events (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  kind TEXT NOT NULL CHECK(kind IN ('delivered','read','message_preview','presence','ping','invite')),
+  payload TEXT NOT NULL,                      -- JSON
+  created_at INTEGER NOT NULL,
+  consumed INTEGER DEFAULT 0
+);
+CREATE INDEX idx_outbound_user_pending ON outbound_events(user_id, consumed, created_at);
 ```
 
-**Schema verification rule:** Before writing any SQL that references columns, always run `PRAGMA table_info(<table>)` first. Never select non-existent columns.
+**Schema verification rule:** Before writing any SQL that references columns, always run `PRAGMA table_info(<table>)` first. Never select non-existent columns. This rule carries to every session.
+
+**Why `outbound_events`?** When `ChatRoom` needs to tell the **sender's** `UserHub` "your message was just delivered to recipient X" (so the sender's UI lights up its "D"), the sender may not be connected right now either. We persist the event in D1; the sender's `UserHub` drains the table on next WebSocket connect. This is the single mechanism that makes D/R offline-correct.
 
 ---
 
-## 8. Durable Object — ChatRoom skeleton
+## 8. Durable Objects
+
+Relay uses **two** Durable Object classes, both built on the **Hibernation API** (`state.acceptWebSocket()` + `webSocketMessage` / `webSocketClose` / `webSocketError`). Hibernation cuts idle billed duration to near zero — see Cloudflare's *Rules of Durable Objects* (Dec 2025).
+
+### 8.1 `UserHub(userId)` — the user's primary socket
+
+One per user. The client opens one WebSocket here on app load and keeps it open across screens (chats list, chat view, profile, anywhere). Everything the user needs to see — incoming messages, D/R deltas for messages they sent, presence changes for their contacts, PINGs, typing, invites — arrives on this socket.
 
 ```typescript
-// packages/relay-worker/src/do/chat-room.ts
+// packages/relay-worker/src/do/user-hub.ts
 
-interface Env {
-  DB: D1Database;
-  CHAT_ROOM: DurableObjectNamespace;
-  JWT_SECRET: string;
-}
-
-interface Session {
+interface Attachment {
   userId: string;
+  jti: string;
+  subscribedChats: string[]; // chats they've asked to receive typing/presence for
 }
 
-export class ChatRoom implements DurableObject {
-  private sessions = new Map<WebSocket, Session>();
-  private typing = new Set<string>();
-
+export class UserHub implements DurableObject {
   constructor(private state: DurableObjectState, private env: Env) {}
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
+    // RPC entrypoint — other DOs call us here
+    if (url.pathname === '/notify') {
+      const event = await request.json<OutboundEvent>();
+      await this.deliverOrQueue(event);
+      return new Response(null, { status: 204 });
+    }
+
     if (url.pathname === '/ws') {
+      const userId = await this.authenticate(request);
+      if (!userId) return new Response('unauthorized', { status: 401 });
+
       const pair = new WebSocketPair();
-      await this.handleSession(pair[1], request);
+      const server = pair[1];
+      this.state.acceptWebSocket(server);
+      server.serializeAttachment({ userId, jti: '...', subscribedChats: [] });
+
+      // drain any queued events for this user
+      await this.drainOutbound(userId, server);
+
+      // mark presence + broadcast to contacts
+      await this.markOnline(userId);
+
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
 
-    return new Response('Not found', { status: 404 });
+    return new Response('not found', { status: 404 });
   }
 
-  private async handleSession(ws: WebSocket, request: Request) {
-    ws.accept();
+  async webSocketMessage(ws: WebSocket, msg: string | ArrayBuffer) {
+    const { userId } = ws.deserializeAttachment() as Attachment;
+    let cmd: ClientMsg;
+    try { cmd = JSON.parse(msg as string); }
+    catch { return this.sendError(ws, 'bad_json'); }
 
-    const userId = await this.authenticate(request);
-    if (!userId) {
-      ws.close(1008, 'unauthorized');
-      return;
+    if (!this.checkRate(userId, cmd.t)) return this.sendError(ws, 'rate_limited');
+
+    switch (cmd.t) {
+      case 'send':        return this.routeSend(userId, cmd);
+      case 'typing':      return this.routeToChatRoom(cmd.chatId, { ...cmd, from: userId });
+      case 'read':        return this.routeToChatRoom(cmd.chatId, { ...cmd, from: userId });
+      case 'ping':        return this.routeToChatRoom(cmd.chatId, { ...cmd, from: userId });
+      case 'recall':      return this.routeRecall(userId, cmd);
+      case 'edit':        return this.routeEdit(userId, cmd);
+      case 'subscribe':   return this.subscribe(ws, cmd.chatId);
+      case 'unsubscribe': return this.unsubscribe(ws, cmd.chatId);
+      default:            return this.sendError(ws, 'unknown_type');
     }
-
-    this.sessions.set(ws, { userId });
-    this.broadcastPresence(userId, true);
-
-    ws.addEventListener('message', async (evt) => {
-      let msg: any;
-      try {
-        msg = JSON.parse(evt.data as string);
-      } catch {
-        this.sendTo(userId, { t: 'error', code: 'bad_json', message: 'invalid JSON' });
-        return;
-      }
-
-      switch (msg.t) {
-        case 'send':    await this.handleSend(userId, msg); break;
-        case 'typing':  this.handleTyping(userId, msg.on); break;
-        case 'read':    await this.handleRead(userId, msg.messageIds); break;
-        case 'PING':    this.broadcast({ t: 'PING', from: userId }); break;
-        default:
-          this.sendTo(userId, { t: 'error', code: 'unknown_type', message: msg.t });
-      }
-    });
-
-    ws.addEventListener('close', () => {
-      this.sessions.delete(ws);
-      this.typing.delete(userId);
-      this.broadcastPresence(userId, false);
-    });
   }
 
-  private async handleSend(userId: string, msg: any) {
-    const sequence = ((await this.state.storage.get<number>('seq')) ?? 0) + 1;
-    await this.state.storage.put('seq', sequence);
+  async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
+    const { userId } = ws.deserializeAttachment() as Attachment;
+    if (this.state.getWebSockets().length === 0) await this.markOffline(userId);
+  }
 
-    const messageId = crypto.randomUUID();
+  // ... routeSend → env.CHAT_ROOM.idFromName(chatId) → stub.fetch('/persist', ...)
+  // ... drainOutbound → SELECT outbound_events WHERE user_id=? AND consumed=0
+  //                     emit each to ws, UPDATE consumed=1
+  // ... deliverOrQueue → if any open ws → send + mark delivered_at + ack to sender's UserHub
+  //                      else → INSERT into outbound_events
+}
+```
+
+Heartbeat: `state.setWebSocketAutoResponse(new WebSocketRequestResponsePair('p', 'pong'))` — the runtime handles ping/pong without waking the DO.
+
+### 8.2 `ChatRoom(chatId)` — message persistence & fan-out
+
+One per chat. Has **no client WebSockets** — clients never connect directly. Only other DOs (UserHubs) and HTTP routes talk to it via `stub.fetch('/persist' | '/typing' | '/read' | '/ping' | '/recall' | '/edit')`. This keeps the DO eligible for hibernation between writes.
+
+```typescript
+// packages/relay-worker/src/do/chat-room.ts
+
+export class ChatRoom implements DurableObject {
+  constructor(private state: DurableObjectState, private env: Env) {}
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+
+    switch (url.pathname) {
+      case '/persist': return this.persist(await request.json());
+      case '/typing':  return this.fanoutTyping(await request.json());
+      case '/read':    return this.markRead(await request.json());
+      case '/ping':    return this.fanoutPing(await request.json());
+      case '/recall':  return this.recall(await request.json());
+      case '/edit':    return this.edit(await request.json());
+    }
+    return new Response('not found', { status: 404 });
+  }
+
+  private async persist(input: { senderId: string; tempId: string; type: string; body: string | null }) {
+    const seq = (await this.state.storage.get<number>('seq') ?? 0) + 1;
+    await this.state.storage.put('seq', seq);
+
+    const id = crypto.randomUUID();
     const now = Date.now();
     const chatId = this.state.id.toString();
 
+    // 1. insert message
     await this.env.DB.prepare(
       `INSERT INTO messages (id, chat_id, sender_id, sequence, message_type, body, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).bind(messageId, chatId, userId, sequence, msg.type ?? 'text', msg.body, now).run();
+    ).bind(id, chatId, input.senderId, seq, input.type, input.body, now).run();
 
-    // ack to sender
-    this.sendTo(userId, { t: 'ack', tempId: msg.tempId, messageId, sequence });
-
-    // fan-out to connected recipients
-    const payload = {
-      t: 'message',
-      id: messageId,
-      from: userId,
-      sequence,
-      type: msg.type ?? 'text',
-      body: msg.body,
-      ts: now,
-    };
-
-    for (const [ws, sess] of this.sessions) {
-      if (sess.userId === userId) continue;
-      ws.send(JSON.stringify(payload));
-      await this.markDelivered(messageId, sess.userId, now);
-      this.sendTo(userId, { t: 'delivered', messageId, userId: sess.userId });
+    // 2. insert receipts row per recipient (delivered_at = NULL)
+    const recipients = await this.recipientIds(chatId, input.senderId);
+    if (recipients.length > 0) {
+      const stmt = this.env.DB.prepare(
+        `INSERT INTO receipts (message_id, recipient_id) VALUES (?, ?)`
+      );
+      await this.env.DB.batch(recipients.map(rid => stmt.bind(id, rid)));
     }
 
-    // TODO v1: queue push notification for offline participants
+    // 3. fan-out: notify each recipient's UserHub
+    const payload = { t: 'message', id, chatId, from: input.senderId, sequence: seq,
+                      type: input.type, body: input.body, ts: now };
+    await Promise.all(recipients.map(rid =>
+      this.notifyUser(rid, payload)
+    ));
+
+    // 4. ack the sender
+    return new Response(JSON.stringify({ messageId: id, sequence: seq, ts: now }), {
+      headers: { 'content-type': 'application/json' },
+    });
   }
 
-  private async handleRead(userId: string, messageIds: string[]) {
-    const now = Date.now();
-    const stmt = this.env.DB.prepare(
-      `UPDATE receipts SET read_at = ?
-       WHERE message_id = ? AND recipient_id = ? AND read_at IS NULL`
-    );
-    await this.env.DB.batch(messageIds.map(id => stmt.bind(now, id, userId)));
-
-    for (const id of messageIds) {
-      this.broadcast({ t: 'read', messageId: id, userId });
-    }
-  }
-
-  private handleTyping(userId: string, on: boolean) {
-    if (on) this.typing.add(userId);
-    else this.typing.delete(userId);
-    this.broadcast({ t: 'typing', userId, on }, userId);
-  }
-
-  private async markDelivered(messageId: string, recipientId: string, ts: number) {
-    await this.env.DB.prepare(
-      `INSERT INTO receipts (message_id, recipient_id, delivered_at)
-       VALUES (?, ?, ?)
-       ON CONFLICT(message_id, recipient_id) DO UPDATE SET delivered_at = excluded.delivered_at
-       WHERE receipts.delivered_at IS NULL`
-    ).bind(messageId, recipientId, ts).run();
-  }
-
-  private broadcast(payload: any, exceptUserId?: string) {
-    const json = JSON.stringify(payload);
-    for (const [ws, sess] of this.sessions) {
-      if (exceptUserId && sess.userId === exceptUserId) continue;
-      ws.send(json);
-    }
-  }
-
-  private sendTo(userId: string, payload: any) {
-    const json = JSON.stringify(payload);
-    for (const [ws, sess] of this.sessions) {
-      if (sess.userId === userId) ws.send(json);
-    }
-  }
-
-  private broadcastPresence(userId: string, online: boolean) {
-    this.broadcast({ t: 'presence', userId, online });
-  }
-
-  private async authenticate(request: Request): Promise<string | null> {
-    // verify JWT from subprotocol header or ?token=... query param
-    // validate against sessions table; return user_id or null
-    // (full implementation in auth.ts)
-    return null;
+  private async notifyUser(userId: string, event: any) {
+    const stub = this.env.USER_HUB.get(this.env.USER_HUB.idFromName(userId));
+    await stub.fetch('https://do/notify', {
+      method: 'POST',
+      body: JSON.stringify({ userId, kind: event.t, payload: event, ts: Date.now() }),
+    });
   }
 }
 ```
+
+### 8.3 Binding rule (locked)
+
+> **One ChatRoom DO per chat.** Its name is the literal `chats.id` string. Look it up via `env.CHAT_ROOM.idFromName(chats.id)`. **One UserHub DO per user.** Its name is the literal `users.id` string. Look it up via `env.USER_HUB.idFromName(users.id)`.
+
+For 1:1 chats, `chats.id` is generated deterministically from the sorted pair of user IDs so creation is idempotent:
+
+```
+chats.id = "1to1:" + [userA.id, userB.id].sort().join(":")
+```
+
+For groups (v1), `chats.id = "g:" + crypto.randomUUID()`.
+
+### 8.4 Offline D/R backfill (this is the BBM-correctness mechanism)
+
+**At send:** ChatRoom writes `receipts(delivered_at=NULL, read_at=NULL)` for every recipient.
+
+**Recipient online at send time:** Their UserHub's `/notify` call delivers the message to their socket, updates `receipts.delivered_at = now`, and POSTs a `delivered` event back to the **sender's** UserHub (which forwards to the sender's socket, lighting up the "D").
+
+**Recipient offline at send time:** UserHub's `/notify` finds no open WebSocket → INSERT into `outbound_events(user_id=recipient, kind='message_preview', payload=...)`. When the recipient eventually opens the app and their UserHub `/ws` upgrades, `drainOutbound` SELECTs all `outbound_events WHERE consumed=0`, emits them in `created_at` order, UPDATEs `consumed=1`, and for each `message_preview` it also bumps `receipts.delivered_at = now` and writes a `delivered` event into the **sender's** `outbound_events` (sender may also be offline). Net effect: D arrives correctly on the first moment both have been online, in either order.
+
+Read receipts use the same path on `read` commands; no backfill needed because reading requires explicit user attention.
 
 ---
 
 ## 9. WebSocket Protocol
 
-### Client → Server
+A single WebSocket per user, terminating at `UserHub`. URL: `wss://relay-api.averrow.com/ws` (auth via session cookie on upgrade; same origin, so the cookie travels automatically).
+
+### 9.1 Client → Server
 
 | Type | Payload | Purpose |
 |---|---|---|
-| `send` | `{ tempId, type, body }` | Send a message (type: `text` or `ping`) |
-| `typing` | `{ on: true \| false }` | Start/stop typing indicator |
-| `read` | `{ messageIds: [...] }` | Mark messages as read |
-| `PING` | `{}` | BBM-style nudge |
+| `send` | `{ tempId, chatId, type, body }` | Send a message (`type`: `text` \| `ping`) |
+| `typing` | `{ chatId, on }` | Start/stop typing indicator |
+| `read` | `{ chatId, messageIds }` | Mark messages as read (max 200 ids) |
+| `ping` | `{ chatId }` | BBM-style PING!! nudge |
+| `recall` | `{ messageId }` | Recall own message (soft delete) |
+| `edit` | `{ messageId, body }` | Edit own message |
+| `subscribe` | `{ chatId }` | Receive `typing`/`presence` for this chat |
+| `unsubscribe` | `{ chatId }` | Stop receiving for this chat |
 
-### Server → Client
+### 9.2 Server → Client
 
 | Type | Payload | Purpose |
 |---|---|---|
-| `ack` | `{ tempId, messageId, sequence }` | Confirm send, return server-assigned ID |
-| `message` | `{ id, from, sequence, type, body, ts }` | Incoming message |
-| `delivered` | `{ messageId, userId }` | A recipient received it |
-| `read` | `{ messageId, userId }` | A recipient read it |
-| `typing` | `{ userId, on }` | Someone started/stopped typing |
-| `presence` | `{ userId, online }` | Someone connected/disconnected |
-| `PING` | `{ from }` | Incoming nudge |
+| `ack` | `{ tempId, messageId, sequence, chatId, ts }` | Send confirmed |
+| `message` | `{ id, chatId, from, sequence, type, body, ts }` | Incoming message |
+| `delivered` | `{ messageId, chatId, userId, ts }` | A recipient received it |
+| `read` | `{ messageId, chatId, userId, ts }` | A recipient read it |
+| `typing` | `{ chatId, userId, on }` | Someone typing |
+| `presence` | `{ userId, online, lastSeen }` | Contact online/offline change |
+| `ping` | `{ chatId, from, ts }` | Incoming PING!! |
+| `recalled` | `{ messageId, chatId, ts }` | A message was recalled |
+| `edited` | `{ messageId, chatId, body, editedAt }` | A message was edited |
+| `preview` | `{ chatId, lastMessage, unreadCount }` | Chats-list row updated |
 | `error` | `{ code, message }` | Protocol or auth error |
+
+### 9.3 Error code taxonomy (locked)
+
+`bad_json` · `unknown_type` · `unauthorized` · `rate_limited` · `not_in_chat` · `payload_too_large` · `chat_not_found` · `message_not_found` · `cannot_edit` · `cannot_recall`
+
+### 9.4 Rate limits (per UserHub, in-memory token bucket)
+
+| Command | Limit |
+|---|---|
+| `send` | 30/min |
+| `typing` | 10/sec |
+| `ping` | 6/min |
+| `read` | 5/sec, ≤200 ids per call |
+| `recall`/`edit` | 10/min |
+
+Buckets reset on DO eviction (acceptable — rates are anti-spam, not security).
+
+### 9.5 Message constraints
+
+- `body` length ≤ 2000 characters (validated server-side; `payload_too_large` if exceeded)
+- `edit` only allowed by the original sender, only on messages younger than **15 minutes**, only on `type='text'`
+- `recall` only allowed by the original sender, only on messages younger than **24 hours**
 
 ---
 
@@ -532,16 +597,19 @@ relay/
 ├── packages/
 │   ├── relay-worker/
 │   │   ├── src/
-│   │   │   ├── index.ts           # router + WS upgrade
-│   │   │   ├── auth.ts            # magic link, JWT issue/verify
+│   │   │   ├── index.ts           # Hono router, WS upgrade
+│   │   │   ├── auth.ts            # Google OAuth handlers, session cookie issue/verify
 │   │   │   ├── pin.ts             # Crockford base32 generator
 │   │   │   ├── contacts.ts        # add by PIN, list
-│   │   │   ├── chats.ts           # create 1:1, list
+│   │   │   ├── chats.ts           # create 1:1, list, deterministic IDs
 │   │   │   ├── do/
-│   │   │   │   └── chat-room.ts   # ChatRoom Durable Object
+│   │   │   │   ├── chat-room.ts   # ChatRoom DO
+│   │   │   │   └── user-hub.ts    # UserHub DO
 │   │   │   ├── lib/
 │   │   │   │   ├── jwt.ts
-│   │   │   │   └── email.ts       # Resend wrapper
+│   │   │   │   ├── google-oauth.ts
+│   │   │   │   ├── rate-limit.ts
+│   │   │   │   └── outbound.ts    # outbound_events helpers
 │   │   │   └── schema.sql
 │   │   ├── wrangler.toml
 │   │   └── package.json
@@ -560,13 +628,14 @@ relay/
 │       │   │   ├── Receipt.tsx
 │       │   │   ├── PinDisplay.tsx
 │       │   │   ├── TypingDots.tsx
-│       │   │   └── PingChip.tsx
+│       │   │   ├── PingChip.tsx
+│       │   │   └── LongPressMenu.tsx
 │       │   ├── lib/
-│       │   │   ├── ws.ts          # WebSocket client + reconnect
-│       │   │   ├── api.ts         # fetch wrapper, auth header
-│       │   │   └── format.ts      # PIN formatting, timestamps
+│       │   │   ├── ws.ts          # UserHub WebSocket client, reconnect, event router
+│       │   │   ├── api.ts         # fetch wrapper (cookie auth, credentials: 'include')
+│       │   │   └── format.ts      # PIN formatting, relative timestamps
 │       │   └── styles/
-│       │       └── tokens.css     # design tokens (palette)
+│       │       └── tokens.css
 │       ├── vite.config.ts
 │       └── package.json
 ├── turbo.json
@@ -579,23 +648,23 @@ relay/
 
 | # | Session | Output |
 |---|---|---|
-| 1 | **Foundation** | Turborepo scaffold, Worker, D1 init, schema applied, magic-link auth, PIN generation, `GET /me` working |
-| 2 | **Contacts + Chats** | Add by PIN, create 1:1 chat, list chats endpoint, contact-invite model |
-| 3 | **Chat DO + WebSockets** | ChatRoom DO, send/receive, sequence numbers, D/R receipts, typing, PING |
-| 4 | **React UI** | Sign in → Onboarding → Chats list → Chat view, mobile-first, design tokens locked |
-| 5 | **Polish + deploy** | Animations (PING shake, typing dots), PWA manifest, deploy to a Relay subdomain |
+| 1 | **Foundation + Google Auth** | Turborepo (Worker + UI stub), Hono router, D1 schema applied, `@hono/oauth-providers/google` wired end-to-end, session cookie issued, `GET /me` + `PATCH /me`, PIN generation, README documents local setup |
+| 2 | **Contacts + Chats** | `POST /contacts/add` (by PIN), `GET /contacts` (with `last_seen_at`), `POST /chats/1to1` (deterministic ID, find-or-create), `GET /chats` (preview + unread count), `outbound_events` helpers |
+| 3 | **Realtime: UserHub + ChatRoom** | Both DOs on Hibernation API, single `/ws` endpoint on UserHub, all client→server commands wired, **offline D/R backfill via `outbound_events` drain on connect**, rate limiting, full error taxonomy |
+| 4 | **React PWA** | Vite + React + React Router v7, all 6 routes, all components, `ws.ts` client with exponential-backoff reconnect, design tokens locked, recall/edit long-press menu |
+| 5 | **Polish + deploy** | PING shake CSS animation, typing dots, recalled/edited tags, PWA manifest + SW, Cloudflare Pages deploy to `relay.averrow.com`, Worker route on `relay-api.averrow.com`, two-device smoke test |
 
-**Critical rule:** start a fresh Claude Code session for each phase. Long sessions cause context drift and stale instructions.
+**Critical rule:** start a fresh Claude Code session for each phase. Long sessions cause context drift.
 
 ---
 
 ## 12. Session 1 — Claude Code Prompt (paste-ready)
 
 ```
-# RELAY — SESSION 1: FOUNDATION
+# RELAY — SESSION 1: FOUNDATION + GOOGLE AUTH
 
 You are building Relay, a BBM-inspired messenger.
-Stack: Cloudflare Workers + D1 + Durable Objects + R2,
+Stack: Cloudflare Workers (Hono) + D1 + Durable Objects + R2,
 React PWA frontend, Turborepo monorepo.
 
 ## CODING STANDARD: DIAGNOSE FIRST
@@ -612,23 +681,32 @@ No blind fixes. No bandaids. Solve correctly.
     full UI is Session 4)
 
 2. relay-worker: Hono router, wrangler.toml configured for D1 +
-   DO binding (ChatRoom class stubbed only — fetch returns 501)
+   DO bindings (CHAT_ROOM and USER_HUB classes stubbed only —
+   their fetch returns 501)
 
 3. Apply D1 schema (see SCHEMA section below) via
    `wrangler d1 execute relay-db --local --file=src/schema.sql`
    and document the remote-apply command in README.
 
-4. Implement endpoints:
-     POST /auth/request   { email }            → sends magic link
-     GET  /auth/verify    ?token=...           → returns JWT,
-                                                 creates user if new
-     GET  /me                                  → returns
-                                                 { id, pin, displayName,
-                                                   statusMessage }
-     PATCH /me            { displayName?, statusMessage? }
-                                               → update profile
+4. Implement Google OAuth via @hono/oauth-providers/google:
+     GET  /auth/google            → 302 to Google consent
+     GET  /auth/google/callback   → exchange code, find-or-create user,
+                                    issue session cookie, redirect to APP_URL
+     POST /auth/signout           → revoke jti, clear cookie
+     GET  /me                     → return { id, pin, displayName,
+                                              statusMessage, avatarUrl, email }
+     PATCH /me                    → update displayName / statusMessage
 
-5. PIN generation:
+5. Session cookie:
+   - HS256 JWT (env: JWT_SECRET)
+   - jti = crypto.randomUUID(), stored in sessions table
+   - 30-day expiry
+   - Cookie: HttpOnly, Secure, SameSite=Lax, Domain=AUTH_COOKIE_DOMAIN
+     (unset in dev), Path=/
+   - Verify on every request: signature → jti exists in sessions →
+     not revoked → not expired
+
+6. PIN generation (first sign-in only):
    - 8-char Crockford base32
    - Alphabet: 0123456789ABCDEFGHJKMNPQRSTVWXYZ (excludes I, L, O, U)
    - Generated via crypto.getRandomValues, NOT Math.random
@@ -636,46 +714,46 @@ No blind fixes. No bandaids. Solve correctly.
    - Returned to client unformatted; client formats as XXXX·XXXX
    - Collision-retry on insert (max 5 attempts, then 500)
 
-6. Magic-link email via Resend:
-   - env: RESEND_API_KEY, FROM_EMAIL, APP_URL
-   - APP_URL for local dev: http://localhost:5173
-   - APP_URL for production: https://relay.averrow.com
-   - FROM_EMAIL: noreply@averrow.com (or a relay-specific sender once
-     domain auth is added in Resend)
-   - For local dev (wrangler dev), if RESEND_API_KEY is unset,
-     console.log the magic link instead of sending
-   - Link format: ${APP_URL}/auth/verify?token=...
-   - Token: 32-byte random, base64url-encoded
-   - Expiry: 15 minutes
-   - Single-use (mark consumed=1 on verify)
+7. Env vars (wrangler.toml + .dev.vars):
+   - GOOGLE_ID, GOOGLE_SECRET — Google OAuth client (Web app)
+   - JWT_SECRET — HS256 signing key (32+ bytes, random)
+   - APP_URL — http://localhost:5173 (dev) / https://relay.averrow.com (prod)
+   - AUTH_COOKIE_DOMAIN — unset (dev) / .averrow.com (prod)
 
-7. JWT:
-   - HS256 signed, secret in env (JWT_SECRET)
-   - 24-hour expiry
-   - Includes jti (random UUID) stored in sessions table
-   - Verify path: check signature, check jti exists in sessions,
-     check not revoked, check not expired
+8. Google Cloud Console setup (document in README):
+   - Create OAuth 2.0 Client ID (Web application)
+   - Authorized redirect URIs:
+       http://localhost:8787/auth/google/callback
+       https://relay-api.averrow.com/auth/google/callback
+   - Consent screen: app name "Relay", scopes openid/email/profile
 
 ## D1 SCHEMA
 
-[Paste the schema block from section 7 of this spec]
+[Paste the schema block from section 7 of this spec — both
+ tables and indexes. There are 8 tables: users, sessions,
+ contacts, chats, chat_participants, messages, receipts,
+ outbound_events. Do NOT create auth_emails or auth_tokens —
+ those tables do not exist in v2.]
 
 ## ACCEPTANCE CRITERIA
 
 - `wrangler dev` runs cleanly with zero TypeScript errors
-- `curl -X POST localhost:8787/auth/request -d '{"email":"test@example.com"}' -H 'Content-Type: application/json'`
-  returns 200, console logs a magic link
-- Following the magic link returns a JWT in the response body
-- `curl localhost:8787/me -H "Authorization: Bearer <jwt>"`
-  returns the user object with an 8-char PIN
-- `wrangler d1 execute relay-db --local --command "SELECT pin FROM users"`
-  shows generated PINs
-- All TypeScript strict, no `any` without inline justification comment
-- README.md documents setup steps and the four endpoints
+- Visiting http://localhost:8787/auth/google redirects to Google
+- After Google consent, callback issues a session cookie and
+  redirects to APP_URL/onboarding (first sign-in) or APP_URL/chats
+- `curl localhost:8787/me -b "session=<cookie>"` returns the user
+  object with an 8-char PIN
+- `wrangler d1 execute relay-db --local --command "SELECT pin, email FROM users"`
+  shows generated PINs and Google emails
+- All TypeScript strict, NO `any` without an inline justification
+  comment (this applies to DO message handlers too — define
+  discriminated unions ClientMsg / ServerMsg now)
+- README documents: env vars, Google Cloud setup, local D1
+  apply command, four auth endpoints, the cookie contract
 
 ## OUT OF SCOPE FOR THIS SESSION
 
-- WebSockets / ChatRoom DO implementation (Session 3)
+- WebSockets / DO implementation beyond stubs (Session 3)
 - Contacts / chats endpoints (Session 2)
 - React UI (Session 4)
 - Encryption (v1)
@@ -696,42 +774,51 @@ Use these only as the *next* session begins. Write the full prompt fresh each ti
 
 ### Session 2 — Contacts + Chats
 
-- `POST /contacts/add` `{ pin }` — look up user by PIN, create mutual contact entry
-- `GET /contacts` — list with online/offline state (uses `last_seen_at`)
-- `POST /chats/1to1` `{ contactId }` — find-or-create deterministic 1:1 chat (sorted-pair ID)
-- `GET /chats` — list user's chats with last message preview, unread count, last activity
-- Contact invite model if you want explicit accept/decline (optional for v0)
+- `POST /contacts/add` `{ pin }` — look up user by PIN, create mutual contact entries in one transaction
+- `GET /contacts` — list with online/offline derived from `last_seen_at` (online if `last_seen_at > now - 60s`)
+- `POST /chats/1to1` `{ contactId }` — compute `chats.id = "1to1:" + sorted-pair`, find-or-create idempotently, also insert two `chat_participants` rows
+- `GET /chats` — list user's chats with last message preview, unread count (`COUNT(receipts WHERE recipient=me AND read_at IS NULL`), last activity
+- Implement `outbound_events` insert/drain helpers in `lib/outbound.ts`
 
-### Session 3 — ChatRoom DO + WebSockets
+### Session 3 — UserHub + ChatRoom + WebSockets
 
-- Full ChatRoom DO implementation (use the skeleton in section 8)
-- Endpoint: `GET /chats/:id/ws` → upgrades to WS, routes to DO
-- JWT auth on WS handshake via `Sec-WebSocket-Protocol: bearer.<jwt>` or `?token=` query
-- Sequence numbers persisted in DO storage
-- D/R receipts wired to receipts table
-- Typing in-memory only (no persistence)
-- PING broadcast to all participants
-- Heartbeat / idle timeout: kick after 60s no activity
+- Implement both DOs on the Hibernation API (see §8)
+- Single WS endpoint: `GET /ws` → upgrades to UserHub via cookie auth
+- ChatRoom is HTTP-only (no client WS); UserHub calls it via `stub.fetch`
+- All client commands: `send`/`typing`/`read`/`ping`/`recall`/`edit`/`subscribe`/`unsubscribe`
+- Offline D/R backfill: `drainOutbound(userId)` on connect (SELECT/UPDATE in batch)
+- Rate limits (§9.4) via in-memory token bucket on UserHub
+- Error taxonomy (§9.3) wired everywhere
+- Heartbeat via `setWebSocketAutoResponse('p','pong')`
+- `recall`: UPDATE messages SET deleted_at = now WHERE id = ? AND sender_id = self AND created_at > now - 24h
+- `edit`: UPDATE messages SET body = ?, edited_at = now WHERE id = ? AND sender_id = self AND created_at > now - 15m AND message_type = 'text'
 
 ### Session 4 — React UI
 
-- Vite + React + TypeScript
-- Routes (React Router): /signin, /onboarding, /chats, /chats/:id, /add-contact, /profile
-- Design tokens in `styles/tokens.css` per palette in section 3
-- Components: MessageBubble, Receipt, PinDisplay, TypingDots, PingChip
-- WebSocket client in `lib/ws.ts` with exponential-backoff reconnect
-- Mobile-first; fluid widths; minimum 44px touch targets
+- Vite + React + TypeScript + React Router v7
+- Routes: `/signin`, `/onboarding`, `/chats`, `/chats/:id`, `/add-contact`, `/profile`
+- All API calls use `credentials: 'include'` for cookie auth
+- Design tokens in `styles/tokens.css` per §3
+- Components: MessageBubble (variants: text, ping, recalled, edited), Receipt (D/R glyphs), PinDisplay, TypingDots, PingChip, LongPressMenu
+- WebSocket client in `lib/ws.ts`:
+  - Single instance, opens on app mount, closes on signout
+  - Exponential-backoff reconnect (1s, 2s, 4s, 8s, max 30s)
+  - Event router: `dispatch(event)` → store update via Zustand or React context
+  - Outbound queue when not connected (held in memory)
+- Mobile-first; fluid widths; minimum 44×44px touch targets
 - Test on Pixel 9 Pro XL viewport (412 × 915 CSS px)
 
 ### Session 5 — Polish + Deploy
 
-- PING shake animation (CSS keyframes on incoming PING)
-- Typing dots animation
-- PWA manifest + service worker for installability
+- PING shake animation: CSS `@keyframes` on incoming PING bubble + ~600ms
+- Typing dots: 3-dot pulse animation, dimmed
+- "edited" and "recalled" affordances in MessageBubble
+- PWA manifest: name, short_name, icons (192, 512, maskable), theme_color = `#0A0A0E`, background_color = `#0A0A0E`
+- Service worker: cache shell, network-first for API
 - Favicon, splash, og:image
-- Deploy Worker to `relay-api.averrow.com`
-- Deploy UI to `relay.averrow.com` (Cloudflare Pages)
-- Smoke test: two devices, one PIN exchange, full conversation including PING
+- Deploy Worker to `relay-api.averrow.com` via `wrangler deploy`
+- Deploy UI to `relay.averrow.com` via Cloudflare Pages
+- Smoke test: two devices (or one device + incognito), full BBM conversation including offline D backfill (sign out one side, send messages, sign back in, verify D lights up)
 
 ---
 
@@ -744,10 +831,10 @@ Use these only as the *next* session begins. Write the full prompt fresh each ti
 | Web UI (PWA) | `https://relay.averrow.com` | Cloudflare Pages project `relay-ui` |
 | API + WS | `https://relay-api.averrow.com` | Cloudflare Worker `relay-worker` |
 
-### DNS records to add (averrow.com zone)
+### DNS records (averrow.com zone)
 
 - `relay` — CNAME → Pages project hostname (set automatically by Pages on custom-domain bind)
-- `relay-api` — proxied to the Worker (via Worker route binding, no DNS record needed beyond enabling the route)
+- `relay-api` — proxied to the Worker via the route binding below (no separate DNS record)
 
 ### Worker route binding (`wrangler.toml`)
 
@@ -759,7 +846,23 @@ zone_name = "averrow.com"
 
 ### CORS
 
-`relay-api.averrow.com` allows origin `https://relay.averrow.com` only in production. Local dev allows `http://localhost:5173`. No wildcard.
+`relay-api.averrow.com` allows origin `https://relay.averrow.com` only in production.
+Local dev allows `http://localhost:5173` and `http://localhost:8787`.
+For LAN testing of the PWA on a real phone, dev mode additionally allows `http://192.168.*` and `http://10.*` (regex-matched, dev-only).
+No wildcard CORS, ever.
+
+All cross-origin requests use `credentials: 'include'` so the session cookie travels. WS upgrade is same-origin (no CORS needed).
+
+### Google Cloud Console setup
+
+- Project: `relay-prod` (and `relay-dev`)
+- OAuth Consent Screen: External, app name "Relay", logo (192×192 maskable), support email, scopes `openid email profile`
+- OAuth 2.0 Client ID — Web application
+- Authorized redirect URIs:
+  - `https://relay-api.averrow.com/auth/google/callback`
+  - `http://localhost:8787/auth/google/callback`
+- Drop client_id / client_secret into Wrangler secrets:
+  - `wrangler secret put GOOGLE_ID` / `GOOGLE_SECRET` / `JWT_SECRET`
 
 ### Brand isolation from Averrow proper
 
@@ -767,14 +870,7 @@ zone_name = "averrow.com"
 - No shared D1 database. Relay gets its own D1 (`relay-db`).
 - No shared user table. Averrow auth ≠ Relay auth.
 - No shared design system. Averrow uses Afterburner Amber (#E5A832); Relay uses Signal Orange (#FF5C2A). Distinct on purpose.
-- Footer on `relay.averrow.com` says "from LRX Enterprises" — not "from Averrow." Keeps the option open to split it out to a standalone domain later (e.g., `getrelay.app`) without rebranding.
-
-### Resend setup
-
-- Add `averrow.com` as a verified sending domain in Resend (if not already)
-- DKIM/SPF records published in the averrow.com zone
-- Use `noreply@averrow.com` as `FROM_EMAIL` for Relay magic links initially
-- Once Relay has traction, optionally migrate to a Relay-branded sender like `hello@relay.averrow.com` (requires Resend domain re-verification on the subdomain)
+- Footer on `relay.averrow.com` says "from LRX Enterprises" — keeps the option open to split to `getrelay.app` without rebrand.
 
 ---
 
@@ -788,16 +884,92 @@ zone_name = "averrow.com"
 
 ---
 
-## 16. Future Considerations (v1+)
+## 16. v1+ Roadmap (concrete epics, not just bullets)
 
-- **E2E encryption layer:** libsodium-wrappers (X25519 ECDH + XSalsa20-Poly1305), per-chat symmetric key, per-message nonce. Server stores ciphertext only.
-- **Multi-device:** per-device keypair; sender-side fan-out encryption to each recipient device
-- **Groups:** reuse the `chats` table with `type='group'`; new participant flow; group key rotation on member change
-- **Media:** R2 storage; client-side encrypts payload with random key; key sent in chat message
-- **Push notifications:** Cloudflare Queue → FCM/APNs/Web Push fan-out worker
-- **QR code add-contact:** library candidate is `qrcode` for generation, `@zxing/library` for scan
-- **Federation / open protocol:** consider Matrix-style federation as a moonshot; would let Relay interop with other servers
+| Epic | Sketch |
+|---|---|
+| **E1: Groups** | Reuse `chats.type='group'`; add `/chats/group` create endpoint; participant invite/leave flow; group avatar; group D coloring (gray-D = some / orange-D = all, per receipts aggregate) |
+| **E2: Media** | R2 bucket `relay-media`; `POST /media/upload` returns presigned PUT; client uploads; message body carries `media_r2_key`; image/voice/file rendering in MessageBubble |
+| **E3: Stickers** | R2-hosted sticker packs; `GET /stickers/packs`; new `message_type='sticker'` (schema change required); sticker picker in input bar |
+| **E4: BBM Voice/Video** | WebRTC; ChatRoom DO acts as signaling channel for ICE/SDP exchange; TURN via Cloudflare Calls API |
+| **E5: E2E Encryption** | libsodium-wrappers (X25519 ECDH + XSalsa20-Poly1305), per-chat symmetric key, per-message nonce; server stores ciphertext + AAD only |
+| **E6: Multi-device** | Per-device keypair; sender-side fan-out encryption to each recipient device; device list in profile |
+| **E7: Push notifications** | Web Push (VAPID) for v1; APNs/FCM gateways for v2 native; `outbound_events` already provides the durable queue |
+| **E8: QR add-contact** | `qrcode` for generation, `@zxing/library` for camera scan; payload = PIN |
+| **E9: Broadcast lists** | Sender-side fan-out; no group chat semantics; recipients see as 1:1 from sender |
+| **E10: Federation** | Long-term moonshot — Matrix-style federation; consider after E1–E7 land |
 
 ---
 
-*End of spec. Print this. Tape it to your monitor. Ship Session 1 this weekend.*
+## 17. BBM Feature Parity Matrix
+
+| BBM Consumer feature | v0 | v1+ | Notes |
+|---|---|---|---|
+| PIN identity (8-char Crockford base32) | ✅ | | |
+| D / R receipts with **offline backfill** | ✅ | | Via `outbound_events` drain |
+| PING!! | ✅ | | Shake animation v0; sound v1 |
+| Typing indicator | ✅ | | "X is composing···" |
+| Status message | ✅ | | Shown under display name |
+| Avatar (Google photo URL) | ✅ | | Self-upload deferred to v1 (E2) |
+| Display name (editable) | ✅ | | Seeded from Google |
+| Message recall (≤24h) | ✅ | | Soft delete |
+| Message edit (≤15m, text only) | ✅ | | `edited_at` column |
+| 2000-char body cap | ✅ | | API-enforced |
+| Contact categories | schema only | UI in v1 | |
+| Last-seen | ✅ | | Derived from `last_seen_at` |
+| Groups up to 250 | | E1 | Schema is group-ready |
+| Group D coloring (some/all) | | E1 | |
+| Broadcast lists | | E9 | |
+| BBM Channels | | ❌ | Out of roadmap |
+| BBM Voice (audio) | | E4 | |
+| BBM Video | | E4 | |
+| Stickers | | E3 | |
+| Pictures/files/voice notes | | E2 | |
+| Real-time location share | | ❌ | Out of scope |
+| End-to-end encryption | | E5 | |
+| QR add-contact | | E8 | |
+| Push notifications | | E7 | |
+
+---
+
+## 18. Operational Concerns
+
+### 18.1 Observability
+
+- Workers Logs enabled in production (`[observability] enabled = true` in `wrangler.toml`)
+- `wrangler tail relay-worker` for live local debugging
+- Per-route latency emitted via `console.log` with structured JSON (Workers Logs auto-parses)
+- DO storage size monitored via Cloudflare dashboard alerts (per chat: shouldn't grow beyond `seq` counter + ~few KB)
+
+### 18.2 CI
+
+GitHub Actions on push + PR:
+- `pnpm install --frozen-lockfile`
+- `pnpm -r typecheck` (`tsc --noEmit` in each package)
+- `pnpm -r test` (Vitest in `relay-worker` using `@cloudflare/vitest-pool-workers`)
+- `pnpm -r build`
+- `wrangler deploy --dry-run` in `relay-worker` (config sanity)
+
+### 18.3 Pinned versions
+
+- Node: **20.x LTS** (pinned via `.nvmrc` and `"engines.node": "^20"`)
+- pnpm: **9.x**
+- Wrangler: **^4** (latest at v0 time)
+- Hono: **^4**
+
+### 18.4 Local development
+
+- `pnpm dev` runs `wrangler dev` + Vite concurrently via Turbo
+- Worker on `http://localhost:8787`, UI on `http://localhost:5173`
+- D1 local sqlite at `.wrangler/state/v3/d1`
+- For Google OAuth locally, use a *separate* Google Cloud OAuth client (`relay-dev`) so prod secrets never appear in `.dev.vars`
+
+### 18.5 Secrets management
+
+- Production secrets via `wrangler secret put`
+- Local dev secrets in `.dev.vars` (gitignored)
+- Rotation: `JWT_SECRET` rotation invalidates all sessions — acceptable; do at most quarterly. `GOOGLE_SECRET` rotation requires no app change.
+
+---
+
+*End of spec. v2 — Google OAuth, two-DO hibernating realtime, offline-correct D/R, BBM-grade UX. Print this. Tape it to your monitor. Ship Session 1 this weekend.*
