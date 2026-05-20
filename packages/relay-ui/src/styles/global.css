@@ -31,8 +31,38 @@ body,
   margin: 0;
 }
 
+/* Konsta's received Message bubble uses `text-inherit`, and Konsta itself
+   doesn't pin a body color in light mode — leaving us at the mercy of OS
+   defaults (which on Android Chrome dark-mode-aware sites flip text to
+   white). Force the colors explicitly. */
+html {
+  color: #000000;
+  background: #ffffff;
+}
+:root[data-theme="dark"] html,
+:root[data-theme="dark"] body,
+html[data-theme="dark"],
+html[data-theme="dark"] body {
+  color: #ffffff;
+  background: #000000;
+}
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]),
+  html:not([data-theme="light"]) body {
+    color: #ffffff;
+    background: #000000;
+  }
+}
+
 body {
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior: none;
+}
+
+/* Konsta Messagebar's textarea inherits text color too. With body color
+   forced above, textarea inherits correctly. Belt-and-suspenders. */
+textarea,
+input {
+  color: inherit;
 }
