@@ -105,6 +105,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ contactId }),
     }),
+  deleteChat: (chatId: string) =>
+    request<{ ok: true }>(`/chats/${encodeURIComponent(chatId)}`, { method: 'DELETE' }),
   createGroup: (subject: string, contactIds: string[]) =>
     request<{
       id: string;

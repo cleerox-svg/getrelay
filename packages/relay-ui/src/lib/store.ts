@@ -30,6 +30,7 @@ interface AppState {
 
   loadChats: () => Promise<void>;
   openOneToOne: (contactId: string) => Promise<string>;
+  deleteChat: (chatId: string) => Promise<void>;
   createGroup: (subject: string, contactIds: string[]) => Promise<string>;
   addGroupMembers: (chatId: string, contactIds: string[]) => Promise<number>;
 
@@ -126,6 +127,16 @@ export const useStore = create<AppState>((set, get) => ({
     const res = await api.openOneToOne(contactId);
     if (res.created) await get().loadChats();
     return res.id;
+  },
+  deleteChat: async (chatId: string) => {
+    await api.deleteChat(chatId);
+    set((s) => {
+      const { [chatId]: _drop, ...rest } = s.byChat;
+      return {
+        chats: s.chats.filter((c) => c.id !== chatId),
+        byChat: rest,
+      };
+    });
   },
   createGroup: async (subject, contactIds) => {
     const res = await api.createGroup(subject, contactIds);

@@ -75,10 +75,18 @@ export function mediaRoutes() {
   app.get('/m/:key', async (c) => {
     const key = c.req.param('key');
     if (!key || key.includes('/') || key.includes('..')) {
+      console.warn(`media: bad key '${key}'`);
+      return c.text('not found', 404);
+    }
+    if (!c.env.MEDIA) {
+      console.error('media: MEDIA binding missing');
       return c.text('not found', 404);
     }
     const obj = await c.env.MEDIA.get(key);
-    if (!obj) return c.text('not found', 404);
+    if (!obj) {
+      console.warn(`media: 404 ${key}`);
+      return c.text('not found', 404);
+    }
 
     const headers = new Headers();
     obj.writeHttpMetadata(headers);

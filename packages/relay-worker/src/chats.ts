@@ -32,6 +32,17 @@ export function chatsRoutes() {
       .first<{ id: string; created_at: number }>();
 
     if (existing) {
+      // Re-insert participant rows in case either side previously left the
+      // chat (DELETE /chats/:id removes only the caller's row). Safe to
+      // re-run because of INSERT OR IGNORE on the (chat_id, user_id) PK.
+      await c.env.DB.batch([
+        c.env.DB.prepare(
+          `INSERT OR IGNORE INTO chat_participants (chat_id, user_id, joined_at) VALUES (?, ?, ?)`,
+        ).bind(chatId, me.id, now),
+        c.env.DB.prepare(
+          `INSERT OR IGNORE INTO chat_participants (chat_id, user_id, joined_at) VALUES (?, ?, ?)`,
+        ).bind(chatId, contactId, now),
+      ]);
       return c.json({ id: existing.id, type: '1to1', createdAt: existing.created_at, created: false });
     }
 
@@ -293,6 +304,38 @@ export function chatsRoutes() {
     });
 
     return c.json({ chats });
+  });
+
+  // DELETE /chats/:id — soft-leave. Drops the caller's chat_participants
+  // row + their own receipts; the chat itself and other participants stay
+  // intact. For 1:1, the chat reappears when the caller next opens it
+  // (openOneToOne re-inserts the participant row).
+  app.delete('/chats/:id', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const chatId = decodeURIComponent(c.req.param('id') ?? '');
+    if (!chatId) return c.json({ error: 'invalid_chat_id' }, 400);
+
+    const member = await c.env.DB.prepare(
+      `SELECT 1 AS ok FROM chat_participants WHERE chat_id = ? AND user_id = ?`,
+    )
+      .bind(chatId, me.id)
+      .first<{ ok: number }>();
+    if (!member) return c.json({ error: 'not_in_chat' }, 403);
+
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        `DELETE FROM receipts
+         WHERE recipient_id = ?
+           AND message_id IN (SELECT id FROM messages WHERE chat_id = ?)`,
+      ).bind(me.id, chatId),
+      c.env.DB.prepare(
+        `DELETE FROM chat_participants WHERE chat_id = ? AND user_id = ?`,
+      ).bind(chatId, me.id),
+    ]);
+
+    return c.json({ ok: true });
   });
 
   return app;
