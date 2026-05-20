@@ -6,7 +6,7 @@
 //  - Never intercept API calls (they go to relay-api.* — different origin).
 //  - Stale-while-revalidate for same-origin static assets.
 
-const SHELL_CACHE = 'relay-shell-v2';
+const SHELL_CACHE = 'relay-shell-v3';
 const SHELL_URLS = ['/', '/index.html', '/manifest.webmanifest', '/favicon.svg', '/icon.svg'];
 
 self.addEventListener('install', (event) => {
@@ -94,6 +94,21 @@ self.addEventListener('push', (event) => {
     const chatId = data.chatId || '';
     const tag = data.tag || chatId || 'relay-message';
 
+    // If a Relay tab is currently focused on THIS device, silence the
+    // notification — the user is already looking at Relay. Other devices
+    // will still get the full notification because each receives its own
+    // push and runs its own SW.
+    let focused = false;
+    try {
+      const all = await self.clients.matchAll({
+        type: 'window',
+        includeUncontrolled: true,
+      });
+      focused = all.some((c) => c.focused);
+    } catch {
+      /* ignore */
+    }
+
     try {
       // Use PNG icons — Android Chrome silently drops SVG icons on the
       // notification surface, so the notification can fail to render or
@@ -101,7 +116,8 @@ self.addEventListener('push', (event) => {
       await self.registration.showNotification(title, {
         body,
         tag,
-        renotify: true,
+        renotify: !focused,
+        silent: focused,
         icon: '/icon-192.png',
         badge: '/icon-192.png',
         data: { chatId },

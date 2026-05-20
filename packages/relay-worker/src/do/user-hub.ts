@@ -182,24 +182,31 @@ export class UserHub implements DurableObject {
   ): Promise<void> {
     const sockets = this.openSocketsFor(userId);
 
+    const persistKind: OutboundKind | null = outboundKindFor(kind);
+
     if (sockets.length === 0) {
-      const persistKind: OutboundKind | null = outboundKindFor(kind);
-      if (persistKind === null) return; // ephemeral — drop silently
-      await insertOutboundEvent(this.env, userId, persistKind, payload);
-      // Best-effort Web Push only for message-bearing kinds; presence /
-      // read / delivered would just spam the notification tray.
-      if (kind === 'message_preview' || kind === 'ping') {
-        await pushToUser(this.env, userId, buildPushPayload(kind, payload)).catch(
-          () => undefined,
-        );
+      // No live socket on this UserHub. Queue persistable kinds for the
+      // recipient to drain on next connect; ephemeral kinds drop.
+      if (persistKind !== null) {
+        await insertOutboundEvent(this.env, userId, persistKind, payload);
       }
-      return;
+    } else {
+      for (const s of sockets) this.safeSend(s, payload as ServerMsg);
+      if (kind === 'message_preview' || kind === 'ping') {
+        await this.markDeliveredAndAck(userId, payload);
+      }
     }
 
-    for (const s of sockets) this.safeSend(s, payload as ServerMsg);
-
+    // Always fire Web Push for message-bearing kinds, regardless of
+    // socket state. A user can be "online" on desktop while their mobile
+    // PWA sits closed — that mobile still deserves a notification. The
+    // SW silences the notification (no sound / vibration) on whichever
+    // device is currently focused so it isn't annoying for the user
+    // actively reading the chat.
     if (kind === 'message_preview' || kind === 'ping') {
-      await this.markDeliveredAndAck(userId, payload);
+      await pushToUser(this.env, userId, buildPushPayload(kind, payload)).catch(
+        () => undefined,
+      );
     }
   }
 
