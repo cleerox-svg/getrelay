@@ -4,9 +4,22 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "echo 'UI package is a stub until Session 4. See RELAY_BUILD_SPEC.md §11.' && exit 0",
-    "build": "echo 'UI package is a stub until Session 4.' && exit 0",
-    "typecheck": "echo 'UI package is a stub until Session 4.' && exit 0",
-    "test": "echo 'UI package is a stub until Session 4.' && exit 0"
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --noEmit"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.1.1",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.5"
   }
 }

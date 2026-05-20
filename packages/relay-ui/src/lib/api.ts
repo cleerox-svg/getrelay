@@ -1,0 +1,61 @@
+import type { Chat, Contact, Me } from './types';
+
+export const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8787').replace(
+  /\/+$/,
+  '',
+);
+
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    public code: string,
+    message?: string,
+  ) {
+    super(message ?? code);
+  }
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    credentials: 'include',
+    headers: {
+      'content-type': 'application/json',
+      ...(init.headers ?? {}),
+    },
+    ...init,
+  });
+  if (!res.ok) {
+    let code = 'http_error';
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body.error) code = body.error;
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(res.status, code);
+  }
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
+export const api = {
+  health: () => request<{ ok: boolean; service: string }>('/health'),
+  me: () => request<Me>('/me'),
+  updateMe: (body: { displayName?: string; statusMessage?: string }) =>
+    request<{ ok: true }>('/me', { method: 'PATCH', body: JSON.stringify(body) }),
+  signout: () => request<void>('/auth/signout', { method: 'POST' }),
+  listContacts: () => request<{ contacts: Contact[] }>('/contacts'),
+  addContact: (pin: string) =>
+    request<{ ok: boolean; contactId: string }>('/contacts/add', {
+      method: 'POST',
+      body: JSON.stringify({ pin }),
+    }),
+  listChats: () => request<{ chats: Chat[] }>('/chats'),
+  openOneToOne: (contactId: string) =>
+    request<{ id: string; type: '1to1'; createdAt: number; created: boolean }>('/chats/1to1', {
+      method: 'POST',
+      body: JSON.stringify({ contactId }),
+    }),
+};
+
+export const GOOGLE_SIGNIN_URL = `${API_BASE}/auth/google`;
