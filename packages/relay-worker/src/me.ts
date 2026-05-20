@@ -10,7 +10,7 @@ export function meRoutes() {
     if (!me) return c.json({ error: 'unauthorized' }, 401);
 
     const row = await c.env.DB.prepare(
-      `SELECT id, email, pin, display_name, status_message, avatar_url
+      `SELECT id, email, pin, display_name, status_message, avatar_url, is_admin
        FROM users WHERE id = ?`,
     ).bind(me.id).first<{
       id: string;
@@ -19,6 +19,7 @@ export function meRoutes() {
       display_name: string;
       status_message: string | null;
       avatar_url: string | null;
+      is_admin: number;
     }>();
     if (!row) return c.json({ error: 'user_not_found' }, 404);
 
@@ -29,6 +30,7 @@ export function meRoutes() {
       displayName: row.display_name,
       statusMessage: row.status_message,
       avatarUrl: row.avatar_url,
+      isAdmin: row.is_admin === 1,
     });
   });
 

@@ -85,8 +85,16 @@ lands in Session 5.
 
 | Session | Status |
 |---|---|
-| 1 Foundation + Google Auth | scaffolded in this branch |
-| 2 Contacts + Chats | endpoints stubbed (501) |
+| 1 Foundation + Google Auth | shipped |
+| 2 Contacts + Chats | shipped |
 | 3 Realtime: UserHub + ChatRoom | DO classes stubbed (501) |
 | 4 React PWA | empty package |
 | 5 Polish + deploy | pending |
+
+## Admin users
+
+Emails in the `ADMIN_EMAILS` var (comma-separated) are auto-promoted to
+`is_admin = 1` on Google sign-in — both at first sign-up and on subsequent
+sign-ins for already-existing users. `GET /me` returns `isAdmin: true` for
+them. The list lives in `wrangler.toml` (`[vars]` and
+`[env.production.vars]`).

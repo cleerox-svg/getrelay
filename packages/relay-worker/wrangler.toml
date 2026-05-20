@@ -32,6 +32,7 @@ enabled = true
 [vars]
 APP_URL = "http://localhost:5173"
 AUTH_COOKIE_DOMAIN = ""
+ADMIN_EMAILS = "cleerox@gmail.com"
 
 # ----- Production environment -----
 [env.production]
@@ -43,6 +44,7 @@ routes = [
 [env.production.vars]
 APP_URL = "https://relay.averrow.com"
 AUTH_COOKIE_DOMAIN = ".averrow.com"
+ADMIN_EMAILS = "cleerox@gmail.com"
 
 [[env.production.d1_databases]]
 binding = "DB"

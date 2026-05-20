@@ -8,4 +8,5 @@ export interface Env {
   JWT_SECRET: string;
   APP_URL: string;
   AUTH_COOKIE_DOMAIN: string;
+  ADMIN_EMAILS: string;
 }

@@ -5,3 +5,6 @@
 GOOGLE_ID=your-google-oauth-client-id.apps.googleusercontent.com
 GOOGLE_SECRET=your-google-oauth-client-secret
 JWT_SECRET=replace-me-with-32-bytes-of-random-base64
+
+# Comma-separated emails that get is_admin=1 promoted at sign-in.
+ADMIN_EMAILS=cleerox@gmail.com

@@ -3,6 +3,8 @@ import { cors } from 'hono/cors';
 import type { Env } from './env';
 import { authRoutes } from './auth';
 import { meRoutes } from './me';
+import { contactsRoutes } from './contacts';
+import { chatsRoutes } from './chats';
 
 export { ChatRoom } from './do/chat-room';
 export { UserHub } from './do/user-hub';
@@ -35,12 +37,8 @@ app.get('/health', (c) => c.json({ ok: true, service: 'relay-worker' }));
 
 app.route('/', authRoutes());
 app.route('/', meRoutes());
-
-// Session 2 endpoints — stubbed so the router shape is visible.
-app.post('/contacts/add', (c) => c.json({ error: 'not_implemented_yet' }, 501));
-app.get('/contacts', (c) => c.json({ error: 'not_implemented_yet' }, 501));
-app.post('/chats/1to1', (c) => c.json({ error: 'not_implemented_yet' }, 501));
-app.get('/chats', (c) => c.json({ error: 'not_implemented_yet' }, 501));
+app.route('/', contactsRoutes());
+app.route('/', chatsRoutes());
 
 // Session 3 endpoint — WS upgrade to UserHub.
 app.get('/ws', (c) => c.text('not_implemented_yet', 501));
