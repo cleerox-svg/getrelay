@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Block, Button, Page } from 'konsta/react';
 import { GOOGLE_SIGNIN_URL } from '../lib/api';
 import { useStore } from '../lib/store';
 
@@ -18,50 +19,33 @@ export function SignIn() {
   }, [me, nav]);
 
   return (
-    <div
-      className="app-shell"
-      style={{ padding: 24, justifyContent: 'space-between', minHeight: '100dvh' }}
-    >
-      <div
-        style={{
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          textAlign: 'center',
-          gap: 48,
-        }}
-      >
-        <div>
-          <h1
-            style={{
-              fontSize: 56,
-              letterSpacing: '-0.02em',
-              fontWeight: 800,
-              margin: 0,
-              color: 'var(--accent)',
+    <Page>
+      <div className="flex flex-col items-center justify-between h-full px-6 py-12 text-center">
+        <div />
+        <div className="flex flex-col items-center gap-2">
+          <div className="text-[56px] font-extrabold tracking-tight" style={{ color: 'var(--accent)' }}>
+            Relay
+          </div>
+          <div className="text-base" style={{ color: 'var(--text-dim)' }}>
+            BBM-inspired messaging
+          </div>
+        </div>
+        <div className="w-full flex flex-col gap-6">
+          <Button
+            large
+            onClick={() => {
+              window.location.href = GOOGLE_SIGNIN_URL;
             }}
           >
-            Relay
-          </h1>
-          <div style={{ color: 'var(--text-dim)', marginTop: 8 }}>BBM-inspired messaging</div>
-        </div>
-
-        <a
-          className="btn-primary"
-          href={GOOGLE_SIGNIN_URL}
-          style={{ display: 'block', textAlign: 'center' }}
-        >
-          Continue with Google
-        </a>
-
-        <div style={{ color: 'var(--text-dim)', lineHeight: 1.8, fontSize: 15 }}>
-          <div>No phone number.</div>
-          <div>No tracking.</div>
-          <div>Just a PIN.</div>
+            Continue with Google
+          </Button>
+          <div className="leading-7" style={{ color: 'var(--text-dim)' }}>
+            <div>No phone number.</div>
+            <div>No tracking.</div>
+            <div>Just a PIN.</div>
+          </div>
         </div>
       </div>
-    </div>
+    </Page>
   );
 }

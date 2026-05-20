@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import { Block, Button, List, ListInput, Navbar, NavbarBackLink, Page } from 'konsta/react';
 import { ApiError } from '../lib/api';
 import { stripPin } from '../lib/pin';
 import { useStore } from '../lib/store';
@@ -17,8 +18,7 @@ export function AddContact() {
   const clean = stripPin(raw);
   const valid = PIN_RE.test(clean);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  async function submit() {
     if (!valid || busy) return;
     setBusy(true);
     setError(null);
@@ -39,48 +39,38 @@ export function AddContact() {
   }
 
   return (
-    <div className="app-shell">
-      <header className="app-header">
-        <Link to="/chats" className="btn-ghost" style={{ minWidth: 'auto', padding: 6 }}>
-          ‹ Chats
-        </Link>
-        <h1 style={{ flex: 1, textAlign: 'center', fontSize: 17, fontWeight: 600 }}>
-          Add Contact
-        </h1>
-        <span style={{ width: 60 }} />
-      </header>
-      <form
-        onSubmit={submit}
-        style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}
-      >
-        <label style={{ color: 'var(--text-dim)', fontSize: 13 }}>Enter their PIN</label>
-        <input
-          className="input"
-          style={{
-            fontFamily: 'var(--font-mono)',
-            letterSpacing: '0.08em',
-            textTransform: 'uppercase',
-            fontSize: 22,
-            textAlign: 'center',
-            padding: '14px',
-          }}
-          autoFocus
-          inputMode="text"
-          autoCapitalize="characters"
-          autoCorrect="off"
-          spellCheck={false}
-          maxLength={9}
+    <Page>
+      <Navbar
+        title="Add Contact"
+        left={<NavbarBackLink text="Chats" onClick={() => nav('/chats')} />}
+      />
+      <List strongIos insetIos>
+        <ListInput
+          label="Their PIN"
+          type="text"
           placeholder="XXXX·XXXX"
           value={raw}
-          onChange={(e) => setRaw(e.target.value.toUpperCase())}
+          maxLength={9}
+          autoCapitalize="characters"
+          autoCorrect="off"
+          spellCheck="false"
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+            setRaw(e.target.value.toUpperCase())
+          }
+          inputClassName="font-mono uppercase tracking-widest text-2xl text-center"
+          inputStyle={{ fontFamily: 'var(--font-mono)' }}
         />
-        {error ? (
-          <div style={{ color: 'var(--ping)', fontSize: 14, textAlign: 'center' }}>{error}</div>
-        ) : null}
-        <button className="btn-primary" type="submit" disabled={!valid || busy}>
+      </List>
+      {error ? (
+        <Block className="text-center text-sm" style={{ color: 'var(--ping)' }}>
+          {error}
+        </Block>
+      ) : null}
+      <Block>
+        <Button large disabled={!valid || busy} onClick={submit}>
           {busy ? 'Finding…' : 'Find'}
-        </button>
-      </form>
-    </div>
+        </Button>
+      </Block>
+    </Page>
   );
 }

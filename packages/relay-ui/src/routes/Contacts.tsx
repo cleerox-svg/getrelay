@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import {
+  Block,
+  Icon,
+  List,
+  ListItem,
+  ListInput,
+  Navbar,
+  Page,
+} from 'konsta/react';
 import { Avatar } from '../components/Avatar';
 import { useStore } from '../lib/store';
 
@@ -36,107 +45,72 @@ export function Contacts() {
   }, [contacts, query]);
 
   return (
-    <>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          padding: '14px 16px 4px',
-        }}
-      >
-        <Link to="/profile" aria-label="Profile">
-          <Avatar src={me?.avatarUrl ?? null} name={me?.displayName ?? me?.email ?? 'Me'} size={32} />
-        </Link>
-        <div style={{ flex: 1 }} />
-        <Link to="/add-contact" className="btn-ghost" aria-label="Add contact">
-          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-            <g stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" fill="none">
-              <path d="M12 6v12M6 12h12" />
-            </g>
-          </svg>
-        </Link>
-      </div>
+    <Page>
+      <Navbar
+        title="Contacts"
+        left={
+          <Link to="/profile" className="px-3">
+            <Avatar src={me?.avatarUrl ?? null} name={me?.displayName ?? me?.email ?? 'Me'} size={30} />
+          </Link>
+        }
+        right={
+          <Link to="/add-contact" className="px-3" aria-label="Add contact">
+            <Icon
+              ios={
+                <svg viewBox="0 0 28 28" width="28" height="28">
+                  <path d="M14 7v14M7 14h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              }
+            />
+          </Link>
+        }
+        large
+        transparent
+      />
 
-      <h1 className="large-title">Contacts</h1>
-
-      <div style={{ padding: '0 16px 12px' }}>
-        <input
-          className="input"
+      <List strongIos insetIos>
+        <ListInput
+          type="text"
           placeholder="Search"
+          clearButton
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          style={{ borderRadius: 999, background: 'var(--surface)' }}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setQuery(e.target.value)}
         />
-      </div>
+      </List>
 
-      <div style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
-        {contacts.length === 0 ? (
-          <div
-            style={{
-              textAlign: 'center',
-              color: 'var(--text-dim)',
-              padding: '60px 24px',
-            }}
-          >
-            <div style={{ fontSize: 16, marginBottom: 8 }}>No contacts yet</div>
-            <div style={{ fontSize: 14 }}>Tap + above to add one by PIN.</div>
-          </div>
-        ) : null}
-
-        {grouped.map(([letter, items]) => (
-          <div key={letter}>
-            <div
-              style={{
-                padding: '4px 16px',
-                fontSize: 13,
-                color: 'var(--text-dim)',
-                fontWeight: 600,
-                background: 'var(--surface)',
-                textTransform: 'uppercase',
-              }}
-            >
-              {letter}
-            </div>
+      {contacts.length === 0 ? (
+        <Block className="text-center" style={{ color: 'var(--text-dim)' }}>
+          <div className="text-base mb-2">No contacts yet</div>
+          <div className="text-sm">Tap + to add one by PIN.</div>
+        </Block>
+      ) : (
+        grouped.map(([letter, items]) => (
+          <List key={letter} strongIos insetIos>
+            <ListItem title={letter} groupTitle />
             {items.map((c) => (
-              <button
+              <ListItem
                 key={c.id}
+                link
+                chevronIos={false}
                 onClick={async () => {
                   const chatId = await openOneToOne(c.id);
                   nav(`/chats/${encodeURIComponent(chatId)}`);
                 }}
-                style={{
-                  width: '100%',
-                  textAlign: 'left',
-                  padding: '10px 16px',
-                  background: 'var(--bg)',
-                  borderBottom: '1px solid var(--separator)',
-                  display: 'flex',
-                  gap: 12,
-                  alignItems: 'center',
-                  minHeight: 'auto',
-                  minWidth: 'auto',
-                }}
-              >
-                <Avatar
-                  src={c.avatarUrl}
-                  name={c.alias ?? c.displayName}
-                  size={40}
-                  online={c.online}
-                />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 500, fontSize: 16 }}>
-                    {c.alias ?? c.displayName}
-                  </div>
-                  <div style={{ color: 'var(--text-dim)', fontSize: 13, marginTop: 2 }}>
-                    {c.pin}
-                  </div>
-                </div>
-              </button>
+                media={
+                  <Avatar
+                    src={c.avatarUrl}
+                    name={c.alias ?? c.displayName}
+                    size={40}
+                    online={c.online}
+                  />
+                }
+                title={c.alias ?? c.displayName}
+                text={c.pin}
+              />
             ))}
-          </div>
-        ))}
-      </div>
-    </>
+          </List>
+        ))
+      )}
+    </Page>
   );
 }

@@ -1,7 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import {
+  Block,
+  Icon,
+  Link as KLink,
+  List,
+  ListItem,
+  Navbar,
+  NavbarBackLink,
+  Page,
+  Segmented,
+  SegmentedButton,
+} from 'konsta/react';
 import { Avatar } from '../components/Avatar';
-import { SegmentedControl } from '../components/SegmentedControl';
 import { useStore } from '../lib/store';
 
 function formatRelative(ts: number): string {
@@ -27,148 +38,100 @@ export function Chats() {
   }, [loadChats]);
 
   return (
-    <>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          padding: '14px 16px 4px',
-        }}
-      >
-        <Link to="/profile" aria-label="Profile">
-          <Avatar src={me?.avatarUrl ?? null} name={me?.displayName ?? me?.email ?? 'Me'} size={32} />
-        </Link>
-        <div style={{ flex: 1 }} />
-        <Link to="/add-contact" className="btn-ghost" aria-label="Add contact">
-          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-            <g stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" fill="none">
-              <path d="M12 6v12M6 12h12" />
-            </g>
-          </svg>
-        </Link>
-      </div>
-
-      <h1 className="large-title">Chats</h1>
-
-      <SegmentedControl
-        value={section}
-        options={[
-          { value: 'messages', label: 'Messages' },
-          { value: 'groups', label: 'Groups', disabled: true },
-        ]}
-        onChange={(v) => setSection(v as 'messages' | 'groups')}
+    <Page>
+      <Navbar
+        title="Chats"
+        left={
+          <Link to="/profile" className="px-3">
+            <Avatar src={me?.avatarUrl ?? null} name={me?.displayName ?? me?.email ?? 'Me'} size={30} />
+          </Link>
+        }
+        right={
+          <Link to="/add-contact" className="px-3" aria-label="Add contact">
+            <Icon
+              ios={
+                <svg viewBox="0 0 28 28" width="28" height="28">
+                  <path
+                    d="M14 7v14M7 14h14"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              }
+            />
+          </Link>
+        }
+        large
+        transparent
       />
 
-      <div style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
-        {chats.length === 0 ? (
-          <div
-            style={{
-              textAlign: 'center',
-              color: 'var(--text-dim)',
-              padding: '60px 24px',
-            }}
+      <Block strong inset className="!mt-2">
+        <Segmented strong>
+          <SegmentedButton active={section === 'messages'} onClick={() => setSection('messages')}>
+            Messages
+          </SegmentedButton>
+          <SegmentedButton
+            active={false}
+            disabled
+            onClick={() => undefined}
           >
-            <div style={{ fontSize: 16, marginBottom: 8 }}>No chats yet</div>
-            <div style={{ fontSize: 14 }}>Tap + above to add a contact by PIN.</div>
-          </div>
-        ) : null}
+            Groups
+          </SegmentedButton>
+        </Segmented>
+      </Block>
 
-        {chats.map((c) => {
-          const peerOnline = c.peer ? presence[c.peer.id]?.online ?? false : false;
-          const last = c.lastMessage;
-          const preview = last?.deletedAt
-            ? 'Message recalled'
-            : last?.messageType === 'ping'
-              ? 'sent a PING!!'
-              : (last?.body ?? '');
-          return (
-            <button
-              key={c.id}
-              onClick={() => nav(`/chats/${encodeURIComponent(c.id)}`)}
-              style={{
-                width: '100%',
-                textAlign: 'left',
-                padding: '10px 16px',
-                background: 'var(--bg)',
-                borderBottom: '1px solid var(--separator)',
-                display: 'flex',
-                gap: 12,
-                alignItems: 'center',
-                minHeight: 'auto',
-                minWidth: 'auto',
-              }}
-            >
-              <Avatar
-                src={c.peer?.avatarUrl ?? null}
-                name={c.peer?.displayName ?? c.subject ?? 'Chat'}
-                size={44}
-                online={peerOnline}
+      {chats.length === 0 ? (
+        <Block className="text-center" style={{ color: 'var(--text-dim)' }}>
+          <div className="text-base mb-2">No chats yet</div>
+          <div className="text-sm">Tap + to add a contact by PIN.</div>
+        </Block>
+      ) : (
+        <List strongIos insetIos>
+          {chats.map((c) => {
+            const peerOnline = c.peer ? presence[c.peer.id]?.online ?? false : false;
+            const last = c.lastMessage;
+            const preview = last?.deletedAt
+              ? 'Message recalled'
+              : last?.messageType === 'ping'
+                ? 'sent a PING!!'
+                : (last?.body ?? '');
+            return (
+              <ListItem
+                key={c.id}
+                link
+                chevronIos={false}
+                onClick={() => nav(`/chats/${encodeURIComponent(c.id)}`)}
+                media={
+                  <Avatar
+                    src={c.peer?.avatarUrl ?? null}
+                    name={c.peer?.displayName ?? c.subject ?? 'Chat'}
+                    size={44}
+                    online={peerOnline}
+                  />
+                }
+                title={c.peer?.displayName ?? c.subject ?? 'Chat'}
+                text={preview || ' '}
+                after={
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs" style={{ color: 'var(--text-dim)' }}>
+                      {formatRelative(c.lastActivityAt)}
+                    </span>
+                    {c.unreadCount > 0 ? (
+                      <span
+                        className="inline-flex items-center justify-center min-w-[22px] h-[22px] px-1.5 rounded-full text-[12px] font-bold text-white"
+                        style={{ background: 'var(--accent)' }}
+                      >
+                        {c.unreadCount > 99 ? '99+' : c.unreadCount}
+                      </span>
+                    ) : null}
+                  </div>
+                }
               />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    gap: 8,
-                    alignItems: 'baseline',
-                  }}
-                >
-                  <strong
-                    style={{
-                      fontWeight: 600,
-                      fontSize: 16,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    }}
-                  >
-                    {c.peer?.displayName ?? c.subject ?? 'Chat'}
-                  </strong>
-                  <span style={{ color: 'var(--text-dim)', fontSize: 13, flex: '0 0 auto' }}>
-                    {formatRelative(c.lastActivityAt)}
-                  </span>
-                </div>
-                <div
-                  style={{
-                    color: 'var(--text-dim)',
-                    fontSize: 14,
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    marginTop: 2,
-                  }}
-                >
-                  {preview || ' '}
-                </div>
-              </div>
-              {c.unreadCount > 0 ? (
-                <span
-                  style={{
-                    background: 'var(--accent)',
-                    color: '#FFFFFF',
-                    borderRadius: 999,
-                    minWidth: 22,
-                    height: 22,
-                    padding: '0 7px',
-                    fontWeight: 700,
-                    fontSize: 12,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  {c.unreadCount > 99 ? '99+' : c.unreadCount}
-                </span>
-              ) : (
-                <span style={{ color: 'var(--text-dim)', fontSize: 18 }} aria-hidden="true">
-                  ›
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-    </>
+            );
+          })}
+        </List>
+      )}
+    </Page>
   );
 }

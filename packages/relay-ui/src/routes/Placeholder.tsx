@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { Block, Navbar, Page } from 'konsta/react';
 import { Avatar } from '../components/Avatar';
 import { useStore } from '../lib/store';
 
@@ -10,50 +11,28 @@ interface Props {
 export function Placeholder({ title, blurb }: Props) {
   const me = useStore((s) => s.me);
   return (
-    <>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          padding: '14px 16px 4px',
-        }}
-      >
-        <Link to="/profile" aria-label="Profile">
-          <Avatar src={me?.avatarUrl ?? null} name={me?.displayName ?? me?.email ?? 'Me'} size={32} />
-        </Link>
-        <div style={{ flex: 1 }} />
-      </div>
-
-      <h1 className="large-title">{title}</h1>
-
-      <div
-        style={{
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          textAlign: 'center',
-          padding: 24,
-          gap: 8,
-        }}
-      >
-        <div
-          style={{
-            background: 'var(--surface)',
-            color: 'var(--accent)',
-            padding: '6px 14px',
-            borderRadius: 999,
-            fontSize: 12,
-            fontWeight: 700,
-            letterSpacing: '0.06em',
-          }}
+    <Page>
+      <Navbar
+        title={title}
+        left={
+          <Link to="/profile" className="px-3">
+            <Avatar src={me?.avatarUrl ?? null} name={me?.displayName ?? me?.email ?? 'Me'} size={30} />
+          </Link>
+        }
+        large
+        transparent
+      />
+      <Block className="flex flex-col items-center text-center gap-2 mt-12">
+        <span
+          className="inline-block px-3 py-1 rounded-full text-xs font-bold tracking-wider"
+          style={{ background: 'var(--surface, #F2F2F7)', color: 'var(--accent)' }}
         >
           COMING IN V1
+        </span>
+        <div className="max-w-xs leading-relaxed text-sm" style={{ color: 'var(--text-dim)' }}>
+          {blurb}
         </div>
-        <div style={{ color: 'var(--text-dim)', maxWidth: 280, lineHeight: 1.5 }}>{blurb}</div>
-      </div>
-    </>
+      </Block>
+    </Page>
   );
 }
