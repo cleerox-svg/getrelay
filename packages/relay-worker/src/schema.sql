@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS users (
   avatar_url TEXT,
   avatar_r2_key TEXT,
   created_at INTEGER NOT NULL,
-  last_seen_at INTEGER
+  last_seen_at INTEGER,
+  is_admin INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_users_pin ON users(pin);
 CREATE INDEX IF NOT EXISTS idx_users_google_sub ON users(google_sub);

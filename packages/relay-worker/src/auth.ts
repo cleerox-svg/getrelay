@@ -99,10 +99,18 @@ async function findOrCreateUser(
   env: Env,
   g: { id: string; email: string; name: string; picture: string },
 ): Promise<string> {
+  const adminFlag = isAdminEmail(env, g.email) ? 1 : 0;
+
   const existing = await env.DB.prepare(
-    `SELECT id FROM users WHERE google_sub = ?`,
-  ).bind(g.id).first<{ id: string }>();
-  if (existing) return existing.id;
+    `SELECT id, is_admin FROM users WHERE google_sub = ?`,
+  ).bind(g.id).first<{ id: string; is_admin: number }>();
+  if (existing) {
+    if (adminFlag && !existing.is_admin) {
+      await env.DB.prepare(`UPDATE users SET is_admin = 1 WHERE id = ?`)
+        .bind(existing.id).run();
+    }
+    return existing.id;
+  }
 
   // New user: create with a unique PIN.
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -111,22 +119,38 @@ async function findOrCreateUser(
     try {
       await env.DB.prepare(
         `INSERT INTO users
-         (id, google_sub, email, pin, display_name, avatar_url, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      ).bind(userId, g.id, g.email, pin, g.name || g.email, g.picture, Date.now()).run();
+         (id, google_sub, email, pin, display_name, avatar_url, created_at, is_admin)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+        .bind(userId, g.id, g.email, pin, g.name || g.email, g.picture, Date.now(), adminFlag)
+        .run();
       return userId;
     } catch (err) {
       // unique constraint on PIN → retry; on email or google_sub → race, lookup again
       const msg = String(err);
       if (msg.includes('UNIQUE') && msg.includes('pin')) continue;
       const racer = await env.DB.prepare(
-        `SELECT id FROM users WHERE google_sub = ?`,
-      ).bind(g.id).first<{ id: string }>();
-      if (racer) return racer.id;
+        `SELECT id, is_admin FROM users WHERE google_sub = ?`,
+      ).bind(g.id).first<{ id: string; is_admin: number }>();
+      if (racer) {
+        if (adminFlag && !racer.is_admin) {
+          await env.DB.prepare(`UPDATE users SET is_admin = 1 WHERE id = ?`)
+            .bind(racer.id).run();
+        }
+        return racer.id;
+      }
       throw err;
     }
   }
   throw new Error('pin_collision_exhausted');
+}
+
+export function isAdminEmail(env: Env, email: string): boolean {
+  const list = (env.ADMIN_EMAILS ?? '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter((e) => e.length > 0);
+  return list.includes(email.toLowerCase());
 }
 
 async function isFirstLogin(env: Env, userId: string): Promise<boolean> {
