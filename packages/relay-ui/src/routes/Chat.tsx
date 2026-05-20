@@ -340,6 +340,14 @@ export function Chat() {
                   <img
                     src={m.mediaUrl ?? undefined}
                     alt=""
+                    onError={(e) => {
+                      // Fall back to a "media unavailable" placeholder so the
+                      // bubble doesn't look broken.
+                      const img = e.currentTarget;
+                      img.style.display = 'none';
+                      const sib = img.nextElementSibling as HTMLElement | null;
+                      if (sib) sib.style.display = 'block';
+                    }}
                     style={{
                       display: 'block',
                       maxWidth: '100%',
@@ -348,6 +356,17 @@ export function Chat() {
                       objectFit: 'cover',
                     }}
                   />
+                  <span
+                    style={{
+                      display: 'none',
+                      padding: '24px 14px',
+                      textAlign: 'center',
+                      color: 'var(--text-dim)',
+                      fontStyle: 'italic',
+                    }}
+                  >
+                    Image unavailable
+                  </span>
                 </a>
               )}
               {m.body ? (
@@ -362,6 +381,19 @@ export function Chat() {
                   {m.body}
                 </div>
               ) : null}
+            </div>
+          ) : m.type === 'image' ? (
+            // Message was an image-type but lost its mediaKey/Url — render a
+            // visible placeholder instead of an empty bubble.
+            <div
+              style={{
+                padding: '20px 16px',
+                textAlign: 'center',
+                color: 'var(--text-dim)',
+                fontStyle: 'italic',
+              }}
+            >
+              Image unavailable
             </div>
           ) : (
             <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.35 }}>
