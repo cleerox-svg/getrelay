@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { Env } from './env';
 import { authRoutes, readAuthedUser } from './auth';
+import { avatarsRoutes } from './avatars';
 import { meRoutes } from './me';
 import { contactsRoutes } from './contacts';
 import { chatsRoutes } from './chats';
@@ -37,6 +38,7 @@ app.get('/health', (c) => c.json({ ok: true, service: 'relay-worker' }));
 
 app.route('/', authRoutes());
 app.route('/', meRoutes());
+app.route('/', avatarsRoutes());
 app.route('/', contactsRoutes());
 app.route('/', chatsRoutes());
 

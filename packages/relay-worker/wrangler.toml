@@ -9,6 +9,11 @@ binding = "DB"
 database_name = "relay-db"
 database_id = "166b7407-11eb-4031-bd44-563d268cc085"
 
+# ----- R2 (avatars) -----
+[[r2_buckets]]
+binding = "AVATARS"
+bucket_name = "relay-avatars"
+
 # ----- Durable Objects -----
 [[durable_objects.bindings]]
 name = "CHAT_ROOM"
@@ -50,6 +55,10 @@ ADMIN_EMAILS = "cleerox@gmail.com"
 binding = "DB"
 database_name = "relay-db"
 database_id = "166b7407-11eb-4031-bd44-563d268cc085"
+
+[[env.production.r2_buckets]]
+binding = "AVATARS"
+bucket_name = "relay-avatars"
 
 [[env.production.durable_objects.bindings]]
 name = "CHAT_ROOM"

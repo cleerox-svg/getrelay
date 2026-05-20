@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Avatar } from '../components/Avatar';
 import { PinDisplay } from '../components/PinDisplay';
-import { api } from '../lib/api';
+import { ApiError, api } from '../lib/api';
 import { useStore } from '../lib/store';
 
 export function Profile() {
@@ -13,6 +13,9 @@ export function Profile() {
   const [statusMessage, setStatusMessage] = useState(me?.statusMessage ?? '');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const nav = useNavigate();
 
   useEffect(() => {
@@ -41,6 +44,39 @@ export function Profile() {
     nav('/signin', { replace: true });
   }
 
+  async function onPickAvatar(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setAvatarError(null);
+    setUploading(true);
+    try {
+      await api.uploadAvatar(file);
+      await loadMe();
+    } catch (err) {
+      if (err instanceof ApiError) {
+        if (err.code === 'too_large') setAvatarError('Image must be 2 MB or less.');
+        else if (err.code === 'bad_type') setAvatarError('Use JPEG, PNG, or WebP.');
+        else setAvatarError(err.code);
+      } else setAvatarError('Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function clearAvatar() {
+    setUploading(true);
+    setAvatarError(null);
+    try {
+      await api.removeAvatar();
+      await loadMe();
+    } catch {
+      setAvatarError('Remove failed');
+    } finally {
+      setUploading(false);
+    }
+  }
+
   if (!me) return null;
 
   return (
@@ -63,8 +99,65 @@ export function Profile() {
             padding: 24,
           }}
         >
-          <Avatar src={me.avatarUrl} name={me.displayName} size={96} />
-          <div style={{ fontSize: 22, fontWeight: 600 }}>{me.displayName}</div>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            aria-label="Change profile picture"
+            style={{
+              minHeight: 'auto',
+              minWidth: 'auto',
+              padding: 0,
+              background: 'transparent',
+              borderRadius: 999,
+              opacity: uploading ? 0.5 : 1,
+              position: 'relative',
+            }}
+          >
+            <Avatar src={me.avatarUrl} name={me.displayName} size={96} />
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            onChange={onPickAvatar}
+            hidden
+          />
+          <div style={{ display: 'flex', gap: 16 }}>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              style={{
+                color: 'var(--accent)',
+                fontSize: 14,
+                fontWeight: 500,
+                minHeight: 'auto',
+                minWidth: 'auto',
+                padding: '4px 8px',
+              }}
+            >
+              {uploading ? 'Uploading…' : me.avatarUrl ? 'Change photo' : 'Add photo'}
+            </button>
+            {me.avatarUrl ? (
+              <button
+                onClick={clearAvatar}
+                disabled={uploading}
+                style={{
+                  color: 'var(--ping)',
+                  fontSize: 14,
+                  fontWeight: 500,
+                  minHeight: 'auto',
+                  minWidth: 'auto',
+                  padding: '4px 8px',
+                }}
+              >
+                Remove
+              </button>
+            ) : null}
+          </div>
+          {avatarError ? (
+            <div style={{ color: 'var(--ping)', fontSize: 12 }}>{avatarError}</div>
+          ) : null}
+          <div style={{ fontSize: 22, fontWeight: 600, marginTop: 8 }}>{me.displayName}</div>
           <div style={{ color: 'var(--text-dim)', fontSize: 14 }}>{me.email}</div>
           {me.isAdmin ? (
             <div

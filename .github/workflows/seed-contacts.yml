@@ -1,0 +1,46 @@
+name: Seed contacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      file:
+        description: "SQL file under packages/relay-worker/migrations/"
+        required: true
+        default: "0002_seed_contacts.sql"
+
+concurrency:
+  group: seed-contacts
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Apply ${{ inputs.file }} to remote D1
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_RELAY_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          path="packages/relay-worker/migrations/${{ inputs.file }}"
+          [ -f "$path" ] || { echo "::error::File $path not found"; exit 1; }
+          echo "Applying $path to relay-db (remote)…"
+          pnpm --filter @relay/worker exec wrangler d1 execute relay-db \
+            --remote \
+            --file="migrations/${{ inputs.file }}"

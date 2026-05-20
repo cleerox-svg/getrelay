@@ -86,7 +86,9 @@ export function chatsRoutes() {
             WHERE m2.chat_id = ch.id
               AND r.recipient_id = ?
               AND r.read_at IS NULL) AS unread_count,
-         (SELECT u.id || '|' || u.display_name || '|' || COALESCE(u.avatar_url, '') || '|' || u.pin
+         (SELECT u.id || '|' || u.display_name || '|' ||
+                 COALESCE(u.avatar_url, '') || '|' || u.pin || '|' ||
+                 COALESCE(u.avatar_r2_key, '')
             FROM chat_participants cp
             JOIN users u ON u.id = cp.user_id
             WHERE cp.chat_id = ch.id AND cp.user_id != ?
@@ -113,8 +115,9 @@ export function chatsRoutes() {
         peer_blob: string | null;
       }>();
 
+    const origin = new URL(c.req.url).origin;
     const chats = (rows.results ?? []).map((r) => {
-      const peer = parsePeerBlob(r.peer_blob);
+      const peer = parsePeerBlob(origin, r.peer_blob);
       const lastMessage = r.msg_id
         ? {
             id: r.msg_id,
@@ -149,14 +152,18 @@ export function oneToOneChatId(a: string, b: string): string {
 }
 
 function parsePeerBlob(
+  origin: string,
   blob: string | null,
 ): { id: string; displayName: string; avatarUrl: string | null; pin: string } | null {
   if (!blob) return null;
   const parts = blob.split('|');
+  const r2Key = parts[4] ?? '';
+  const externalUrl = parts[2] ?? '';
+  const avatarUrl = r2Key ? `${origin}/r/${r2Key}` : externalUrl || null;
   return {
     id: parts[0] ?? '',
     displayName: parts[1] ?? '',
-    avatarUrl: parts[2] ? parts[2] : null,
+    avatarUrl,
     pin: parts[3] ?? '',
   };
 }

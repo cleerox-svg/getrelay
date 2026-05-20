@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from './env';
 import { readAuthedUser } from './auth';
+import { avatarUrlFor } from './me';
 
 const PIN_ALPHABET = /^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{8}$/;
 const ONLINE_WINDOW_MS = 60 * 1000;
@@ -44,7 +45,8 @@ export function contactsRoutes() {
     if (!me) return c.json({ error: 'unauthorized' }, 401);
 
     const rows = await c.env.DB.prepare(
-      `SELECT u.id, u.pin, u.display_name, u.status_message, u.avatar_url, u.last_seen_at,
+      `SELECT u.id, u.pin, u.display_name, u.status_message,
+              u.avatar_url, u.avatar_r2_key, u.last_seen_at,
               c.alias, c.category, c.added_at
        FROM contacts c
        JOIN users u ON u.id = c.contact_id
@@ -58,6 +60,7 @@ export function contactsRoutes() {
         display_name: string;
         status_message: string | null;
         avatar_url: string | null;
+        avatar_r2_key: string | null;
         last_seen_at: number | null;
         alias: string | null;
         category: string | null;
@@ -65,12 +68,13 @@ export function contactsRoutes() {
       }>();
 
     const cutoff = Date.now() - ONLINE_WINDOW_MS;
+    const origin = new URL(c.req.url).origin;
     const contacts = (rows.results ?? []).map((r) => ({
       id: r.id,
       pin: r.pin,
       displayName: r.display_name,
       statusMessage: r.status_message,
-      avatarUrl: r.avatar_url,
+      avatarUrl: avatarUrlFor(origin, r),
       alias: r.alias,
       category: r.category,
       addedAt: r.added_at,

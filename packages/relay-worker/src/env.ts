@@ -2,6 +2,7 @@ export interface Env {
   DB: D1Database;
   CHAT_ROOM: DurableObjectNamespace;
   USER_HUB: DurableObjectNamespace;
+  AVATARS: R2Bucket;
 
   GOOGLE_ID: string;
   GOOGLE_SECRET: string;

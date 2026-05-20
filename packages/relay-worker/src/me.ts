@@ -2,6 +2,14 @@ import { Hono } from 'hono';
 import type { Env } from './env';
 import { readAuthedUser } from './auth';
 
+export function avatarUrlFor(
+  origin: string,
+  row: { avatar_r2_key: string | null; avatar_url: string | null },
+): string | null {
+  if (row.avatar_r2_key) return `${origin}/r/${row.avatar_r2_key}`;
+  return row.avatar_url ?? null;
+}
+
 export function meRoutes() {
   const app = new Hono<{ Bindings: Env }>();
 
@@ -10,7 +18,7 @@ export function meRoutes() {
     if (!me) return c.json({ error: 'unauthorized' }, 401);
 
     const row = await c.env.DB.prepare(
-      `SELECT id, email, pin, display_name, status_message, avatar_url, is_admin
+      `SELECT id, email, pin, display_name, status_message, avatar_url, avatar_r2_key, is_admin
        FROM users WHERE id = ?`,
     ).bind(me.id).first<{
       id: string;
@@ -19,17 +27,19 @@ export function meRoutes() {
       display_name: string;
       status_message: string | null;
       avatar_url: string | null;
+      avatar_r2_key: string | null;
       is_admin: number;
     }>();
     if (!row) return c.json({ error: 'user_not_found' }, 404);
 
+    const origin = new URL(c.req.url).origin;
     return c.json({
       id: row.id,
       email: row.email,
       pin: row.pin,
       displayName: row.display_name,
       statusMessage: row.status_message,
-      avatarUrl: row.avatar_url,
+      avatarUrl: avatarUrlFor(origin, row),
       isAdmin: row.is_admin === 1,
     });
   });
