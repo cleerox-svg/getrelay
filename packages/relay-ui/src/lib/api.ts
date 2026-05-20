@@ -1,4 +1,4 @@
-import type { Chat, Contact, Me } from './types';
+import type { Chat, Contact, GroupMember, Me } from './types';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8787').replace(
   /\/+$/,
@@ -77,6 +77,26 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ contactId }),
     }),
+  createGroup: (subject: string, contactIds: string[]) =>
+    request<{
+      id: string;
+      type: 'group';
+      subject: string;
+      createdAt: number;
+      memberCount: number;
+    }>('/chats/group', {
+      method: 'POST',
+      body: JSON.stringify({ subject, contactIds }),
+    }),
+  addGroupMembers: (chatId: string, contactIds: string[]) =>
+    request<{ ok: boolean; added: number }>(
+      `/chats/${encodeURIComponent(chatId)}/participants`,
+      { method: 'POST', body: JSON.stringify({ contactIds }) },
+    ),
+  listChatMembers: (chatId: string) =>
+    request<{ members: GroupMember[] }>(
+      `/chats/${encodeURIComponent(chatId)}/members`,
+    ),
   listChatMessages: (chatId: string, opts?: { before?: number; limit?: number }) => {
     const qs = new URLSearchParams();
     if (opts?.before != null) qs.set('before', String(opts.before));
