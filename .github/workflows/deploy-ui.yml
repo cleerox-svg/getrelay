@@ -139,13 +139,9 @@ jobs:
           fi
 
       - name: Deploy to Cloudflare Pages
-        working-directory: packages/relay-ui
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_RELAY_API_KEY }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          set -euo pipefail
-          pnpm exec wrangler pages deploy dist \
-            --project-name="${PAGES_PROJECT}" \
-            --branch=main \
-            --commit-dirty=true
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_RELAY_API_KEY }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/relay-ui
+          command: pages deploy dist --project-name=${{ env.PAGES_PROJECT }} --branch=main --commit-dirty=true
