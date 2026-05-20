@@ -40,33 +40,49 @@ export function Onboarding() {
   }
 
   return (
-    <div className="app-shell" style={{ padding: 24, gap: 32 }}>
-      <h1 style={{ fontSize: 40, letterSpacing: '0.06em', textAlign: 'center', margin: '24px 0 0' }}>
-        RELAY
+    <div className="app-shell" style={{ padding: 24, gap: 24 }}>
+      <h1
+        style={{
+          fontSize: 32,
+          fontWeight: 800,
+          letterSpacing: '-0.02em',
+          color: 'var(--accent)',
+          textAlign: 'center',
+          margin: '24px 0 8px',
+        }}
+      >
+        Welcome to Relay
       </h1>
-      <p style={{ textAlign: 'center', color: 'var(--text-dim)' }}>Your PIN is ready.</p>
+      <p style={{ textAlign: 'center', color: 'var(--text-dim)', margin: 0 }}>
+        Your PIN is ready.
+      </p>
       <div
         style={{
           background: 'var(--surface)',
-          padding: '20px 24px',
+          padding: '24px',
           borderRadius: 'var(--radius-md)',
           textAlign: 'center',
         }}
       >
         <PinDisplay pin={me.pin} size="lg" />
       </div>
-      <p style={{ textAlign: 'center', color: 'var(--text-dim)', lineHeight: 1.7 }}>
+      <p style={{ textAlign: 'center', color: 'var(--text-dim)', lineHeight: 1.7, margin: 0 }}>
         Share it. Memorize it.
         <br />
         This is who you are on Relay.
       </p>
-      <button onClick={copy} className="btn-primary" style={{ background: 'var(--surface-2)', color: 'var(--text)' }}>
+      <button onClick={copy} className="btn-secondary">
         {copied ? 'Copied' : 'Copy PIN'}
       </button>
 
       <div>
         <label
-          style={{ display: 'block', color: 'var(--text-dim)', marginBottom: 6, fontSize: 13 }}
+          style={{
+            display: 'block',
+            color: 'var(--text-dim)',
+            marginBottom: 6,
+            fontSize: 13,
+          }}
         >
           Display name
         </label>
@@ -79,7 +95,7 @@ export function Onboarding() {
       </div>
 
       <button onClick={continueOn} disabled={saving} className="btn-primary">
-        Continue →
+        Continue
       </button>
     </div>
   );

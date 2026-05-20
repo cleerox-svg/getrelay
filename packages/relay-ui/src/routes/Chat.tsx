@@ -1,10 +1,26 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { Avatar } from '../components/Avatar';
 import { LongPressMenu } from '../components/LongPressMenu';
 import { MessageBubble } from '../components/MessageBubble';
 import { TypingDots } from '../components/TypingDots';
 import { useStore } from '../lib/store';
 import type { UiMessage } from '../lib/types';
+
+function dayKey(ts: number): string {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+function dayLabel(ts: number): string {
+  const d = new Date(ts);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  if (dayKey(ts) === dayKey(today.getTime())) return 'Today';
+  if (dayKey(ts) === dayKey(yesterday.getTime())) return 'Yesterday';
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
 
 export function Chat() {
   const params = useParams();
@@ -12,6 +28,7 @@ export function Chat() {
   const me = useStore((s) => s.me);
   const chat = useStore((s) => s.chats.find((c) => c.id === chatId));
   const chatState = useStore((s) => s.byChat[chatId]);
+  const presence = useStore((s) => s.presence);
   const ensureChatState = useStore((s) => s.ensureChatState);
   const subscribeChat = useStore((s) => s.subscribeChat);
   const unsubscribeChat = useStore((s) => s.unsubscribeChat);
@@ -42,7 +59,6 @@ export function Chat() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages.length]);
 
-  // Mark incoming messages as read on mount and whenever new arrive.
   useEffect(() => {
     if (!me) return;
     const unread = messages
@@ -50,6 +66,8 @@ export function Chat() {
       .map((m) => m.id);
     if (unread.length > 0) markRead(chatId, unread);
   }, [messages, chatId, me, markRead]);
+
+  const peerOnline = chat?.peer ? presence[chat.peer.id]?.online ?? false : false;
 
   const typingNames = useMemo(() => {
     if (!chatState || !me) return [];
@@ -92,10 +110,30 @@ export function Chat() {
 
   return (
     <div className="app-shell">
-      <header className="app-header">
-        <Link to="/chats" className="btn-ghost" style={{ minWidth: 'auto', padding: 8 }}>
-          ←
+      <header className="app-header" style={{ gap: 10 }}>
+        <Link
+          to="/chats"
+          className="icon-btn"
+          aria-label="Back"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}
+        >
+          <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+            <path
+              d="M15 6l-6 6 6 6"
+              stroke="currentColor"
+              strokeWidth="2"
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
         </Link>
+        <Avatar
+          src={chat?.peer?.avatarUrl ?? null}
+          name={chat?.peer?.displayName ?? chat?.subject ?? 'Chat'}
+          size={32}
+          online={peerOnline}
+        />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
             style={{
@@ -109,20 +147,54 @@ export function Chat() {
             {chat?.peer?.displayName ?? chat?.subject ?? 'Chat'}
           </div>
           <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>
-            {chat?.peer?.pin ? chat.peer.pin : ''}
+            {peerOnline ? 'online' : chat?.peer?.pin ?? ''}
           </div>
         </div>
       </header>
 
-      <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
-        {messages.map((m) => (
-          <MessageBubble
-            key={m.id}
-            msg={m}
-            mine={m.from === me?.id}
-            onLongPress={(target) => setMenuFor(target)}
-          />
-        ))}
+      <div
+        ref={scrollRef}
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: '8px 0',
+          background: 'var(--bg)',
+          WebkitOverflowScrolling: 'touch',
+        }}
+      >
+        {(() => {
+          const out: React.ReactNode[] = [];
+          let lastDay = '';
+          for (const m of messages) {
+            const k = dayKey(m.ts);
+            if (k !== lastDay) {
+              out.push(
+                <div
+                  key={`day-${k}`}
+                  style={{
+                    textAlign: 'center',
+                    color: 'var(--text-dim)',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    padding: '12px 0 6px',
+                  }}
+                >
+                  {dayLabel(m.ts)}
+                </div>,
+              );
+              lastDay = k;
+            }
+            out.push(
+              <MessageBubble
+                key={m.id}
+                msg={m}
+                mine={m.from === me?.id}
+                onLongPress={(target) => setMenuFor(target)}
+              />,
+            );
+          }
+          return out;
+        })()}
         {typingNames.length > 0 ? <TypingDots name={typingNames[0]} /> : null}
       </div>
 
@@ -131,28 +203,38 @@ export function Chat() {
         style={{
           display: 'flex',
           gap: 8,
-          padding: 12,
-          borderTop: '1px solid var(--surface)',
+          padding: '10px 12px max(10px, env(safe-area-inset-bottom))',
+          borderTop: '1px solid var(--separator)',
           background: 'var(--bg)',
         }}
       >
         <input
           className="input"
-          placeholder={editing ? 'Edit message' : 'Type a message'}
+          placeholder={editing ? 'Edit message' : 'Message'}
           value={input}
           onChange={(e) => onInputChange(e.target.value)}
           maxLength={2000}
+          style={{ borderRadius: 999, background: 'var(--surface)' }}
         />
         <button
           type="button"
           onClick={() => sendPing(chatId)}
           aria-label="Send PING"
           style={{
-            background: 'var(--surface-2)',
-            color: 'var(--accent)',
-            borderRadius: 'var(--radius-md)',
-            padding: '0 14px',
+            background: 'var(--surface)',
+            color: 'var(--ping)',
+            borderRadius: 999,
+            width: 44,
+            height: 44,
+            minWidth: 44,
+            minHeight: 44,
             fontWeight: 700,
+            fontSize: 20,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 0,
+            flex: '0 0 auto',
           }}
         >
           ⚡
@@ -162,13 +244,23 @@ export function Chat() {
           aria-label="Send"
           style={{
             background: 'var(--accent)',
-            color: '#0A0A0E',
-            borderRadius: 'var(--radius-md)',
-            padding: '0 18px',
+            color: '#FFFFFF',
+            borderRadius: 999,
+            width: 44,
+            height: 44,
+            minWidth: 44,
+            minHeight: 44,
             fontWeight: 700,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 0,
+            flex: '0 0 auto',
+            opacity: input.trim() ? 1 : 0.5,
           }}
+          disabled={!input.trim()}
         >
-          ➤
+          ↑
         </button>
       </form>
 
@@ -179,7 +271,7 @@ export function Chat() {
             textAlign: 'center',
             color: 'var(--text-dim)',
             fontSize: 12,
-            borderTop: '1px solid var(--surface)',
+            borderTop: '1px solid var(--separator)',
           }}
         >
           Editing — press send to save.{' '}

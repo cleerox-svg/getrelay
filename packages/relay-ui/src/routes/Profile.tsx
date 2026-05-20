@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { Avatar } from '../components/Avatar';
 import { PinDisplay } from '../components/PinDisplay';
 import { api } from '../lib/api';
 import { useStore } from '../lib/store';
@@ -43,105 +44,121 @@ export function Profile() {
   if (!me) return null;
 
   return (
-    <div className="app-shell">
-      <header className="app-header">
-        <Link to="/chats" className="btn-ghost" style={{ minWidth: 'auto', padding: 8 }}>
-          ←
+    <div className="app-shell" style={{ background: 'var(--surface)' }}>
+      <header className="app-header" style={{ background: 'var(--surface)' }}>
+        <Link to="/chats" className="btn-ghost" style={{ minWidth: 'auto', padding: 6 }}>
+          ‹ Chats
         </Link>
-        <h1>Profile</h1>
+        <h1 style={{ flex: 1, textAlign: 'center', fontSize: 17, fontWeight: 600 }}>Profile</h1>
+        <span style={{ width: 60 }} />
       </header>
-      <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          {me.avatarUrl ? (
-            <img
-              src={me.avatarUrl}
-              alt=""
-              referrerPolicy="no-referrer"
-              style={{ width: 64, height: 64, borderRadius: 999, objectFit: 'cover' }}
-            />
-          ) : (
+
+      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 0 32px' }}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 8,
+            padding: 24,
+          }}
+        >
+          <Avatar src={me.avatarUrl} name={me.displayName} size={96} />
+          <div style={{ fontSize: 22, fontWeight: 600 }}>{me.displayName}</div>
+          <div style={{ color: 'var(--text-dim)', fontSize: 14 }}>{me.email}</div>
+          {me.isAdmin ? (
             <div
               style={{
-                width: 64,
-                height: 64,
-                borderRadius: 999,
-                background: 'var(--surface-2)',
+                fontSize: 12,
+                color: 'var(--accent)',
+                fontWeight: 600,
+                marginTop: 4,
               }}
-            />
-          )}
-          <div>
-            <div style={{ fontWeight: 600 }}>{me.displayName}</div>
-            <div style={{ color: 'var(--text-dim)', fontSize: 13 }}>{me.email}</div>
+            >
+              ★ Platform admin
+            </div>
+          ) : null}
+        </div>
+
+        <div className="section-header">PIN (Username)</div>
+        <div className="list-section">
+          <div
+            className="list-row"
+            style={{ display: 'flex', justifyContent: 'space-between' }}
+          >
+            <PinDisplay pin={me.pin} />
+            <button
+              className="btn-ghost"
+              onClick={() => navigator.clipboard.writeText(me.pin).catch(() => undefined)}
+              style={{ minHeight: 'auto', minWidth: 'auto', padding: '4px 8px', fontSize: 15 }}
+            >
+              Copy
+            </button>
           </div>
         </div>
 
-        <div
-          style={{
-            background: 'var(--surface)',
-            padding: 16,
-            borderRadius: 'var(--radius-md)',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-          }}
-        >
-          <div>
-            <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>Your PIN</div>
-            <PinDisplay pin={me.pin} />
+        <div className="section-header">Display</div>
+        <div className="list-section">
+          <div className="list-row" style={{ display: 'block', padding: '10px 16px' }}>
+            <div style={{ color: 'var(--text-dim)', fontSize: 12, marginBottom: 2 }}>
+              Display name
+            </div>
+            <input
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              maxLength={64}
+              style={{
+                width: '100%',
+                background: 'transparent',
+                border: 0,
+                outline: 'none',
+                fontSize: 17,
+                padding: 0,
+              }}
+            />
           </div>
-          <button
-            className="btn-ghost"
-            onClick={() => navigator.clipboard.writeText(me.pin).catch(() => undefined)}
-          >
-            Copy
+          <div className="list-row" style={{ display: 'block', padding: '10px 16px' }}>
+            <div style={{ color: 'var(--text-dim)', fontSize: 12, marginBottom: 2 }}>Status</div>
+            <input
+              value={statusMessage}
+              onChange={(e) => setStatusMessage(e.target.value)}
+              maxLength={140}
+              placeholder="What's your status?"
+              style={{
+                width: '100%',
+                background: 'transparent',
+                border: 0,
+                outline: 'none',
+                fontSize: 17,
+                padding: 0,
+              }}
+            />
+          </div>
+        </div>
+
+        <div style={{ padding: 16 }}>
+          <button className="btn-primary" onClick={save} disabled={saving}>
+            {saved ? 'Saved' : saving ? 'Saving…' : 'Save'}
           </button>
         </div>
 
-        <div>
-          <label style={{ color: 'var(--text-dim)', fontSize: 13 }}>Display name</label>
-          <input
-            className="input"
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-            maxLength={64}
-          />
-        </div>
-
-        <div>
-          <label style={{ color: 'var(--text-dim)', fontSize: 13 }}>Status</label>
-          <input
-            className="input"
-            value={statusMessage}
-            onChange={(e) => setStatusMessage(e.target.value)}
-            maxLength={140}
-            placeholder="What's your status?"
-          />
-        </div>
-
-        <button className="btn-primary" onClick={save} disabled={saving}>
-          {saved ? 'Saved' : saving ? 'Saving…' : 'Save'}
-        </button>
-
-        {me.isAdmin ? (
-          <div
+        <div style={{ padding: '24px 16px' }}>
+          <button
+            onClick={doSignout}
             style={{
-              color: 'var(--text-dim)',
-              fontSize: 12,
-              textAlign: 'center',
-              padding: '4px 0',
+              width: '100%',
+              background: 'var(--bg)',
+              color: 'var(--ping)',
+              padding: '14px 20px',
+              borderRadius: 'var(--radius-md)',
+              fontWeight: 500,
+              fontSize: 17,
+              border: '1px solid var(--separator)',
             }}
           >
-            ★ Platform admin
-          </div>
-        ) : null}
-
-        <button
-          onClick={doSignout}
-          className="btn-ghost"
-          style={{ color: 'var(--accent)', marginTop: 24 }}
-        >
-          Sign out
-        </button>
+            Sign out
+          </button>
+        </div>
       </div>
     </div>
   );

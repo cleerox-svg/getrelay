@@ -33,15 +33,30 @@ export function SignIn() {
           gap: 48,
         }}
       >
-        <h1 style={{ fontSize: 56, letterSpacing: '0.06em', fontWeight: 700, margin: 0 }}>
-          RELAY
-        </h1>
-        <div style={{ width: '100%' }}>
-          <a className="btn-primary" href={GOOGLE_SIGNIN_URL} style={{ display: 'block', textAlign: 'center' }}>
-            ▸ Continue with Google
-          </a>
+        <div>
+          <h1
+            style={{
+              fontSize: 56,
+              letterSpacing: '-0.02em',
+              fontWeight: 800,
+              margin: 0,
+              color: 'var(--accent)',
+            }}
+          >
+            Relay
+          </h1>
+          <div style={{ color: 'var(--text-dim)', marginTop: 8 }}>BBM-inspired messaging</div>
         </div>
-        <div style={{ color: 'var(--text-dim)', lineHeight: 1.8 }}>
+
+        <a
+          className="btn-primary"
+          href={GOOGLE_SIGNIN_URL}
+          style={{ display: 'block', textAlign: 'center' }}
+        >
+          Continue with Google
+        </a>
+
+        <div style={{ color: 'var(--text-dim)', lineHeight: 1.8, fontSize: 15 }}>
           <div>No phone number.</div>
           <div>No tracking.</div>
           <div>Just a PIN.</div>
