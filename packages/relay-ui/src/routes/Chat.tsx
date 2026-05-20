@@ -459,8 +459,17 @@ export function Chat() {
           </div>
         ) : null}
         {/* Sentinel scroll target — kept directly below the last message
-            so scrollIntoView always lands on the most recent thing. */}
-        <div ref={bottomRef} aria-hidden="true" />
+            so scrollIntoView always lands on the most recent thing. The
+            scroll-margin-bottom reserves room for the fixed Messagebar
+            so scrollIntoView({ block: 'end' }) doesn't park the bottom
+            under the bar. */}
+        <div
+          ref={bottomRef}
+          aria-hidden="true"
+          style={{
+            scrollMarginBottom: 'calc(96px + env(safe-area-inset-bottom, 0px))',
+          }}
+        />
       </div>
 
       {emojiOpen ? (
