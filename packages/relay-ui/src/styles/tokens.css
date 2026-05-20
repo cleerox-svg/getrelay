@@ -1,0 +1,28 @@
+/* Locked palette + typography per RELAY_BUILD_SPEC.md §3. */
+:root {
+  --bg: #0A0A0E;
+  --surface: #15151C;
+  --surface-2: #1F1F28;
+  --text: #F2F2F5;
+  --text-dim: #8A8A95;
+  --accent: #FF5C2A;
+  --receipt-d: #8A8A95;
+  --receipt-r: #FF5C2A;
+  --online: #00D964;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --font-sans: 'Outfit', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+
+  --touch-target: 44px;
+}

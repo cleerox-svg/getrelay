@@ -87,9 +87,20 @@ lands in Session 5.
 |---|---|
 | 1 Foundation + Google Auth | shipped |
 | 2 Contacts + Chats | shipped |
-| 3 Realtime: UserHub + ChatRoom | DO classes stubbed (501) |
-| 4 React PWA | empty package |
+| 3 Realtime: UserHub + ChatRoom | shipped |
+| 4 React PWA | shipped |
 | 5 Polish + deploy | pending |
+
+## Running the UI locally
+
+```sh
+pnpm install
+pnpm --filter @relay/worker dev      # API on :8787
+pnpm --filter @relay/ui dev          # UI  on :5173
+```
+
+Open <http://localhost:5173>. The production UI host
+(`relay.averrow.com`) is provisioned in Session 5.
 
 ## Admin users
 
