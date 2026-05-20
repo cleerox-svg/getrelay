@@ -56,6 +56,8 @@ export function Chat() {
   const edit = useStore((s) => s.edit);
 
   const loadChatHistory = useStore((s) => s.loadChatHistory);
+  const loadChats = useStore((s) => s.loadChats);
+  const chats = useStore((s) => s.chats);
 
   const [input, setInput] = useState('');
   const [editing, setEditing] = useState<UiMessage | null>(null);
@@ -70,6 +72,12 @@ export function Chat() {
     subscribeChat(chatId);
     return () => unsubscribeChat(chatId);
   }, [chatId, ensureChatState, loadChatHistory, subscribeChat, unsubscribeChat]);
+
+  // Direct deep-links (refresh on /chats/:id) skip the chats list. Pull
+  // it so the navbar can resolve the peer's name + avatar.
+  useEffect(() => {
+    if (chats.length === 0) loadChats().catch(() => undefined);
+  }, [chats.length, loadChats]);
 
   // Hook Enter (without Shift) on the underlying textarea to send.
   useEffect(() => {
