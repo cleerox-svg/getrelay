@@ -1,4 +1,3 @@
-@import 'konsta/react/theme.css';
 @import './animations.css';
 @tailwind base;
 @tailwind components;

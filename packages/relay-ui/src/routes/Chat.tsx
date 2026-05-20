@@ -235,7 +235,7 @@ export function Chat() {
       <Actions opened={!!actionsFor} onBackdropClick={() => setActionsFor(null)}>
         <ActionsGroup>
           <ActionsButton
-            disabled={!actionsFor?.body}
+            className={!actionsFor?.body ? 'opacity-40 pointer-events-none' : undefined}
             onClick={() => {
               if (actionsFor?.body)
                 navigator.clipboard.writeText(actionsFor.body).catch(() => undefined);
@@ -245,9 +245,13 @@ export function Chat() {
             Copy text
           </ActionsButton>
           <ActionsButton
-            disabled={actionsFor?.type !== 'text' || !!actionsFor?.deletedAt}
+            className={
+              actionsFor?.type !== 'text' || !!actionsFor?.deletedAt
+                ? 'opacity-40 pointer-events-none'
+                : undefined
+            }
             onClick={() => {
-              if (actionsFor) {
+              if (actionsFor?.type === 'text' && !actionsFor.deletedAt) {
                 setEditing(actionsFor);
                 setInput(actionsFor.body ?? '');
               }
@@ -257,10 +261,9 @@ export function Chat() {
             Edit
           </ActionsButton>
           <ActionsButton
-            className="!text-red-500"
-            disabled={!!actionsFor?.deletedAt}
+            className={`!text-red-500${actionsFor?.deletedAt ? ' opacity-40 pointer-events-none' : ''}`}
             onClick={() => {
-              if (actionsFor) recall(actionsFor.id);
+              if (actionsFor && !actionsFor.deletedAt) recall(actionsFor.id);
               setActionsFor(null);
             }}
           >

@@ -73,8 +73,8 @@ export function Chats() {
           </SegmentedButton>
           <SegmentedButton
             active={false}
-            disabled
             onClick={() => undefined}
+            className="opacity-40 pointer-events-none"
           >
             Groups
           </SegmentedButton>
