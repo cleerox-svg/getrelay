@@ -97,6 +97,22 @@ export function pushRoutes() {
       }),
     );
 
+    // Mirror pushToUser's cleanup: 404 / 410 means the push service has
+    // dropped the subscription. Delete from D1 so the next test only
+    // shows live endpoints.
+    const dead = subs
+      .map((s, i) => ({ endpoint: s.endpoint, r: results[i] }))
+      .filter((x) => x.r && (x.r.status === 404 || x.r.status === 410))
+      .map((x) => x.endpoint);
+    if (dead.length > 0) {
+      const placeholders = dead.map(() => '?').join(',');
+      await c.env.DB.prepare(
+        `DELETE FROM push_subscriptions WHERE endpoint IN (${placeholders})`,
+      )
+        .bind(...dead)
+        .run();
+    }
+
     return c.json({ results });
   });
 
