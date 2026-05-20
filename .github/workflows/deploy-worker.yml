@@ -45,3 +45,11 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: packages/relay-worker
           command: deploy --env production
+          secrets: |
+            GOOGLE_ID
+            GOOGLE_SECRET
+            JWT_SECRET
+        env:
+          GOOGLE_ID: ${{ secrets.GOOGLE_ID }}
+          GOOGLE_SECRET: ${{ secrets.GOOGLE_SECRET }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
