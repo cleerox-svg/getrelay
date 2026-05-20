@@ -55,17 +55,39 @@ export function Chat() {
   const recall = useStore((s) => s.recall);
   const edit = useStore((s) => s.edit);
 
+  const loadChatHistory = useStore((s) => s.loadChatHistory);
+
   const [input, setInput] = useState('');
   const [editing, setEditing] = useState<UiMessage | null>(null);
   const [actionsFor, setActionsFor] = useState<UiMessage | null>(null);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sentTypingRef = useRef(false);
+  const messagebarRef = useRef<{ areaElRef: HTMLTextAreaElement | null } | null>(null);
 
   useEffect(() => {
     ensureChatState(chatId);
+    loadChatHistory(chatId).catch(() => undefined);
     subscribeChat(chatId);
     return () => unsubscribeChat(chatId);
-  }, [chatId, ensureChatState, subscribeChat, unsubscribeChat]);
+  }, [chatId, ensureChatState, loadChatHistory, subscribeChat, unsubscribeChat]);
+
+  // Hook Enter (without Shift) on the underlying textarea to send.
+  useEffect(() => {
+    const textarea = messagebarRef.current?.areaElRef;
+    if (!textarea) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+        e.preventDefault();
+        submitRef.current();
+      }
+    };
+    textarea.addEventListener('keydown', onKey);
+    return () => textarea.removeEventListener('keydown', onKey);
+  });
+
+  // Keep a stable ref to the latest submit so the keydown handler always
+  // sees current state.
+  const submitRef = useRef(() => undefined as void);
 
   const messages = chatState?.messages ?? [];
 
@@ -101,6 +123,7 @@ export function Chat() {
       sentTypingRef.current = false;
     }
   }
+  submitRef.current = submit;
 
   function onInputChange(v: string) {
     setInput(v);
@@ -184,10 +207,12 @@ export function Chat() {
       {typingNames.length > 0 ? <TypingDots name={typingNames[0]} /> : null}
 
       <Messagebar
+        // @ts-expect-error Konsta forwardRef returns { el, areaElRef }; types lag
+        ref={messagebarRef}
         placeholder={editing ? 'Edit message' : 'Message'}
         value={input}
-        onInput={(e: React.FormEvent<HTMLTextAreaElement>) =>
-          onInputChange((e.target as HTMLTextAreaElement).value)
+        onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
+          onInputChange(e.target.value)
         }
         right={
           <div className="flex items-center gap-2">
