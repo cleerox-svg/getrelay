@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from './env';
 import { readAuthedUser } from './auth';
+import { mediaUrlFor } from './media';
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -37,7 +38,7 @@ export function messagesRoutes() {
     // Pull the slice we want by descending sequence, then reverse for UI.
     const rows = await c.env.DB.prepare(
       `SELECT m.id, m.sender_id, m.sequence, m.message_type, m.body,
-              m.created_at, m.edited_at, m.deleted_at,
+              m.media_r2_key, m.created_at, m.edited_at, m.deleted_at,
               CASE WHEN m.sender_id = ?
                 THEN (SELECT MAX(CASE WHEN delivered_at IS NULL THEN 0 ELSE 1 END)
                         FROM receipts WHERE message_id = m.id)
@@ -61,6 +62,7 @@ export function messagesRoutes() {
         sequence: number;
         message_type: string;
         body: string | null;
+        media_r2_key: string | null;
         created_at: number;
         edited_at: number | null;
         deleted_at: number | null;
@@ -69,6 +71,7 @@ export function messagesRoutes() {
       }>();
 
     const list = (rows.results ?? []).slice().reverse();
+    const origin = new URL(c.req.url).origin;
     const messages = list.map((r) => ({
       id: r.id,
       chatId,
@@ -76,6 +79,8 @@ export function messagesRoutes() {
       sequence: r.sequence,
       type: r.message_type,
       body: r.deleted_at ? null : r.body,
+      mediaKey: r.deleted_at ? null : r.media_r2_key,
+      mediaUrl: r.deleted_at ? null : mediaUrlFor(origin, r.media_r2_key),
       ts: r.created_at,
       editedAt: r.edited_at,
       deletedAt: r.deleted_at,

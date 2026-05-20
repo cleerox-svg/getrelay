@@ -11,7 +11,9 @@
   --online: #34C759;
   --receipt-d: #8E8E93;
   --receipt-r: #007AFF;
+  --text: #000000;
   --text-dim: #8E8E93;
+  --bubble-them: #E5E5EA;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
@@ -21,7 +23,9 @@
   --ping: #FF453A;
   --receipt-r: #0A84FF;
   --online: #30D158;
+  --text: #FFFFFF;
   --text-dim: #98989F;
+  --bubble-them: #2C2C2E;
 }
 
 html,

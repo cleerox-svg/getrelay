@@ -14,6 +14,11 @@ database_id = "166b7407-11eb-4031-bd44-563d268cc085"
 binding = "AVATARS"
 bucket_name = "relay-avatars"
 
+# ----- R2 (media — images + video attachments) -----
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "relay-media"
+
 # ----- Durable Objects -----
 [[durable_objects.bindings]]
 name = "CHAT_ROOM"
@@ -59,6 +64,10 @@ database_id = "166b7407-11eb-4031-bd44-563d268cc085"
 [[env.production.r2_buckets]]
 binding = "AVATARS"
 bucket_name = "relay-avatars"
+
+[[env.production.r2_buckets]]
+binding = "MEDIA"
+bucket_name = "relay-media"
 
 [[env.production.durable_objects.bindings]]
 name = "CHAT_ROOM"

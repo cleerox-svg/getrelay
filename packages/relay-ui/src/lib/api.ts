@@ -65,6 +65,34 @@ export const api = {
     return (await res.json()) as { ok: boolean; key: string };
   },
   removeAvatar: () => request<{ ok: true }>('/me/avatar', { method: 'DELETE' }),
+  uploadMedia: async (
+    file: File,
+  ): Promise<{ ok: boolean; key: string; url: string; contentType: string; bytes: number }> => {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`${API_BASE}/me/media`, {
+      method: 'POST',
+      credentials: 'include',
+      body: form,
+    });
+    if (!res.ok) {
+      let code = 'http_error';
+      try {
+        const b = (await res.json()) as { error?: string };
+        if (b.error) code = b.error;
+      } catch {
+        /* ignore */
+      }
+      throw new ApiError(res.status, code);
+    }
+    return (await res.json()) as {
+      ok: boolean;
+      key: string;
+      url: string;
+      contentType: string;
+      bytes: number;
+    };
+  },
   listContacts: () => request<{ contacts: Contact[] }>('/contacts'),
   addContact: (pin: string) =>
     request<{ ok: boolean; contactId: string }>('/contacts/add', {

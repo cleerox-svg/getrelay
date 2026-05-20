@@ -3,6 +3,7 @@ export interface Env {
   CHAT_ROOM: DurableObjectNamespace;
   USER_HUB: DurableObjectNamespace;
   AVATARS: R2Bucket;
+  MEDIA: R2Bucket;
 
   GOOGLE_ID: string;
   GOOGLE_SECRET: string;

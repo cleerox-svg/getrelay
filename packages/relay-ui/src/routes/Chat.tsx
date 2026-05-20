@@ -14,6 +14,7 @@ import { GroupAvatar } from '../components/GroupAvatar';
 import { PingChip } from '../components/PingChip';
 import { Receipt } from '../components/Receipt';
 import { TypingDots } from '../components/TypingDots';
+import { ApiError, api } from '../lib/api';
 import { useStore } from '../lib/store';
 import type { UiMessage } from '../lib/types';
 
@@ -49,6 +50,7 @@ export function Chat() {
   const unsubscribeChat = useStore((s) => s.unsubscribeChat);
   const sendText = useStore((s) => s.sendText);
   const sendPing = useStore((s) => s.sendPing);
+  const sendMedia = useStore((s) => s.sendMedia);
   const sendTyping = useStore((s) => s.sendTyping);
   const markRead = useStore((s) => s.markRead);
   const recall = useStore((s) => s.recall);
@@ -65,6 +67,9 @@ export function Chat() {
   const sentTypingRef = useRef(false);
   const messagebarRef = useRef<{ areaElRef: HTMLTextAreaElement | null } | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     ensureChatState(chatId);
@@ -147,6 +152,33 @@ export function Chat() {
   }
   submitRef.current = submit;
 
+  async function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setUploadError(null);
+    setUploading(true);
+    try {
+      const result = await api.uploadMedia(file);
+      const caption = input.trim();
+      sendMedia(chatId, result.key, result.url, caption || undefined);
+      setInput('');
+    } catch (err) {
+      if (err instanceof ApiError) {
+        if (err.code === 'too_large') setUploadError('Files up to 10 MB.');
+        else if (err.code === 'bad_type') setUploadError('Use JPEG, PNG, WebP, GIF, MP4, WebM, or MOV.');
+        else setUploadError(err.code);
+      } else setUploadError('Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function isVideoKey(key: string | null | undefined): boolean {
+    if (!key) return false;
+    return /\.(mp4|webm|mov)$/i.test(key);
+  }
+
   function onInputChange(v: string) {
     setInput(v);
     if (!sentTypingRef.current && v.length > 0) {
@@ -183,67 +215,137 @@ export function Chat() {
     const mine = m.from === me?.id;
     const recalled = !!m.deletedAt;
     const isPing = m.type === 'ping';
+    const hasMedia = !!m.mediaKey && !!m.mediaUrl;
+    const senderName = mine
+      ? me?.displayName ?? 'Me'
+      : chat?.peer?.id === m.from
+        ? chat?.peer?.displayName ?? '?'
+        : `User ${m.from.slice(0, 4)}`;
+    const senderAvatarSrc = mine
+      ? me?.avatarUrl ?? null
+      : chat?.peer?.id === m.from
+        ? chat?.peer?.avatarUrl ?? null
+        : null;
+
     const bg = recalled
       ? 'transparent'
       : isPing
         ? 'transparent'
         : mine
           ? 'var(--accent)'
-          : 'rgba(0,0,0,0.06)';
-    const fg = mine && !recalled && !isPing ? '#FFFFFF' : 'var(--text, #000)';
+          : 'var(--bubble-them)';
+    const fg = mine && !recalled && !isPing ? '#FFFFFF' : 'var(--text)';
     const metaColor =
       mine && !recalled && !isPing ? 'rgba(255,255,255,0.85)' : 'var(--text-dim)';
 
     stacked.push(
       <div
         key={m.id}
-        onClick={() => {
-          if (mine && !recalled) setActionsFor(m);
-        }}
+        className="fade-in"
         style={{
-          alignSelf: 'flex-start',
-          maxWidth: '85%',
-          background: bg,
-          color: fg,
-          borderRadius: 16,
-          padding: isPing ? 6 : '10px 14px',
-          border: recalled ? '1px dashed var(--text-dim)' : 'none',
-          opacity: m.pending ? 0.7 : 1,
-          cursor: mine && !recalled ? 'pointer' : 'default',
+          display: 'flex',
+          alignItems: 'flex-end',
+          gap: 8,
+          alignSelf: 'stretch',
         }}
       >
-        {isGroup && !mine && !recalled ? (
-          <div
-            className="text-[12px] font-semibold mb-0.5"
-            style={{ color: 'var(--accent)' }}
-          >
-            {/* Sender name placeholder — we currently only have ids in messages.
-                Group sender names land in v2 when we wire member info. */}
-            {m.from.slice(0, 6)}
-          </div>
-        ) : null}
-
-        {recalled ? (
-          <em style={{ color: 'var(--text-dim)' }}>Message recalled</em>
-        ) : isPing ? (
-          <div className="flex justify-center py-1">
-            <PingChip />
-          </div>
-        ) : (
-          <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.35 }}>
-            {m.body}
-          </div>
-        )}
-
+        <Avatar src={senderAvatarSrc} name={senderName} size={28} />
         <div
-          className="text-[11px] mt-1 flex items-center gap-1.5"
-          style={{ color: metaColor, justifyContent: 'flex-end' }}
+          onClick={() => {
+            if (mine && !recalled) setActionsFor(m);
+          }}
+          style={{
+            maxWidth: 'calc(100% - 44px)',
+            background: bg,
+            color: fg,
+            borderRadius: 16,
+            padding: isPing ? 6 : hasMedia ? 4 : '10px 14px',
+            border: recalled ? '1px dashed var(--text-dim)' : 'none',
+            opacity: m.pending ? 0.7 : 1,
+            cursor: mine && !recalled ? 'pointer' : 'default',
+            overflow: 'hidden',
+          }}
         >
-          <span>{formatTime(m.ts)}</span>
-          {m.editedAt && !recalled ? <span>· edited</span> : null}
-          {mine && !recalled ? (
-            <Receipt delivered={m.delivered} read={m.read} onAccent={!isPing} />
+          {isGroup && !mine && !recalled ? (
+            <div
+              className="text-[12px] font-semibold mb-1 px-2 pt-1"
+              style={{ color: 'var(--accent)' }}
+            >
+              {senderName}
+            </div>
           ) : null}
+
+          {recalled ? (
+            <em style={{ color: 'var(--text-dim)' }}>Message recalled</em>
+          ) : isPing ? (
+            <div className="flex justify-center py-1">
+              <PingChip />
+            </div>
+          ) : hasMedia ? (
+            <div>
+              {isVideoKey(m.mediaKey) ? (
+                <video
+                  src={m.mediaUrl ?? undefined}
+                  controls
+                  playsInline
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    maxHeight: 360,
+                    borderRadius: 12,
+                    background: '#000',
+                  }}
+                />
+              ) : (
+                <a href={m.mediaUrl ?? undefined} target="_blank" rel="noreferrer">
+                  <img
+                    src={m.mediaUrl ?? undefined}
+                    alt=""
+                    style={{
+                      display: 'block',
+                      maxWidth: '100%',
+                      maxHeight: 360,
+                      borderRadius: 12,
+                      objectFit: 'cover',
+                    }}
+                  />
+                </a>
+              )}
+              {m.body ? (
+                <div
+                  style={{
+                    padding: '6px 10px 2px',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    lineHeight: 1.35,
+                  }}
+                >
+                  {m.body}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.35 }}>
+              {m.body}
+            </div>
+          )}
+
+          <div
+            className="text-[11px] mt-1 flex items-center gap-1.5"
+            style={{
+              color: metaColor,
+              justifyContent: 'flex-end',
+              paddingRight: hasMedia ? 10 : 0,
+              paddingBottom: hasMedia ? 4 : 0,
+              paddingLeft: hasMedia ? 10 : 0,
+            }}
+          >
+            <span>{formatTime(m.ts)}</span>
+            {m.editedAt && !recalled ? <span>· edited</span> : null}
+            {mine && !recalled ? (
+              <Receipt delivered={m.delivered} read={m.read} onAccent={!isPing} />
+            ) : null}
+          </div>
         </div>
       </div>,
     );
@@ -292,11 +394,18 @@ export function Chat() {
           display: 'flex',
           flexDirection: 'column',
           gap: 8,
-          padding: '12px 16px 16px',
+          // Big bottom pad so the final bubble clears the sticky Messagebar
+          // (~64px) and any home-bar safe area.
+          padding: '12px 16px calc(96px + env(safe-area-inset-bottom, 0px))',
         }}
       >
         {stacked}
         {typingNames.length > 0 ? <TypingDots name={typingNames[0]} /> : null}
+        {uploadError ? (
+          <div className="text-xs text-center" style={{ color: 'var(--ping)' }}>
+            {uploadError}
+          </div>
+        ) : null}
       </div>
 
       <Messagebar
@@ -311,9 +420,32 @@ export function Chat() {
           <div className="flex items-center gap-2">
             <button
               type="button"
+              onClick={() => fileInputRef.current?.click()}
+              aria-label="Attach photo or video"
+              disabled={uploading}
+              className="px-2 disabled:opacity-50"
+              style={{ color: 'var(--accent)' }}
+            >
+              {uploading ? (
+                <span style={{ fontSize: 14 }}>…</span>
+              ) : (
+                <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+                  <path
+                    d="M21 12.5l-9 9a5 5 0 0 1-7-7l9-9a3 3 0 0 1 4 4l-9 9a1 1 0 0 1-2-2l8-8"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              )}
+            </button>
+            <button
+              type="button"
               onClick={() => sendPing(chatId)}
               aria-label="Send PING"
-              className="px-2 text-xl"
+              className="px-1 text-xl"
               style={{ color: 'var(--ping)' }}
             >
               ⚡
@@ -330,6 +462,13 @@ export function Chat() {
             </button>
           </div>
         }
+      />
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime"
+        onChange={onPickFile}
+        hidden
       />
 
       {editing ? (

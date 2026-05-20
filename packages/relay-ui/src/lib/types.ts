@@ -67,6 +67,8 @@ export interface UiMessage {
   sequence: number | null;
   type: string;
   body: string | null;
+  mediaKey?: string | null;
+  mediaUrl?: string | null;
   ts: number;
   editedAt: number | null;
   deletedAt: number | null;
@@ -78,7 +80,14 @@ export interface UiMessage {
 
 // Client -> Server
 export type ClientMsg =
-  | { t: 'send'; tempId: string; chatId: string; type: 'text' | 'ping'; body?: string }
+  | {
+      t: 'send';
+      tempId: string;
+      chatId: string;
+      type: 'text' | 'ping' | 'image';
+      body?: string;
+      mediaKey?: string;
+    }
   | { t: 'typing'; chatId: string; on: boolean }
   | { t: 'read'; chatId: string; messageIds: string[] }
   | { t: 'ping'; chatId: string }
@@ -98,6 +107,8 @@ export type ServerMsg =
       sequence: number;
       type: string;
       body: string | null;
+      mediaKey?: string | null;
+      mediaUrl?: string | null;
       ts: number;
     }
   | { t: 'delivered'; messageId: string; chatId: string; userId: string; ts: number }

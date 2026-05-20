@@ -14,8 +14,9 @@ import {
 type PersistInput = {
   senderId: string;
   tempId: string;
-  type: 'text' | 'ping';
+  type: 'text' | 'ping' | 'image';
   body: string | null;
+  mediaKey?: string | null;
 };
 type TypingInput = { chatId: string; senderId: string; on: boolean };
 type ReadInput = { chatId: string; senderId: string; messageIds: string[] };
@@ -86,13 +87,23 @@ export class ChatRoom implements DurableObject {
 
   // ---------- /persist ----------
   private async persist(input: PersistInput & { chatId?: string }): Promise<Response> {
-    if (input.type !== 'text' && input.type !== 'ping') {
+    if (input.type !== 'text' && input.type !== 'ping' && input.type !== 'image') {
       throw new RoomError('bad_json', 400);
     }
-    const body = input.type === 'text' ? (input.body ?? '').trim() : null;
+    const isMedia = input.type === 'image';
+    const body =
+      input.type === 'ping' ? null : (input.body ?? '').trim() || null;
     if (input.type === 'text') {
       if (!body || body.length === 0) throw new RoomError('bad_json', 400);
       if (body.length > MAX_BODY_LEN) throw new RoomError('payload_too_large', 413);
+    }
+    if (isMedia) {
+      if (!input.mediaKey || typeof input.mediaKey !== 'string') {
+        throw new RoomError('bad_json', 400);
+      }
+      if (body && body.length > MAX_BODY_LEN) {
+        throw new RoomError('payload_too_large', 413);
+      }
     }
 
     const chatId = input.chatId ?? (await this.state.storage.get<string>('chatId'));
@@ -108,12 +119,14 @@ export class ChatRoom implements DurableObject {
     const id = crypto.randomUUID();
     const now = Date.now();
     const seq = await this.nextSequence();
+    const mediaKey = isMedia ? input.mediaKey ?? null : null;
 
     const ops = [
       this.env.DB.prepare(
-        `INSERT INTO messages (id, chat_id, sender_id, sequence, message_type, body, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      ).bind(id, chatId, input.senderId, seq, input.type, body, now),
+        `INSERT INTO messages
+           (id, chat_id, sender_id, sequence, message_type, body, media_r2_key, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(id, chatId, input.senderId, seq, input.type, body, mediaKey, now),
       ...recipients.map((rid) =>
         this.env.DB.prepare(
           `INSERT INTO receipts (message_id, recipient_id) VALUES (?, ?)`,
@@ -137,6 +150,7 @@ export class ChatRoom implements DurableObject {
             sequence: seq,
             type: input.type,
             body,
+            mediaKey,
             ts: now,
           };
 
