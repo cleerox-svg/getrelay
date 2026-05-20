@@ -16,6 +16,13 @@ import {
 import { Avatar } from '../components/Avatar';
 import { PinDisplay } from '../components/PinDisplay';
 import { ApiError, api } from '../lib/api';
+import {
+  currentPushState,
+  disablePush,
+  enablePush,
+  isPushSupported,
+  type PushState,
+} from '../lib/push';
 import { useStore } from '../lib/store';
 import { getTheme, setTheme, type ThemeMode } from '../lib/theme';
 
@@ -30,12 +37,30 @@ export function Profile() {
   const [uploading, setUploading] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>('auto');
+  const [pushState, setPushState] = useState<PushState>('unsubscribed');
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushError, setPushError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const nav = useNavigate();
 
   useEffect(() => {
     setThemeMode(getTheme());
+    currentPushState().then(setPushState).catch(() => undefined);
   }, []);
+
+  async function togglePush() {
+    setPushBusy(true);
+    setPushError(null);
+    try {
+      const next =
+        pushState === 'subscribed' ? await disablePush() : await enablePush();
+      setPushState(next);
+    } catch (err) {
+      setPushError(err instanceof Error ? err.message : 'failed');
+    } finally {
+      setPushBusy(false);
+    }
+  }
 
   useEffect(() => {
     setDisplayName(me?.displayName ?? '');
@@ -195,6 +220,59 @@ export function Profile() {
         <Button onClick={save} disabled={saving}>
           {saved ? 'Saved' : saving ? 'Saving…' : 'Save'}
         </Button>
+      </Block>
+
+      <BlockTitle>Notifications</BlockTitle>
+      <Block strong inset className="!py-4">
+        {!isPushSupported() ? (
+          <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
+            This browser doesn't support web push notifications.
+          </div>
+        ) : pushState === 'denied' ? (
+          <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
+            Notifications are blocked for this site. Enable them in your
+            browser's site settings, then refresh.
+          </div>
+        ) : (
+          <>
+            <div
+              className="flex items-center justify-between gap-3"
+              style={{ minHeight: 32 }}
+            >
+              <div>
+                <div className="font-medium">Push notifications</div>
+                <div className="text-xs" style={{ color: 'var(--text-dim)' }}>
+                  {pushState === 'subscribed'
+                    ? 'Enabled on this device.'
+                    : 'Get notified when someone messages you and the app is closed.'}
+                </div>
+              </div>
+              <Button
+                small
+                onClick={togglePush}
+                className={
+                  pushBusy
+                    ? 'opacity-50 pointer-events-none'
+                    : pushState === 'subscribed'
+                      ? '!border-red-500 !text-red-500'
+                      : undefined
+                }
+                outline={pushState === 'subscribed'}
+              >
+                {pushBusy
+                  ? '…'
+                  : pushState === 'subscribed'
+                    ? 'Disable'
+                    : 'Enable'}
+              </Button>
+            </div>
+            {pushError ? (
+              <div className="text-xs mt-2" style={{ color: 'var(--ping)' }}>
+                {pushError}
+              </div>
+            ) : null}
+          </>
+        )}
       </Block>
 
       <BlockTitle>Appearance</BlockTitle>

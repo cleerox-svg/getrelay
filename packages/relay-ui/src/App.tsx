@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { App as KonstaApp } from 'konsta/react';
 import { wireWsToStore } from './lib/store';
 import { AddContact } from './routes/AddContact';
@@ -36,6 +36,20 @@ function resolveDark(): boolean {
   return window.matchMedia('(prefers-color-scheme: dark)').matches;
 }
 
+function SwNavigationBridge() {
+  const nav = useNavigate();
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const onMsg = (e: MessageEvent) => {
+      const data = e.data as { type?: string; path?: string } | undefined;
+      if (data?.type === 'navigate' && data.path) nav(data.path);
+    };
+    navigator.serviceWorker.addEventListener('message', onMsg);
+    return () => navigator.serviceWorker.removeEventListener('message', onMsg);
+  }, [nav]);
+  return null;
+}
+
 export function App() {
   useEffect(() => {
     wireWsToStore();
@@ -45,6 +59,7 @@ export function App() {
   return (
     <KonstaApp theme="ios" dark={dark} safeAreas>
       <BrowserRouter>
+        <SwNavigationBridge />
         <Routes>
           <Route path="/signin" element={<SignIn />} />
           <Route element={<RequireAuth />}>
