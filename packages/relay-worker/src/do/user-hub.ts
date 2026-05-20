@@ -252,11 +252,22 @@ export class UserHub implements DurableObject {
     att: Attachment,
     cmd: Extract<ClientMsg, { t: 'send' }>,
   ): Promise<void> {
-    if (cmd.type !== 'text' && cmd.type !== 'ping') return this.sendError(ws, 'bad_json');
-    const body = cmd.type === 'text' ? (cmd.body ?? '').trim() : null;
+    if (cmd.type !== 'text' && cmd.type !== 'ping' && cmd.type !== 'image') {
+      return this.sendError(ws, 'bad_json');
+    }
+    const body =
+      cmd.type === 'ping' ? null : (cmd.body ?? '').trim() || null;
     if (cmd.type === 'text') {
       if (!body || body.length === 0) return this.sendError(ws, 'bad_json');
       if (body.length > MAX_BODY_LEN) return this.sendError(ws, 'payload_too_large');
+    }
+    if (cmd.type === 'image') {
+      if (!cmd.mediaKey || typeof cmd.mediaKey !== 'string') {
+        return this.sendError(ws, 'bad_json');
+      }
+      if (body && body.length > MAX_BODY_LEN) {
+        return this.sendError(ws, 'payload_too_large');
+      }
     }
 
     const res = await this.callChatRoom(cmd.chatId, '/persist', {
@@ -264,6 +275,7 @@ export class UserHub implements DurableObject {
       tempId: cmd.tempId,
       type: cmd.type,
       body,
+      mediaKey: cmd.type === 'image' ? cmd.mediaKey : null,
       chatId: cmd.chatId,
     });
 
