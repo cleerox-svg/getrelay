@@ -2,6 +2,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Tabbar, TabbarLink } from 'konsta/react';
 import { InstallPrompt } from '../components/InstallPrompt';
 import { PushPrompt } from '../components/PushPrompt';
+import { useLegacyUi } from '../lib/legacy';
 import { useStore } from '../lib/store';
 
 const TABS = [
@@ -15,7 +16,20 @@ const TABS = [
 export function MainLayout() {
   const nav = useNavigate();
   const loc = useLocation();
+  const legacy = useLegacyUi();
   const unread = useStore((s) => s.chats.reduce((n, c) => n + (c.unreadCount ?? 0), 0));
+
+  // In legacy mode the BBM-style routes are full-screen and have their own
+  // chrome — don't overlay the Konsta tab bar.
+  if (legacy) {
+    return (
+      <>
+        <Outlet />
+        <InstallPrompt />
+        <PushPrompt />
+      </>
+    );
+  }
 
   return (
     <>

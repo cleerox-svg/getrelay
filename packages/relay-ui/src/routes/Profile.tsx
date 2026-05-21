@@ -16,6 +16,7 @@ import {
 import { Avatar } from '../components/Avatar';
 import { PinDisplay } from '../components/PinDisplay';
 import { ApiError, api } from '../lib/api';
+import { setLegacyUi, useLegacyUi } from '../lib/legacy';
 import {
   currentPushState,
   diagnosePush,
@@ -44,6 +45,7 @@ export function Profile() {
   const [pushError, setPushError] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<PushTestResult[] | null>(null);
   const [testing, setTesting] = useState(false);
+  const legacyOn = useLegacyUi();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const nav = useNavigate();
 
@@ -401,6 +403,24 @@ export function Profile() {
         </Segmented>
         <div className="text-xs mt-2" style={{ color: 'var(--text-dim)' }}>
           Auto follows your device's setting.
+        </div>
+        <div
+          className="flex items-center justify-between gap-3 mt-4 pt-3"
+          style={{ borderTop: '1px solid var(--separator, rgba(0,0,0,0.08))' }}
+        >
+          <div>
+            <div className="font-medium">Legacy UI (BBM style)</div>
+            <div className="text-xs" style={{ color: 'var(--text-dim)' }}>
+              Skin Chats and the chat window like classic BBM.
+            </div>
+          </div>
+          <Button
+            small
+            onClick={() => setLegacyUi(!legacyOn)}
+            outline={legacyOn}
+          >
+            {legacyOn ? 'On' : 'Off'}
+          </Button>
         </div>
       </Block>
 
