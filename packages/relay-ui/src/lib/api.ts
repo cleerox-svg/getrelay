@@ -108,6 +108,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ contactId }),
     }),
+  patchChat: (chatId: string, body: { muted?: boolean; pinned?: boolean }) =>
+    request<{ ok: true }>(`/chats/${encodeURIComponent(chatId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
   deleteChat: (chatId: string) =>
     request<{ ok: true }>(`/chats/${encodeURIComponent(chatId)}`, { method: 'DELETE' }),
   listFeed: () => request<{ statuses: ContactStatus[] }>('/feed'),

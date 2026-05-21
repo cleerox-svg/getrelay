@@ -204,10 +204,29 @@ export class UserHub implements DurableObject {
     // SW silences the notification (no sound / vibration) on whichever
     // device is currently focused so it isn't annoying for the user
     // actively reading the chat.
+    //
+    // Exception: if the recipient muted this chat, skip the push (the
+    // live socket still receives the message — they see it in the chat
+    // list, just no notification).
     if (kind === 'message_preview' || kind === 'ping') {
+      const chatId = (payload as { chatId?: string })?.chatId;
+      if (chatId) {
+        const muted = await this.isChatMutedFor(userId, chatId);
+        if (muted) return;
+      }
       const pushPayload = await buildPushPayload(this.env, kind, payload);
       await pushToUser(this.env, userId, pushPayload).catch(() => undefined);
     }
+  }
+
+  private async isChatMutedFor(userId: string, chatId: string): Promise<boolean> {
+    const row = await this.env.DB.prepare(
+      `SELECT COALESCE(muted, 0) AS muted
+       FROM chat_participants WHERE user_id = ? AND chat_id = ?`,
+    )
+      .bind(userId, chatId)
+      .first<{ muted: number }>();
+    return row?.muted === 1;
   }
 
   private openSocketsFor(userId: string): WebSocket[] {

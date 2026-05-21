@@ -214,7 +214,8 @@ export function chatsRoutes() {
 
     const rows = await c.env.DB.prepare(
       `WITH my_chats AS (
-         SELECT chat_id FROM chat_participants WHERE user_id = ?
+         SELECT chat_id, COALESCE(muted, 0) AS muted, pinned_at
+         FROM chat_participants WHERE user_id = ?
        ),
        last_msg AS (
          SELECT m.chat_id, m.id, m.sender_id, m.message_type, m.body,
@@ -233,6 +234,8 @@ export function chatsRoutes() {
          ch.type AS chat_type,
          ch.subject,
          ch.created_at AS chat_created_at,
+         mc.muted AS muted,
+         mc.pinned_at AS pinned_at,
          lm.id AS msg_id,
          lm.sender_id AS msg_sender_id,
          lm.message_type AS msg_type,
@@ -258,7 +261,10 @@ export function chatsRoutes() {
        FROM chats ch
        JOIN my_chats mc ON mc.chat_id = ch.id
        LEFT JOIN last_msg lm ON lm.chat_id = ch.id
-       ORDER BY COALESCE(lm.created_at, ch.created_at) DESC`,
+       ORDER BY
+         CASE WHEN mc.pinned_at IS NOT NULL THEN 0 ELSE 1 END,
+         mc.pinned_at DESC,
+         COALESCE(lm.created_at, ch.created_at) DESC`,
     )
       .bind(me.id, me.id, me.id)
       .all<{
@@ -266,6 +272,8 @@ export function chatsRoutes() {
         chat_type: '1to1' | 'group';
         subject: string | null;
         chat_created_at: number;
+        muted: number;
+        pinned_at: number | null;
         msg_id: string | null;
         msg_sender_id: string | null;
         msg_type: string | null;
@@ -301,10 +309,56 @@ export function chatsRoutes() {
         lastMessage,
         unreadCount: r.unread_count ?? 0,
         lastActivityAt: r.msg_created_at ?? r.chat_created_at,
+        muted: r.muted === 1,
+        pinnedAt: r.pinned_at,
       };
     });
 
     return c.json({ chats });
+  });
+
+  // PATCH /chats/:id — flip per-participant flags (mute, pin to top).
+  // Both fields are optional; missing means "no change". The chat itself
+  // and other participants are untouched — these are per-user UI prefs.
+  app.patch('/chats/:id', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const chatId = decodeURIComponent(c.req.param('id') ?? '');
+    if (!chatId) return c.json({ error: 'invalid_chat_id' }, 400);
+
+    const body = await c.req.json<{ muted?: boolean; pinned?: boolean }>().catch(
+      () => ({}) as { muted?: boolean; pinned?: boolean },
+    );
+
+    const member = await c.env.DB.prepare(
+      `SELECT 1 AS ok FROM chat_participants WHERE chat_id = ? AND user_id = ?`,
+    )
+      .bind(chatId, me.id)
+      .first<{ ok: number }>();
+    if (!member) return c.json({ error: 'not_in_chat' }, 403);
+
+    const updates: string[] = [];
+    const values: (string | number | null)[] = [];
+    if (typeof body.muted === 'boolean') {
+      updates.push('muted = ?');
+      values.push(body.muted ? 1 : 0);
+    }
+    if (typeof body.pinned === 'boolean') {
+      updates.push('pinned_at = ?');
+      values.push(body.pinned ? Date.now() : null);
+    }
+    if (updates.length === 0) return c.json({ ok: true });
+
+    values.push(chatId, me.id);
+    await c.env.DB.prepare(
+      `UPDATE chat_participants SET ${updates.join(', ')}
+       WHERE chat_id = ? AND user_id = ?`,
+    )
+      .bind(...values)
+      .run();
+
+    return c.json({ ok: true });
   });
 
   // DELETE /chats/:id — soft-leave. Drops the caller's chat_participants

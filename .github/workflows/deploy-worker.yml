@@ -102,6 +102,26 @@ jobs:
             echo "messages.reply_to column already present"
           fi
 
+          probe=$(pnpm exec wrangler d1 execute relay-db --remote --json \
+            --command "SELECT name FROM pragma_table_info('chat_participants') WHERE name='muted';")
+          if ! echo "$probe" | jq -e '.[0].results | length > 0' > /dev/null; then
+            echo "Adding chat_participants.muted column"
+            pnpm exec wrangler d1 execute relay-db --remote \
+              --command "ALTER TABLE chat_participants ADD COLUMN muted INTEGER NOT NULL DEFAULT 0;"
+          else
+            echo "chat_participants.muted column already present"
+          fi
+
+          probe=$(pnpm exec wrangler d1 execute relay-db --remote --json \
+            --command "SELECT name FROM pragma_table_info('chat_participants') WHERE name='pinned_at';")
+          if ! echo "$probe" | jq -e '.[0].results | length > 0' > /dev/null; then
+            echo "Adding chat_participants.pinned_at column"
+            pnpm exec wrangler d1 execute relay-db --remote \
+              --command "ALTER TABLE chat_participants ADD COLUMN pinned_at INTEGER;"
+          else
+            echo "chat_participants.pinned_at column already present"
+          fi
+
       - name: Ensure DNS record (relay-api.averrow.com → proxied placeholder)
         env:
           CF_API_TOKEN: ${{ secrets.CF_RELAY_API_KEY }}

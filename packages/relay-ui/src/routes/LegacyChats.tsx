@@ -21,8 +21,11 @@ export function LegacyChats() {
   const presence = useStore((s) => s.presence);
   const loadChats = useStore((s) => s.loadChats);
   const deleteChat = useStore((s) => s.deleteChat);
+  const setChatMuted = useStore((s) => s.setChatMuted);
+  const setChatPinned = useStore((s) => s.setChatPinned);
   const nav = useNavigate();
   const [section, setSection] = useState<'chats' | 'groups'>('chats');
+  const [actionsFor, setActionsFor] = useState<Chat | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Chat | null>(null);
   const pressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressFiredRef = useRef(false);
@@ -32,7 +35,7 @@ export function LegacyChats() {
     if (pressTimerRef.current) clearTimeout(pressTimerRef.current);
     pressTimerRef.current = setTimeout(() => {
       longPressFiredRef.current = true;
-      setConfirmDelete(c);
+      setActionsFor(c);
     }, 450);
   }
   function onPressEnd() {
@@ -186,6 +189,16 @@ export function LegacyChats() {
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {name}
                     </span>
+                    {c.pinnedAt ? (
+                      <span aria-label="Pinned" style={{ fontSize: 12 }}>
+                        📌
+                      </span>
+                    ) : null}
+                    {c.muted ? (
+                      <span aria-label="Muted" style={{ fontSize: 12 }}>
+                        🔕
+                      </span>
+                    ) : null}
                   </div>
                   <div className="l-preview">{subtitle || ' '}</div>
                 </div>
@@ -235,6 +248,109 @@ export function LegacyChats() {
           />
         </svg>
       </Link>
+
+      {actionsFor ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setActionsFor(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.4)',
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'center',
+            zIndex: 40,
+            paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'var(--legacy-card-bg)',
+              color: 'var(--legacy-text)',
+              borderTopLeftRadius: 16,
+              borderTopRightRadius: 16,
+              width: '100%',
+              maxWidth: 480,
+              padding: 8,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                const c = actionsFor;
+                setActionsFor(null);
+                if (c) setChatPinned(c.id, !c.pinnedAt).catch(() => undefined);
+              }}
+              style={{
+                width: '100%',
+                padding: '14px 18px',
+                textAlign: 'left',
+                fontSize: 16,
+                fontWeight: 600,
+                color: 'var(--legacy-text)',
+              }}
+            >
+              {actionsFor.pinnedAt ? 'Unpin' : 'Pin to top'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const c = actionsFor;
+                setActionsFor(null);
+                if (c) setChatMuted(c.id, !c.muted).catch(() => undefined);
+              }}
+              style={{
+                width: '100%',
+                padding: '14px 18px',
+                textAlign: 'left',
+                fontSize: 16,
+                fontWeight: 600,
+                color: 'var(--legacy-text)',
+                borderTop: '1px solid var(--legacy-separator)',
+              }}
+            >
+              {actionsFor.muted ? 'Unmute' : 'Mute notifications'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const c = actionsFor;
+                setActionsFor(null);
+                if (c) setConfirmDelete(c);
+              }}
+              style={{
+                width: '100%',
+                padding: '14px 18px',
+                textAlign: 'left',
+                fontSize: 16,
+                fontWeight: 700,
+                color: 'var(--legacy-ping, #E5443B)',
+                borderTop: '1px solid var(--legacy-separator)',
+              }}
+            >
+              Delete chat
+            </button>
+            <button
+              type="button"
+              onClick={() => setActionsFor(null)}
+              style={{
+                width: '100%',
+                padding: '14px 18px',
+                textAlign: 'center',
+                fontSize: 16,
+                fontWeight: 700,
+                color: 'var(--legacy-text-dim)',
+                borderTop: '1px solid var(--legacy-separator)',
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {confirmDelete ? (
         <div
