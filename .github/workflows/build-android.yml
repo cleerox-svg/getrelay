@@ -32,6 +32,10 @@ on:
         description: "Optional CAPACITOR_SERVER_URL (leave blank to bundle web assets)"
         required: false
         default: ""
+      version_code:
+        description: "Override versionCode (blank = auto, minutes since 2024-01-01)"
+        required: false
+        default: ""
 
 concurrency:
   group: build-android
@@ -94,14 +98,33 @@ jobs:
       - name: Bump versionCode + versionName from git
         working-directory: packages/relay-ui/android/app
         env:
-          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          OVERRIDE_VC: ${{ github.event.inputs.version_code }}
         run: |
           set -euo pipefail
-          # versionCode = monotonic GitHub run number; versionName from
-          # the short SHA so we can trace any release AAB back to a commit.
+          # versionCode rules:
+          #   1. Must be a positive integer that strictly increases per AAB
+          #      submitted to Play Console (Play rejects duplicates).
+          #   2. Max 2,100,000,000 (Play limit).
+          #
+          # We derive it as minutes-since-2024-01-01-UTC. That always
+          # increases, stays well under the cap (50M for the next ~3000
+          # years), and doesn't depend on github.run_number, which can
+          # repeat if you re-run the same workflow run.
+          #
+          # The workflow_dispatch input version_code can override this
+          # in case you ever need to bump past a specific value.
+          if [ -n "${OVERRIDE_VC:-}" ]; then
+            VC="$OVERRIDE_VC"
+          else
+            EPOCH_2024=1704067200  # 2024-01-01T00:00:00Z
+            NOW=$(date -u +%s)
+            VC=$(( (NOW - EPOCH_2024) / 60 ))
+          fi
+
           SHORT_SHA=$(git -C "$GITHUB_WORKSPACE" rev-parse --short HEAD)
-          VC="$GITHUB_RUN_NUMBER"
           VN="0.1.0+${SHORT_SHA}"
+
+          echo "Using versionCode=${VC} versionName=${VN}"
           sed -i -E "s/(versionCode )[0-9]+/\1${VC}/" build.gradle
           sed -i -E "s/(versionName )\".*\"/\1\"${VN}\"/" build.gradle
           grep -E "versionCode|versionName" build.gradle
