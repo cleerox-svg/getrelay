@@ -1,31 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#15172A"/>
-      <stop offset="1" stop-color="#080912"/>
-    </linearGradient>
-    <linearGradient id="a" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#E84C46"/>
-      <stop offset="1" stop-color="#A11A1A"/>
-    </linearGradient>
-  </defs>
-  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="#0A0A0A"/>
   <g fill="#F2F2F5" font-family="-apple-system, system-ui, sans-serif">
     <text x="80" y="200" font-size="120" font-weight="800" letter-spacing="-2">Relay</text>
-    <rect x="82" y="222" width="320" height="8" fill="url(#a)"/>
+    <rect x="82" y="222" width="320" height="8" fill="#FB6A2C"/>
     <text x="80" y="330" font-size="44" font-weight="500" fill="#F2F2F5">Your PIN. Your line.</text>
     <text x="80" y="390" font-size="44" font-weight="500" fill="#8E8E93">No phone number required.</text>
     <text x="80" y="560" font-size="22" font-weight="500" fill="#8E8E93">from LRX Enterprises</text>
   </g>
   <!-- Brand mark on the right -->
-  <g transform="translate(900,200)">
-    <path d="M180 200 h44 a22 22 0 0 1 22 22 v36 a22 22 0 0 1-22 22 h-14 l-18 18 v-18 h-12 a22 22 0 0 1-22-22 v-36 a22 22 0 0 1 22-22 z"
-          fill="#0A84FF"/>
-    <rect x="0" y="0" width="240" height="240" rx="52" fill="url(#bg)" stroke="#1F2238" stroke-width="2"/>
-    <g fill="url(#a)">
-      <polygon points="108,40 50,160 70,160 116,80"/>
-      <polygon points="116,40 198,160 178,160 124,80"/>
-      <polygon points="112,40 90,80 138,80"/>
-    </g>
+  <g transform="translate(880,195)">
+    <circle cx="120" cy="120" r="120" fill="#000000"/>
+    <path fill="#FB6A2C" fill-rule="evenodd" transform="scale(0.46875)" d="
+      M 120 92 H 200 V 420 H 120 Z
+      M 200 92 A 100 100 0 0 1 200 292 Z
+      M 200 286 L 292 286 L 428 420 L 336 420 Z
+      M 200 154 A 38 38 0 0 1 200 230 Z
+    "/>
   </g>
 </svg>
