@@ -7,6 +7,7 @@ import { Chat } from './routes/Chat';
 import { Chats } from './routes/Chats';
 import { ContactProfile } from './routes/ContactProfile';
 import { Contacts } from './routes/Contacts';
+import { Feeds } from './routes/Feeds';
 import { MainLayout } from './routes/MainLayout';
 import { NewGroup } from './routes/NewGroup';
 import { Onboarding } from './routes/Onboarding';
@@ -84,15 +85,7 @@ export function App() {
                   />
                 }
               />
-              <Route
-                path="/feeds"
-                element={
-                  <Placeholder
-                    title="Feeds"
-                    blurb="Status updates from your contacts. Lands in v1 alongside group chats."
-                  />
-                }
-              />
+              <Route path="/feeds" element={<Feeds />} />
               <Route
                 path="/discover"
                 element={
