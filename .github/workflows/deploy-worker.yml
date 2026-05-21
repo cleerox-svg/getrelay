@@ -92,6 +92,16 @@ jobs:
             echo "users.sports_notifications column already present"
           fi
 
+          probe=$(pnpm exec wrangler d1 execute relay-db --remote --json \
+            --command "SELECT name FROM pragma_table_info('messages') WHERE name='reply_to';")
+          if ! echo "$probe" | jq -e '.[0].results | length > 0' > /dev/null; then
+            echo "Adding messages.reply_to column"
+            pnpm exec wrangler d1 execute relay-db --remote \
+              --command "ALTER TABLE messages ADD COLUMN reply_to TEXT;"
+          else
+            echo "messages.reply_to column already present"
+          fi
+
       - name: Ensure DNS record (relay-api.averrow.com → proxied placeholder)
         env:
           CF_API_TOKEN: ${{ secrets.CF_RELAY_API_KEY }}

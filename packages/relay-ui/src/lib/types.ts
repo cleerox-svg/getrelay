@@ -91,6 +91,19 @@ export interface SportsGame {
   ourSide: 'home' | 'away';
 }
 
+export interface ReplyPreview {
+  id: string;
+  from: string;
+  fromName: string;
+  preview: string;
+}
+
+export interface ReactionTally {
+  emoji: string;
+  count: number;
+  mine: boolean;
+}
+
 export interface UiMessage {
   id: string;
   chatId: string;
@@ -100,6 +113,8 @@ export interface UiMessage {
   body: string | null;
   mediaKey?: string | null;
   mediaUrl?: string | null;
+  replyTo?: ReplyPreview | null;
+  reactions?: ReactionTally[];
   ts: number;
   editedAt: number | null;
   deletedAt: number | null;
@@ -118,12 +133,14 @@ export type ClientMsg =
       type: 'text' | 'ping' | 'image';
       body?: string;
       mediaKey?: string;
+      replyTo?: string;
     }
   | { t: 'typing'; chatId: string; on: boolean }
   | { t: 'read'; chatId: string; messageIds: string[] }
   | { t: 'ping'; chatId: string }
   | { t: 'recall'; messageId: string }
   | { t: 'edit'; messageId: string; body: string }
+  | { t: 'react'; messageId: string; emoji: string }
   | { t: 'subscribe'; chatId: string }
   | { t: 'unsubscribe'; chatId: string };
 
@@ -140,7 +157,16 @@ export type ServerMsg =
       body: string | null;
       mediaKey?: string | null;
       mediaUrl?: string | null;
+      replyTo?: ReplyPreview | null;
       ts: number;
+    }
+  | {
+      t: 'reaction';
+      chatId: string;
+      messageId: string;
+      userId: string;
+      emoji: string;
+      action: 'add' | 'remove';
     }
   | { t: 'delivered'; messageId: string; chatId: string; userId: string; ts: number }
   | { t: 'read'; messageId: string; chatId: string; userId: string; ts: number }

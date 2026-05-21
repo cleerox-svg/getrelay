@@ -3,9 +3,11 @@ import { notifyUserHub } from '../lib/outbound';
 import {
   EDIT_WINDOW_MS,
   MAX_BODY_LEN,
+  MAX_EMOJI_BYTES,
   MAX_READ_IDS,
   RECALL_WINDOW_MS,
   type ErrorCode,
+  type ReplyPreview,
 } from '../lib/ws-protocol';
 
 // One ChatRoom DO per chat (named via env.CHAT_ROOM.idFromName(chats.id)).
@@ -17,12 +19,14 @@ type PersistInput = {
   type: 'text' | 'ping' | 'image';
   body: string | null;
   mediaKey?: string | null;
+  replyTo?: string | null;
 };
 type TypingInput = { chatId: string; senderId: string; on: boolean };
 type ReadInput = { chatId: string; senderId: string; messageIds: string[] };
 type PingInput = { chatId: string; senderId: string };
 type RecallInput = { chatId: string; senderId: string; messageId: string };
 type EditInput = { chatId: string; senderId: string; messageId: string; body: string };
+type ReactInput = { chatId: string; senderId: string; messageId: string; emoji: string };
 
 export class ChatRoom implements DurableObject {
   constructor(
@@ -40,6 +44,7 @@ export class ChatRoom implements DurableObject {
         case '/ping':    return await this.persistPing(await request.json());
         case '/recall':  return await this.recall(await request.json());
         case '/edit':    return await this.edit(await request.json());
+        case '/react':   return await this.react(await request.json());
       }
     } catch (err) {
       return err instanceof RoomError
@@ -120,13 +125,20 @@ export class ChatRoom implements DurableObject {
     const now = Date.now();
     const seq = await this.nextSequence();
     const mediaKey = isMedia ? input.mediaKey ?? null : null;
+    // Validate replyTo: must be a non-deleted message in this chat.
+    let replyToId: string | null = null;
+    let replyPreview: ReplyPreview | null = null;
+    if (input.type !== 'ping' && input.replyTo) {
+      replyPreview = await this.loadReplyPreview(chatId, input.replyTo);
+      if (replyPreview) replyToId = replyPreview.id;
+    }
 
     const ops = [
       this.env.DB.prepare(
         `INSERT INTO messages
-           (id, chat_id, sender_id, sequence, message_type, body, media_r2_key, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).bind(id, chatId, input.senderId, seq, input.type, body, mediaKey, now),
+           (id, chat_id, sender_id, sequence, message_type, body, media_r2_key, reply_to, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(id, chatId, input.senderId, seq, input.type, body, mediaKey, replyToId, now),
       ...recipients.map((rid) =>
         this.env.DB.prepare(
           `INSERT INTO receipts (message_id, recipient_id) VALUES (?, ?)`,
@@ -151,6 +163,7 @@ export class ChatRoom implements DurableObject {
             type: input.type,
             body,
             mediaKey,
+            replyTo: replyPreview,
             ts: now,
           };
 
@@ -270,6 +283,97 @@ export class ChatRoom implements DurableObject {
     return new Response(null, { status: 204 });
   }
 
+  // ---------- /react ----------
+  private async react(input: ReactInput): Promise<Response> {
+    const chatId = input.chatId;
+    await this.assertParticipant(chatId, input.senderId);
+
+    const emoji = (input.emoji ?? '').trim();
+    if (!emoji || new Blob([emoji]).size > MAX_EMOJI_BYTES) {
+      throw new RoomError('bad_emoji', 400);
+    }
+
+    // The message must exist in this chat (no cross-chat reactions).
+    const msg = await this.env.DB.prepare(
+      `SELECT id FROM messages WHERE id = ? AND chat_id = ? AND deleted_at IS NULL`,
+    )
+      .bind(input.messageId, chatId)
+      .first<{ id: string }>();
+    if (!msg) throw new RoomError('message_not_found', 404);
+
+    // Toggle: try delete first, count rows; if none deleted, insert.
+    const del = await this.env.DB.prepare(
+      `DELETE FROM message_reactions
+       WHERE message_id = ? AND user_id = ? AND emoji = ?`,
+    )
+      .bind(input.messageId, input.senderId, emoji)
+      .run();
+    const removed = (del.meta?.changes ?? 0) > 0;
+    if (!removed) {
+      await this.env.DB.prepare(
+        `INSERT OR IGNORE INTO message_reactions
+           (message_id, user_id, emoji, created_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+        .bind(input.messageId, input.senderId, emoji, Date.now())
+        .run();
+    }
+
+    // Fan out the delta to everyone in the chat (including sender — keeps
+    // multiple devices in sync).
+    const others = await this.recipientIds(chatId, input.senderId);
+    const payload = {
+      t: 'reaction',
+      chatId,
+      messageId: input.messageId,
+      userId: input.senderId,
+      emoji,
+      action: removed ? 'remove' : 'add',
+    };
+    await Promise.all(
+      [...others, input.senderId].map((uid) =>
+        fireAndForget(notifyUserHub(this.env, uid, 'reaction', payload)),
+      ),
+    );
+    return new Response(null, { status: 204 });
+  }
+
+  // Resolves a target message into the short preview shipped with the
+  // reply. We trust chat_id matching here — never expose a message from
+  // a different chat.
+  private async loadReplyPreview(
+    chatId: string,
+    targetId: string,
+  ): Promise<ReplyPreview | null> {
+    const row = await this.env.DB.prepare(
+      `SELECT m.id, m.sender_id, m.message_type, m.body, u.display_name
+       FROM messages m
+       JOIN users u ON u.id = m.sender_id
+       WHERE m.id = ? AND m.chat_id = ? AND m.deleted_at IS NULL`,
+    )
+      .bind(targetId, chatId)
+      .first<{
+        id: string;
+        sender_id: string;
+        message_type: string;
+        body: string | null;
+        display_name: string;
+      }>();
+    if (!row) return null;
+    const preview =
+      row.message_type === 'image'
+        ? row.body && row.body.trim() ? truncate(row.body, 80) : '📷 Photo'
+        : row.message_type === 'ping'
+          ? 'PING!!'
+          : truncate(row.body ?? '', 80);
+    return {
+      id: row.id,
+      from: row.sender_id,
+      fromName: row.display_name,
+      preview,
+    };
+  }
+
   // ---------- /edit ----------
   private async edit(input: EditInput): Promise<Response> {
     const chatId = input.chatId;
@@ -341,4 +445,9 @@ function json(body: unknown, status = 200): Response {
 
 function fireAndForget<T>(p: Promise<T>): Promise<void> {
   return p.then(() => undefined).catch(() => undefined);
+}
+
+function truncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + '…';
 }

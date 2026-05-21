@@ -6,6 +6,8 @@ import { ApiError, api } from '../lib/api';
 import { useStore } from '../lib/store';
 import type { UiMessage } from '../lib/types';
 
+const LEGACY_REACTION_PALETTE = ['👍', '❤️', '😂', '😯', '😢', '🎉'];
+
 function dayKey(ts: number): string {
   const d = new Date(ts);
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
@@ -43,11 +45,14 @@ export function LegacyChat() {
   const sendMedia = useStore((s) => s.sendMedia);
   const sendTyping = useStore((s) => s.sendTyping);
   const markRead = useStore((s) => s.markRead);
+  const react = useStore((s) => s.react);
   const loadChatHistory = useStore((s) => s.loadChatHistory);
   const loadChats = useStore((s) => s.loadChats);
   const chats = useStore((s) => s.chats);
 
   const [input, setInput] = useState('');
+  const [replyingTo, setReplyingTo] = useState<UiMessage | null>(null);
+  const [actionsFor, setActionsFor] = useState<UiMessage | null>(null);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sentTypingRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -135,8 +140,9 @@ export function LegacyChat() {
   function submit() {
     const text = input.trim();
     if (!text) return;
-    sendText(chatId, text);
+    sendText(chatId, text, replyingTo?.id);
     setInput('');
+    setReplyingTo(null);
     if (sentTypingRef.current) {
       sendTyping(chatId, false);
       sentTypingRef.current = false;
@@ -167,8 +173,9 @@ export function LegacyChat() {
     try {
       const result = await api.uploadMedia(file);
       const caption = input.trim();
-      sendMedia(chatId, result.key, result.url, caption || undefined);
+      sendMedia(chatId, result.key, result.url, caption || undefined, replyingTo?.id);
       setInput('');
+      setReplyingTo(null);
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.code === 'too_large') setUploadError('Files up to 10 MB.');
@@ -248,13 +255,47 @@ export function LegacyChat() {
       <article
         key={m.id}
         className={`legacy-message-card${mine ? ' mine' : ''}`}
-        style={{ opacity: m.pending ? 0.7 : 1 }}
+        style={{ opacity: m.pending ? 0.7 : 1, cursor: recalled ? 'default' : 'pointer' }}
+        onClick={() => {
+          if (!recalled) setActionsFor(m);
+        }}
       >
         <Avatar src={senderAvatarSrc} name={senderName} size={32} />
         <div className="l-body-col">
           <div className="l-head">
             <span className="l-from">{senderName}</span>
           </div>
+          {m.replyTo && !recalled ? (
+            <div
+              style={{
+                marginBottom: 6,
+                paddingLeft: 8,
+                borderLeft: '3px solid var(--legacy-blue)',
+                opacity: 0.85,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: 'var(--legacy-blue)',
+                }}
+              >
+                {m.replyTo.from === me?.id ? 'You' : m.replyTo.fromName}
+              </div>
+              <div
+                style={{
+                  fontSize: 12,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  color: 'var(--legacy-text-dim)',
+                }}
+              >
+                {m.replyTo.preview}
+              </div>
+            </div>
+          ) : null}
           {recalled ? (
             <em style={{ color: 'var(--legacy-text-dim)' }}>Message recalled</em>
           ) : hasMedia ? (
@@ -319,6 +360,46 @@ export function LegacyChat() {
               </span>
             ) : null}
           </div>
+          {m.reactions && m.reactions.length > 0 ? (
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 4,
+                marginTop: 4,
+              }}
+            >
+              {m.reactions.map((r) => (
+                <button
+                  key={r.emoji}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    react(m.id, r.emoji);
+                  }}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    background: r.mine
+                      ? 'var(--legacy-blue)'
+                      : 'var(--legacy-bg)',
+                    color: r.mine ? '#FFFFFF' : 'var(--legacy-text)',
+                    border: r.mine
+                      ? 'none'
+                      : '1px solid var(--legacy-separator)',
+                    borderRadius: 999,
+                    padding: '2px 8px',
+                    fontSize: 12,
+                    fontWeight: 600,
+                  }}
+                >
+                  <span>{r.emoji}</span>
+                  {r.count > 1 ? <span>{r.count}</span> : null}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
       </article>,
     );
@@ -414,6 +495,75 @@ export function LegacyChat() {
         />
       </div>
 
+      {replyingTo ? (
+        <div
+          style={{
+            position: 'fixed',
+            left: 0,
+            right: 0,
+            bottom: 'calc(64px + env(safe-area-inset-bottom, 0px))',
+            zIndex: 20,
+            background: 'var(--legacy-bg)',
+            borderTop: '1px solid var(--legacy-separator)',
+            padding: '8px 14px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+          }}
+        >
+          <div
+            style={{
+              width: 3,
+              alignSelf: 'stretch',
+              background: 'var(--legacy-blue)',
+              borderRadius: 2,
+            }}
+          />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div
+              style={{
+                fontSize: 12,
+                fontWeight: 700,
+                color: 'var(--legacy-blue)',
+              }}
+            >
+              Replying to{' '}
+              {replyingTo.from === me?.id ? 'yourself' : chat?.peer?.displayName ?? 'them'}
+            </div>
+            <div
+              style={{
+                fontSize: 13,
+                color: 'var(--legacy-text-dim)',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {replyingTo.type === 'ping'
+                ? 'PING!!'
+                : replyingTo.body
+                  ? replyingTo.body
+                  : replyingTo.mediaKey
+                    ? '📷 Photo'
+                    : ''}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setReplyingTo(null)}
+            aria-label="Cancel reply"
+            style={{
+              padding: 6,
+              color: 'var(--legacy-text-dim)',
+              fontSize: 18,
+              lineHeight: 1,
+            }}
+          >
+            ×
+          </button>
+        </div>
+      ) : null}
+
       <div className="legacy-messagebar">
         <button
           type="button"
@@ -473,6 +623,113 @@ export function LegacyChat() {
         onChange={onPickFile}
         hidden
       />
+
+      {actionsFor ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setActionsFor(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.4)',
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'center',
+            zIndex: 40,
+            paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'var(--legacy-card-bg)',
+              color: 'var(--legacy-text)',
+              borderTopLeftRadius: 16,
+              borderTopRightRadius: 16,
+              width: '100%',
+              maxWidth: 480,
+              padding: 8,
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-around',
+                padding: '12px 4px',
+                borderBottom: '1px solid var(--legacy-separator)',
+              }}
+            >
+              {LEGACY_REACTION_PALETTE.map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  onClick={() => {
+                    if (actionsFor) react(actionsFor.id, emoji);
+                    setActionsFor(null);
+                  }}
+                  style={{ fontSize: 26, padding: 6, lineHeight: 1 }}
+                  aria-label={`React with ${emoji}`}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                if (actionsFor) setReplyingTo(actionsFor);
+                setActionsFor(null);
+              }}
+              style={{
+                width: '100%',
+                padding: '14px 18px',
+                textAlign: 'left',
+                fontSize: 16,
+                fontWeight: 600,
+                color: 'var(--legacy-blue)',
+              }}
+            >
+              Reply
+            </button>
+            {actionsFor.body ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (actionsFor?.body)
+                    navigator.clipboard.writeText(actionsFor.body).catch(() => undefined);
+                  setActionsFor(null);
+                }}
+                style={{
+                  width: '100%',
+                  padding: '14px 18px',
+                  textAlign: 'left',
+                  fontSize: 16,
+                  fontWeight: 600,
+                  color: 'var(--legacy-text)',
+                }}
+              >
+                Copy text
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setActionsFor(null)}
+              style={{
+                width: '100%',
+                padding: '14px 18px',
+                textAlign: 'center',
+                fontSize: 16,
+                fontWeight: 700,
+                color: 'var(--legacy-text-dim)',
+                borderTop: '1px solid var(--legacy-separator)',
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
