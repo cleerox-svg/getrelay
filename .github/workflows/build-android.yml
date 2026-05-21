@@ -29,9 +29,9 @@ on:
         type: boolean
         default: false
       server_url:
-        description: "Optional CAPACITOR_SERVER_URL (leave blank to bundle web assets)"
+        description: "Capacitor server URL (the WebView loads from here; blank = bundle local assets)"
         required: false
-        default: ""
+        default: "https://relay.averrow.com"
       version_code:
         description: "Override versionCode (blank = auto, minutes since 2024-01-01)"
         required: false
@@ -74,7 +74,9 @@ jobs:
       - name: Build web bundle
         working-directory: packages/relay-ui
         env:
-          VITE_API_BASE: https://relay-api.averrow.com
+          # Must match the env name api.ts reads. The Pages deploy uses
+          # the same value.
+          VITE_API_BASE_URL: https://relay-api.averrow.com
         run: pnpm exec vite build
 
       - name: Initialise Capacitor android project

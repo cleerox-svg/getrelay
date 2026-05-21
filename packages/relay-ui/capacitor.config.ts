@@ -1,11 +1,16 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 // Capacitor wraps the Vite-built web bundle (./dist) into a native shell.
-// We keep `server.url` unset so the app ships its assets locally — that
-// means store builds work offline-on-launch and don't depend on the web
-// host being up. If you ever want to point the wrapper at the live web
-// app for faster iteration (no Play Store review per UI change), set
-// CAPACITOR_SERVER_URL=https://relay.averrow.com when building.
+// The build workflow sets CAPACITOR_SERVER_URL=https://relay.averrow.com
+// so the WebView loads from production. That's important for OAuth:
+// Google's redirect URI is https://relay-api.averrow.com/auth/google/callback,
+// which sets a session cookie on .averrow.com — that cookie only reaches
+// the app when the app is actually on a *.averrow.com origin (not file://).
+//
+// To produce a fully offline-bundled build, run the workflow with
+// server_url blank. You'll then need a native Google Sign-In plugin
+// (e.g. @capacitor-community/google-auth) wired to the worker, since
+// the redirect-based flow can't bounce back into file:// origins.
 
 const remote = process.env.CAPACITOR_SERVER_URL ?? '';
 
