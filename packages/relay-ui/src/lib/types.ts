@@ -8,6 +8,7 @@ export interface Me {
   statusMessage: string | null;
   avatarUrl: string | null;
   isAdmin: boolean;
+  sportsNotifications: boolean;
 }
 
 export interface Contact {

@@ -9,7 +9,7 @@ import { chatsRoutes } from './chats';
 import { mediaRoutes } from './media';
 import { messagesRoutes } from './messages';
 import { pushRoutes } from './push';
-import { sportsRoutes } from './sports';
+import { runSportsCron, sportsRoutes } from './sports';
 import { statusRoutes } from './status';
 
 export { ChatRoom } from './do/chat-room';
@@ -69,4 +69,16 @@ app.get('/ws', async (c) => {
   return stub.fetch('https://do/ws', { method: 'GET', headers });
 });
 
-export default app;
+export default {
+  fetch: app.fetch,
+  // Cron trigger — fires every minute (see wrangler.toml). Polls the
+  // Canadiens / Blue Jays game state and pushes score / win notifications
+  // to opted-in subscribers.
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(
+      runSportsCron(env).catch((err) => {
+        console.error('sports cron failed:', err);
+      }),
+    );
+  },
+};

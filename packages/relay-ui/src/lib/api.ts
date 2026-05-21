@@ -41,8 +41,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const api = {
   health: () => request<{ ok: boolean; service: string }>('/health'),
   me: () => request<Me>('/me'),
-  updateMe: (body: { displayName?: string; statusMessage?: string }) =>
-    request<{ ok: true }>('/me', { method: 'PATCH', body: JSON.stringify(body) }),
+  updateMe: (body: {
+    displayName?: string;
+    statusMessage?: string;
+    sportsNotifications?: boolean;
+  }) => request<{ ok: true }>('/me', { method: 'PATCH', body: JSON.stringify(body) }),
   signout: () => request<void>('/auth/signout', { method: 'POST' }),
   uploadAvatar: async (file: File): Promise<{ ok: boolean; key: string }> => {
     const form = new FormData();
