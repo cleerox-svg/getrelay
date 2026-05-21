@@ -164,6 +164,36 @@ export function Chat() {
     };
   }, [chatId, messages.length, JSON.stringify(chatState?.typing ?? {})]);
 
+  // Keep the most recent message on screen when the soft keyboard opens
+  // or closes. Without this, the visualViewport shrinks under the chat
+  // body and the bottom messages slide above the fold (or behind the
+  // keyboard). Also handle textarea focus directly — iOS Safari often
+  // fires focus before any visualViewport event.
+  useEffect(() => {
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+    const ta = messagebarRef.current?.areaElRef;
+    let raf = 0;
+    const scrollSoon = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        bottomRef.current?.scrollIntoView({ block: 'end' });
+      });
+    };
+    const onFocus = () => {
+      // Wait for the keyboard to animate in before measuring.
+      setTimeout(scrollSoon, 250);
+    };
+    vv?.addEventListener('resize', scrollSoon);
+    vv?.addEventListener('scroll', scrollSoon);
+    ta?.addEventListener('focus', onFocus);
+    return () => {
+      cancelAnimationFrame(raf);
+      vv?.removeEventListener('resize', scrollSoon);
+      vv?.removeEventListener('scroll', scrollSoon);
+      ta?.removeEventListener('focus', onFocus);
+    };
+  }, []);
+
   const isGroup = chat?.type === 'group';
   const peerOnline = chat?.peer ? presence[chat.peer.id]?.online ?? false : false;
 

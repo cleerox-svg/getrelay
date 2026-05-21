@@ -89,6 +89,34 @@ export function LegacyChat() {
     };
   }, [chatId, messages.length, JSON.stringify(chatState?.typing ?? {})]);
 
+  // Keep the most recent message on screen when the soft keyboard opens
+  // or closes — see Chat.tsx for the matching effect / rationale.
+  useEffect(() => {
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+    let raf = 0;
+    const scrollSoon = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        bottomRef.current?.scrollIntoView({ block: 'end' });
+      });
+    };
+    const onFocusIn = (e: FocusEvent) => {
+      const tgt = e.target as HTMLElement | null;
+      if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA')) {
+        setTimeout(scrollSoon, 250);
+      }
+    };
+    vv?.addEventListener('resize', scrollSoon);
+    vv?.addEventListener('scroll', scrollSoon);
+    document.addEventListener('focusin', onFocusIn);
+    return () => {
+      cancelAnimationFrame(raf);
+      vv?.removeEventListener('resize', scrollSoon);
+      vv?.removeEventListener('scroll', scrollSoon);
+      document.removeEventListener('focusin', onFocusIn);
+    };
+  }, []);
+
   const isGroup = chat?.type === 'group';
   const peerOnline = chat?.peer ? presence[chat.peer.id]?.online ?? false : false;
   const peerName = isGroup ? chat?.subject ?? 'Group' : chat?.peer?.displayName ?? 'Chat';
