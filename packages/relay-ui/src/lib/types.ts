@@ -38,6 +38,7 @@ export interface ChatPeer {
   displayName: string;
   avatarUrl: string | null;
   pin: string;
+  statusMessage: string | null;
 }
 
 export interface Chat {
@@ -60,14 +61,13 @@ export interface GroupMember {
   joinedAt: number;
 }
 
-export interface StatusPost {
-  id: string;
+export interface ContactStatus {
   userId: string;
   displayName: string;
   pin: string;
   avatarUrl: string | null;
-  body: string;
-  createdAt: number;
+  statusMessage: string;
+  updatedAt: number;
   mine: boolean;
 }
 

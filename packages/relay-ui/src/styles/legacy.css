@@ -199,7 +199,7 @@ html.legacy[data-theme='dark'] {
 .legacy-fab {
   position: fixed;
   right: 16px;
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 76px);
   width: 56px;
   height: 56px;
   border-radius: 999px;
@@ -355,4 +355,76 @@ html.legacy[data-theme='dark'] {
 .legacy-segment button.active {
   color: var(--legacy-blue);
   border-bottom: 2px solid var(--legacy-blue);
+}
+
+/* Bottom tab bar for legacy mode. Substitutes for Konsta's Tabbar so
+   the user can move between Chats / Calls / Feeds / Discover / Contacts. */
+.legacy-tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  background: var(--legacy-card-bg);
+  border-top: 1px solid var(--legacy-separator);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  z-index: 20;
+}
+
+.legacy-tabbar button {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 0 4px;
+  min-height: 56px;
+  color: var(--legacy-text-dim);
+}
+
+.legacy-tabbar button.active {
+  color: var(--legacy-blue);
+}
+
+.legacy-tabbar .l-tab-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+}
+
+.legacy-tabbar .l-tab-badge {
+  position: absolute;
+  top: -4px;
+  right: -8px;
+  background: var(--legacy-ping, #E5443B);
+  color: #FFFFFF;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 999px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.legacy-tabbar .l-tab-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+/* Reserve room for the legacy tabbar so the chats list / FAB / empty state
+   don't sit under it. The chat-route is full-screen (no MainLayout wrapper)
+   so it doesn't need this. */
+html.legacy .legacy-list,
+html.legacy .legacy-empty {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 64px);
 }
