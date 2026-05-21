@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920" font-family="-apple-system, BlinkMacSystemFont, system-ui, sans-serif">
+  <rect width="1080" height="1920" fill="#FFFFFF"/>
+
+  <!-- Status bar -->
+  <text x="80" y="55" font-size="34" font-weight="600" fill="#000000">9:41</text>
+
+  <!-- Navbar -->
+  <rect x="0" y="80" width="1080" height="170" fill="#FFFFFF"/>
+  <rect x="0" y="248" width="1080" height="2" fill="#E5E5EA"/>
+  <text x="60" y="180" font-size="28" font-weight="400" fill="#007AFF">‹ Chats</text>
+  <g transform="translate(440, 105)">
+    <circle cx="40" cy="40" r="40" fill="#FFCC00"/>
+    <text x="40" y="55" font-size="38" font-weight="700" fill="#FFFFFF" text-anchor="middle">M</text>
+    <circle cx="68" cy="68" r="12" fill="#34C759" stroke="#FFFFFF" stroke-width="3"/>
+    <text x="100" y="42" font-size="34" font-weight="700" fill="#000000">Matthew</text>
+    <text x="100" y="80" font-size="22" font-weight="500" fill="#6E6E73">Vibing</text>
+  </g>
+
+  <!-- Day separator -->
+  <text x="540" y="320" font-size="22" font-weight="600" fill="#6E6E73" text-anchor="middle">Today</text>
+
+  <!-- Message 1: from Matthew -->
+  <g transform="translate(60, 360)">
+    <circle cx="40" cy="50" r="36" fill="#FFCC00"/>
+    <text x="40" y="64" font-size="30" font-weight="700" fill="#FFFFFF" text-anchor="middle">M</text>
+    <rect x="100" y="20" width="380" height="120" rx="22" fill="#E5E5EA"/>
+    <text x="120" y="78" font-size="30" font-weight="400" fill="#000000">Coffee soon?</text>
+    <text x="460" y="160" font-size="20" fill="#6E6E73" text-anchor="end">8:32</text>
+  </g>
+
+  <!-- Message 2: from me -->
+  <g transform="translate(60, 560)">
+    <circle cx="40" cy="50" r="36" fill="#5856D6"/>
+    <text x="40" y="64" font-size="30" font-weight="700" fill="#FFFFFF" text-anchor="middle">C</text>
+    <rect x="100" y="20" width="500" height="120" rx="22" fill="#007AFF"/>
+    <text x="120" y="78" font-size="30" font-weight="400" fill="#FFFFFF">10 min, on my way 🚗</text>
+    <text x="580" y="160" font-size="20" fill="#6E6E73" text-anchor="end">8:33 ✓✓</text>
+  </g>
+
+  <!-- Message 3: PING from Matthew -->
+  <g transform="translate(60, 760)">
+    <circle cx="40" cy="50" r="36" fill="#FFCC00"/>
+    <text x="40" y="64" font-size="30" font-weight="700" fill="#FFFFFF" text-anchor="middle">M</text>
+    <rect x="100" y="20" width="260" height="86" rx="20" fill="#FF3B30"/>
+    <text x="230" y="76" font-size="32" font-weight="700" fill="#FFFFFF" text-anchor="middle">PING!!</text>
+    <text x="340" y="124" font-size="20" fill="#6E6E73" text-anchor="end">8:33</text>
+  </g>
+
+  <!-- Message 4: image from me -->
+  <g transform="translate(60, 920)">
+    <circle cx="40" cy="50" r="36" fill="#5856D6"/>
+    <text x="40" y="64" font-size="30" font-weight="700" fill="#FFFFFF" text-anchor="middle">C</text>
+    <rect x="100" y="20" width="500" height="380" rx="22" fill="#007AFF"/>
+    <rect x="116" y="36" width="468" height="280" rx="12" fill="#1A1A2E"/>
+    <!-- fake coffee photo -->
+    <ellipse cx="350" cy="190" rx="80" ry="80" fill="#6E3A1A"/>
+    <ellipse cx="350" cy="180" rx="70" ry="22" fill="#3F2310"/>
+    <text x="120" y="368" font-size="28" font-weight="400" fill="#FFFFFF">Here we go ☕</text>
+    <text x="580" y="420" font-size="20" fill="#6E6E73" text-anchor="end">8:48 ✓✓</text>
+  </g>
+
+  <!-- Message 5: text from Matthew -->
+  <g transform="translate(60, 1400)">
+    <circle cx="40" cy="50" r="36" fill="#FFCC00"/>
+    <text x="40" y="64" font-size="30" font-weight="700" fill="#FFFFFF" text-anchor="middle">M</text>
+    <rect x="100" y="20" width="320" height="120" rx="22" fill="#E5E5EA"/>
+    <text x="120" y="78" font-size="30" font-weight="400" fill="#000000">Be right there 🙌</text>
+    <text x="400" y="160" font-size="20" fill="#6E6E73" text-anchor="end">8:51</text>
+  </g>
+
+  <!-- Messagebar -->
+  <rect x="0" y="1730" width="1080" height="190" fill="#F2F2F7"/>
+  <rect x="0" y="1728" width="1080" height="2" fill="#E5E5EA"/>
+  <rect x="40" y="1760" width="780" height="100" rx="50" fill="#FFFFFF" stroke="#E5E5EA" stroke-width="2"/>
+  <text x="80" y="1820" font-size="30" font-weight="400" fill="#8E8E93" font-style="italic">Message</text>
+  <rect x="840" y="1768" width="200" height="84" rx="42" fill="#007AFF"/>
+  <text x="940" y="1820" font-size="30" font-weight="700" fill="#FFFFFF" text-anchor="middle">Send</text>
+</svg>

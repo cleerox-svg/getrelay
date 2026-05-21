@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920" font-family="-apple-system, BlinkMacSystemFont, system-ui, sans-serif">
+  <rect width="1080" height="1920" fill="#FFFFFF"/>
+
+  <!-- Status bar -->
+  <rect x="0" y="0" width="1080" height="80" fill="#FFFFFF"/>
+  <text x="80" y="55" font-size="34" font-weight="600" fill="#000000">9:41</text>
+  <g transform="translate(900, 32)">
+    <rect x="0" y="0" width="48" height="20" rx="4" fill="#000000"/>
+    <rect x="50" y="2" width="4" height="16" fill="#000000"/>
+  </g>
+
+  <!-- Navbar -->
+  <rect x="0" y="80" width="1080" height="170" fill="#FFFFFF"/>
+  <rect x="0" y="248" width="1080" height="2" fill="#E5E5EA"/>
+  <!-- Avatar -->
+  <circle cx="80" cy="165" r="46" fill="#8E8E93"/>
+  <!-- Brand -->
+  <g transform="translate(440, 110)">
+    <circle cx="32" cy="50" r="32" fill="#0A0A0A"/>
+    <path fill="#C83C3C" fill-rule="evenodd" transform="translate(32, 50) scale(0.13) translate(-256, -256)" d="
+      M 120 92 H 200 V 420 H 120 Z
+      M 200 92 A 100 100 0 0 1 200 292 Z
+      M 200 286 L 292 286 L 428 420 L 336 420 Z
+      M 200 154 A 38 38 0 0 1 200 230 Z
+    "/>
+    <text x="86" y="50" font-size="36" font-weight="700" fill="#000000">Relay</text>
+    <rect x="208" y="22" width="64" height="22" rx="4" fill="#C83C3C"/>
+    <text x="240" y="40" font-size="14" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="2">BETA</text>
+    <text x="86" y="86" font-size="20" font-weight="500" fill="#8E8E93">Pin to Pin Messenger</text>
+  </g>
+  <!-- Add button -->
+  <g transform="translate(960, 145)" stroke="#000000" stroke-width="4" stroke-linecap="round">
+    <line x1="0" y1="20" x2="40" y2="20"/>
+    <line x1="20" y1="0" x2="20" y2="40"/>
+  </g>
+
+  <!-- Big title -->
+  <text x="60" y="370" font-size="84" font-weight="800" fill="#000000" letter-spacing="-2">Chats</text>
+
+  <!-- Segmented -->
+  <g transform="translate(60, 420)">
+    <rect x="0" y="0" width="960" height="80" rx="14" fill="#F2F2F7"/>
+    <rect x="6" y="6" width="474" height="68" rx="10" fill="#FFFFFF"/>
+    <text x="243" y="54" font-size="32" font-weight="600" fill="#000000" text-anchor="middle">Messages</text>
+    <text x="717" y="54" font-size="32" font-weight="500" fill="#6E6E73" text-anchor="middle">Groups</text>
+  </g>
+
+  <!-- List rows -->
+  <g transform="translate(60, 560)">
+    <rect x="0" y="0" width="960" height="900" rx="22" fill="#FFFFFF" stroke="#E5E5EA" stroke-width="2"/>
+
+    <!-- Row 1 -->
+    <circle cx="90" cy="100" r="56" fill="#FF3B30"/>
+    <text x="90" y="118" font-size="48" font-weight="700" fill="#FFFFFF" text-anchor="middle">D</text>
+    <text x="180" y="92" font-size="34" font-weight="600" fill="#000000">Daniel</text>
+    <text x="180" y="138" font-size="26" font-weight="400" fill="#6E6E73">Are we still on for tonight?</text>
+    <text x="900" y="92" font-size="22" font-weight="400" fill="#6E6E73" text-anchor="end">9:14</text>
+    <circle cx="900" cy="125" r="18" fill="#C83C3C"/>
+    <text x="900" y="135" font-size="22" font-weight="700" fill="#FFFFFF" text-anchor="middle">2</text>
+    <line x1="60" y1="200" x2="900" y2="200" stroke="#E5E5EA" stroke-width="2"/>
+
+    <!-- Row 2 -->
+    <circle cx="90" cy="300" r="56" fill="#FFCC00"/>
+    <text x="90" y="318" font-size="48" font-weight="700" fill="#FFFFFF" text-anchor="middle">M</text>
+    <text x="180" y="292" font-size="34" font-weight="600" fill="#000000">Matthew</text>
+    <text x="180" y="338" font-size="26" font-weight="400" fill="#6E6E73">📷 Photo</text>
+    <text x="900" y="292" font-size="22" font-weight="400" fill="#6E6E73" text-anchor="end">8:51</text>
+    <line x1="60" y1="400" x2="900" y2="400" stroke="#E5E5EA" stroke-width="2"/>
+
+    <!-- Row 3 -->
+    <circle cx="90" cy="500" r="56" fill="#00C7BE"/>
+    <text x="90" y="518" font-size="48" font-weight="700" fill="#FFFFFF" text-anchor="middle">J</text>
+    <text x="180" y="492" font-size="34" font-weight="600" fill="#000000">Jewlz</text>
+    <text x="180" y="538" font-size="26" font-weight="400" fill="#6E6E73">🥹 Same</text>
+    <text x="900" y="492" font-size="22" font-weight="400" fill="#6E6E73" text-anchor="end">Yesterday</text>
+    <line x1="60" y1="600" x2="900" y2="600" stroke="#E5E5EA" stroke-width="2"/>
+
+    <!-- Row 4 -->
+    <circle cx="90" cy="700" r="56" fill="#5856D6"/>
+    <text x="90" y="718" font-size="48" font-weight="700" fill="#FFFFFF" text-anchor="middle">B</text>
+    <text x="180" y="692" font-size="34" font-weight="600" fill="#000000">Bradey</text>
+    <text x="180" y="738" font-size="26" font-weight="400" fill="#6E6E73">Sent a PING!!</text>
+    <text x="900" y="692" font-size="22" font-weight="400" fill="#6E6E73" text-anchor="end">Mon</text>
+  </g>
+
+  <!-- Tagline -->
+  <text x="540" y="1820" font-size="42" font-weight="700" fill="#000000" text-anchor="middle">Your PIN. Your line.</text>
+  <text x="540" y="1880" font-size="32" font-weight="400" fill="#6E6E73" text-anchor="middle">No phone number required.</text>
+</svg>

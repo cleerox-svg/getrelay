@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 500">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0E0F1A"/>
+      <stop offset="1" stop-color="#000000"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="500" fill="url(#bg)"/>
+
+  <!-- Big mark on the left -->
+  <g transform="translate(60, 110)">
+    <circle cx="140" cy="140" r="140" fill="#0A0A0A"/>
+    <path fill="#C83C3C" fill-rule="evenodd" transform="translate(140, 140) scale(0.55) translate(-256, -256)" d="
+      M 120 92 H 200 V 420 H 120 Z
+      M 200 92 A 100 100 0 0 1 200 292 Z
+      M 200 286 L 292 286 L 428 420 L 336 420 Z
+      M 200 154 A 38 38 0 0 1 200 230 Z
+    "/>
+  </g>
+
+  <!-- Wordmark + tagline on the right -->
+  <g font-family="-apple-system, BlinkMacSystemFont, system-ui, sans-serif" fill="#FFFFFF">
+    <text x="380" y="200" font-size="92" font-weight="800" letter-spacing="-2">Relay</text>
+    <rect x="382" y="220" width="240" height="6" fill="#C83C3C"/>
+    <text x="380" y="290" font-size="38" font-weight="600" fill="#FFFFFF">Pin to PIN messenger.</text>
+    <text x="380" y="340" font-size="28" font-weight="400" fill="#8E8E93">No phone number. No nonsense.</text>
+    <text x="380" y="395" font-size="22" font-weight="500" fill="#8E8E93" letter-spacing="2">BETA</text>
+  </g>
+</svg>
