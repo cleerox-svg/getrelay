@@ -153,6 +153,8 @@ export interface HistoryMessage {
   sequence: number;
   type: string;
   body: string | null;
+  mediaKey: string | null;
+  mediaUrl: string | null;
   ts: number;
   editedAt: number | null;
   deletedAt: number | null;

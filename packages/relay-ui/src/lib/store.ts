@@ -171,6 +171,8 @@ export const useStore = create<AppState>((set, get) => ({
           sequence: m.sequence,
           type: m.type,
           body: m.body,
+          mediaKey: m.mediaKey ?? null,
+          mediaUrl: m.mediaUrl ?? mediaUrlFor(m.mediaKey),
           ts: m.ts,
           editedAt: m.editedAt,
           deletedAt: m.deletedAt,
