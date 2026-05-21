@@ -1,0 +1,358 @@
+/* Classic BBM 7+ (Android cross-platform, ~2014) skin.
+   Opt-in via the Legacy UI toggle in Profile. */
+
+html.legacy {
+  --legacy-blue: #29ABE2;
+  --legacy-blue-dark: #1A8FC3;
+  --legacy-bg: #EFF0F2;
+  --legacy-card-bg: #FFFFFF;
+  --legacy-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --legacy-separator: #DCDDE0;
+  --legacy-text: #1A1A1A;
+  --legacy-text-dim: #6E7378;
+  --legacy-online: #4CD964;
+  --legacy-ping: #E5443B;
+  --legacy-sent-bubble: #DEEDF6;
+  --legacy-received-bubble: #FFFFFF;
+}
+
+html.legacy[data-theme='dark'] {
+  --legacy-bg: #1B1C1F;
+  --legacy-card-bg: #2C2D31;
+  --legacy-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --legacy-separator: rgba(255, 255, 255, 0.08);
+  --legacy-text: #F0F1F2;
+  --legacy-text-dim: #98989F;
+  --legacy-sent-bubble: #1F2E3A;
+  --legacy-received-bubble: #2C2D31;
+}
+
+@media (prefers-color-scheme: dark) {
+  html.legacy:not([data-theme='light']) {
+    --legacy-bg: #1B1C1F;
+    --legacy-card-bg: #2C2D31;
+    --legacy-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --legacy-separator: rgba(255, 255, 255, 0.08);
+    --legacy-text: #F0F1F2;
+    --legacy-text-dim: #98989F;
+    --legacy-sent-bubble: #1F2E3A;
+    --legacy-received-bubble: #2C2D31;
+  }
+}
+
+.legacy-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  background: var(--legacy-bg);
+  color: var(--legacy-text);
+}
+
+.legacy-navbar {
+  display: flex;
+  align-items: center;
+  background: var(--legacy-blue);
+  color: #FFFFFF;
+  padding: calc(env(safe-area-inset-top, 0px) + 6px) 8px 6px;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  min-height: calc(env(safe-area-inset-top, 0px) + 44px);
+}
+
+.legacy-navbar .l-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  color: #FFFFFF;
+}
+
+.legacy-navbar .l-title {
+  flex: 1;
+  font-size: 18px;
+  font-weight: 600;
+  text-align: left;
+  margin-left: 4px;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.legacy-navbar .l-title-sub {
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.85;
+}
+
+.legacy-navbar .l-right {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.legacy-navbar .l-right > * {
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #FFFFFF;
+}
+
+.legacy-tabstrip {
+  display: flex;
+  background: var(--legacy-card-bg);
+  border-bottom: 1px solid var(--legacy-separator);
+  position: sticky;
+  top: calc(env(safe-area-inset-top, 0px) + 50px);
+  z-index: 10;
+}
+
+.legacy-tabstrip button {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 0;
+  min-height: 44px;
+  color: var(--legacy-text-dim);
+  position: relative;
+}
+
+.legacy-tabstrip button.active {
+  color: var(--legacy-blue);
+}
+
+.legacy-tabstrip button.active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 3px;
+  background: var(--legacy-blue);
+}
+
+.legacy-list {
+  background: var(--legacy-card-bg);
+  flex: 1;
+  overflow-y: auto;
+}
+
+.legacy-list-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--legacy-separator);
+  background: var(--legacy-card-bg);
+  width: 100%;
+  text-align: left;
+}
+
+.legacy-list-row .l-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.legacy-list-row .l-name {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--legacy-text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.legacy-list-row .l-name-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--legacy-online);
+  display: inline-block;
+  flex: 0 0 auto;
+}
+
+.legacy-list-row .l-preview {
+  font-size: 13px;
+  color: var(--legacy-text-dim);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.legacy-list-row .l-time {
+  font-size: 11px;
+  color: var(--legacy-text-dim);
+  flex: 0 0 auto;
+  margin-left: 6px;
+}
+
+.legacy-fab {
+  position: fixed;
+  right: 16px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+  width: 56px;
+  height: 56px;
+  border-radius: 999px;
+  background: var(--legacy-blue);
+  color: #FFFFFF;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(41, 171, 226, 0.4);
+  z-index: 15;
+}
+
+.legacy-chat-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 8px calc(80px + env(safe-area-inset-bottom, 0px));
+  background: var(--legacy-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.legacy-message-card {
+  background: var(--legacy-card-bg);
+  border-radius: 8px;
+  box-shadow: var(--legacy-card-shadow);
+  padding: 8px 10px;
+  display: flex;
+  gap: 8px;
+  align-self: flex-start;
+  max-width: 88%;
+}
+
+.legacy-message-card.mine {
+  background: var(--legacy-sent-bubble);
+  align-self: flex-end;
+}
+
+.legacy-message-card .l-body-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.legacy-message-card .l-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.legacy-message-card .l-from {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--legacy-text);
+}
+
+.legacy-message-card .l-text {
+  font-size: 14px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--legacy-text);
+}
+
+.legacy-message-card .l-foot {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--legacy-text-dim);
+  margin-top: 4px;
+}
+
+.legacy-message-card .l-image {
+  margin-top: 4px;
+  max-width: 100%;
+  max-height: 320px;
+  border-radius: 6px;
+  display: block;
+}
+
+.legacy-messagebar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--legacy-card-bg);
+  border-top: 1px solid var(--legacy-separator);
+  padding: 8px;
+  padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.legacy-messagebar input,
+.legacy-messagebar textarea {
+  flex: 1;
+  background: var(--legacy-bg);
+  border: 1px solid var(--legacy-separator);
+  border-radius: 18px;
+  padding: 8px 12px;
+  font-size: 14px;
+  color: var(--legacy-text);
+  resize: none;
+  outline: none;
+  font-style: italic;
+}
+
+.legacy-messagebar input:not(:placeholder-shown),
+.legacy-messagebar textarea:not(:placeholder-shown) {
+  font-style: normal;
+}
+
+.legacy-messagebar .l-send {
+  background: var(--legacy-blue);
+  color: #FFFFFF;
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.legacy-messagebar .l-send:disabled {
+  background: var(--legacy-separator);
+  color: var(--legacy-text-dim);
+}
+
+.legacy-empty {
+  text-align: center;
+  color: var(--legacy-text-dim);
+  padding: 60px 24px;
+}
+
+.legacy-segment {
+  display: flex;
+  background: var(--legacy-card-bg);
+  border-bottom: 1px solid var(--legacy-separator);
+}
+
+.legacy-segment button {
+  flex: 1;
+  padding: 10px;
+  color: var(--legacy-text-dim);
+  font-weight: 500;
+  font-size: 13px;
+  min-height: 44px;
+}
+
+.legacy-segment button.active {
+  color: var(--legacy-blue);
+  border-bottom: 2px solid var(--legacy-blue);
+}

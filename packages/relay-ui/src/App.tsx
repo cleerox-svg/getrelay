@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { App as KonstaApp } from 'konsta/react';
+import { useLegacyUi } from './lib/legacy';
 import { wireWsToStore } from './lib/store';
 import { AddContact } from './routes/AddContact';
 import { Chat } from './routes/Chat';
@@ -8,6 +9,8 @@ import { Chats } from './routes/Chats';
 import { ContactProfile } from './routes/ContactProfile';
 import { Contacts } from './routes/Contacts';
 import { Feeds } from './routes/Feeds';
+import { LegacyChat } from './routes/LegacyChat';
+import { LegacyChats } from './routes/LegacyChats';
 import { MainLayout } from './routes/MainLayout';
 import { NewGroup } from './routes/NewGroup';
 import { Onboarding } from './routes/Onboarding';
@@ -58,6 +61,7 @@ export function App() {
     wireWsToStore();
   }, []);
   const dark = useIsDark();
+  const legacy = useLegacyUi();
 
   return (
     <KonstaApp theme="ios" dark={dark} safeAreas>
@@ -67,14 +71,14 @@ export function App() {
           <Route path="/signin" element={<SignIn />} />
           <Route element={<RequireAuth />}>
             <Route path="/onboarding" element={<Onboarding />} />
-            <Route path="/chats/:id" element={<Chat />} />
+            <Route path="/chats/:id" element={legacy ? <LegacyChat /> : <Chat />} />
             <Route path="/contacts/:id" element={<ContactProfile />} />
             <Route path="/add-contact" element={<AddContact />} />
             <Route path="/new-group" element={<NewGroup />} />
             <Route path="/profile" element={<Profile />} />
 
             <Route element={<MainLayout />}>
-              <Route path="/chats" element={<Chats />} />
+              <Route path="/chats" element={legacy ? <LegacyChats /> : <Chats />} />
               <Route path="/contacts" element={<Contacts />} />
               <Route
                 path="/calls"
