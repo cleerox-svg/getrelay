@@ -73,3 +73,15 @@ input {
   color: var(--text);
   caret-color: var(--accent);
 }
+
+/* Konsta's Messagebar textarea has a fixed-ish height pill. Add a
+   reasonable min-height + line-height-based vertical centering for the
+   single-line case so the "Message" placeholder doesn't hang at the top
+   of the field. */
+.k-ios .k-messagebar textarea,
+.k-material .k-messagebar textarea {
+  min-height: 36px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  line-height: 20px;
+}

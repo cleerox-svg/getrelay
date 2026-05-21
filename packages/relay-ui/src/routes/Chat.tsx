@@ -578,8 +578,15 @@ export function Chat() {
               onClick={submit}
               aria-label="Send"
               disabled={!input.trim()}
-              className="px-3 font-semibold disabled:opacity-40"
-              style={{ color: 'var(--accent)' }}
+              className="font-semibold disabled:opacity-40"
+              style={{
+                background: input.trim() ? 'var(--accent)' : 'transparent',
+                color: input.trim() ? '#FFFFFF' : 'var(--accent)',
+                borderRadius: 999,
+                padding: '6px 14px',
+                minWidth: 0,
+                minHeight: 0,
+              }}
             >
               Send
             </button>
