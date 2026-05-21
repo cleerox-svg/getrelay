@@ -2,7 +2,7 @@
   <!-- Maskable: black fills the entire canvas (the platform crops it to a
        circle/squircle). Foreground stays inside the 80% safe zone (102..410). -->
   <rect width="512" height="512" fill="#0A0A0A"/>
-  <path fill="#FB6A2C" fill-rule="evenodd" d="
+  <path fill="#C83C3C" fill-rule="evenodd" d="
     M 152 132 H 216 V 394 H 152 Z
     M 216 132 A 80 80 0 0 1 216 292 Z
     M 216 287 L 290 287 L 398 394 L 324 394 Z

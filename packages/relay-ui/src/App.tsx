@@ -15,6 +15,7 @@ import { MainLayout } from './routes/MainLayout';
 import { NewGroup } from './routes/NewGroup';
 import { Onboarding } from './routes/Onboarding';
 import { Placeholder } from './routes/Placeholder';
+import { Privacy } from './routes/Privacy';
 import { Profile } from './routes/Profile';
 import { RequireAuth } from './routes/RequireAuth';
 import { SignIn } from './routes/SignIn';
@@ -69,6 +70,7 @@ export function App() {
         <SwNavigationBridge />
         <Routes>
           <Route path="/signin" element={<SignIn />} />
+          <Route path="/privacy" element={<Privacy />} />
           <Route element={<RequireAuth />}>
             <Route path="/onboarding" element={<Onboarding />} />
             <Route path="/chats/:id" element={legacy ? <LegacyChat /> : <Chat />} />

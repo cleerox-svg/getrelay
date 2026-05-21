@@ -2,7 +2,7 @@
   <rect width="1200" height="630" fill="#0A0A0A"/>
   <g fill="#F2F2F5" font-family="-apple-system, system-ui, sans-serif">
     <text x="80" y="200" font-size="120" font-weight="800" letter-spacing="-2">Relay</text>
-    <rect x="82" y="222" width="320" height="8" fill="#FB6A2C"/>
+    <rect x="82" y="222" width="320" height="8" fill="#C83C3C"/>
     <text x="80" y="330" font-size="44" font-weight="500" fill="#F2F2F5">Your PIN. Your line.</text>
     <text x="80" y="390" font-size="44" font-weight="500" fill="#8E8E93">No phone number required.</text>
     <text x="80" y="560" font-size="22" font-weight="500" fill="#8E8E93">from LRX Enterprises</text>
@@ -10,7 +10,7 @@
   <!-- Brand mark on the right -->
   <g transform="translate(880,195)">
     <circle cx="120" cy="120" r="120" fill="#000000"/>
-    <path fill="#FB6A2C" fill-rule="evenodd" transform="scale(0.46875)" d="
+    <path fill="#C83C3C" fill-rule="evenodd" transform="scale(0.46875)" d="
       M 120 92 H 200 V 420 H 120 Z
       M 200 92 A 100 100 0 0 1 200 292 Z
       M 200 286 L 292 286 L 428 420 L 336 420 Z

@@ -1,0 +1,61 @@
+# Android build & release
+
+This is the user-facing checklist for shipping Relay to Google Play. All
+build steps run in GitHub Actions — no local Android Studio or Mac
+required.
+
+## One-time setup
+
+1. **Initialise the upload keystore.** Actions tab →
+   *Initialize Android upload keystore* → Run workflow. When it finishes,
+   open the run's **Job Summary** and copy the four values into
+   **Settings → Secrets and variables → Actions**:
+   - `ANDROID_KEYSTORE_BASE64`
+   - `ANDROID_KEYSTORE_PASSWORD`
+   - `ANDROID_KEY_ALIAS`
+   - `ANDROID_KEY_PASSWORD`
+   Also download the `relay-upload-keystore` artifact and stash a copy
+   somewhere safe (password manager, encrypted backup).
+
+2. **Create a Play Console service account** (only needed if you want
+   the workflow to auto-upload to the Internal Testing track):
+   - Google Cloud Console → IAM & Admin → Service Accounts → Create.
+   - Grant it the role *Service Account User*.
+   - Create a JSON key for it; download the file.
+   - Play Console → Setup → API access → Link Cloud project → Invite
+     the service account email, give it *Release Manager*.
+   - Paste the JSON into a new GitHub Secret `PLAY_SERVICE_ACCOUNT_JSON`.
+   Skip this if you'd rather upload AABs by hand.
+
+3. **First AAB to Play Console must be uploaded manually.** Play Console
+   needs to see one signed AAB associated with `com.averrow.relay`
+   before the API will accept further uploads. Run *Build Android APK /
+   AAB* with `build_type=release-aab`, `publish=false`. Download the
+   artifact, upload it to Internal Testing in Play Console.
+
+## Repeating the release loop
+
+Every subsequent release:
+
+1. Actions tab → *Build Android APK / AAB* → Run workflow.
+2. `build_type=release-aab`, optionally `publish=true` if you've set up
+   the service account.
+3. The workflow builds a signed AAB and (if publish=true) pushes it to
+   Internal Testing as a draft. You promote the draft to live testers
+   in Play Console.
+
+`versionCode` auto-bumps from the workflow run number. `versionName`
+follows the pattern `0.1.0+<short sha>` so every AAB traces back to a
+specific commit.
+
+## Debug APKs (sideloading)
+
+For local install on your phone without Play Store:
+
+1. Actions tab → *Build Android APK / AAB* → `build_type=debug-apk`.
+2. Download the APK artifact.
+3. Enable "Install unknown apps" for whatever you'll transfer the APK
+   with, then open the APK on the phone.
+
+Debug APKs don't need any signing secrets — they ship with Android's
+universal debug keystore.

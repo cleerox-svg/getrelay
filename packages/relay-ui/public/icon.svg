@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <!-- Relay brand mark: orange "R" on a black circle. -->
   <circle cx="256" cy="256" r="256" fill="#0A0A0A"/>
-  <path fill="#FB6A2C" fill-rule="evenodd" d="
+  <path fill="#C83C3C" fill-rule="evenodd" d="
     M 120 92 H 200 V 420 H 120 Z
     M 200 92 A 100 100 0 0 1 200 292 Z
     M 200 286 L 292 286 L 428 420 L 336 420 Z
