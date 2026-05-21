@@ -11,20 +11,22 @@ export type OutboundKind =
   | 'invite';
 
 // Wire kinds for DO-to-DO /notify calls. Ephemeral kinds ('typing',
-// 'recalled', 'edited') are best-effort: delivered live if the recipient
-// has a socket, dropped otherwise. Persistable kinds are mapped to
-// OutboundKind via outboundKindFor() when queuing.
+// 'recalled', 'edited', 'reaction') are best-effort: delivered live if
+// the recipient has a socket, dropped otherwise. Persistable kinds are
+// mapped to OutboundKind via outboundKindFor() when queuing.
 export type NotifyKind =
   | OutboundKind
   | 'typing'
   | 'recalled'
-  | 'edited';
+  | 'edited'
+  | 'reaction';
 
 export function outboundKindFor(kind: NotifyKind): OutboundKind | null {
   switch (kind) {
     case 'typing':
     case 'recalled':
     case 'edited':
+    case 'reaction':
       return null; // ephemeral
     default:
       return kind;

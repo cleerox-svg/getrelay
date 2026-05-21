@@ -9,14 +9,23 @@ export type ClientMsg =
       type: 'text' | 'ping' | 'image';
       body?: string;
       mediaKey?: string;
+      replyTo?: string;
     }
   | { t: 'typing'; chatId: string; on: boolean }
   | { t: 'read'; chatId: string; messageIds: string[] }
   | { t: 'ping'; chatId: string }
   | { t: 'recall'; messageId: string }
   | { t: 'edit'; messageId: string; body: string }
+  | { t: 'react'; messageId: string; emoji: string }
   | { t: 'subscribe'; chatId: string }
   | { t: 'unsubscribe'; chatId: string };
+
+export interface ReplyPreview {
+  id: string;
+  from: string;
+  fromName: string;
+  preview: string;
+}
 
 export type ServerMsg =
   | { t: 'ack'; tempId: string; messageId: string; sequence: number; chatId: string; ts: number }
@@ -30,6 +39,7 @@ export type ServerMsg =
       body: string | null;
       mediaKey?: string | null;
       mediaUrl?: string | null;
+      replyTo?: ReplyPreview | null;
       ts: number;
     }
   | { t: 'delivered'; messageId: string; chatId: string; userId: string; ts: number }
@@ -39,6 +49,14 @@ export type ServerMsg =
   | { t: 'ping'; chatId: string; from: string; ts: number }
   | { t: 'recalled'; messageId: string; chatId: string; ts: number }
   | { t: 'edited'; messageId: string; chatId: string; body: string; editedAt: number }
+  | {
+      t: 'reaction';
+      chatId: string;
+      messageId: string;
+      userId: string;
+      emoji: string;
+      action: 'add' | 'remove';
+    }
   | { t: 'error'; code: ErrorCode; message?: string };
 
 export type ErrorCode =
@@ -51,9 +69,12 @@ export type ErrorCode =
   | 'chat_not_found'
   | 'message_not_found'
   | 'cannot_edit'
-  | 'cannot_recall';
+  | 'cannot_recall'
+  | 'bad_emoji';
 
 export const MAX_BODY_LEN = 2000;
 export const MAX_READ_IDS = 200;
 export const EDIT_WINDOW_MS = 15 * 60 * 1000;
 export const RECALL_WINDOW_MS = 24 * 60 * 60 * 1000;
+// Single grapheme reactions only, capped for sanity.
+export const MAX_EMOJI_BYTES = 16;

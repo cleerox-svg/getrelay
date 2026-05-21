@@ -41,6 +41,8 @@ function formatTime(ts: number): string {
 
 const MAX_TEXTAREA_HEIGHT = 140; // ~6 lines
 
+const REACTION_PALETTE = ['👍', '❤️', '😂', '😯', '😢', '🎉'];
+
 export function Chat() {
   const params = useParams();
   const chatId = decodeURIComponent(params.id ?? '');
@@ -59,6 +61,7 @@ export function Chat() {
   const markRead = useStore((s) => s.markRead);
   const recall = useStore((s) => s.recall);
   const edit = useStore((s) => s.edit);
+  const react = useStore((s) => s.react);
 
   const loadChatHistory = useStore((s) => s.loadChatHistory);
   const loadChats = useStore((s) => s.loadChats);
@@ -66,6 +69,7 @@ export function Chat() {
 
   const [input, setInput] = useState('');
   const [editing, setEditing] = useState<UiMessage | null>(null);
+  const [replyingTo, setReplyingTo] = useState<UiMessage | null>(null);
   const [actionsFor, setActionsFor] = useState<UiMessage | null>(null);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sentTypingRef = useRef(false);
@@ -211,7 +215,8 @@ export function Chat() {
       edit(editing.id, text);
       setEditing(null);
     } else {
-      sendText(chatId, text);
+      sendText(chatId, text, replyingTo?.id);
+      setReplyingTo(null);
     }
     setInput('');
     if (sentTypingRef.current) {
@@ -230,8 +235,9 @@ export function Chat() {
     try {
       const result = await api.uploadMedia(file);
       const caption = input.trim();
-      sendMedia(chatId, result.key, result.url, caption || undefined);
+      sendMedia(chatId, result.key, result.url, caption || undefined, replyingTo?.id);
       setInput('');
+      setReplyingTo(null);
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.code === 'too_large') setUploadError('Files up to 10 MB.');
@@ -320,8 +326,18 @@ export function Chat() {
       >
         <Avatar src={senderAvatarSrc} name={senderName} size={28} />
         <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'flex-start',
+            gap: 4,
+            minWidth: 0,
+            flex: '1 1 auto',
+          }}
+        >
+        <div
           onClick={() => {
-            if (mine && !recalled) setActionsFor(m);
+            if (!recalled && !isPing) setActionsFor(m);
           }}
           style={{
             maxWidth: 'calc(100% - 44px)',
@@ -331,7 +347,7 @@ export function Chat() {
             padding: isPing ? 6 : hasMedia ? 4 : '10px 14px',
             border: recalled ? '1px dashed var(--text-dim)' : 'none',
             opacity: m.pending ? 0.7 : 1,
-            cursor: mine && !recalled ? 'pointer' : 'default',
+            cursor: !recalled && !isPing ? 'pointer' : 'default',
             overflow: 'hidden',
           }}
         >
@@ -341,6 +357,38 @@ export function Chat() {
               style={{ color: 'var(--accent)' }}
             >
               {senderName}
+            </div>
+          ) : null}
+
+          {m.replyTo && !recalled ? (
+            <div
+              style={{
+                marginBottom: 6,
+                paddingLeft: 8,
+                borderLeft: `3px solid ${mine ? 'rgba(255,255,255,0.6)' : 'var(--accent)'}`,
+                opacity: 0.85,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: mine ? 'rgba(255,255,255,0.9)' : 'var(--accent)',
+                }}
+              >
+                {m.replyTo.from === me?.id ? 'You' : m.replyTo.fromName}
+              </div>
+              <div
+                style={{
+                  fontSize: 12,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  color: mine ? 'rgba(255,255,255,0.85)' : 'var(--text-dim)',
+                }}
+              >
+                {m.replyTo.preview}
+              </div>
             </div>
           ) : null}
 
@@ -448,6 +496,45 @@ export function Chat() {
             ) : null}
           </div>
         </div>
+        {m.reactions && m.reactions.length > 0 ? (
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 4,
+              maxWidth: '100%',
+            }}
+          >
+            {m.reactions.map((r) => (
+              <button
+                key={r.emoji}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  react(m.id, r.emoji);
+                }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  background: r.mine
+                    ? 'var(--accent)'
+                    : 'var(--bubble-them, #E5E5EA)',
+                  color: r.mine ? '#FFFFFF' : 'var(--text)',
+                  borderRadius: 999,
+                  padding: '2px 8px',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  lineHeight: 1.2,
+                }}
+              >
+                <span>{r.emoji}</span>
+                {r.count > 1 ? <span>{r.count}</span> : null}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        </div>
       </div>,
     );
   }
@@ -543,6 +630,75 @@ export function Chat() {
             }}
           />
         </Suspense>
+      ) : null}
+
+      {replyingTo ? (
+        <div
+          style={{
+            position: 'fixed',
+            left: 0,
+            right: 0,
+            bottom: 'calc(64px + env(safe-area-inset-bottom, 0px))',
+            zIndex: 20,
+            background: 'var(--bubble-them, #E5E5EA)',
+            borderTop: '1px solid var(--separator, rgba(0,0,0,0.08))',
+            padding: '8px 14px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+          }}
+        >
+          <div
+            style={{
+              width: 3,
+              alignSelf: 'stretch',
+              background: 'var(--accent)',
+              borderRadius: 2,
+            }}
+          />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div
+              style={{
+                fontSize: 12,
+                fontWeight: 700,
+                color: 'var(--accent)',
+              }}
+            >
+              Replying to{' '}
+              {replyingTo.from === me?.id ? 'yourself' : chat?.peer?.displayName ?? 'them'}
+            </div>
+            <div
+              style={{
+                fontSize: 13,
+                color: 'var(--text-dim)',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {replyingTo.type === 'ping'
+                ? 'PING!!'
+                : replyingTo.body
+                  ? replyingTo.body
+                  : replyingTo.mediaKey
+                    ? '📷 Photo'
+                    : ''}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setReplyingTo(null)}
+            aria-label="Cancel reply"
+            style={{
+              padding: 6,
+              color: 'var(--text-dim)',
+              fontSize: 18,
+              lineHeight: 1,
+            }}
+          >
+            ×
+          </button>
+        </div>
       ) : null}
 
       <Messagebar
@@ -650,6 +806,48 @@ export function Chat() {
 
       <Actions opened={!!actionsFor} onBackdropClick={() => setActionsFor(null)}>
         <ActionsGroup>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-around',
+              alignItems: 'center',
+              padding: '10px 8px',
+              gap: 4,
+            }}
+          >
+            {REACTION_PALETTE.map((emoji) => (
+              <button
+                type="button"
+                key={emoji}
+                onClick={() => {
+                  if (actionsFor) react(actionsFor.id, emoji);
+                  setActionsFor(null);
+                }}
+                style={{
+                  fontSize: 28,
+                  lineHeight: 1,
+                  padding: 6,
+                  borderRadius: 999,
+                }}
+                aria-label={`React with ${emoji}`}
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+        </ActionsGroup>
+        <ActionsGroup>
+          <ActionsButton
+            onClick={() => {
+              if (actionsFor) setReplyingTo(actionsFor);
+              setActionsFor(null);
+              setTimeout(() => {
+                messagebarRef.current?.areaElRef?.focus();
+              }, 50);
+            }}
+          >
+            Reply
+          </ActionsButton>
           <ActionsButton
             className={!actionsFor?.body ? 'opacity-40 pointer-events-none' : undefined}
             onClick={() => {
@@ -662,12 +860,18 @@ export function Chat() {
           </ActionsButton>
           <ActionsButton
             className={
-              actionsFor?.type !== 'text' || !!actionsFor?.deletedAt
+              actionsFor?.from !== me?.id ||
+              actionsFor?.type !== 'text' ||
+              !!actionsFor?.deletedAt
                 ? 'opacity-40 pointer-events-none'
                 : undefined
             }
             onClick={() => {
-              if (actionsFor?.type === 'text' && !actionsFor.deletedAt) {
+              if (
+                actionsFor?.type === 'text' &&
+                !actionsFor.deletedAt &&
+                actionsFor.from === me?.id
+              ) {
                 setEditing(actionsFor);
                 setInput(actionsFor.body ?? '');
               }
@@ -677,9 +881,18 @@ export function Chat() {
             Edit
           </ActionsButton>
           <ActionsButton
-            className={`!text-red-500${actionsFor?.deletedAt ? ' opacity-40 pointer-events-none' : ''}`}
+            className={`!text-red-500${
+              actionsFor?.from !== me?.id || actionsFor?.deletedAt
+                ? ' opacity-40 pointer-events-none'
+                : ''
+            }`}
             onClick={() => {
-              if (actionsFor && !actionsFor.deletedAt) recall(actionsFor.id);
+              if (
+                actionsFor &&
+                !actionsFor.deletedAt &&
+                actionsFor.from === me?.id
+              )
+                recall(actionsFor.id);
               setActionsFor(null);
             }}
           >

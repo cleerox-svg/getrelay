@@ -99,6 +99,7 @@ export class UserHub implements DurableObject {
         case 'ping':        return await this.handlePing(att, cmd);
         case 'recall':      return await this.handleRecall(att, cmd);
         case 'edit':        return await this.handleEdit(att, cmd);
+        case 'react':       return await this.handleReact(att, cmd);
         case 'subscribe':   return this.handleSubscribe(ws, att, cmd.chatId);
         case 'unsubscribe': return this.handleUnsubscribe(ws, att, cmd.chatId);
         default:            return this.sendError(ws, 'unknown_type');
@@ -276,6 +277,7 @@ export class UserHub implements DurableObject {
       type: cmd.type,
       body,
       mediaKey: cmd.type === 'image' ? cmd.mediaKey : null,
+      replyTo: cmd.replyTo ?? null,
       chatId: cmd.chatId,
     });
 
@@ -357,6 +359,20 @@ export class UserHub implements DurableObject {
     });
   }
 
+  private async handleReact(
+    att: Attachment,
+    cmd: Extract<ClientMsg, { t: 'react' }>,
+  ): Promise<void> {
+    const chatId = await this.lookupChatIdForMessage(cmd.messageId);
+    if (!chatId) throw new Error('message_not_found');
+    await this.callChatRoom(chatId, '/react', {
+      chatId,
+      senderId: att.userId,
+      messageId: cmd.messageId,
+      emoji: cmd.emoji,
+    });
+  }
+
   private async lookupChatIdForMessage(messageId: string): Promise<string | null> {
     const row = await this.env.DB.prepare(`SELECT chat_id FROM messages WHERE id = ?`)
       .bind(messageId)
@@ -384,7 +400,7 @@ export class UserHub implements DurableObject {
   // ---------- helpers ----------
   private async callChatRoom(
     chatId: string,
-    path: '/persist' | '/typing' | '/read' | '/ping' | '/recall' | '/edit',
+    path: '/persist' | '/typing' | '/read' | '/ping' | '/recall' | '/edit' | '/react',
     body: unknown,
   ): Promise<Response> {
     const stub = this.env.CHAT_ROOM.get(this.env.CHAT_ROOM.idFromName(chatId));

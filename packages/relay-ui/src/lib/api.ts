@@ -152,6 +152,13 @@ export interface HistoryMessage {
   body: string | null;
   mediaKey: string | null;
   mediaUrl: string | null;
+  replyTo: {
+    id: string;
+    from: string;
+    fromName: string;
+    preview: string;
+  } | null;
+  reactions: { emoji: string; count: number; mine: boolean }[];
   ts: number;
   editedAt: number | null;
   deletedAt: number | null;

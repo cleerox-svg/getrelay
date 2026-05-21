@@ -65,11 +65,24 @@ CREATE TABLE IF NOT EXISTS messages (
   message_type TEXT NOT NULL CHECK(message_type IN ('text','image','voice','ping','system')),
   body TEXT,
   media_r2_key TEXT,
+  reply_to TEXT,
   created_at INTEGER NOT NULL,
   edited_at INTEGER,
   deleted_at INTEGER
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_chat_seq ON messages(chat_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to);
+
+-- One row per (message, user, emoji). PK keeps a single user from
+-- reacting with the same emoji twice; toggling delete + re-insert.
+CREATE TABLE IF NOT EXISTS message_reactions (
+  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  user_id    TEXT NOT NULL REFERENCES users(id),
+  emoji      TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (message_id, user_id, emoji)
+);
+CREATE INDEX IF NOT EXISTS idx_reactions_msg ON message_reactions(message_id);
 
 CREATE TABLE IF NOT EXISTS receipts (
   message_id TEXT NOT NULL REFERENCES messages(id),
