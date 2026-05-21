@@ -1,5 +1,6 @@
-/* Classic BBM 7+ (Android cross-platform, ~2014) skin.
-   Opt-in via the Legacy UI toggle in Profile. */
+/* Classic skin — early-2010s pin-messenger look (sky-blue navbar,
+   white message cards, pale-blue sent bubbles). Opt-in via the
+   Classic theme toggle in Profile. */
 
 html.legacy {
   --legacy-blue: #29ABE2;

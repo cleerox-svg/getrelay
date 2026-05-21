@@ -17,6 +17,6 @@
     <polygon points="272,160 378,360 338,360 256,210"/>
     <polygon points="248,160 208,210 304,210"/>
   </g>
-  <!-- Small BBM-blue dot inside safe zone, bottom-right corner -->
+  <!-- Small accent dot inside safe zone, bottom-right corner -->
   <circle cx="370" cy="370" r="18" fill="#0A84FF"/>
 </svg>

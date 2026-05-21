@@ -1,0 +1,88 @@
+name: Build Android APK
+
+# Manual trigger for now — flips to push-on-main once we want every
+# merge to produce an artifact. The job generates the Capacitor
+# `android/` project on the fly so we don't have to commit it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "Gradle target"
+        type: choice
+        options: [assembleDebug, assembleRelease, bundleRelease]
+        default: assembleDebug
+      server_url:
+        description: "Optional CAPACITOR_SERVER_URL (leave blank to bundle web assets)"
+        required: false
+        default: ""
+
+concurrency:
+  group: build-android
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-34 build-tools;34.0.0"
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build web bundle
+        working-directory: packages/relay-ui
+        env:
+          # Inline the production API base so the bundled app talks to
+          # the live worker even when offline-first.
+          VITE_API_BASE: https://relay-api.averrow.com
+        run: pnpm exec vite build
+
+      - name: Initialise Capacitor android project
+        working-directory: packages/relay-ui
+        env:
+          CAPACITOR_SERVER_URL: ${{ github.event.inputs.server_url }}
+        run: |
+          set -euo pipefail
+          if [ ! -d android ]; then
+            echo "Generating android/ project (first build on this runner)"
+            pnpm exec cap add android
+          fi
+          pnpm exec cap sync android
+
+      - name: Gradle build
+        working-directory: packages/relay-ui/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew ${{ github.event.inputs.build_type }} --no-daemon --stacktrace
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-android-${{ github.event.inputs.build_type }}
+          path: |
+            packages/relay-ui/android/app/build/outputs/apk/**/*.apk
+            packages/relay-ui/android/app/build/outputs/bundle/**/*.aab
+          if-no-files-found: error
+          retention-days: 14

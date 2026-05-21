@@ -432,9 +432,9 @@ export function Profile() {
           style={{ borderTop: '1px solid var(--separator, rgba(0,0,0,0.08))' }}
         >
           <div>
-            <div className="font-medium">Legacy UI (BBM style)</div>
+            <div className="font-medium">Classic theme</div>
             <div className="text-xs" style={{ color: 'var(--text-dim)' }}>
-              Skin Chats and the chat window like classic BBM.
+              Switch Chats and the chat window to the classic skin.
             </div>
           </div>
           <Button
@@ -444,6 +444,27 @@ export function Profile() {
           >
             {legacyOn ? 'On' : 'Off'}
           </Button>
+        </div>
+      </Block>
+
+      <Block
+        strong
+        inset
+        className="!mt-6 !py-3"
+      >
+        <div className="flex items-baseline gap-2 mb-1">
+          <span
+            className="text-[10px] font-bold tracking-wider px-1.5 py-[1px] rounded-sm"
+            style={{ background: 'var(--accent)', color: '#FFFFFF', letterSpacing: 1 }}
+          >
+            BETA
+          </span>
+          <span className="font-medium">You're testing Relay early</span>
+        </div>
+        <div className="text-xs" style={{ color: 'var(--text-dim)' }}>
+          Things may break. When Relay reaches its 1.0 release we'll
+          introduce optional ads and a subscription to remove them. Beta
+          testers will get a heads-up first.
         </div>
       </Block>
 

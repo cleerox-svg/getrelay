@@ -19,7 +19,7 @@ export function MainLayout() {
   const legacy = useLegacyUi();
   const unread = useStore((s) => s.chats.reduce((n, c) => n + (c.unreadCount ?? 0), 0));
 
-  // Legacy mode gets its own BBM-style tab bar instead of Konsta's. Same
+  // Classic mode gets its own tab bar instead of Konsta's. Same
   // five destinations so the user isn't locked into Chats.
   if (legacy) {
     return (

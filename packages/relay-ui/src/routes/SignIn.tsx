@@ -27,7 +27,7 @@ export function SignIn() {
             Relay
           </div>
           <div className="text-base" style={{ color: 'var(--text-dim)' }}>
-            BBM-inspired messaging
+            Pin-to-pin messaging
           </div>
         </div>
         <div className="w-full flex flex-col gap-6">
