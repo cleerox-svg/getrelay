@@ -58,7 +58,11 @@ CREATE TABLE IF NOT EXISTS chat_participants (
   PRIMARY KEY (chat_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_participants_user ON chat_participants(user_id);
-CREATE INDEX IF NOT EXISTS idx_participants_pinned ON chat_participants(user_id, pinned_at);
+-- idx_participants_pinned is created in deploy-worker.yml *after* the
+-- pinned_at column has been ensured. It can't live here because on
+-- existing databases the CREATE TABLE IF NOT EXISTS above is a no-op,
+-- which means pinned_at isn't yet a real column at schema-apply time
+-- and the index creation would fail.
 
 CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY,
@@ -74,7 +78,8 @@ CREATE TABLE IF NOT EXISTS messages (
   deleted_at INTEGER
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_chat_seq ON messages(chat_id, sequence);
-CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to);
+-- idx_messages_reply_to is created in deploy-worker.yml *after* the
+-- reply_to column has been ensured (see note on idx_participants_pinned).
 
 -- One row per (message, user, emoji). PK keeps a single user from
 -- reacting with the same emoji twice; toggling delete + re-insert.

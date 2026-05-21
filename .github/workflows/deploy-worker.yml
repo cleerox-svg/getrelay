@@ -122,6 +122,15 @@ jobs:
             echo "chat_participants.pinned_at column already present"
           fi
 
+          # Indexes that depend on the columns we may have just added.
+          # CREATE INDEX IF NOT EXISTS is itself idempotent, so re-runs
+          # are safe — we just couldn't put these in schema.sql because
+          # that runs before the ALTERs.
+          pnpm exec wrangler d1 execute relay-db --remote \
+            --command "CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to);"
+          pnpm exec wrangler d1 execute relay-db --remote \
+            --command "CREATE INDEX IF NOT EXISTS idx_participants_pinned ON chat_participants(user_id, pinned_at);"
+
       - name: Ensure DNS record (relay-api.averrow.com → proxied placeholder)
         env:
           CF_API_TOKEN: ${{ secrets.CF_RELAY_API_KEY }}
