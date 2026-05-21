@@ -120,33 +120,11 @@ jobs:
         run: |
           set -euo pipefail
           # Capacitor's generated build.gradle has no signingConfig.
-          # Append a release signingConfig that reads from env vars set
-          # below, and wire it into buildTypes.release. Idempotent — we
-          # check for our marker before appending.
+          # Append the overlay (under .github/) which adds a release
+          # signingConfig that reads from env vars set below. Idempotent
+          # via a marker comment in the overlay file.
           if ! grep -q "RELAY_SIGNING_CONFIG_INJECTED" build.gradle; then
-            cat >> build.gradle <<'GRADLE'
-
-// RELAY_SIGNING_CONFIG_INJECTED
-android {
-    signingConfigs {
-        release {
-            def ksPath = System.getenv("ANDROID_KEYSTORE_PATH")
-            if (ksPath) {
-                storeFile file(ksPath)
-                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
-                keyAlias System.getenv("ANDROID_KEY_ALIAS")
-                keyPassword System.getenv("ANDROID_KEY_PASSWORD")
-            }
-        }
-    }
-    buildTypes {
-        release {
-            signingConfig signingConfigs.release
-            minifyEnabled false
-        }
-    }
-}
-GRADLE
+            cat "$GITHUB_WORKSPACE/.github/android-signing-overlay.gradle" >> build.gradle
           fi
 
       - name: Gradle assemble debug APK

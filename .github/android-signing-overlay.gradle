@@ -1,0 +1,23 @@
+// RELAY_SIGNING_CONFIG_INJECTED
+// Appended to android/app/build.gradle by build-android.yml when
+// producing a signed release AAB. Reads credentials from env vars
+// supplied by the workflow.
+android {
+    signingConfigs {
+        release {
+            def ksPath = System.getenv("ANDROID_KEYSTORE_PATH")
+            if (ksPath) {
+                storeFile file(ksPath)
+                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled false
+        }
+    }
+}
