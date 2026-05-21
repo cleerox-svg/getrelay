@@ -71,6 +71,25 @@ export interface ContactStatus {
   mine: boolean;
 }
 
+export interface SportsTeam {
+  abbr: string;
+  name: string;
+  logo: string | null;
+  score: number | null;
+}
+
+export interface SportsGame {
+  league: 'NHL' | 'MLB';
+  status: 'pre' | 'live' | 'final';
+  statusDetail: string;
+  startTime: number;
+  startTimeLocal: string;
+  homeTeam: SportsTeam;
+  awayTeam: SportsTeam;
+  venue: string | null;
+  ourSide: 'home' | 'away';
+}
+
 export interface UiMessage {
   id: string;
   chatId: string;

@@ -9,6 +9,7 @@ import { chatsRoutes } from './chats';
 import { mediaRoutes } from './media';
 import { messagesRoutes } from './messages';
 import { pushRoutes } from './push';
+import { sportsRoutes } from './sports';
 import { statusRoutes } from './status';
 
 export { ChatRoom } from './do/chat-room';
@@ -48,6 +49,7 @@ app.route('/', chatsRoutes());
 app.route('/', messagesRoutes());
 app.route('/', mediaRoutes());
 app.route('/', pushRoutes());
+app.route('/', sportsRoutes());
 app.route('/', statusRoutes());
 
 // WebSocket upgrade — authenticates via cookie, forwards to the user's
