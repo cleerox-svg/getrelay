@@ -1,28 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#15172A"/>
-      <stop offset="1" stop-color="#080912"/>
-    </linearGradient>
-    <linearGradient id="a" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#C83C3C"/>
-      <stop offset="1" stop-color="#8E2A2A"/>
-    </linearGradient>
-  </defs>
-  <!-- Subtle chat-bubble hint tucked behind, bottom-right -->
-  <path d="M48 50 h8 a4 4 0 0 1 4 4 v6 a4 4 0 0 1-4 4 h-2 l-3 3 v-3 h-3 a4 4 0 0 1-4-4 v-6 a4 4 0 0 1 4-4 z"
-        fill="#0A84FF"/>
-
-  <!-- Averrow squircle -->
-  <rect x="2" y="2" width="56" height="56" rx="13" fill="url(#bg)"/>
-
-  <!-- Averrow "A" mark with the upward arrow apex -->
-  <g fill="url(#a)">
-    <!-- Left leg -->
-    <polygon points="29,12 12,48 18,48 31,22"/>
-    <!-- Right leg -->
-    <polygon points="31,12 48,48 42,48 29,22"/>
-    <!-- Apex (small upward arrow / chevron) -->
-    <polygon points="30,12 24,22 36,22"/>
-  </g>
+  <!-- Relay brand mark: orange "R" on a black circle. -->
+  <circle cx="32" cy="32" r="32" fill="#0A0A0A"/>
+  <path fill="#C83C3C" fill-rule="evenodd" d="
+    M 15 11.5 H 25 V 52.5 H 15 Z
+    M 25 11.5 A 12.5 12.5 0 0 1 25 36.5 Z
+    M 25 35.75 L 36.5 35.75 L 53.5 52.5 L 42 52.5 Z
+    M 25 19.25 A 4.75 4.75 0 0 1 25 28.75 Z
+  "/>
 </svg>

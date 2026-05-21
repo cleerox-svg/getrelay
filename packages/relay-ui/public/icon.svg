@@ -1,25 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#15172A"/>
-      <stop offset="1" stop-color="#080912"/>
-    </linearGradient>
-    <linearGradient id="a" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#C83C3C"/>
-      <stop offset="1" stop-color="#8E2A2A"/>
-    </linearGradient>
-  </defs>
-  <!-- Chat bubble tail in bottom-right -->
-  <path d="M376 392 h66 a32 32 0 0 1 32 32 v54 a32 32 0 0 1-32 32 h-22 l-26 26 v-26 h-18 a32 32 0 0 1-32-32 v-54 a32 32 0 0 1 32-32 z"
-        fill="#0A84FF"/>
-
-  <!-- Averrow squircle -->
-  <rect x="16" y="16" width="448" height="448" rx="100" fill="url(#bg)"/>
-
-  <!-- A mark -->
-  <g fill="url(#a)">
-    <polygon points="232,96 96,384 144,384 248,176"/>
-    <polygon points="248,96 416,384 368,384 232,176"/>
-    <polygon points="240,96 192,176 288,176"/>
-  </g>
+  <!-- Relay brand mark: orange "R" on a black circle. -->
+  <circle cx="256" cy="256" r="256" fill="#0A0A0A"/>
+  <path fill="#C83C3C" fill-rule="evenodd" d="
+    M 120 92 H 200 V 420 H 120 Z
+    M 200 92 A 100 100 0 0 1 200 292 Z
+    M 200 286 L 292 286 L 428 420 L 336 420 Z
+    M 200 154 A 38 38 0 0 1 200 230 Z
+  "/>
 </svg>
