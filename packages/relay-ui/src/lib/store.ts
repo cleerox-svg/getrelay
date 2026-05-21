@@ -359,12 +359,13 @@ export const useStore = create<AppState>((set, get) => ({
       }
       if (!chatId) return s;
       const chat = s.byChat[chatId];
+      if (!chat) return s;
       const next = chat.messages.map((m) => {
         if (m.id !== messageId) return m;
         const reactions = m.reactions ? m.reactions.slice() : [];
         const idx = reactions.findIndex((r) => r.emoji === e);
         if (idx >= 0) {
-          const r = reactions[idx];
+          const r = reactions[idx]!;
           if (r.mine) {
             const newCount = r.count - 1;
             if (newCount <= 0) reactions.splice(idx, 1);
@@ -518,7 +519,7 @@ export const useStore = create<AppState>((set, get) => ({
             const isMine = me && msg.userId === me;
             if (msg.action === 'add') {
               if (idx >= 0) {
-                const r = reactions[idx];
+                const r = reactions[idx]!;
                 // Server is authoritative; only flip `mine` if this user
                 // added it. Avoid double-counting when our optimistic
                 // toggle already incremented.
@@ -534,7 +535,7 @@ export const useStore = create<AppState>((set, get) => ({
               }
             } else {
               if (idx >= 0) {
-                const r = reactions[idx];
+                const r = reactions[idx]!;
                 const newCount = r.count - 1;
                 if (newCount <= 0) reactions.splice(idx, 1);
                 else
