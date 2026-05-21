@@ -60,6 +60,17 @@ export interface GroupMember {
   joinedAt: number;
 }
 
+export interface StatusPost {
+  id: string;
+  userId: string;
+  displayName: string;
+  pin: string;
+  avatarUrl: string | null;
+  body: string;
+  createdAt: number;
+  mine: boolean;
+}
+
 export interface UiMessage {
   id: string;
   chatId: string;

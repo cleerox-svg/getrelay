@@ -9,6 +9,7 @@ import { chatsRoutes } from './chats';
 import { mediaRoutes } from './media';
 import { messagesRoutes } from './messages';
 import { pushRoutes } from './push';
+import { statusRoutes } from './status';
 
 export { ChatRoom } from './do/chat-room';
 export { UserHub } from './do/user-hub';
@@ -47,6 +48,7 @@ app.route('/', chatsRoutes());
 app.route('/', messagesRoutes());
 app.route('/', mediaRoutes());
 app.route('/', pushRoutes());
+app.route('/', statusRoutes());
 
 // WebSocket upgrade — authenticates via cookie, forwards to the user's
 // UserHub DO with the user id/jti in headers.
