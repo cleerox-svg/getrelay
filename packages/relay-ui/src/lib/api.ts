@@ -1,4 +1,4 @@
-import type { Chat, Contact, GroupMember, Me, StatusPost } from './types';
+import type { Chat, Contact, ContactStatus, GroupMember, Me } from './types';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8787').replace(
   /\/+$/,
@@ -107,14 +107,7 @@ export const api = {
     }),
   deleteChat: (chatId: string) =>
     request<{ ok: true }>(`/chats/${encodeURIComponent(chatId)}`, { method: 'DELETE' }),
-  postStatus: (body: string) =>
-    request<{ id: string; body: string; createdAt: number }>('/me/status', {
-      method: 'POST',
-      body: JSON.stringify({ body }),
-    }),
-  deleteStatus: (id: string) =>
-    request<{ ok: true }>(`/status/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  listFeed: () => request<{ posts: StatusPost[] }>('/feed'),
+  listFeed: () => request<{ statuses: ContactStatus[] }>('/feed'),
   createGroup: (subject: string, contactIds: string[]) =>
     request<{
       id: string;

@@ -247,9 +247,10 @@ export function chatsRoutes() {
               AND r.read_at IS NULL) AS unread_count,
          (SELECT COUNT(*) FROM chat_participants cp2
             WHERE cp2.chat_id = ch.id) AS member_count,
-         (SELECT u.id || '|' || u.display_name || '|' ||
-                 COALESCE(u.avatar_url, '') || '|' || u.pin || '|' ||
-                 COALESCE(u.avatar_r2_key, '')
+         (SELECT u.id || char(31) || u.display_name || char(31) ||
+                 COALESCE(u.avatar_url, '') || char(31) || u.pin || char(31) ||
+                 COALESCE(u.avatar_r2_key, '') || char(31) ||
+                 COALESCE(u.status_message, '')
             FROM chat_participants cp
             JOIN users u ON u.id = cp.user_id
             WHERE cp.chat_id = ch.id AND cp.user_id != ?
@@ -349,16 +350,25 @@ export function oneToOneChatId(a: string, b: string): string {
 function parsePeerBlob(
   origin: string,
   blob: string | null,
-): { id: string; displayName: string; avatarUrl: string | null; pin: string } | null {
+): {
+  id: string;
+  displayName: string;
+  avatarUrl: string | null;
+  pin: string;
+  statusMessage: string | null;
+} | null {
   if (!blob) return null;
-  const parts = blob.split('|');
+  // ASCII Unit Separator (\x1f) — safe against user content that contains '|'.
+  const parts = blob.split('\x1f');
   const r2Key = parts[4] ?? '';
   const externalUrl = parts[2] ?? '';
   const avatarUrl = r2Key ? `${origin}/r/${r2Key}` : externalUrl || null;
+  const statusMessage = parts[5]?.trim() ? parts[5] : null;
   return {
     id: parts[0] ?? '',
     displayName: parts[1] ?? '',
     avatarUrl,
     pin: parts[3] ?? '',
+    statusMessage,
   };
 }

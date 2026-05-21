@@ -94,9 +94,8 @@ export function LegacyChat() {
   const peerName = isGroup ? chat?.subject ?? 'Group' : chat?.peer?.displayName ?? 'Chat';
   const subLine = isGroup
     ? `${chat?.memberCount ?? '–'} members`
-    : peerOnline
-      ? 'available'
-      : chat?.peer?.pin || '';
+    : (chat?.peer?.statusMessage?.trim() ||
+        (peerOnline ? 'available' : chat?.peer?.pin || ''));
 
   const typingNames = useMemo(() => {
     if (!chatState || !me) return [];

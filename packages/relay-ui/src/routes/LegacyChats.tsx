@@ -143,13 +143,19 @@ export function LegacyChats() {
             const isGroup = c.type === 'group';
             const peerOnline = c.peer ? presence[c.peer.id]?.online ?? false : false;
             const last = c.lastMessage;
-            const preview = last?.deletedAt
+            const lastPreview = last?.deletedAt
               ? 'Message recalled'
               : last?.messageType === 'ping'
                 ? 'sent a PING!!'
                 : last?.messageType === 'image'
                   ? '📷 Photo'
                   : (last?.body ?? '');
+            // BBM-style rows show the contact's current status under their
+            // name. Fall back to the last-message preview when they haven't
+            // set one (or for groups, where status doesn't apply).
+            const subtitle = isGroup
+              ? `${c.memberCount ?? '–'} members`
+              : (c.peer?.statusMessage?.trim() || lastPreview);
             const name = c.peer?.displayName ?? c.subject ?? 'Chat';
 
             return (
@@ -181,9 +187,7 @@ export function LegacyChats() {
                       {name}
                     </span>
                   </div>
-                  <div className="l-preview">
-                    {preview || (isGroup ? `${c.memberCount ?? '–'} members` : ' ')}
-                  </div>
+                  <div className="l-preview">{subtitle || ' '}</div>
                 </div>
                 <div
                   style={{

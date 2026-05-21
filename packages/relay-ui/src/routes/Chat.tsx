@@ -460,9 +460,8 @@ export function Chat() {
               <span className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
                 {isGroup
                   ? `${chat?.memberCount ?? '–'} members`
-                  : peerOnline
-                    ? 'online'
-                    : chat?.peer?.pin ?? ''}
+                  : chat?.peer?.statusMessage?.trim() ||
+                    (peerOnline ? 'online' : chat?.peer?.pin ?? '')}
               </span>
             </span>
           </Link>

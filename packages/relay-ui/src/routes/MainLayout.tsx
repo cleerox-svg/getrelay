@@ -19,14 +19,44 @@ export function MainLayout() {
   const legacy = useLegacyUi();
   const unread = useStore((s) => s.chats.reduce((n, c) => n + (c.unreadCount ?? 0), 0));
 
-  // In legacy mode the BBM-style routes are full-screen and have their own
-  // chrome — don't overlay the Konsta tab bar.
+  // Legacy mode gets its own BBM-style tab bar instead of Konsta's. Same
+  // five destinations so the user isn't locked into Chats.
   if (legacy) {
     return (
       <>
         <Outlet />
         <InstallPrompt />
         <PushPrompt />
+        <nav
+          className="legacy-tabbar"
+          role="tablist"
+          aria-label="Sections"
+        >
+          {TABS.map((t) => {
+            const Icon = t.icon;
+            const active = loc.pathname === t.to;
+            return (
+              <button
+                type="button"
+                key={t.to}
+                role="tab"
+                aria-selected={active}
+                className={active ? 'active' : undefined}
+                onClick={() => nav(t.to)}
+              >
+                <span className="l-tab-icon">
+                  <Icon active={active} />
+                  {t.to === '/chats' && unread > 0 ? (
+                    <span className="l-tab-badge">
+                      {unread > 99 ? '99+' : unread}
+                    </span>
+                  ) : null}
+                </span>
+                <span className="l-tab-label">{t.label}</span>
+              </button>
+            );
+          })}
+        </nav>
       </>
     );
   }
