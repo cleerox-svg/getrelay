@@ -1,17 +1,33 @@
-name: Build Android APK
+name: Build Android APK / AAB
 
-# Manual trigger for now — flips to push-on-main once we want every
-# merge to produce an artifact. The job generates the Capacitor
-# `android/` project on the fly so we don't have to commit it.
+# Manual trigger. Produces:
+#   - Debug APK (no signing required) — sideloadable for testing
+#   - Signed release AAB — what you upload to Play Console
+#
+# Signed releases need these repository Secrets (generated once via the
+# "Initialize Android upload keystore" workflow):
+#   ANDROID_KEYSTORE_BASE64
+#   ANDROID_KEYSTORE_PASSWORD
+#   ANDROID_KEY_ALIAS
+#   ANDROID_KEY_PASSWORD
+#
+# Auto-upload to Play Console Internal Testing track also requires:
+#   PLAY_SERVICE_ACCOUNT_JSON  (from Google Cloud → Service Accounts)
+# When this secret is missing the upload step is skipped and the AAB
+# is left as a workflow artifact for manual upload.
 
 on:
   workflow_dispatch:
     inputs:
       build_type:
-        description: "Gradle target"
+        description: "What to build"
         type: choice
-        options: [assembleDebug, assembleRelease, bundleRelease]
-        default: assembleDebug
+        options: [debug-apk, release-aab]
+        default: release-aab
+      publish:
+        description: "Auto-upload AAB to Play Internal Testing"
+        type: boolean
+        default: false
       server_url:
         description: "Optional CAPACITOR_SERVER_URL (leave blank to bundle web assets)"
         required: false
@@ -54,8 +70,6 @@ jobs:
       - name: Build web bundle
         working-directory: packages/relay-ui
         env:
-          # Inline the production API base so the bundled app talks to
-          # the live worker even when offline-first.
           VITE_API_BASE: https://relay-api.averrow.com
         run: pnpm exec vite build
 
@@ -71,11 +85,87 @@ jobs:
           fi
           pnpm exec cap sync android
 
-      - name: Gradle build
+      - name: Bump versionCode + versionName from git
+        working-directory: packages/relay-ui/android/app
+        env:
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          # versionCode = monotonic GitHub run number; versionName from
+          # the short SHA so we can trace any release AAB back to a commit.
+          SHORT_SHA=$(git -C "$GITHUB_WORKSPACE" rev-parse --short HEAD)
+          VC="$GITHUB_RUN_NUMBER"
+          VN="0.1.0+${SHORT_SHA}"
+          sed -i -E "s/(versionCode )[0-9]+/\1${VC}/" build.gradle
+          sed -i -E "s/(versionName )\".*\"/\1\"${VN}\"/" build.gradle
+          grep -E "versionCode|versionName" build.gradle
+
+      - name: Decode keystore (release builds only)
+        if: ${{ github.event.inputs.build_type == 'release-aab' }}
+        env:
+          KS_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KS_BASE64:-}" ]; then
+            echo "ERROR: ANDROID_KEYSTORE_BASE64 secret is not set. Run the 'Initialize Android upload keystore' workflow first." >&2
+            exit 1
+          fi
+          echo "$KS_BASE64" | base64 -d > "$RUNNER_TEMP/upload-keystore.jks"
+          chmod 600 "$RUNNER_TEMP/upload-keystore.jks"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/upload-keystore.jks" >> "$GITHUB_ENV"
+
+      - name: Inject signing config into Gradle (release builds only)
+        if: ${{ github.event.inputs.build_type == 'release-aab' }}
+        working-directory: packages/relay-ui/android/app
+        run: |
+          set -euo pipefail
+          # Capacitor's generated build.gradle has no signingConfig.
+          # Append a release signingConfig that reads from env vars set
+          # below, and wire it into buildTypes.release. Idempotent — we
+          # check for our marker before appending.
+          if ! grep -q "RELAY_SIGNING_CONFIG_INJECTED" build.gradle; then
+            cat >> build.gradle <<'GRADLE'
+
+// RELAY_SIGNING_CONFIG_INJECTED
+android {
+    signingConfigs {
+        release {
+            def ksPath = System.getenv("ANDROID_KEYSTORE_PATH")
+            if (ksPath) {
+                storeFile file(ksPath)
+                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled false
+        }
+    }
+}
+GRADLE
+          fi
+
+      - name: Gradle assemble debug APK
+        if: ${{ github.event.inputs.build_type == 'debug-apk' }}
         working-directory: packages/relay-ui/android
         run: |
           chmod +x ./gradlew
-          ./gradlew ${{ github.event.inputs.build_type }} --no-daemon --stacktrace
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Gradle bundle release AAB
+        if: ${{ github.event.inputs.build_type == 'release-aab' }}
+        working-directory: packages/relay-ui/android
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x ./gradlew
+          ./gradlew bundleRelease --no-daemon --stacktrace
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -86,3 +176,13 @@ jobs:
             packages/relay-ui/android/app/build/outputs/bundle/**/*.aab
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload AAB to Play Console (Internal Testing)
+        if: ${{ github.event.inputs.build_type == 'release-aab' && github.event.inputs.publish == 'true' }}
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.averrow.relay
+          releaseFiles: packages/relay-ui/android/app/build/outputs/bundle/release/*.aab
+          track: internal
+          status: draft

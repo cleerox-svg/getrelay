@@ -466,6 +466,16 @@ export function Profile() {
           introduce optional ads and a subscription to remove them. Beta
           testers will get a heads-up first.
         </div>
+        <div className="text-xs mt-2">
+          <a
+            href="/privacy"
+            target="_blank"
+            rel="noreferrer"
+            style={{ color: 'var(--accent)' }}
+          >
+            Privacy policy
+          </a>
+        </div>
       </Block>
 
       <Block className="mt-6">
