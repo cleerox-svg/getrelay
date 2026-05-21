@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import type { Env } from './env';
+import { sendPush, type VapidKeys } from './lib/web-push';
 
 // Today's game (if any) for the Montreal Canadiens (NHL) and Toronto
 // Blue Jays (MLB). No D1 usage — we hit the official league APIs and
@@ -103,16 +104,22 @@ function ordinalInning(n: number): string {
 
 async function fetchNhlMtl(ymd: string): Promise<Game | null> {
   try {
-    const r = await fetch('https://api-web.nhle.com/v1/score/now', {
-      cf: { cacheTtl: 30 },
-    } as RequestInit);
-    if (!r.ok) return null;
-    const data = (await r.json()) as { games?: NhlRawGame[] };
-    const ev = (data.games ?? []).find(
-      (g) =>
-        g?.gameDate === ymd &&
-        (g?.homeTeam?.abbrev === NHL_TEAM_ABBR || g?.awayTeam?.abbrev === NHL_TEAM_ABBR),
+    // Team-specific weekly schedule. Includes every Canadiens game in the
+    // current week regardless of state (FUT / PRE / LIVE / OFF / FINAL),
+    // unlike /score/now which only surfaces games already underway. That's
+    // why pre-game evening games for the Habs weren't appearing.
+    const r = await fetch(
+      `https://api-web.nhle.com/v1/club-schedule/${NHL_TEAM_ABBR}/week/now`,
+      { cf: { cacheTtl: 30 } } as RequestInit,
     );
+    if (!r.ok) return null;
+    const data = (await r.json()) as {
+      games?: NhlRawGame[];
+      gamesByDate?: { date?: string; games?: NhlRawGame[] }[];
+    };
+    const flat: NhlRawGame[] =
+      data.games ?? (data.gamesByDate ?? []).flatMap((d) => d.games ?? []);
+    const ev = flat.find((g) => g?.gameDate === ymd);
     if (!ev) return null;
     return parseNhlGame(ev);
   } catch {
@@ -298,5 +305,170 @@ function parseMlbTeam(t: MlbRawTeam, score: number | null): Team {
     name: t.team?.name ?? '',
     logo,
     score,
+  };
+}
+
+// ---- Cron + notifications ----------------------------------------------
+//
+// runSportsCron is called every minute by the worker's scheduled handler.
+// It compares each team's current state to the last-seen state stored in
+// the kv_state D1 table; when the score changes or the game ends, it
+// broadcasts a Web Push to every subscriber with sports notifications
+// enabled. Persisting state *before* sending means a transient push
+// failure won't re-fire the same notification next minute.
+
+interface PersistedState {
+  status: 'pre' | 'live' | 'final';
+  homeScore: number;
+  awayScore: number;
+}
+
+interface SportsEvent {
+  title: string;
+  body: string;
+  tag: string;
+}
+
+export async function runSportsCron(env: Env): Promise<void> {
+  const ymd = todayInToronto();
+  const [nhl, mlb] = await Promise.all([fetchNhlMtl(ymd), fetchMlbTor(ymd)]);
+  // Short-circuit when neither team plays today — zero D1 work.
+  if (!nhl && !mlb) return;
+  for (const g of [nhl, mlb]) {
+    if (g) await processGameUpdate(env, ymd, g);
+  }
+}
+
+async function processGameUpdate(env: Env, ymd: string, g: Game): Promise<void> {
+  const key = `sports:${g.league}:${ymd}`;
+  // 1 read per game per tick.
+  const prevRow = await env.DB.prepare(
+    `SELECT value FROM kv_state WHERE key = ?`,
+  )
+    .bind(key)
+    .first<{ value: string }>();
+
+  const prev: PersistedState | null = prevRow
+    ? (() => {
+        try {
+          return JSON.parse(prevRow.value) as PersistedState;
+        } catch {
+          return null;
+        }
+      })()
+    : null;
+
+  const cur: PersistedState = {
+    status: g.status,
+    homeScore: g.homeTeam.score ?? 0,
+    awayScore: g.awayTeam.score ?? 0,
+  };
+
+  // No-op when nothing changed since last tick. Steady state during a
+  // game (between goals) and after Final means most cron ticks are
+  // read-only — no D1 writes, no push-sub query, no fan-out fetch.
+  const unchanged =
+    prev !== null &&
+    prev.status === cur.status &&
+    prev.homeScore === cur.homeScore &&
+    prev.awayScore === cur.awayScore;
+  if (unchanged) return;
+
+  const value = JSON.stringify(cur);
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT INTO kv_state (key, value, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+  )
+    .bind(key, value, now)
+    .run();
+
+  if (!prev) return; // First sighting — set baseline; never push on cold start.
+
+  const events: SportsEvent[] = [];
+  const emoji = g.league === 'NHL' ? '🏒' : '⚾';
+  const goalWord = g.league === 'NHL' ? 'goal' : 'score';
+
+  const ours = g.ourSide === 'home' ? g.homeTeam : g.awayTeam;
+  const theirs = g.ourSide === 'home' ? g.awayTeam : g.homeTeam;
+  const ourScore = g.ourSide === 'home' ? cur.homeScore : cur.awayScore;
+  const theirScore = g.ourSide === 'home' ? cur.awayScore : cur.homeScore;
+  const prevOurScore = g.ourSide === 'home' ? prev.homeScore : prev.awayScore;
+  const prevTheirScore = g.ourSide === 'home' ? prev.awayScore : prev.homeScore;
+
+  if (ourScore > prevOurScore) {
+    events.push({
+      title: `${emoji} ${ours.name} ${goalWord}!`,
+      body: `${ours.abbr} ${ourScore} – ${theirScore} ${theirs.abbr} · ${g.statusDetail}`,
+      tag: `sports-${g.league}-score`,
+    });
+  } else if (theirScore > prevTheirScore) {
+    events.push({
+      title: `${emoji} ${theirs.name} ${goalWord}`,
+      body: `${ours.abbr} ${ourScore} – ${theirScore} ${theirs.abbr} · ${g.statusDetail}`,
+      tag: `sports-${g.league}-score`,
+    });
+  }
+
+  if (prev.status !== 'final' && cur.status === 'final') {
+    const won = ourScore > theirScore;
+    events.push({
+      title: won ? `${emoji} ${ours.name} win!` : `${emoji} ${ours.name} fall`,
+      body: `Final · ${ours.abbr} ${ourScore} – ${theirScore} ${theirs.abbr}`,
+      tag: `sports-${g.league}-final`,
+    });
+  }
+
+  for (const ev of events) {
+    await broadcastSportsPush(env, ev);
+  }
+}
+
+async function broadcastSportsPush(env: Env, payload: SportsEvent): Promise<void> {
+  const keys = vapidKeys(env);
+  if (!keys) {
+    console.warn('sports: VAPID not configured; skipping push');
+    return;
+  }
+  const rows = await env.DB.prepare(
+    `SELECT ps.endpoint, ps.p256dh, ps.auth
+     FROM push_subscriptions ps
+     JOIN users u ON u.id = ps.user_id
+     WHERE COALESCE(u.sports_notifications, 1) = 1`,
+  ).all<{ endpoint: string; p256dh: string; auth: string }>();
+  const subs = rows.results ?? [];
+  if (subs.length === 0) return;
+
+  const dead: string[] = [];
+  await Promise.all(
+    subs.map(async (s) => {
+      try {
+        const r = await sendPush(
+          { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
+          payload,
+          keys,
+        );
+        if (r.status === 404 || r.status === 410) dead.push(s.endpoint);
+      } catch (err) {
+        console.warn('sports: push failed', err);
+      }
+    }),
+  );
+  if (dead.length > 0) {
+    const ph = dead.map(() => '?').join(',');
+    await env.DB.prepare(
+      `DELETE FROM push_subscriptions WHERE endpoint IN (${ph})`,
+    )
+      .bind(...dead)
+      .run();
+  }
+}
+
+function vapidKeys(env: Env): VapidKeys | null {
+  if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY || !env.VAPID_SUBJECT) return null;
+  return {
+    publicKey: env.VAPID_PUBLIC_KEY,
+    privateKey: env.VAPID_PRIVATE_KEY,
+    subject: env.VAPID_SUBJECT,
   };
 }

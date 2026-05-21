@@ -18,7 +18,8 @@ export function meRoutes() {
     if (!me) return c.json({ error: 'unauthorized' }, 401);
 
     const row = await c.env.DB.prepare(
-      `SELECT id, email, pin, display_name, status_message, avatar_url, avatar_r2_key, is_admin
+      `SELECT id, email, pin, display_name, status_message, avatar_url, avatar_r2_key,
+              is_admin, COALESCE(sports_notifications, 1) AS sports_notifications
        FROM users WHERE id = ?`,
     ).bind(me.id).first<{
       id: string;
@@ -29,6 +30,7 @@ export function meRoutes() {
       avatar_url: string | null;
       avatar_r2_key: string | null;
       is_admin: number;
+      sports_notifications: number;
     }>();
     if (!row) return c.json({ error: 'user_not_found' }, 404);
 
@@ -41,6 +43,7 @@ export function meRoutes() {
       statusMessage: row.status_message,
       avatarUrl: avatarUrlFor(origin, row),
       isAdmin: row.is_admin === 1,
+      sportsNotifications: row.sports_notifications === 1,
     });
   });
 
@@ -48,7 +51,11 @@ export function meRoutes() {
     const me = await readAuthedUser(c.env, c.req.raw);
     if (!me) return c.json({ error: 'unauthorized' }, 401);
 
-    const body = await c.req.json<{ displayName?: string; statusMessage?: string }>();
+    const body = await c.req.json<{
+      displayName?: string;
+      statusMessage?: string;
+      sportsNotifications?: boolean;
+    }>();
 
     const updates: string[] = [];
     const values: (string | number)[] = [];
@@ -65,6 +72,10 @@ export function meRoutes() {
       if (sm.length > 140) return c.json({ error: 'invalid_status' }, 400);
       updates.push('status_message = ?');
       values.push(sm);
+    }
+    if (typeof body.sportsNotifications === 'boolean') {
+      updates.push('sports_notifications = ?');
+      values.push(body.sportsNotifications ? 1 : 0);
     }
     if (updates.length === 0) return c.json({ ok: true });
 

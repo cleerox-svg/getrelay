@@ -32,6 +32,13 @@ class_name = "UserHub"
 tag = "v1"
 new_sqlite_classes = ["ChatRoom", "UserHub"]
 
+# ----- Cron triggers -----
+# Every minute — polls Canadiens / Blue Jays state and pushes score / win
+# notifications when the state changes. State is persisted in the kv_state
+# D1 table; broadcast push is gated by users.sports_notifications.
+[triggers]
+crons = ["* * * * *"]
+
 # ----- Observability -----
 [observability]
 enabled = true

@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS users (
   avatar_r2_key TEXT,
   created_at INTEGER NOT NULL,
   last_seen_at INTEGER,
-  is_admin INTEGER NOT NULL DEFAULT 0
+  is_admin INTEGER NOT NULL DEFAULT 0,
+  sports_notifications INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_users_pin ON users(pin);
 CREATE INDEX IF NOT EXISTS idx_users_google_sub ON users(google_sub);
@@ -106,3 +107,12 @@ CREATE TABLE IF NOT EXISTS status_posts (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_status_user_time ON status_posts(user_id, created_at DESC);
+
+-- Small key/value table used by the sports cron to remember the
+-- last-seen game state per (league, date). Keeps notification de-dup
+-- self-contained — no new table per game.
+CREATE TABLE IF NOT EXISTS kv_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
