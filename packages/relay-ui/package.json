@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "icons": "node scripts/build-icons.mjs",
+    "store-assets": "node scripts/build-store-assets.mjs",
     "cap:sync": "cap sync android",
     "cap:add:android": "cap add android",
     "android:build:debug": "pnpm build && pnpm cap:sync && cd android && ./gradlew assembleDebug"

@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920" font-family="-apple-system, BlinkMacSystemFont, system-ui, sans-serif">
+  <rect width="1080" height="1920" fill="#EFF0F2"/>
+
+  <!-- Status bar -->
+  <text x="80" y="55" font-size="34" font-weight="600" fill="#000000">9:41</text>
+
+  <!-- Classic sky-blue navbar -->
+  <rect x="0" y="80" width="1080" height="200" fill="#29ABE2"/>
+  <circle cx="100" cy="180" r="48" fill="#5856D6"/>
+  <text x="100" y="200" font-size="42" font-weight="700" fill="#FFFFFF" text-anchor="middle">C</text>
+  <text x="180" y="180" font-size="36" font-weight="700" fill="#FFFFFF">Relay</text>
+  <text x="180" y="220" font-size="22" font-weight="500" fill="#E0EEF5">Vibing</text>
+  <!-- + icon -->
+  <g transform="translate(1000, 165)" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round">
+    <line x1="-30" y1="0" x2="30" y2="0"/>
+    <line x1="0" y1="-30" x2="0" y2="30"/>
+  </g>
+
+  <!-- Tab strip -->
+  <rect x="0" y="280" width="1080" height="100" fill="#FFFFFF"/>
+  <text x="270" y="345" font-size="30" font-weight="700" fill="#29ABE2" text-anchor="middle" letter-spacing="4">CHATS</text>
+  <text x="810" y="345" font-size="30" font-weight="500" fill="#6E7378" text-anchor="middle" letter-spacing="4">GROUPS</text>
+  <rect x="60" y="370" width="420" height="6" fill="#29ABE2"/>
+  <rect x="0" y="380" width="1080" height="2" fill="#DCDDE0"/>
+
+  <!-- Card rows -->
+  <g transform="translate(0, 400)">
+    <!-- Row 1: Daniel -->
+    <rect x="0" y="0" width="1080" height="170" fill="#FFFFFF"/>
+    <circle cx="100" cy="85" r="48" fill="#FF3B30"/>
+    <text x="100" y="103" font-size="42" font-weight="700" fill="#FFFFFF" text-anchor="middle">D</text>
+    <circle cx="184" cy="55" r="10" fill="#4CD964"/>
+    <text x="208" y="68" font-size="34" font-weight="700" fill="#1A1A1A">Daniel</text>
+    <text x="184" y="118" font-size="26" font-weight="400" fill="#6E7378">Skiing this weekend?</text>
+    <text x="1020" y="68" font-size="22" font-weight="400" fill="#6E7378" text-anchor="end">9:14</text>
+    <rect x="970" y="90" width="50" height="36" rx="18" fill="#29ABE2"/>
+    <text x="995" y="116" font-size="22" font-weight="700" fill="#FFFFFF" text-anchor="middle">2</text>
+    <line x1="180" y1="170" x2="1080" y2="170" stroke="#DCDDE0" stroke-width="2"/>
+
+    <!-- Row 2: Matthew -->
+    <rect x="0" y="170" width="1080" height="170" fill="#FFFFFF"/>
+    <circle cx="100" cy="255" r="48" fill="#FFCC00"/>
+    <text x="100" y="273" font-size="42" font-weight="700" fill="#FFFFFF" text-anchor="middle">M</text>
+    <text x="208" y="238" font-size="34" font-weight="700" fill="#1A1A1A">Matthew</text>
+    <text x="184" y="288" font-size="26" font-weight="400" fill="#6E7378">Vibing</text>
+    <text x="1020" y="238" font-size="22" font-weight="400" fill="#6E7378" text-anchor="end">8:51</text>
+    <line x1="180" y1="340" x2="1080" y2="340" stroke="#DCDDE0" stroke-width="2"/>
+
+    <!-- Row 3: Jewlz -->
+    <rect x="0" y="340" width="1080" height="170" fill="#FFFFFF"/>
+    <circle cx="100" cy="425" r="48" fill="#00C7BE"/>
+    <text x="100" y="443" font-size="42" font-weight="700" fill="#FFFFFF" text-anchor="middle">J</text>
+    <circle cx="184" cy="395" r="10" fill="#4CD964"/>
+    <text x="208" y="408" font-size="34" font-weight="700" fill="#1A1A1A">Jewlz</text>
+    <text x="184" y="458" font-size="26" font-weight="400" fill="#6E7378">Working on it 🛠️</text>
+    <text x="1020" y="408" font-size="22" font-weight="400" fill="#6E7378" text-anchor="end">8:12</text>
+    <line x1="180" y1="510" x2="1080" y2="510" stroke="#DCDDE0" stroke-width="2"/>
+
+    <!-- Row 4: Bradey -->
+    <rect x="0" y="510" width="1080" height="170" fill="#FFFFFF"/>
+    <circle cx="100" cy="595" r="48" fill="#5856D6"/>
+    <text x="100" y="613" font-size="42" font-weight="700" fill="#FFFFFF" text-anchor="middle">B</text>
+    <text x="208" y="578" font-size="34" font-weight="700" fill="#1A1A1A">Bradey</text>
+    <text x="184" y="628" font-size="26" font-weight="400" fill="#6E7378">In transit ✈️</text>
+    <text x="1020" y="578" font-size="22" font-weight="400" fill="#6E7378" text-anchor="end">Yesterday</text>
+  </g>
+
+  <!-- FAB -->
+  <g transform="translate(940, 1500)">
+    <circle cx="60" cy="60" r="60" fill="#29ABE2"/>
+    <g stroke="#FFFFFF" stroke-width="6" stroke-linecap="round">
+      <line x1="30" y1="60" x2="90" y2="60"/>
+      <line x1="60" y1="30" x2="60" y2="90"/>
+    </g>
+  </g>
+
+  <!-- Caption at the very bottom (NOT under the chrome) -->
+  <text x="540" y="1820" font-size="42" font-weight="700" fill="#1A1A1A" text-anchor="middle">Classic theme</text>
+  <text x="540" y="1880" font-size="32" font-weight="400" fill="#6E7378" text-anchor="middle">A retro skin if you miss the early-2010s look.</text>
+</svg>
