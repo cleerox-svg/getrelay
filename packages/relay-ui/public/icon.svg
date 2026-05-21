@@ -9,7 +9,7 @@
       <stop offset="1" stop-color="#A11A1A"/>
     </linearGradient>
   </defs>
-  <!-- BBM hint: blue chat bubble tail in bottom-right -->
+  <!-- Chat bubble tail in bottom-right -->
   <path d="M376 392 h66 a32 32 0 0 1 32 32 v54 a32 32 0 0 1-32 32 h-22 l-26 26 v-26 h-18 a32 32 0 0 1-32-32 v-54 a32 32 0 0 1 32-32 z"
         fill="#0A84FF"/>
 

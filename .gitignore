@@ -14,3 +14,9 @@ build
 .vscode
 .idea
 coverage
+
+# Capacitor — Android project is generated on demand by CI. If you ever
+# need to customize it (signing, icons), run `pnpm cap add android` once
+# locally and selectively commit the customized files.
+packages/relay-ui/android
+packages/relay-ui/ios

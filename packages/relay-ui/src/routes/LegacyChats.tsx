@@ -150,7 +150,7 @@ export function LegacyChats() {
                 : last?.messageType === 'image'
                   ? '📷 Photo'
                   : (last?.body ?? '');
-            // BBM-style rows show the contact's current status under their
+            // Classic rows show the contact's current status under their
             // name. Fall back to the last-message preview when they haven't
             // set one (or for groups, where status doesn't apply).
             const subtitle = isGroup

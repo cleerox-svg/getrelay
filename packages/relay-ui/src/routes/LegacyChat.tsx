@@ -180,7 +180,7 @@ export function LegacyChat() {
     }
   }
 
-  // BBM rendering: each message is a white card with sender name + body +
+  // Classic rendering: each message is a white card with sender name + body +
   // timestamp. Sent messages tint pale blue, received stay white. Grouped
   // by day separator, lined up vertically (no opposing alignment).
   const stacked: React.ReactNode[] = [];
