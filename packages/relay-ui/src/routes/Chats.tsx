@@ -35,6 +35,8 @@ export function Chats() {
   const presence = useStore((s) => s.presence);
   const loadChats = useStore((s) => s.loadChats);
   const deleteChat = useStore((s) => s.deleteChat);
+  const setChatMuted = useStore((s) => s.setChatMuted);
+  const setChatPinned = useStore((s) => s.setChatPinned);
   const nav = useNavigate();
   const [section, setSection] = useState<'messages' | 'groups'>('messages');
   const [actionsFor, setActionsFor] = useState<Chat | null>(null);
@@ -172,7 +174,29 @@ export function Chats() {
                     />
                   )
                 }
-                title={c.peer?.displayName ?? c.subject ?? 'Chat'}
+                title={
+                  <span className="inline-flex items-center gap-1.5">
+                    <span>{c.peer?.displayName ?? c.subject ?? 'Chat'}</span>
+                    {c.pinnedAt ? (
+                      <span
+                        aria-label="Pinned"
+                        title="Pinned"
+                        style={{ color: 'var(--text-dim)', fontSize: 12 }}
+                      >
+                        📌
+                      </span>
+                    ) : null}
+                    {c.muted ? (
+                      <span
+                        aria-label="Muted"
+                        title="Muted"
+                        style={{ color: 'var(--text-dim)', fontSize: 12 }}
+                      >
+                        🔕
+                      </span>
+                    ) : null}
+                  </span>
+                }
                 text={preview || (isGroup ? `${c.memberCount ?? '–'} members` : ' ')}
                 after={
                   <div className="flex items-center gap-2">
@@ -182,7 +206,7 @@ export function Chats() {
                     {c.unreadCount > 0 ? (
                       <span
                         className="inline-flex items-center justify-center min-w-[22px] h-[22px] px-1.5 rounded-full text-[12px] font-bold text-white"
-                        style={{ background: 'var(--accent)' }}
+                        style={{ background: c.muted ? 'var(--text-dim)' : 'var(--accent)' }}
                       >
                         {c.unreadCount > 99 ? '99+' : c.unreadCount}
                       </span>
@@ -197,6 +221,24 @@ export function Chats() {
       })()}
       <Actions opened={!!actionsFor} onBackdropClick={() => setActionsFor(null)}>
         <ActionsGroup>
+          <ActionsButton
+            onClick={() => {
+              if (actionsFor)
+                setChatPinned(actionsFor.id, !actionsFor.pinnedAt).catch(() => undefined);
+              setActionsFor(null);
+            }}
+          >
+            {actionsFor?.pinnedAt ? 'Unpin' : 'Pin to top'}
+          </ActionsButton>
+          <ActionsButton
+            onClick={() => {
+              if (actionsFor)
+                setChatMuted(actionsFor.id, !actionsFor.muted).catch(() => undefined);
+              setActionsFor(null);
+            }}
+          >
+            {actionsFor?.muted ? 'Unmute' : 'Mute notifications'}
+          </ActionsButton>
           <ActionsButton
             className="!text-red-500"
             onClick={() => {

@@ -31,6 +31,8 @@ interface AppState {
   loadChats: () => Promise<void>;
   openOneToOne: (contactId: string) => Promise<string>;
   deleteChat: (chatId: string) => Promise<void>;
+  setChatMuted: (chatId: string, muted: boolean) => Promise<void>;
+  setChatPinned: (chatId: string, pinned: boolean) => Promise<void>;
   createGroup: (subject: string, contactIds: string[]) => Promise<string>;
   addGroupMembers: (chatId: string, contactIds: string[]) => Promise<number>;
 
@@ -144,6 +146,29 @@ export const useStore = create<AppState>((set, get) => ({
         byChat: rest,
       };
     });
+  },
+  setChatMuted: async (chatId, muted) => {
+    set((s) => ({
+      chats: s.chats.map((c) => (c.id === chatId ? { ...c, muted } : c)),
+    }));
+    await api.patchChat(chatId, { muted }).catch(() => undefined);
+  },
+  setChatPinned: async (chatId, pinned) => {
+    const now = pinned ? Date.now() : null;
+    set((s) => {
+      const next = s.chats.map((c) =>
+        c.id === chatId ? { ...c, pinnedAt: now } : c,
+      );
+      // Re-sort so pinned chats float to the top right away.
+      next.sort((a, b) => {
+        if ((a.pinnedAt ?? 0) !== (b.pinnedAt ?? 0)) {
+          return (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
+        }
+        return (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0);
+      });
+      return { chats: next };
+    });
+    await api.patchChat(chatId, { pinned }).catch(() => undefined);
   },
   createGroup: async (subject, contactIds) => {
     const res = await api.createGroup(subject, contactIds);

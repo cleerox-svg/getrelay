@@ -50,12 +50,15 @@ CREATE TABLE IF NOT EXISTS chats (
 );
 
 CREATE TABLE IF NOT EXISTS chat_participants (
-  chat_id TEXT NOT NULL REFERENCES chats(id),
-  user_id TEXT NOT NULL REFERENCES users(id),
+  chat_id   TEXT NOT NULL REFERENCES chats(id),
+  user_id   TEXT NOT NULL REFERENCES users(id),
   joined_at INTEGER NOT NULL,
+  muted     INTEGER NOT NULL DEFAULT 0,
+  pinned_at INTEGER,
   PRIMARY KEY (chat_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_participants_user ON chat_participants(user_id);
+CREATE INDEX IF NOT EXISTS idx_participants_pinned ON chat_participants(user_id, pinned_at);
 
 CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY,

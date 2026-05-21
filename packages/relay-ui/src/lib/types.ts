@@ -51,6 +51,8 @@ export interface Chat {
   lastMessage: ChatLastMessage | null;
   unreadCount: number;
   lastActivityAt: number;
+  muted?: boolean;
+  pinnedAt?: number | null;
 }
 
 export interface GroupMember {
