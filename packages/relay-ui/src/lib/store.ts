@@ -319,8 +319,8 @@ export const useStore = create<AppState>((set, get) => ({
     });
   },
 
-  // GIF from a third-party provider (Tenor / Giphy). No R2 upload —
-  // we just ride the external URL through the existing image type.
+  // GIF from Giphy. No R2 upload — we just ride the external URL
+  // through the existing image type.
   sendGif: (chatId, gifUrl, replyTo) => {
     const tempId = crypto.randomUUID();
     set((s) => {

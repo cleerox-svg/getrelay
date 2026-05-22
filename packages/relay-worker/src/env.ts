@@ -20,12 +20,7 @@ export interface Env {
   VAPID_PRIVATE_KEY: string;
   VAPID_SUBJECT: string;
 
-  // Tenor v2 API key. Free, registered at console.cloud.google.com →
-  // "Tenor API" → enable.
-  TENOR_API_KEY?: string;
   // Giphy v1 API key. Free, registered at developers.giphy.com.
-  // The /gifs endpoint will use whichever provider the client asks for
-  // (?provider=tenor|giphy); requests fail closed (404) when that
-  // provider's secret isn't configured.
+  // /gifs returns 404 ("gifs_not_configured") when this isn't set.
   GIPHY_API_KEY?: string;
 }

@@ -199,7 +199,7 @@ jobs:
           VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
           VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
-          # GIF support: set TENOR_API_KEY and/or GIPHY_API_KEY via
-          # `wrangler secret put TENOR_API_KEY --env production` from a
+          # GIF support: set GIPHY_API_KEY via
+          # `wrangler secret put GIPHY_API_KEY --env production` from a
           # machine with wrangler logged in. The /gifs endpoint returns
-          # 404 ("gifs_not_configured") until at least one is set.
+          # 404 ("gifs_not_configured") until it's set.

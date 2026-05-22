@@ -145,16 +145,13 @@ export const api = {
   getSports: () => request<{ games: SportsGame[] }>('/sports'),
   getSportsGame: (league: 'nhl' | 'mlb', id: string) =>
     request<SportsGameDetail>(`/sports/${league}/${encodeURIComponent(id)}`),
-  listGifProviders: () => request<{ tenor: boolean; giphy: boolean }>('/gifs/providers'),
-  searchGifs: (q: string, provider?: 'tenor' | 'giphy', pos?: string) => {
+  searchGifs: (q: string, pos?: string) => {
     const usp = new URLSearchParams();
     if (q) usp.set('q', q);
-    if (provider) usp.set('provider', provider);
     if (pos) usp.set('pos', pos);
     return request<{
       items: {
         id: string;
-        provider: 'tenor' | 'giphy';
         description: string;
         previewUrl: string;
         previewWidth: number;
@@ -164,7 +161,6 @@ export const api = {
         gifHeight: number;
       }[];
       next: string | null;
-      provider: 'tenor' | 'giphy';
     }>(`/gifs/search?${usp.toString()}`);
   },
   createGroup: (subject: string, contactIds: string[]) =>

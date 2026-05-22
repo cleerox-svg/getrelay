@@ -19,7 +19,7 @@ type PersistInput = {
   type: 'text' | 'ping' | 'image';
   body: string | null;
   mediaKey?: string | null;
-  // External media URL (Tenor GIFs etc.). Either mediaKey OR mediaUrl
+  // External media URL (Giphy GIFs etc.). Either mediaKey OR mediaUrl
   // is acceptable for image-type messages.
   mediaUrl?: string | null;
   replyTo?: string | null;
