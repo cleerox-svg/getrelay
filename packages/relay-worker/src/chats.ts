@@ -4,6 +4,7 @@ import { readAuthedUser } from './auth';
 import { isBlockedEitherWay } from './blocks';
 import { notifyUserHub } from './lib/outbound';
 import { avatarUrlFor } from './me';
+import { pushToUser } from './push';
 
 export function chatsRoutes() {
   const app = new Hono<{ Bindings: Env }>();
@@ -172,8 +173,15 @@ export function chatsRoutes() {
     // === self is how their client learns "I was just added to a new
     // chat, refresh the chat list"). Skip the caller; they already
     // know from the HTTP success.
+    //
+    // Newly-added users also get a Web Push so they see "Alice added
+    // you to Friday Group" on devices where the PWA isn't open. The
+    // push fires regardless of online state (same policy as message
+    // pushes — the SW silences on whichever device is currently
+    // focused). Existing members don't get a push for someone-else-
+    // joining; it's low-signal compared to a real message.
     const origin = new URL(c.req.url).origin;
-    const [membersRow, addedInfo] = await Promise.all([
+    const [membersRow, addedInfo, callerRow, chatRow] = await Promise.all([
       c.env.DB.prepare(
         `SELECT user_id FROM chat_participants WHERE chat_id = ?`,
       )
@@ -190,10 +198,18 @@ export function chatsRoutes() {
           avatar_url: string | null;
           avatar_r2_key: string | null;
         }>(),
+      c.env.DB.prepare(`SELECT display_name FROM users WHERE id = ?`)
+        .bind(me.id)
+        .first<{ display_name: string }>(),
+      c.env.DB.prepare(`SELECT subject FROM chats WHERE id = ?`)
+        .bind(chatId)
+        .first<{ subject: string | null }>(),
     ]);
     const allMemberIds = (membersRow.results ?? [])
       .map((r) => r.user_id)
       .filter((id) => id !== me.id);
+    const callerName = callerRow?.display_name ?? 'Someone';
+    const groupName = chatRow?.subject ?? 'a group';
     const sends: Promise<void>[] = [];
     for (const added of addedInfo.results ?? []) {
       const payload = {
@@ -211,6 +227,19 @@ export function chatsRoutes() {
           ),
         );
       }
+      // Push the newly-added user themselves so they get a
+      // notification on devices where the PWA is closed. Tag by chatId
+      // so multi-add (Alice adds Bob and Carl at once) doesn't stack
+      // duplicate notifications on Bob's lock screen — the second
+      // overwrites the first.
+      sends.push(
+        pushToUser(c.env, added.id, {
+          title: groupName,
+          body: `${callerName} added you to the group`,
+          chatId,
+          tag: chatId,
+        }).catch(() => undefined),
+      );
     }
     await Promise.all(sends);
 
