@@ -23,6 +23,7 @@ import { Privacy } from './routes/Privacy';
 import { Profile } from './routes/Profile';
 import { RequireAuth } from './routes/RequireAuth';
 import { SignIn } from './routes/SignIn';
+import { Sports } from './routes/Sports';
 import { SportsDetail } from './routes/SportsDetail';
 import { SportsSettings } from './routes/SportsSettings';
 
@@ -94,15 +95,7 @@ export function App() {
             <Route element={<MainLayout />}>
               <Route path="/chats" element={legacy ? <LegacyChats /> : <Chats />} />
               <Route path="/contacts" element={<Contacts />} />
-              <Route
-                path="/calls"
-                element={
-                  <Placeholder
-                    title="Calls"
-                    blurb="Voice and video calls between Relay users. Lands in v1 once WebRTC signaling is in place."
-                  />
-                }
-              />
+              <Route path="/sports" element={<Sports />} />
               <Route path="/feeds" element={<Feeds />} />
               <Route
                 path="/discover"
