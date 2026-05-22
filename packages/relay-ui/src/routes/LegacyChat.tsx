@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Avatar } from '../components/Avatar';
+import { GifPicker } from '../components/GifPicker';
 import { GroupAvatar } from '../components/GroupAvatar';
 import { ApiError, api } from '../lib/api';
 import { useStore } from '../lib/store';
@@ -43,6 +44,7 @@ export function LegacyChat() {
   const sendText = useStore((s) => s.sendText);
   const sendPing = useStore((s) => s.sendPing);
   const sendMedia = useStore((s) => s.sendMedia);
+  const sendGif = useStore((s) => s.sendGif);
   const sendTyping = useStore((s) => s.sendTyping);
   const markRead = useStore((s) => s.markRead);
   const react = useStore((s) => s.react);
@@ -59,6 +61,7 @@ export function LegacyChat() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [gifOpen, setGifOpen] = useState(false);
 
   useEffect(() => {
     ensureChatState(chatId);
@@ -217,7 +220,8 @@ export function LegacyChat() {
     const mine = m.from === me?.id;
     const recalled = !!m.deletedAt;
     const isPing = m.type === 'ping';
-    const hasMedia = !!m.mediaKey && !!m.mediaUrl;
+    // GIFs from Tenor/Giphy carry only mediaUrl (no R2 key).
+    const hasMedia = (!!m.mediaKey && !!m.mediaUrl) || !!m.mediaUrl;
     const senderName = mine
       ? me?.displayName ?? 'Me'
       : chat?.peer?.id === m.from
@@ -366,7 +370,14 @@ export function LegacyChat() {
                 display: 'flex',
                 flexWrap: 'wrap',
                 gap: 4,
-                marginTop: 4,
+                // Overlap the bubble's bottom edge so the chip(s) visually
+                // tag the message instead of starting a new row.
+                marginTop: -10,
+                // Mine renders right-aligned (iMessage-style classic
+                // layout), peer renders left-aligned.
+                justifyContent: mine ? 'flex-end' : 'flex-start',
+                position: 'relative',
+                zIndex: 1,
               }}
             >
               {m.reactions.map((r) => (
@@ -385,13 +396,15 @@ export function LegacyChat() {
                       ? 'var(--legacy-blue)'
                       : 'var(--legacy-bg)',
                     color: r.mine ? '#FFFFFF' : 'var(--legacy-text)',
-                    border: r.mine
-                      ? 'none'
-                      : '1px solid var(--legacy-separator)',
                     borderRadius: 999,
                     padding: '2px 8px',
                     fontSize: 12,
                     fontWeight: 600,
+                    lineHeight: 1.2,
+                    // Soft drop shadow + halo lifts the chip off the
+                    // bubble it overlaps.
+                    boxShadow:
+                      '0 0 0 2px var(--legacy-bg-page, transparent), 0 1px 3px rgba(0,0,0,0.18)',
                   }}
                 >
                   <span>{r.emoji}</span>
@@ -609,6 +622,24 @@ export function LegacyChat() {
         />
         <button
           type="button"
+          onClick={() => setGifOpen(true)}
+          aria-label="Send a GIF"
+          style={{
+            color: 'var(--legacy-blue)',
+            fontWeight: 800,
+            fontSize: 11,
+            letterSpacing: 0.6,
+            border: '1.5px solid var(--legacy-blue)',
+            borderRadius: 6,
+            padding: '4px 6px',
+            lineHeight: 1,
+            flex: '0 0 auto',
+          }}
+        >
+          GIF
+        </button>
+        <button
+          type="button"
           className="l-send"
           onClick={submit}
           disabled={!input.trim()}
@@ -622,6 +653,12 @@ export function LegacyChat() {
         accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime"
         onChange={onPickFile}
         hidden
+      />
+
+      <GifPicker
+        open={gifOpen}
+        onClose={() => setGifOpen(false)}
+        onPick={(gifUrl) => sendGif(chatId, gifUrl, replyingTo?.id)}
       />
 
       {actionsFor ? (

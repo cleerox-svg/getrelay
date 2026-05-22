@@ -10,6 +10,7 @@ import {
   Page,
 } from 'konsta/react';
 import { Avatar } from '../components/Avatar';
+import { GifPicker } from '../components/GifPicker';
 import { GroupAvatar } from '../components/GroupAvatar';
 import { PingChip } from '../components/PingChip';
 import { Receipt } from '../components/Receipt';
@@ -57,6 +58,7 @@ export function Chat() {
   const sendText = useStore((s) => s.sendText);
   const sendPing = useStore((s) => s.sendPing);
   const sendMedia = useStore((s) => s.sendMedia);
+  const sendGif = useStore((s) => s.sendGif);
   const sendTyping = useStore((s) => s.sendTyping);
   const markRead = useStore((s) => s.markRead);
   const recall = useStore((s) => s.recall);
@@ -79,6 +81,7 @@ export function Chat() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [gifOpen, setGifOpen] = useState(false);
 
   function insertEmoji(emoji: string) {
     const ta = messagebarRef.current?.areaElRef;
@@ -290,7 +293,9 @@ export function Chat() {
     const mine = m.from === me?.id;
     const recalled = !!m.deletedAt;
     const isPing = m.type === 'ping';
-    const hasMedia = !!m.mediaKey && !!m.mediaUrl;
+    // GIFs from Tenor/Giphy carry only mediaUrl (no R2 key) — fall back
+    // to mediaUrl alone so the bubble renders the external GIF.
+    const hasMedia = (!!m.mediaKey && !!m.mediaUrl) || !!m.mediaUrl;
     const senderName = mine
       ? me?.displayName ?? 'Me'
       : chat?.peer?.id === m.from
@@ -502,7 +507,16 @@ export function Chat() {
               display: 'flex',
               flexWrap: 'wrap',
               gap: 4,
-              maxWidth: '100%',
+              // Pull the chips up so they overlap the bubble's bottom edge
+              // (canonical iMessage / Material chip style — the reaction
+              // visually "tags" the bubble instead of starting a new row).
+              marginTop: -10,
+              // Constrain to the bubble's own width so a long reaction
+              // strip can't escape the bubble's right edge.
+              maxWidth: 'calc(100% - 44px)',
+              paddingLeft: 4,
+              position: 'relative',
+              zIndex: 1,
             }}
           >
             {m.reactions.map((r) => (
@@ -523,9 +537,13 @@ export function Chat() {
                   color: r.mine ? '#FFFFFF' : 'var(--text)',
                   borderRadius: 999,
                   padding: '2px 8px',
-                  fontSize: 13,
+                  fontSize: 12,
                   fontWeight: 600,
                   lineHeight: 1.2,
+                  // Soft drop shadow + halo lifts the chip off the
+                  // bubble it overlaps in both light and dark modes.
+                  boxShadow:
+                    '0 0 0 2px var(--page-bg, transparent), 0 1px 3px rgba(0,0,0,0.18)',
                 }}
               >
                 <span>{r.emoji}</span>
@@ -738,6 +756,28 @@ export function Chat() {
               type="button"
               onClick={() => {
                 const ta = messagebarRef.current?.areaElRef;
+                if (ta) ta.blur();
+                setGifOpen(true);
+              }}
+              aria-label="Send a GIF"
+              className="px-1"
+              style={{
+                color: 'var(--accent)',
+                fontWeight: 800,
+                fontSize: 11,
+                letterSpacing: 0.6,
+                border: '1.5px solid var(--accent)',
+                borderRadius: 6,
+                padding: '2px 5px',
+                lineHeight: 1,
+              }}
+            >
+              GIF
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const ta = messagebarRef.current?.areaElRef;
                 // Dismiss the on-screen keyboard before opening so iOS /
                 // Android don't render the picker behind the keyboard.
                 if (!emojiOpen && ta) ta.blur();
@@ -803,6 +843,12 @@ export function Chat() {
           </button>
         </div>
       ) : null}
+
+      <GifPicker
+        open={gifOpen}
+        onClose={() => setGifOpen(false)}
+        onPick={(gifUrl) => sendGif(chatId, gifUrl, replyingTo?.id)}
+      />
 
       <Actions opened={!!actionsFor} onBackdropClick={() => setActionsFor(null)}>
         <ActionsGroup>

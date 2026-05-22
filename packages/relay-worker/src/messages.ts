@@ -38,7 +38,8 @@ export function messagesRoutes() {
     // Pull the slice we want by descending sequence, then reverse for UI.
     const rows = await c.env.DB.prepare(
       `SELECT m.id, m.sender_id, m.sequence, m.message_type, m.body,
-              m.media_r2_key, m.reply_to, m.created_at, m.edited_at, m.deleted_at,
+              m.media_r2_key, m.media_url, m.reply_to,
+              m.created_at, m.edited_at, m.deleted_at,
               CASE WHEN m.sender_id = ?
                 THEN (SELECT MAX(CASE WHEN delivered_at IS NULL THEN 0 ELSE 1 END)
                         FROM receipts WHERE message_id = m.id)
@@ -63,6 +64,7 @@ export function messagesRoutes() {
         message_type: string;
         body: string | null;
         media_r2_key: string | null;
+        media_url: string | null;
         reply_to: string | null;
         created_at: number;
         edited_at: number | null;
@@ -148,7 +150,11 @@ export function messagesRoutes() {
       type: r.message_type,
       body: r.deleted_at ? null : r.body,
       mediaKey: r.deleted_at ? null : r.media_r2_key,
-      mediaUrl: r.deleted_at ? null : mediaUrlFor(origin, r.media_r2_key),
+      // Prefer the external URL (Tenor/Giphy) when present, otherwise
+      // resolve the R2 key against the worker origin.
+      mediaUrl: r.deleted_at
+        ? null
+        : r.media_url ?? mediaUrlFor(origin, r.media_r2_key),
       replyTo: r.deleted_at
         ? null
         : (r.reply_to ? replyPreviewById.get(r.reply_to) ?? null : null),

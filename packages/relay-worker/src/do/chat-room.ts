@@ -19,6 +19,9 @@ type PersistInput = {
   type: 'text' | 'ping' | 'image';
   body: string | null;
   mediaKey?: string | null;
+  // External media URL (Tenor GIFs etc.). Either mediaKey OR mediaUrl
+  // is acceptable for image-type messages.
+  mediaUrl?: string | null;
   replyTo?: string | null;
 };
 type TypingInput = { chatId: string; senderId: string; on: boolean };
@@ -129,7 +132,11 @@ export class ChatRoom implements DurableObject {
       if (body.length > MAX_BODY_LEN) throw new RoomError('payload_too_large', 413);
     }
     if (isMedia) {
-      if (!input.mediaKey || typeof input.mediaKey !== 'string') {
+      const hasKey = typeof input.mediaKey === 'string' && input.mediaKey.length > 0;
+      const hasUrl =
+        typeof input.mediaUrl === 'string' &&
+        /^https:\/\/[^\s]+$/.test(input.mediaUrl);
+      if (!hasKey && !hasUrl) {
         throw new RoomError('bad_json', 400);
       }
       if (body && body.length > MAX_BODY_LEN) {
@@ -154,6 +161,7 @@ export class ChatRoom implements DurableObject {
     const now = Date.now();
     const seq = await this.nextSequence();
     const mediaKey = isMedia ? input.mediaKey ?? null : null;
+    const mediaUrl = isMedia ? input.mediaUrl ?? null : null;
     // Validate replyTo: must be a non-deleted message in this chat.
     let replyToId: string | null = null;
     let replyPreview: ReplyPreview | null = null;
@@ -165,9 +173,20 @@ export class ChatRoom implements DurableObject {
     const ops = [
       this.env.DB.prepare(
         `INSERT INTO messages
-           (id, chat_id, sender_id, sequence, message_type, body, media_r2_key, reply_to, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).bind(id, chatId, input.senderId, seq, input.type, body, mediaKey, replyToId, now),
+           (id, chat_id, sender_id, sequence, message_type, body, media_r2_key, media_url, reply_to, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(
+        id,
+        chatId,
+        input.senderId,
+        seq,
+        input.type,
+        body,
+        mediaKey,
+        mediaUrl,
+        replyToId,
+        now,
+      ),
       ...deliverable.map((rid) =>
         this.env.DB.prepare(
           `INSERT INTO receipts (message_id, recipient_id) VALUES (?, ?)`,
@@ -192,6 +211,7 @@ export class ChatRoom implements DurableObject {
             type: input.type,
             body,
             mediaKey,
+            mediaUrl,
             replyTo: replyPreview,
             ts: now,
           };
@@ -330,40 +350,77 @@ export class ChatRoom implements DurableObject {
       .first<{ id: string }>();
     if (!msg) throw new RoomError('message_not_found', 404);
 
-    // Toggle: try delete first, count rows; if none deleted, insert.
-    const del = await this.env.DB.prepare(
-      `DELETE FROM message_reactions
-       WHERE message_id = ? AND user_id = ? AND emoji = ?`,
+    // One reaction per user per message. Resolve what's currently in
+    // place for this user on this message, then decide:
+    //   - Same emoji as before → toggle it off (remove only).
+    //   - Different emoji      → remove whatever's there, add the new one.
+    //   - Nothing yet          → straight add.
+    const prevRows = await this.env.DB.prepare(
+      `SELECT emoji FROM message_reactions WHERE message_id = ? AND user_id = ?`,
     )
-      .bind(input.messageId, input.senderId, emoji)
-      .run();
-    const removed = (del.meta?.changes ?? 0) > 0;
-    if (!removed) {
+      .bind(input.messageId, input.senderId)
+      .all<{ emoji: string }>();
+    const prev = (prevRows.results ?? []).map((r) => r.emoji);
+    const hadSame = prev.includes(emoji);
+
+    const removedEmojis: string[] = [];
+    let added = false;
+
+    if (hadSame && prev.length === 1) {
+      // Pure toggle-off path.
       await this.env.DB.prepare(
-        `INSERT OR IGNORE INTO message_reactions
-           (message_id, user_id, emoji, created_at)
-         VALUES (?, ?, ?, ?)`,
+        `DELETE FROM message_reactions
+          WHERE message_id = ? AND user_id = ? AND emoji = ?`,
       )
-        .bind(input.messageId, input.senderId, emoji, Date.now())
+        .bind(input.messageId, input.senderId, emoji)
         .run();
+      removedEmojis.push(emoji);
+    } else {
+      // Replace: drop everything the user had, then add the new emoji.
+      if (prev.length > 0) {
+        await this.env.DB.prepare(
+          `DELETE FROM message_reactions
+            WHERE message_id = ? AND user_id = ?`,
+        )
+          .bind(input.messageId, input.senderId)
+          .run();
+        for (const e of prev) removedEmojis.push(e);
+      }
+      if (!hadSame) {
+        await this.env.DB.prepare(
+          `INSERT OR IGNORE INTO message_reactions
+             (message_id, user_id, emoji, created_at)
+           VALUES (?, ?, ?, ?)`,
+        )
+          .bind(input.messageId, input.senderId, emoji, Date.now())
+          .run();
+        added = true;
+      }
     }
 
-    // Fan out the delta to everyone in the chat (including sender — keeps
-    // multiple devices in sync).
+    // Fan out the deltas. The existing protocol speaks add/remove only,
+    // so a replace turns into one or more removes plus one add.
     const others = await this.recipientIds(chatId, input.senderId);
-    const payload = {
-      t: 'reaction',
-      chatId,
-      messageId: input.messageId,
-      userId: input.senderId,
-      emoji,
-      action: removed ? 'remove' : 'add',
+    const fanout = [...others, input.senderId];
+    const broadcast = async (action: 'add' | 'remove', e: string) => {
+      const payload = {
+        t: 'reaction',
+        chatId,
+        messageId: input.messageId,
+        userId: input.senderId,
+        emoji: e,
+        action,
+      };
+      await Promise.all(
+        fanout.map((uid) =>
+          fireAndForget(notifyUserHub(this.env, uid, 'reaction', payload)),
+        ),
+      );
     };
-    await Promise.all(
-      [...others, input.senderId].map((uid) =>
-        fireAndForget(notifyUserHub(this.env, uid, 'reaction', payload)),
-      ),
-    );
+
+    for (const e of removedEmojis) await broadcast('remove', e);
+    if (added) await broadcast('add', emoji);
+
     return new Response(null, { status: 204 });
   }
 
