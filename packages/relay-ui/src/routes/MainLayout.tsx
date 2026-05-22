@@ -7,7 +7,7 @@ import { useStore } from '../lib/store';
 
 const TABS = [
   { to: '/chats',    label: 'Chats',    icon: ChatsIcon },
-  { to: '/calls',    label: 'Calls',    icon: CallsIcon },
+  { to: '/sports',   label: 'Sports',   icon: SportsIcon },
   { to: '/feeds',    label: 'Feeds',    icon: FeedsIcon },
   { to: '/discover', label: 'Discover', icon: DiscoverIcon },
   { to: '/contacts', label: 'Contacts', icon: ContactsIcon },
@@ -115,17 +115,23 @@ function ChatsIcon({ active }: { active: boolean }) {
     </svg>
   );
 }
-function CallsIcon({ active }: { active: boolean }) {
+function SportsIcon({ active }: { active: boolean }) {
+  // Three-bar podium — universal "scoreboard / standings" glyph.
+  // Tallest pillar in the middle (1st place), shorter flanks (2nd
+  // and 3rd) sit lower. Reads at 28px without needing detail.
   return (
     <svg viewBox="0 0 28 28" width="28" height="28">
-      <path
-        d="M7 5h3l2 5-2.5 1.5a11 11 0 0 0 6 6L17 15l5 2v3a2 2 0 0 1-2 2A15 15 0 0 1 5 7a2 2 0 0 1 2-2z"
+      <g
         stroke="currentColor"
         strokeWidth={active ? 2 : 1.6}
         fill={active ? 'currentColor' : 'none'}
         fillOpacity={active ? 0.12 : 0}
         strokeLinejoin="round"
-      />
+      >
+        <rect x="11" y="6" width="6" height="17" rx="1" />
+        <rect x="4" y="11" width="6" height="12" rx="1" />
+        <rect x="18" y="13" width="6" height="10" rx="1" />
+      </g>
     </svg>
   );
 }
