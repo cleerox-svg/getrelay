@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import type { SportsGame, SportsTeam } from '../lib/types';
 
 interface Props {
@@ -110,8 +111,9 @@ export function SportsCard({ game }: Props) {
   const isLive = game.status === 'live';
   const isFinal = game.status === 'final';
   const showScore = isLive || isFinal;
+  const canDrillDown = !!game.id;
 
-  return (
+  const card = (
     <div
       style={{
         border: '1px solid var(--separator, rgba(0,0,0,0.08))',
@@ -119,6 +121,7 @@ export function SportsCard({ game }: Props) {
         padding: '12px 14px',
         background: 'var(--card-bg, #FFFFFF)',
         marginTop: 10,
+        cursor: canDrillDown ? 'pointer' : 'default',
       }}
     >
       <div
@@ -205,5 +208,15 @@ export function SportsCard({ game }: Props) {
         </div>
       ) : null}
     </div>
+  );
+
+  if (!canDrillDown) return card;
+  return (
+    <Link
+      to={`/sports/${game.league.toLowerCase()}/${encodeURIComponent(game.id)}`}
+      style={{ display: 'block', textDecoration: 'none', color: 'inherit' }}
+    >
+      {card}
+    </Link>
   );
 }

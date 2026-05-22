@@ -1,4 +1,12 @@
-import type { Chat, Contact, ContactStatus, GroupMember, Me, SportsGame } from './types';
+import type {
+  Chat,
+  Contact,
+  ContactStatus,
+  GroupMember,
+  Me,
+  SportsGame,
+  SportsGameDetail,
+} from './types';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8787').replace(
   /\/+$/,
@@ -117,6 +125,8 @@ export const api = {
     request<{ ok: true }>(`/chats/${encodeURIComponent(chatId)}`, { method: 'DELETE' }),
   listFeed: () => request<{ statuses: ContactStatus[] }>('/feed'),
   getSports: () => request<{ games: SportsGame[] }>('/sports'),
+  getSportsGame: (league: 'nhl' | 'mlb', id: string) =>
+    request<SportsGameDetail>(`/sports/${league}/${encodeURIComponent(id)}`),
   createGroup: (subject: string, contactIds: string[]) =>
     request<{
       id: string;

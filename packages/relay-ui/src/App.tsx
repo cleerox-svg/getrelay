@@ -19,6 +19,7 @@ import { Privacy } from './routes/Privacy';
 import { Profile } from './routes/Profile';
 import { RequireAuth } from './routes/RequireAuth';
 import { SignIn } from './routes/SignIn';
+import { SportsDetail } from './routes/SportsDetail';
 
 function useIsDark(): boolean {
   const [dark, setDark] = useState<boolean>(() => resolveDark());
@@ -78,6 +79,7 @@ export function App() {
             <Route path="/add-contact" element={<AddContact />} />
             <Route path="/new-group" element={<NewGroup />} />
             <Route path="/profile" element={<Profile />} />
+            <Route path="/sports/:league/:id" element={<SportsDetail />} />
 
             <Route element={<MainLayout />}>
               <Route path="/chats" element={legacy ? <LegacyChats /> : <Chats />} />
