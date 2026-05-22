@@ -3,7 +3,6 @@ import { api } from '../lib/api';
 
 interface GifItem {
   id: string;
-  provider: 'tenor' | 'giphy';
   description: string;
   previewUrl: string;
   previewWidth: number;
@@ -32,27 +31,10 @@ function useDebounced<T>(value: T, ms = 250): T {
 export function GifPicker({ open, onClose, onPick }: Props) {
   const [q, setQ] = useState('');
   const debouncedQ = useDebounced(q, 250);
-  const [provider, setProvider] = useState<'tenor' | 'giphy'>('tenor');
-  const [providers, setProviders] = useState<{ tenor: boolean; giphy: boolean } | null>(null);
   const [items, setItems] = useState<GifItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
-
-  // Fetch the available-providers list lazily, only once the picker
-  // opens for the first time in the session.
-  useEffect(() => {
-    if (!open || providers !== null) return;
-    api
-      .listGifProviders()
-      .then((r) => {
-        setProviders(r);
-        // Initial provider: respect what the worker has configured.
-        if (r.tenor) setProvider('tenor');
-        else if (r.giphy) setProvider('giphy');
-      })
-      .catch(() => setProviders({ tenor: false, giphy: false }));
-  }, [open, providers]);
 
   useEffect(() => {
     if (!open) return;
@@ -60,7 +42,7 @@ export function GifPicker({ open, onClose, onPick }: Props) {
     setLoading(true);
     setError(null);
     api
-      .searchGifs(debouncedQ, provider)
+      .searchGifs(debouncedQ)
       .then((r) => {
         if (cancelled) return;
         setItems(r.items);
@@ -76,7 +58,7 @@ export function GifPicker({ open, onClose, onPick }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [open, debouncedQ, provider]);
+  }, [open, debouncedQ]);
 
   useEffect(() => {
     if (open) {
@@ -85,9 +67,6 @@ export function GifPicker({ open, onClose, onPick }: Props) {
       return () => window.clearTimeout(t);
     }
   }, [open]);
-
-  const bothAvailable = !!providers?.tenor && !!providers?.giphy;
-  const someAvailable = !!providers?.tenor || !!providers?.giphy;
 
   // Crude two-column masonry: split items into two columns by index.
   // Good enough for a phone-sized picker without bringing in a layout lib.
@@ -163,36 +142,8 @@ export function GifPicker({ open, onClose, onPick }: Props) {
           </button>
         </div>
 
-        {bothAvailable ? (
-          <div style={{ display: 'flex', gap: 6, fontSize: 12, fontWeight: 600 }}>
-            {(['tenor', 'giphy'] as const).map((p) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => setProvider(p)}
-                style={{
-                  padding: '3px 10px',
-                  borderRadius: 999,
-                  background: provider === p ? 'var(--accent)' : 'transparent',
-                  color: provider === p ? '#FFF' : 'var(--text-dim)',
-                  border: '1px solid var(--separator, rgba(0,0,0,0.15))',
-                  textTransform: 'uppercase',
-                  letterSpacing: 0.4,
-                }}
-              >
-                {p}
-              </button>
-            ))}
-          </div>
-        ) : null}
-
         <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-          {!someAvailable && providers ? (
-            <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-dim)' }}>
-              GIFs aren't configured on this worker. Set TENOR_API_KEY
-              or GIPHY_API_KEY to enable.
-            </div>
-          ) : error ? (
+          {error ? (
             <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-dim)' }}>
               {error === 'gifs_not_configured'
                 ? 'GIFs aren’t configured yet.'

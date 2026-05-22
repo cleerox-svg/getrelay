@@ -150,7 +150,7 @@ export function messagesRoutes() {
       type: r.message_type,
       body: r.deleted_at ? null : r.body,
       mediaKey: r.deleted_at ? null : r.media_r2_key,
-      // Prefer the external URL (Tenor/Giphy) when present, otherwise
+      // Prefer the external URL (Giphy) when present, otherwise
       // resolve the R2 key against the worker origin.
       mediaUrl: r.deleted_at
         ? null

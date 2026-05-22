@@ -505,7 +505,7 @@ async function buildPushPayload(
   } else if (ev.mediaKey) {
     preview = /\.(mp4|webm|mov)$/i.test(ev.mediaKey) ? '🎬 Video' : '📷 Photo';
   } else if (ev.mediaUrl) {
-    // External media (Tenor/Giphy). Read the URL to spot videos; default to GIF.
+    // External media (Giphy). Read the URL to spot videos; default to GIF.
     preview = /\.(mp4|webm|mov)(\?|$)/i.test(ev.mediaUrl) ? '🎬 Video' : '🎞️ GIF';
   } else {
     preview = 'New message';

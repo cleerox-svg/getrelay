@@ -9,7 +9,7 @@ export type ClientMsg =
       type: 'text' | 'ping' | 'image';
       body?: string;
       mediaKey?: string;
-      // External media URL (Tenor/Giphy). Used for GIFs that live on a
+      // External media URL (Giphy). Used for GIFs that live on a
       // third-party CDN — either mediaKey or mediaUrl is acceptable for
       // image-type messages.
       mediaUrl?: string;

@@ -220,7 +220,7 @@ export function LegacyChat() {
     const mine = m.from === me?.id;
     const recalled = !!m.deletedAt;
     const isPing = m.type === 'ping';
-    // GIFs from Tenor/Giphy carry only mediaUrl (no R2 key).
+    // GIFs from Giphy carry only mediaUrl (no R2 key).
     const hasMedia = (!!m.mediaKey && !!m.mediaUrl) || !!m.mediaUrl;
     const senderName = mine
       ? me?.displayName ?? 'Me'
