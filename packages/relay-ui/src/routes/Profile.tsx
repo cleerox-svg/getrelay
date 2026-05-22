@@ -408,22 +408,13 @@ export function Profile() {
       <Block strong inset className="!py-3 !mt-2">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <div className="font-medium">Sports alerts</div>
+            <div className="font-medium">Sports</div>
             <div className="text-xs" style={{ color: 'var(--text-dim)' }}>
-              Push when the Canadiens or Blue Jays score or finish a game.
+              Follow teams and tune which pushes you receive.
             </div>
           </div>
-          <Button
-            small
-            disabled={pushBusy}
-            onClick={async () => {
-              const next = !(me.sportsNotifications ?? true);
-              await api.updateMe({ sportsNotifications: next }).catch(() => undefined);
-              await loadMe();
-            }}
-            outline={!(me.sportsNotifications ?? true)}
-          >
-            {(me.sportsNotifications ?? true) ? 'On' : 'Off'}
+          <Button small onClick={() => nav('/settings/sports')}>
+            Open
           </Button>
         </div>
       </Block>

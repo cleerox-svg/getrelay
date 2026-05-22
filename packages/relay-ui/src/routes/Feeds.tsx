@@ -6,12 +6,12 @@ import { BrandTitle } from '../components/BrandTitle';
 import { SportsCard } from '../components/SportsCard';
 import { api } from '../lib/api';
 import { useStore } from '../lib/store';
-import type { ContactStatus, SportsGame } from '../lib/types';
+import type { ContactStatus, SportsSub } from '../lib/types';
 
 export function Feeds() {
   const me = useStore((s) => s.me);
   const [statuses, setStatuses] = useState<ContactStatus[]>([]);
-  const [games, setGames] = useState<SportsGame[]>([]);
+  const [subs, setSubs] = useState<SportsSub[]>([]);
   const [loaded, setLoaded] = useState(false);
   // Track most recent live state for the polling interval — no re-mount.
   const liveRef = useRef(false);
@@ -31,8 +31,8 @@ export function Feeds() {
       try {
         const r = await api.getSports();
         if (cancelled) return;
-        setGames(r.games);
-        liveRef.current = r.games.some((g) => g.status === 'live');
+        setSubs(r.subs ?? []);
+        liveRef.current = (r.subs ?? []).some((s) => s.current?.status === 'live');
       } catch {
         /* swallow — sports card is non-critical */
       } finally {
@@ -63,10 +63,21 @@ export function Feeds() {
 
       <h1 className="text-[34px] font-bold tracking-tight px-4 pt-3 pb-1">Updates</h1>
 
-      {games.length > 0 ? (
+      {subs.length > 0 ? (
         <div className="px-4">
-          {games.map((g) => (
-            <SportsCard key={`${g.league}-${g.startTime}`} game={g} />
+          {subs.map((s) => (
+            <div key={`${s.league}-${s.teamKey}`}>
+              {s.current ? (
+                <SportsCard game={s.current} teamKey={s.teamKey} />
+              ) : null}
+              {s.previous ? (
+                <SportsCard
+                  game={s.previous}
+                  teamKey={s.teamKey}
+                  label={s.current ? 'Last game' : 'No game today · Last result'}
+                />
+              ) : null}
+            </div>
           ))}
         </div>
       ) : null}

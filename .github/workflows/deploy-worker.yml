@@ -132,6 +132,43 @@ jobs:
             echo "messages.media_url column already present"
           fi
 
+          # Per-event sports notification toggles. Each runs against
+          # pragma_table_info so re-applying is a no-op.
+          for col in sports_notify_start sports_notify_score sports_notify_final; do
+            probe=$(pnpm exec wrangler d1 execute relay-db --remote --json \
+              --command "SELECT name FROM pragma_table_info('users') WHERE name='${col}';")
+            if ! echo "$probe" | jq -e '.[0].results | length > 0' > /dev/null; then
+              echo "Adding users.${col} column"
+              pnpm exec wrangler d1 execute relay-db --remote \
+                --command "ALTER TABLE users ADD COLUMN ${col} INTEGER NOT NULL DEFAULT 1;"
+            else
+              echo "users.${col} column already present"
+            fi
+          done
+
+          # user_sports_subs (per-user team subscriptions). CREATE TABLE
+          # IF NOT EXISTS is itself idempotent.
+          pnpm exec wrangler d1 execute relay-db --remote --command \
+            "CREATE TABLE IF NOT EXISTS user_sports_subs (
+               user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+               league TEXT NOT NULL CHECK(league IN ('NHL','MLB')),
+               team_key TEXT NOT NULL,
+               created_at INTEGER NOT NULL,
+               PRIMARY KEY (user_id, league, team_key)
+             );"
+
+          # Seed MTL + TOR subscriptions for any existing user who
+          # currently has the master sports_notifications flag on. New
+          # users start with no rows by default; the seed only runs
+          # against the legacy population so nobody loses notifications
+          # silently in the migration.
+          pnpm exec wrangler d1 execute relay-db --remote --command \
+            "INSERT OR IGNORE INTO user_sports_subs (user_id, league, team_key, created_at)
+             SELECT id, 'NHL', 'MTL', $(date +%s)000 FROM users WHERE COALESCE(sports_notifications, 1) = 1;"
+          pnpm exec wrangler d1 execute relay-db --remote --command \
+            "INSERT OR IGNORE INTO user_sports_subs (user_id, league, team_key, created_at)
+             SELECT id, 'MLB', '141', $(date +%s)000 FROM users WHERE COALESCE(sports_notifications, 1) = 1;"
+
           # Indexes that depend on the columns we may have just added.
           # CREATE INDEX IF NOT EXISTS is itself idempotent, so re-runs
           # are safe — we just couldn't put these in schema.sql because
@@ -140,6 +177,8 @@ jobs:
             --command "CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to);"
           pnpm exec wrangler d1 execute relay-db --remote \
             --command "CREATE INDEX IF NOT EXISTS idx_participants_pinned ON chat_participants(user_id, pinned_at);"
+          pnpm exec wrangler d1 execute relay-db --remote \
+            --command "CREATE INDEX IF NOT EXISTS idx_uss_team ON user_sports_subs(league, team_key);"
 
       - name: Ensure DNS record (relay-api.averrow.com → proxied placeholder)
         env:

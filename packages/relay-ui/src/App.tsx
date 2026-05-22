@@ -21,6 +21,7 @@ import { Profile } from './routes/Profile';
 import { RequireAuth } from './routes/RequireAuth';
 import { SignIn } from './routes/SignIn';
 import { SportsDetail } from './routes/SportsDetail';
+import { SportsSettings } from './routes/SportsSettings';
 
 function useIsDark(): boolean {
   const [dark, setDark] = useState<boolean>(() => resolveDark());
@@ -81,6 +82,7 @@ export function App() {
             <Route path="/new-group" element={<NewGroup />} />
             <Route path="/profile" element={<Profile />} />
             <Route path="/sports/:league/:id" element={<SportsDetail />} />
+            <Route path="/settings/sports" element={<SportsSettings />} />
 
             <Route element={<MainLayout />}>
               <Route path="/chats" element={legacy ? <LegacyChats /> : <Chats />} />

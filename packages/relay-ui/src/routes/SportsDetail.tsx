@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { Navbar, NavbarBackLink, Page } from 'konsta/react';
 import { api } from '../lib/api';
 import type {
@@ -299,6 +299,12 @@ function BoxSection({ box, league }: { box: SportsTeamBox; league: 'NHL' | 'MLB'
 
 export function SportsDetail() {
   const { league, id } = useParams<{ league: string; id: string }>();
+  const [searchParams] = useSearchParams();
+  // The card that linked here passes `abbr` (NHL) or `teamId` (MLB) so
+  // the detail view knows which side to highlight as "ours". When the
+  // user deep-links straight in, both are absent and the worker falls
+  // back to MTL / TOR.
+  const teamKey = searchParams.get('abbr') ?? searchParams.get('teamId') ?? undefined;
   const leagueLc = (league ?? '').toLowerCase();
   const isLeague = leagueLc === 'nhl' || leagueLc === 'mlb';
   const [detail, setDetail] = useState<SportsGameDetail | null>(null);
@@ -312,7 +318,7 @@ export function SportsDetail() {
     let timer: number | undefined;
     async function load() {
       try {
-        const r = await api.getSportsGame(leagueLc as 'nhl' | 'mlb', id!);
+        const r = await api.getSportsGame(leagueLc as 'nhl' | 'mlb', id!, teamKey);
         if (cancelled) return;
         setDetail(r);
         liveRef.current = r.status === 'live';
@@ -332,7 +338,7 @@ export function SportsDetail() {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [isLeague, leagueLc, id]);
+  }, [isLeague, leagueLc, id, teamKey]);
 
   return (
     <Page>
@@ -393,6 +399,39 @@ export function SportsDetail() {
               <span style={{ fontWeight: 800 }}>{detail.homeTeam.score ?? '–'}</span>
               <span>{detail.homeTeam.abbr}</span>
             </div>
+            {detail.series ? (
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  gap: 8,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: 'var(--text-dim)',
+                  letterSpacing: 0.4,
+                  textTransform: 'uppercase',
+                  marginBottom: 8,
+                }}
+              >
+                {detail.series.round ? (
+                  <span
+                    style={{
+                      background: 'var(--bubble-them, #E5E5EA)',
+                      color: 'var(--text)',
+                      padding: '2px 8px',
+                      borderRadius: 999,
+                    }}
+                  >
+                    {detail.series.round}
+                  </span>
+                ) : null}
+                <span>{detail.series.gameLabel}</span>
+                <span aria-hidden>·</span>
+                <span>{detail.series.seriesLabel}</span>
+              </div>
+            ) : null}
+
             {detail.venue ? (
               <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 14 }}>
                 {detail.venue}

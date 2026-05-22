@@ -1,8 +1,15 @@
+import type React from 'react';
 import { Link } from 'react-router-dom';
 import type { SportsGame, SportsTeam } from '../lib/types';
 
 interface Props {
   game: SportsGame;
+  // The team this card was rendered for. When passed, the detail link
+  // includes it so /sports/:league/:id resolves "ourSide" from the
+  // viewer's perspective rather than defaulting to MTL / TOR.
+  teamKey?: string;
+  // Optional label rendered above the card, e.g. "Last game".
+  label?: string;
 }
 
 function leagueAccent(league: SportsGame['league']): { bg: string; chip: string } {
@@ -105,7 +112,7 @@ function TeamRow({
   );
 }
 
-export function SportsCard({ game }: Props) {
+export function SportsCard({ game, teamKey, label }: Props) {
   const accent = leagueAccent(game.league);
   const isOurHome = game.ourSide === 'home';
   const isLive = game.status === 'live';
@@ -196,6 +203,39 @@ export function SportsCard({ game }: Props) {
         showScore={showScore}
       />
 
+      {game.series ? (
+        <div
+          style={{
+            marginTop: 8,
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: 11,
+            fontWeight: 700,
+            color: 'var(--text-dim)',
+            letterSpacing: 0.4,
+            textTransform: 'uppercase',
+          }}
+        >
+          {game.series.round ? (
+            <span
+              style={{
+                background: 'var(--bubble-them, #E5E5EA)',
+                color: 'var(--text)',
+                padding: '2px 7px',
+                borderRadius: 999,
+              }}
+            >
+              {game.series.round}
+            </span>
+          ) : null}
+          <span>{game.series.gameLabel}</span>
+          <span aria-hidden>·</span>
+          <span>{game.series.seriesLabel}</span>
+        </div>
+      ) : null}
+
       {game.venue ? (
         <div
           style={{
@@ -210,13 +250,39 @@ export function SportsCard({ game }: Props) {
     </div>
   );
 
-  if (!canDrillDown) return card;
-  return (
+  // Tiny header label rendered above the card body (e.g. "Last game").
+  const wrapper = (children: React.ReactNode) =>
+    label ? (
+      <div>
+        <div
+          style={{
+            marginTop: 10,
+            marginBottom: -4,
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: 0.6,
+            color: 'var(--text-dim)',
+            textTransform: 'uppercase',
+          }}
+        >
+          {label}
+        </div>
+        {children}
+      </div>
+    ) : (
+      <>{children}</>
+    );
+
+  if (!canDrillDown) return wrapper(card);
+  const params = teamKey
+    ? `?${game.league === 'NHL' ? 'abbr' : 'teamId'}=${encodeURIComponent(teamKey)}`
+    : '';
+  return wrapper(
     <Link
-      to={`/sports/${game.league.toLowerCase()}/${encodeURIComponent(game.id)}`}
+      to={`/sports/${game.league.toLowerCase()}/${encodeURIComponent(game.id)}${params}`}
       style={{ display: 'block', textDecoration: 'none', color: 'inherit' }}
     >
       {card}
-    </Link>
+    </Link>,
   );
 }

@@ -17,10 +17,29 @@ CREATE TABLE IF NOT EXISTS users (
   created_at INTEGER NOT NULL,
   last_seen_at INTEGER,
   is_admin INTEGER NOT NULL DEFAULT 0,
-  sports_notifications INTEGER NOT NULL DEFAULT 1
+  -- Master kill switch. When 0, sports push is completely off no matter
+  -- what the per-event toggles below say.
+  sports_notifications INTEGER NOT NULL DEFAULT 1,
+  -- Per-event toggles. Default ON; can be set independently.
+  sports_notify_start INTEGER NOT NULL DEFAULT 1,
+  sports_notify_score INTEGER NOT NULL DEFAULT 1,
+  sports_notify_final INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_users_pin ON users(pin);
 CREATE INDEX IF NOT EXISTS idx_users_google_sub ON users(google_sub);
+
+-- Each row = one (user, team) follow. team_key is the league's native
+-- identifier: NHL uses team abbrev ("MTL"), MLB uses numeric team id
+-- as a string ("141"). Letting MLB use its numeric id keeps the schedule
+-- API integration straightforward.
+CREATE TABLE IF NOT EXISTS user_sports_subs (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  league TEXT NOT NULL CHECK(league IN ('NHL','MLB')),
+  team_key TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, league, team_key)
+);
+CREATE INDEX IF NOT EXISTS idx_uss_team ON user_sports_subs(league, team_key);
 
 CREATE TABLE IF NOT EXISTS sessions (
   jwt_id TEXT PRIMARY KEY,
