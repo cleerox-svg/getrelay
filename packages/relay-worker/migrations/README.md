@@ -8,6 +8,7 @@ itself lives in `../src/schema.sql` and is applied on every worker deploy.
 | `0001_add_is_admin.sql` | (Applied automatically by `deploy-worker.yml`'s probe step) | n/a |
 | `0002_seed_contacts.sql` | Pre-create four placeholder users as contacts of `cleerox@gmail.com`. Idempotent. | `gh workflow run "Seed contacts"` or the **Seed contacts** workflow in the Actions tab |
 | `0003_rename_bradey_email.sql` | One-shot email swap for one of the seeded contacts. Idempotent. | Same as above, with `file: 0003_rename_bradey_email.sql` |
+| `0004_clean_defunct_sports_subs.sql` | DELETE `user_sports_subs` rows for teams not in the current active 32-NHL / 30-MLB set. Cleans up orphan subs left behind by the pre-PR-#81 picker bug. Idempotent. | Same as above, with `file: 0004_clean_defunct_sports_subs.sql` |
 
 ## How the pending-user claim works
 
