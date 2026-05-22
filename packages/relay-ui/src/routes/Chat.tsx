@@ -791,31 +791,39 @@ export function Chat() {
         onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
           onInputChange(e.target.value)
         }
+        // Left = attach. Right = GIF, sticker, PING, Send. Five
+        // total buttons (was six — emoji was dropped, native keyboard
+        // handles emoji on both iOS and Android). Send is now icon-
+        // only (paper plane) instead of the word "Send" — saves
+        // ~30px of horizontal real estate. Combined: textarea gains
+        // about a third more width on a 360px phone.
+        left={
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            aria-label="Attach photo or video"
+            disabled={uploading}
+            className="px-1 disabled:opacity-50"
+            style={{ color: 'var(--accent)' }}
+          >
+            {uploading ? (
+              <span style={{ fontSize: 14 }}>…</span>
+            ) : (
+              <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                <path
+                  d="M21 12.5l-9 9a5 5 0 0 1-7-7l9-9a3 3 0 0 1 4 4l-9 9a1 1 0 0 1-2-2l8-8"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  fill="none"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            )}
+          </button>
+        }
         right={
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              aria-label="Attach photo or video"
-              disabled={uploading}
-              className="px-2 disabled:opacity-50"
-              style={{ color: 'var(--accent)' }}
-            >
-              {uploading ? (
-                <span style={{ fontSize: 14 }}>…</span>
-              ) : (
-                <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
-                  <path
-                    d="M21 12.5l-9 9a5 5 0 0 1-7-7l9-9a3 3 0 0 1 4 4l-9 9a1 1 0 0 1-2-2l8-8"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    fill="none"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              )}
-            </button>
+          <div className="flex items-center gap-1.5">
             <button
               type="button"
               onClick={() => {
@@ -824,7 +832,6 @@ export function Chat() {
                 setGifOpen(true);
               }}
               aria-label="Send a GIF"
-              className="px-1"
               style={{
                 color: 'var(--accent)',
                 fontWeight: 800,
@@ -862,24 +869,9 @@ export function Chat() {
             </button>
             <button
               type="button"
-              onClick={() => {
-                const ta = messagebarRef.current?.areaElRef;
-                // Dismiss the on-screen keyboard before opening so iOS /
-                // Android don't render the picker behind the keyboard.
-                if (!emojiOpen && ta) ta.blur();
-                setEmojiOpen((v) => !v);
-              }}
-              aria-label="Insert emoji"
-              className="px-1 text-xl"
-              style={{ color: emojiOpen ? 'var(--accent)' : 'var(--text-dim)' }}
-            >
-              😀
-            </button>
-            <button
-              type="button"
               onClick={() => sendPing(chatId)}
               aria-label="Send PING"
-              className="px-1 text-xl"
+              className="px-1 text-lg"
               style={{ color: 'var(--ping)' }}
             >
               ⚡
@@ -889,17 +881,32 @@ export function Chat() {
               onClick={submit}
               aria-label="Send"
               disabled={!input.trim()}
-              className="font-semibold disabled:opacity-40"
+              className="disabled:opacity-40"
               style={{
                 background: input.trim() ? 'var(--accent)' : 'transparent',
                 color: input.trim() ? '#FFFFFF' : 'var(--accent)',
                 borderRadius: 999,
-                padding: '6px 14px',
+                width: 32,
+                height: 32,
                 minWidth: 0,
                 minHeight: 0,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
             >
-              Send
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                {/* Paper plane, point at top-right — iOS Messages
+                    convention. Slight downward tilt feels more
+                    "launch" than a horizontal arrow. */}
+                <path
+                  d="M3 11.5 21 3l-5.5 18-3.5-8-8-1.5Z"
+                  fill="currentColor"
+                  stroke="currentColor"
+                  strokeWidth="1.2"
+                  strokeLinejoin="round"
+                />
+              </svg>
             </button>
           </div>
         }
