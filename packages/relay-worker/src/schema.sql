@@ -72,6 +72,9 @@ CREATE TABLE IF NOT EXISTS messages (
   message_type TEXT NOT NULL CHECK(message_type IN ('text','image','voice','ping','system')),
   body TEXT,
   media_r2_key TEXT,
+  -- External media URL (e.g. Tenor for GIFs). Used in lieu of
+  -- media_r2_key when the content isn't hosted on our own R2 bucket.
+  media_url TEXT,
   reply_to TEXT,
   created_at INTEGER NOT NULL,
   edited_at INTEGER,

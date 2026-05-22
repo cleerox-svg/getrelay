@@ -282,7 +282,10 @@ export class UserHub implements DurableObject {
       if (body.length > MAX_BODY_LEN) return this.sendError(ws, 'payload_too_large');
     }
     if (cmd.type === 'image') {
-      if (!cmd.mediaKey || typeof cmd.mediaKey !== 'string') {
+      const hasKey = typeof cmd.mediaKey === 'string' && cmd.mediaKey.length > 0;
+      const hasUrl =
+        typeof cmd.mediaUrl === 'string' && /^https:\/\/[^\s]+$/.test(cmd.mediaUrl);
+      if (!hasKey && !hasUrl) {
         return this.sendError(ws, 'bad_json');
       }
       if (body && body.length > MAX_BODY_LEN) {
@@ -296,6 +299,7 @@ export class UserHub implements DurableObject {
       type: cmd.type,
       body,
       mediaKey: cmd.type === 'image' ? cmd.mediaKey : null,
+      mediaUrl: cmd.type === 'image' ? cmd.mediaUrl ?? null : null,
       replyTo: cmd.replyTo ?? null,
       chatId: cmd.chatId,
     });
@@ -461,6 +465,7 @@ async function buildPushPayload(
     from?: string;
     body?: string | null;
     mediaKey?: string | null;
+    mediaUrl?: string | null;
   };
   const fromId = ev.from ?? '';
   const chatId = ev.chatId ?? '';
@@ -499,6 +504,9 @@ async function buildPushPayload(
     preview = trimmed.slice(0, 140);
   } else if (ev.mediaKey) {
     preview = /\.(mp4|webm|mov)$/i.test(ev.mediaKey) ? '🎬 Video' : '📷 Photo';
+  } else if (ev.mediaUrl) {
+    // External media (Tenor/Giphy). Read the URL to spot videos; default to GIF.
+    preview = /\.(mp4|webm|mov)(\?|$)/i.test(ev.mediaUrl) ? '🎬 Video' : '🎞️ GIF';
   } else {
     preview = 'New message';
   }

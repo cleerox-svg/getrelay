@@ -189,6 +189,9 @@ export type ClientMsg =
       type: 'text' | 'ping' | 'image';
       body?: string;
       mediaKey?: string;
+      // External media URL (Tenor / Giphy etc.) — used for GIFs that
+      // live on a third-party CDN rather than our R2 bucket.
+      mediaUrl?: string;
       replyTo?: string;
     }
   | { t: 'typing'; chatId: string; on: boolean }
@@ -212,6 +215,7 @@ export type ServerMsg =
       type: string;
       body: string | null;
       mediaKey?: string | null;
+      // Either an R2-resolved URL or an external (Tenor/Giphy) URL.
       mediaUrl?: string | null;
       replyTo?: ReplyPreview | null;
       ts: number;

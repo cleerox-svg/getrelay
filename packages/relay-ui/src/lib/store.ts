@@ -50,6 +50,7 @@ interface AppState {
     caption?: string,
     replyTo?: string,
   ) => void;
+  sendGif: (chatId: string, gifUrl: string, replyTo?: string) => void;
   sendTyping: (chatId: string, on: boolean) => void;
   markRead: (chatId: string, messageIds: string[]) => void;
   recall: (messageId: string) => void;
@@ -318,6 +319,42 @@ export const useStore = create<AppState>((set, get) => ({
     });
   },
 
+  // GIF from a third-party provider (Tenor / Giphy). No R2 upload —
+  // we just ride the external URL through the existing image type.
+  sendGif: (chatId, gifUrl, replyTo) => {
+    const tempId = crypto.randomUUID();
+    set((s) => {
+      const chat = ensureChat(s, chatId);
+      const optimistic: UiMessage = {
+        id: tempId,
+        tempId,
+        chatId,
+        from: s.me?.id ?? '',
+        sequence: null,
+        type: 'image',
+        body: null,
+        mediaKey: null,
+        mediaUrl: gifUrl,
+        ts: Date.now(),
+        editedAt: null,
+        deletedAt: null,
+        delivered: false,
+        read: false,
+        pending: true,
+      };
+      chat.messages = upsertMessage(chat.messages, optimistic);
+      return { byChat: { ...s.byChat, [chatId]: { ...chat } } };
+    });
+    ws.send({
+      t: 'send',
+      tempId,
+      chatId,
+      type: 'image',
+      mediaUrl: gifUrl,
+      replyTo,
+    });
+  },
+
   sendTyping: (chatId, on) => {
     ws.send({ t: 'typing', chatId, on });
   },
@@ -363,6 +400,16 @@ export const useStore = create<AppState>((set, get) => ({
       const next = chat.messages.map((m) => {
         if (m.id !== messageId) return m;
         const reactions = m.reactions ? m.reactions.slice() : [];
+        // One reaction per user. Drop any other emoji this user had on
+        // the message first; then either toggle the new one or add it.
+        for (let i = reactions.length - 1; i >= 0; i--) {
+          const r = reactions[i]!;
+          if (r.mine && r.emoji !== e) {
+            const c = r.count - 1;
+            if (c <= 0) reactions.splice(i, 1);
+            else reactions[i] = { ...r, count: c, mine: false };
+          }
+        }
         const idx = reactions.findIndex((r) => r.emoji === e);
         if (idx >= 0) {
           const r = reactions[idx]!;

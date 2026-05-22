@@ -122,6 +122,16 @@ jobs:
             echo "chat_participants.pinned_at column already present"
           fi
 
+          probe=$(pnpm exec wrangler d1 execute relay-db --remote --json \
+            --command "SELECT name FROM pragma_table_info('messages') WHERE name='media_url';")
+          if ! echo "$probe" | jq -e '.[0].results | length > 0' > /dev/null; then
+            echo "Adding messages.media_url column"
+            pnpm exec wrangler d1 execute relay-db --remote \
+              --command "ALTER TABLE messages ADD COLUMN media_url TEXT;"
+          else
+            echo "messages.media_url column already present"
+          fi
+
           # Indexes that depend on the columns we may have just added.
           # CREATE INDEX IF NOT EXISTS is itself idempotent, so re-runs
           # are safe — we just couldn't put these in schema.sql because
@@ -189,3 +199,7 @@ jobs:
           VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
           VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
+          # GIF support: set TENOR_API_KEY and/or GIPHY_API_KEY via
+          # `wrangler secret put TENOR_API_KEY --env production` from a
+          # machine with wrangler logged in. The /gifs endpoint returns
+          # 404 ("gifs_not_configured") until at least one is set.
