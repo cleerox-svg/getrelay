@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Avatar } from '../components/Avatar';
 import { GifPicker } from '../components/GifPicker';
+import { StickerPicker } from '../components/StickerPicker';
 import { GroupAvatar } from '../components/GroupAvatar';
 import { ApiError, api } from '../lib/api';
 import { useStore } from '../lib/store';
@@ -45,6 +46,7 @@ export function LegacyChat() {
   const sendPing = useStore((s) => s.sendPing);
   const sendMedia = useStore((s) => s.sendMedia);
   const sendGif = useStore((s) => s.sendGif);
+  const sendSticker = useStore((s) => s.sendSticker);
   const sendTyping = useStore((s) => s.sendTyping);
   const markRead = useStore((s) => s.markRead);
   const react = useStore((s) => s.react);
@@ -62,6 +64,7 @@ export function LegacyChat() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [gifOpen, setGifOpen] = useState(false);
+  const [stickerOpen, setStickerOpen] = useState(false);
 
   useEffect(() => {
     ensureChatState(chatId);
@@ -220,8 +223,11 @@ export function LegacyChat() {
     const mine = m.from === me?.id;
     const recalled = !!m.deletedAt;
     const isPing = m.type === 'ping';
-    // GIFs from Giphy carry only mediaUrl (no R2 key).
-    const hasMedia = (!!m.mediaKey && !!m.mediaUrl) || !!m.mediaUrl;
+    const isSticker = m.type === 'sticker';
+    // GIFs from Giphy carry only mediaUrl (no R2 key). Stickers also
+    // carry only mediaUrl but render via their own branch below, so
+    // exclude them from the generic media bubble.
+    const hasMedia = !isSticker && ((!!m.mediaKey && !!m.mediaUrl) || !!m.mediaUrl);
     const senderName = mine
       ? me?.displayName ?? 'Me'
       : chat?.peer?.id === m.from
@@ -251,6 +257,25 @@ export function LegacyChat() {
         >
           PING!!
         </div>,
+      );
+      continue;
+    }
+
+    if (isSticker && !recalled) {
+      stacked.push(
+        <img
+          key={m.id}
+          src={m.mediaUrl ?? undefined}
+          alt=""
+          draggable={false}
+          style={{
+            alignSelf: mine ? 'flex-end' : 'flex-start',
+            width: 120,
+            height: 120,
+            objectFit: 'contain',
+            opacity: m.pending ? 0.7 : 1,
+          }}
+        />,
       );
       continue;
     }
@@ -640,6 +665,30 @@ export function LegacyChat() {
         </button>
         <button
           type="button"
+          onClick={() => setStickerOpen(true)}
+          aria-label="Send a sticker"
+          style={{
+            color: 'var(--legacy-blue)',
+            background: 'transparent',
+            border: 0,
+            padding: '2px 4px',
+            flex: '0 0 auto',
+            lineHeight: 1,
+          }}
+        >
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path
+              d="M20 4H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h10l6-6V5a1 1 0 0 0-1-1Zm-6 16v-5a1 1 0 0 1 1-1h5"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+        <button
+          type="button"
           className="l-send"
           onClick={submit}
           disabled={!input.trim()}
@@ -659,6 +708,12 @@ export function LegacyChat() {
         open={gifOpen}
         onClose={() => setGifOpen(false)}
         onPick={(gifUrl) => sendGif(chatId, gifUrl, replyingTo?.id)}
+      />
+
+      <StickerPicker
+        open={stickerOpen}
+        onClose={() => setStickerOpen(false)}
+        onPick={(url) => sendSticker(chatId, url, replyingTo?.id)}
       />
 
       {actionsFor ? (

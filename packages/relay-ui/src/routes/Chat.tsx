@@ -11,6 +11,7 @@ import {
 } from 'konsta/react';
 import { Avatar } from '../components/Avatar';
 import { GifPicker } from '../components/GifPicker';
+import { StickerPicker } from '../components/StickerPicker';
 import { GroupAvatar } from '../components/GroupAvatar';
 import { PingChip } from '../components/PingChip';
 import { Receipt } from '../components/Receipt';
@@ -59,6 +60,7 @@ export function Chat() {
   const sendPing = useStore((s) => s.sendPing);
   const sendMedia = useStore((s) => s.sendMedia);
   const sendGif = useStore((s) => s.sendGif);
+  const sendSticker = useStore((s) => s.sendSticker);
   const sendTyping = useStore((s) => s.sendTyping);
   const markRead = useStore((s) => s.markRead);
   const recall = useStore((s) => s.recall);
@@ -82,6 +84,7 @@ export function Chat() {
   const [uploading, setUploading] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [gifOpen, setGifOpen] = useState(false);
+  const [stickerOpen, setStickerOpen] = useState(false);
 
   function insertEmoji(emoji: string) {
     const ta = messagebarRef.current?.areaElRef;
@@ -293,9 +296,12 @@ export function Chat() {
     const mine = m.from === me?.id;
     const recalled = !!m.deletedAt;
     const isPing = m.type === 'ping';
+    const isSticker = m.type === 'sticker';
     // GIFs from Giphy carry only mediaUrl (no R2 key) — fall back to
-    // mediaUrl alone so the bubble renders the external GIF.
-    const hasMedia = (!!m.mediaKey && !!m.mediaUrl) || !!m.mediaUrl;
+    // mediaUrl alone so the bubble renders the external GIF. Stickers
+    // have their own render branch below and skip the media bubble
+    // entirely.
+    const hasMedia = !isSticker && ((!!m.mediaKey && !!m.mediaUrl) || !!m.mediaUrl);
     const senderName = mine
       ? me?.displayName ?? 'Me'
       : chat?.peer?.id === m.from
@@ -309,14 +315,16 @@ export function Chat() {
 
     const bg = recalled
       ? 'transparent'
-      : isPing
+      : isPing || isSticker
         ? 'transparent'
         : mine
           ? 'var(--accent)'
           : 'var(--bubble-them)';
-    const fg = mine && !recalled && !isPing ? '#FFFFFF' : 'var(--text)';
+    const fg = mine && !recalled && !isPing && !isSticker ? '#FFFFFF' : 'var(--text)';
     const metaColor =
-      mine && !recalled && !isPing ? 'rgba(255,255,255,0.85)' : 'var(--text-dim)';
+      mine && !recalled && !isPing && !isSticker
+        ? 'rgba(255,255,255,0.85)'
+        : 'var(--text-dim)';
 
     stacked.push(
       <div
@@ -349,7 +357,7 @@ export function Chat() {
             background: bg,
             color: fg,
             borderRadius: 16,
-            padding: isPing ? 6 : hasMedia ? 4 : '10px 14px',
+            padding: isPing ? 6 : isSticker ? 0 : hasMedia ? 4 : '10px 14px',
             border: recalled ? '1px dashed var(--text-dim)' : 'none',
             opacity: m.pending ? 0.7 : 1,
             cursor: !recalled && !isPing ? 'pointer' : 'default',
@@ -403,6 +411,18 @@ export function Chat() {
             <div className="flex justify-center py-1">
               <PingChip />
             </div>
+          ) : isSticker ? (
+            <img
+              src={m.mediaUrl ?? undefined}
+              alt=""
+              draggable={false}
+              style={{
+                display: 'block',
+                width: 140,
+                height: 140,
+                objectFit: 'contain',
+              }}
+            />
           ) : hasMedia ? (
             <div>
               {isVideoKey(m.mediaKey) ? (
@@ -778,6 +798,28 @@ export function Chat() {
               type="button"
               onClick={() => {
                 const ta = messagebarRef.current?.areaElRef;
+                if (ta) ta.blur();
+                setStickerOpen(true);
+              }}
+              aria-label="Send a sticker"
+              className="px-1"
+              style={{ color: 'var(--accent)' }}
+            >
+              <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                <path
+                  d="M20 4H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h10l6-6V5a1 1 0 0 0-1-1Zm-6 16v-5a1 1 0 0 1 1-1h5"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  fill="none"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const ta = messagebarRef.current?.areaElRef;
                 // Dismiss the on-screen keyboard before opening so iOS /
                 // Android don't render the picker behind the keyboard.
                 if (!emojiOpen && ta) ta.blur();
@@ -848,6 +890,12 @@ export function Chat() {
         open={gifOpen}
         onClose={() => setGifOpen(false)}
         onPick={(gifUrl) => sendGif(chatId, gifUrl, replyingTo?.id)}
+      />
+
+      <StickerPicker
+        open={stickerOpen}
+        onClose={() => setStickerOpen(false)}
+        onPick={(url) => sendSticker(chatId, url, replyingTo?.id)}
       />
 
       <Actions opened={!!actionsFor} onBackdropClick={() => setActionsFor(null)}>

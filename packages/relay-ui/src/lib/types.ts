@@ -220,11 +220,11 @@ export type ClientMsg =
       t: 'send';
       tempId: string;
       chatId: string;
-      type: 'text' | 'ping' | 'image';
+      type: 'text' | 'ping' | 'image' | 'sticker';
       body?: string;
       mediaKey?: string;
-      // External media URL (Giphy) — used for GIFs that live on a
-      // third-party CDN rather than our R2 bucket.
+      // External media URL. Carries the Giphy CDN URL for image-type
+      // GIFs or the bundled sticker URL for sticker-type messages.
       mediaUrl?: string;
       replyTo?: string;
     }

@@ -16,11 +16,11 @@ import {
 type PersistInput = {
   senderId: string;
   tempId: string;
-  type: 'text' | 'ping' | 'image';
+  type: 'text' | 'ping' | 'image' | 'sticker';
   body: string | null;
   mediaKey?: string | null;
-  // External media URL (Giphy GIFs etc.). Either mediaKey OR mediaUrl
-  // is acceptable for image-type messages.
+  // External media URL. Holds the Giphy CDN URL for image-type GIFs
+  // or the bundled sticker URL for sticker-type messages.
   mediaUrl?: string | null;
   replyTo?: string | null;
 };
@@ -121,12 +121,18 @@ export class ChatRoom implements DurableObject {
 
   // ---------- /persist ----------
   private async persist(input: PersistInput & { chatId?: string }): Promise<Response> {
-    if (input.type !== 'text' && input.type !== 'ping' && input.type !== 'image') {
+    if (
+      input.type !== 'text' &&
+      input.type !== 'ping' &&
+      input.type !== 'image' &&
+      input.type !== 'sticker'
+    ) {
       throw new RoomError('bad_json', 400);
     }
     const isMedia = input.type === 'image';
+    const isSticker = input.type === 'sticker';
     const body =
-      input.type === 'ping' ? null : (input.body ?? '').trim() || null;
+      input.type === 'ping' || isSticker ? null : (input.body ?? '').trim() || null;
     if (input.type === 'text') {
       if (!body || body.length === 0) throw new RoomError('bad_json', 400);
       if (body.length > MAX_BODY_LEN) throw new RoomError('payload_too_large', 413);
@@ -142,6 +148,16 @@ export class ChatRoom implements DurableObject {
       if (body && body.length > MAX_BODY_LEN) {
         throw new RoomError('payload_too_large', 413);
       }
+    }
+    if (isSticker) {
+      // Stickers carry only a mediaUrl pointing at a bundled SVG on the
+      // PWA origin (e.g. https://relay.averrow.com/stickers/wink.svg).
+      // No mediaKey — these aren't R2-hosted. No body — stickers are
+      // standalone.
+      const hasUrl =
+        typeof input.mediaUrl === 'string' &&
+        /^https:\/\/[^\s]+$/.test(input.mediaUrl);
+      if (!hasUrl) throw new RoomError('bad_json', 400);
     }
 
     const chatId = input.chatId ?? (await this.state.storage.get<string>('chatId'));
@@ -161,7 +177,7 @@ export class ChatRoom implements DurableObject {
     const now = Date.now();
     const seq = await this.nextSequence();
     const mediaKey = isMedia ? input.mediaKey ?? null : null;
-    const mediaUrl = isMedia ? input.mediaUrl ?? null : null;
+    const mediaUrl = isMedia || isSticker ? input.mediaUrl ?? null : null;
     // Validate replyTo: must be a non-deleted message in this chat.
     let replyToId: string | null = null;
     let replyPreview: ReplyPreview | null = null;
@@ -449,9 +465,11 @@ export class ChatRoom implements DurableObject {
     const preview =
       row.message_type === 'image'
         ? row.body && row.body.trim() ? truncate(row.body, 80) : '📷 Photo'
-        : row.message_type === 'ping'
-          ? 'PING!!'
-          : truncate(row.body ?? '', 80);
+        : row.message_type === 'sticker'
+          ? '🌟 Sticker'
+          : row.message_type === 'ping'
+            ? 'PING!!'
+            : truncate(row.body ?? '', 80);
     return {
       id: row.id,
       from: row.sender_id,

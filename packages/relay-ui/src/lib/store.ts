@@ -51,6 +51,7 @@ interface AppState {
     replyTo?: string,
   ) => void;
   sendGif: (chatId: string, gifUrl: string, replyTo?: string) => void;
+  sendSticker: (chatId: string, stickerUrl: string, replyTo?: string) => void;
   sendTyping: (chatId: string, on: boolean) => void;
   markRead: (chatId: string, messageIds: string[]) => void;
   recall: (messageId: string) => void;
@@ -351,6 +352,40 @@ export const useStore = create<AppState>((set, get) => ({
       chatId,
       type: 'image',
       mediaUrl: gifUrl,
+      replyTo,
+    });
+  },
+
+  sendSticker: (chatId, stickerUrl, replyTo) => {
+    const tempId = crypto.randomUUID();
+    set((s) => {
+      const chat = ensureChat(s, chatId);
+      const optimistic: UiMessage = {
+        id: tempId,
+        tempId,
+        chatId,
+        from: s.me?.id ?? '',
+        sequence: null,
+        type: 'sticker',
+        body: null,
+        mediaKey: null,
+        mediaUrl: stickerUrl,
+        ts: Date.now(),
+        editedAt: null,
+        deletedAt: null,
+        delivered: false,
+        read: false,
+        pending: true,
+      };
+      chat.messages = upsertMessage(chat.messages, optimistic);
+      return { byChat: { ...s.byChat, [chatId]: { ...chat } } };
+    });
+    ws.send({
+      t: 'send',
+      tempId,
+      chatId,
+      type: 'sticker',
+      mediaUrl: stickerUrl,
       replyTo,
     });
   },
