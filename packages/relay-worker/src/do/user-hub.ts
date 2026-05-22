@@ -272,11 +272,17 @@ export class UserHub implements DurableObject {
     att: Attachment,
     cmd: Extract<ClientMsg, { t: 'send' }>,
   ): Promise<void> {
-    if (cmd.type !== 'text' && cmd.type !== 'ping' && cmd.type !== 'image') {
+    if (
+      cmd.type !== 'text' &&
+      cmd.type !== 'ping' &&
+      cmd.type !== 'image' &&
+      cmd.type !== 'sticker'
+    ) {
       return this.sendError(ws, 'bad_json');
     }
+    const isSticker = cmd.type === 'sticker';
     const body =
-      cmd.type === 'ping' ? null : (cmd.body ?? '').trim() || null;
+      cmd.type === 'ping' || isSticker ? null : (cmd.body ?? '').trim() || null;
     if (cmd.type === 'text') {
       if (!body || body.length === 0) return this.sendError(ws, 'bad_json');
       if (body.length > MAX_BODY_LEN) return this.sendError(ws, 'payload_too_large');
@@ -292,6 +298,11 @@ export class UserHub implements DurableObject {
         return this.sendError(ws, 'payload_too_large');
       }
     }
+    if (isSticker) {
+      const hasUrl =
+        typeof cmd.mediaUrl === 'string' && /^https:\/\/[^\s]+$/.test(cmd.mediaUrl);
+      if (!hasUrl) return this.sendError(ws, 'bad_json');
+    }
 
     const res = await this.callChatRoom(cmd.chatId, '/persist', {
       senderId: att.userId,
@@ -299,7 +310,7 @@ export class UserHub implements DurableObject {
       type: cmd.type,
       body,
       mediaKey: cmd.type === 'image' ? cmd.mediaKey : null,
-      mediaUrl: cmd.type === 'image' ? cmd.mediaUrl ?? null : null,
+      mediaUrl: cmd.type === 'image' || isSticker ? cmd.mediaUrl ?? null : null,
       replyTo: cmd.replyTo ?? null,
       chatId: cmd.chatId,
     });
@@ -463,6 +474,7 @@ async function buildPushPayload(
   const ev = payload as {
     chatId?: string;
     from?: string;
+    type?: string;
     body?: string | null;
     mediaKey?: string | null;
     mediaUrl?: string | null;
@@ -500,7 +512,9 @@ async function buildPushPayload(
   // Media-only previews (no caption): icon + label so it reads at a glance.
   const trimmed = (ev.body ?? '').trim();
   let preview: string;
-  if (trimmed.length > 0) {
+  if (ev.type === 'sticker') {
+    preview = '🌟 Sticker';
+  } else if (trimmed.length > 0) {
     preview = trimmed.slice(0, 140);
   } else if (ev.mediaKey) {
     preview = /\.(mp4|webm|mov)$/i.test(ev.mediaKey) ? '🎬 Video' : '📷 Photo';

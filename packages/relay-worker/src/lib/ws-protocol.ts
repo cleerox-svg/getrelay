@@ -6,12 +6,14 @@ export type ClientMsg =
       t: 'send';
       tempId: string;
       chatId: string;
-      type: 'text' | 'ping' | 'image';
+      type: 'text' | 'ping' | 'image' | 'sticker';
       body?: string;
       mediaKey?: string;
-      // External media URL (Giphy). Used for GIFs that live on a
-      // third-party CDN — either mediaKey or mediaUrl is acceptable for
-      // image-type messages.
+      // External media URL. Carries the Giphy CDN URL for type='image'
+      // GIFs, or the bundled sticker URL (e.g. https://relay.averrow.com
+      // /stickers/wink.svg) for type='sticker'. Either mediaKey or
+      // mediaUrl is acceptable for image-type messages; stickers always
+      // use mediaUrl.
       mediaUrl?: string;
       replyTo?: string;
     }
