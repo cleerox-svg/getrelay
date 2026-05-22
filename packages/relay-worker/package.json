@@ -10,7 +10,9 @@
     "test": "vitest run",
     "build": "wrangler deploy --dry-run --outdir dist",
     "db:apply:local": "wrangler d1 execute relay-db --local --file=src/schema.sql",
-    "db:apply:remote": "wrangler d1 execute relay-db --remote --file=src/schema.sql"
+    "db:apply:remote": "wrangler d1 execute relay-db --remote --file=src/schema.sql",
+    "lint:migrations": "bash scripts/lint-migrations.sh",
+    "test:migrations": "bash scripts/test-migrations.sh"
   },
   "dependencies": {
     "hono": "^4.6.0",
