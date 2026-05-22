@@ -315,6 +315,8 @@ export function chatsRoutes() {
          ch.id AS chat_id,
          ch.type AS chat_type,
          ch.subject,
+         ch.avatar_url AS chat_avatar_url,
+         ch.avatar_r2_key AS chat_avatar_r2_key,
          ch.created_at AS chat_created_at,
          mc.muted AS muted,
          mc.pinned_at AS pinned_at,
@@ -360,6 +362,8 @@ export function chatsRoutes() {
         chat_id: string;
         chat_type: '1to1' | 'group';
         subject: string | null;
+        chat_avatar_url: string | null;
+        chat_avatar_r2_key: string | null;
         chat_created_at: number;
         muted: number;
         pinned_at: number | null;
@@ -393,6 +397,14 @@ export function chatsRoutes() {
         id: r.chat_id,
         type: r.chat_type,
         subject: r.subject,
+        // Resolved group avatar URL (R2 key wins over external url —
+        // same precedence as user avatars in avatarUrlFor). Null for
+        // 1to1s, and for groups that haven't uploaded one (client
+        // renders the hashed-letter GroupAvatar fallback).
+        avatarUrl: avatarUrlFor(origin, {
+          avatar_r2_key: r.chat_avatar_r2_key,
+          avatar_url: r.chat_avatar_url,
+        }),
         memberCount: r.member_count,
         peer,
         lastMessage,
@@ -513,7 +525,205 @@ export function chatsRoutes() {
     return c.json({ ok: true });
   });
 
+  // PATCH /chats/:id — update group metadata (subject for now; the
+  // avatar lives at its own /chats/:id/avatar route because it's a
+  // multipart upload). Group-only and member-only. Any current member
+  // can rename — no admin role yet. Fires `group_updated` to every
+  // member so other clients see the new subject in real time.
+  app.patch('/chats/:id', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const chatId = decodeURIComponent(c.req.param('id') ?? '');
+    if (!chatId) return c.json({ error: 'invalid_chat_id' }, 400);
+
+    const chat = await c.env.DB.prepare(`SELECT type FROM chats WHERE id = ?`)
+      .bind(chatId)
+      .first<{ type: '1to1' | 'group' }>();
+    if (!chat) return c.json({ error: 'not_found' }, 404);
+    if (chat.type !== 'group') return c.json({ error: 'not_a_group' }, 400);
+
+    const inGroup = await c.env.DB.prepare(
+      `SELECT 1 AS ok FROM chat_participants WHERE chat_id = ? AND user_id = ?`,
+    )
+      .bind(chatId, me.id)
+      .first<{ ok: number }>();
+    if (!inGroup) return c.json({ error: 'not_in_chat' }, 403);
+
+    const body = await c.req.json<{ subject?: string }>().catch(
+      () => ({}) as { subject?: string },
+    );
+    const subject = (body.subject ?? '').trim();
+    if (subject.length === 0 || subject.length > 80) {
+      return c.json({ error: 'invalid_subject' }, 400);
+    }
+
+    await c.env.DB.prepare(`UPDATE chats SET subject = ? WHERE id = ?`)
+      .bind(subject, chatId)
+      .run();
+
+    await broadcastGroupUpdated(c.env, chatId, c.req.url, me.id);
+    return c.json({ ok: true, subject });
+  });
+
+  // POST /chats/:id/avatar — multipart upload (single `file` field).
+  // Stores in the AVATARS bucket under a `ga-<uuid>.<ext>` key (the
+  // user-avatar path uses `av-<uuid>.<ext>`). The /r/:key proxy
+  // serves both since R2 keys are globally unique.
+  app.post('/chats/:id/avatar', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const chatId = decodeURIComponent(c.req.param('id') ?? '');
+    if (!chatId) return c.json({ error: 'invalid_chat_id' }, 400);
+
+    const chat = await c.env.DB.prepare(
+      `SELECT type, avatar_r2_key FROM chats WHERE id = ?`,
+    )
+      .bind(chatId)
+      .first<{ type: '1to1' | 'group'; avatar_r2_key: string | null }>();
+    if (!chat) return c.json({ error: 'not_found' }, 404);
+    if (chat.type !== 'group') return c.json({ error: 'not_a_group' }, 400);
+
+    const inGroup = await c.env.DB.prepare(
+      `SELECT 1 AS ok FROM chat_participants WHERE chat_id = ? AND user_id = ?`,
+    )
+      .bind(chatId, me.id)
+      .first<{ ok: number }>();
+    if (!inGroup) return c.json({ error: 'not_in_chat' }, 403);
+
+    const form = await c.req.raw.formData().catch(() => null);
+    if (!form) return c.json({ error: 'bad_form' }, 400);
+    const fileEntry = form.get('file');
+    if (
+      !fileEntry ||
+      typeof fileEntry === 'string' ||
+      !('arrayBuffer' in fileEntry) ||
+      !('type' in fileEntry) ||
+      !('size' in fileEntry) ||
+      !('stream' in fileEntry)
+    ) {
+      return c.json({ error: 'no_file' }, 400);
+    }
+    const file = fileEntry as Blob & { name?: string };
+    const allowed = new Set(['image/jpeg', 'image/png', 'image/webp']);
+    if (!allowed.has(file.type)) return c.json({ error: 'bad_type' }, 415);
+    if (file.size > 2 * 1024 * 1024) return c.json({ error: 'too_large' }, 413);
+
+    const ext =
+      file.type === 'image/jpeg' ? 'jpg' :
+      file.type === 'image/png' ? 'png' :
+      file.type === 'image/webp' ? 'webp' : 'bin';
+    const key = `ga-${crypto.randomUUID()}.${ext}`;
+    await c.env.AVATARS.put(key, file.stream(), {
+      httpMetadata: { contentType: file.type },
+    });
+
+    await c.env.DB.prepare(
+      `UPDATE chats SET avatar_r2_key = ?, avatar_url = NULL WHERE id = ?`,
+    )
+      .bind(key, chatId)
+      .run();
+
+    // Drop the previous object so we don't accumulate orphans on
+    // every re-upload. Same pattern as the user-avatar route.
+    if (chat.avatar_r2_key) {
+      c.executionCtx.waitUntil(c.env.AVATARS.delete(chat.avatar_r2_key));
+    }
+
+    await broadcastGroupUpdated(c.env, chatId, c.req.url, me.id);
+    return c.json({ ok: true, key });
+  });
+
+  // DELETE /chats/:id/avatar — clear back to the hashed-letter
+  // GroupAvatar fallback.
+  app.delete('/chats/:id/avatar', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const chatId = decodeURIComponent(c.req.param('id') ?? '');
+    if (!chatId) return c.json({ error: 'invalid_chat_id' }, 400);
+
+    const chat = await c.env.DB.prepare(
+      `SELECT type, avatar_r2_key FROM chats WHERE id = ?`,
+    )
+      .bind(chatId)
+      .first<{ type: '1to1' | 'group'; avatar_r2_key: string | null }>();
+    if (!chat) return c.json({ error: 'not_found' }, 404);
+    if (chat.type !== 'group') return c.json({ error: 'not_a_group' }, 400);
+
+    const inGroup = await c.env.DB.prepare(
+      `SELECT 1 AS ok FROM chat_participants WHERE chat_id = ? AND user_id = ?`,
+    )
+      .bind(chatId, me.id)
+      .first<{ ok: number }>();
+    if (!inGroup) return c.json({ error: 'not_in_chat' }, 403);
+
+    await c.env.DB.prepare(
+      `UPDATE chats SET avatar_r2_key = NULL, avatar_url = NULL WHERE id = ?`,
+    )
+      .bind(chatId)
+      .run();
+
+    if (chat.avatar_r2_key) {
+      c.executionCtx.waitUntil(c.env.AVATARS.delete(chat.avatar_r2_key));
+    }
+
+    await broadcastGroupUpdated(c.env, chatId, c.req.url, me.id);
+    return c.json({ ok: true });
+  });
+
   return app;
+}
+
+// Fan out `group_updated` to every current member of `chatId`,
+// including the caller (so a user editing the group on one device
+// also sees their other devices update in real time). The fresh
+// state (subject + resolved avatar url) is read inside this helper
+// so callers don't have to thread it through. Skips silently if the
+// chat row is gone for any reason.
+async function broadcastGroupUpdated(
+  env: Env,
+  chatId: string,
+  requestUrl: string,
+  // accepted but unused — callers pass me.id for parity with the
+  // other broadcast helpers; nothing in the payload depends on it.
+  _editorId: string,
+): Promise<void> {
+  const [chat, members] = await Promise.all([
+    env.DB.prepare(
+      `SELECT subject, avatar_url, avatar_r2_key FROM chats WHERE id = ?`,
+    )
+      .bind(chatId)
+      .first<{
+        subject: string | null;
+        avatar_url: string | null;
+        avatar_r2_key: string | null;
+      }>(),
+    env.DB.prepare(`SELECT user_id FROM chat_participants WHERE chat_id = ?`)
+      .bind(chatId)
+      .all<{ user_id: string }>(),
+  ]);
+  if (!chat) return;
+
+  const origin = new URL(requestUrl).origin;
+  const payload = {
+    t: 'group_updated' as const,
+    chatId,
+    subject: chat.subject,
+    avatarUrl: avatarUrlFor(origin, {
+      avatar_r2_key: chat.avatar_r2_key,
+      avatar_url: chat.avatar_url,
+    }),
+  };
+
+  await Promise.all(
+    (members.results ?? []).map((r) =>
+      notifyUserHub(env, r.user_id, 'group_updated', payload).catch(
+        () => undefined,
+      ),
+    ),
+  );
 }
 
 export function oneToOneChatId(a: string, b: string): string {

@@ -741,6 +741,20 @@ export const useStore = create<AppState>((set, get) => ({
         }));
         break;
 
+      case 'group_updated':
+        // Sent to every current member after the subject or avatar
+        // changes (PATCH /chats/:id or POST/DELETE /chats/:id/avatar).
+        // The editor receives it too — that's how their other
+        // devices stay in sync.
+        set((s) => ({
+          chats: s.chats.map((c) =>
+            c.id === msg.chatId
+              ? { ...c, subject: msg.subject, avatarUrl: msg.avatarUrl }
+              : c,
+          ),
+        }));
+        break;
+
       case 'error':
         console.warn('[ws] error from server', msg.code, msg.message);
         break;

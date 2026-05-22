@@ -494,7 +494,7 @@ export function LegacyChat() {
           style={{ textDecoration: 'none', color: 'inherit', flexDirection: 'row', gap: 8, alignItems: 'center' }}
         >
           {isGroup ? (
-            <GroupAvatar subject={chat?.subject ?? 'Group'} size={32} />
+            <GroupAvatar subject={chat?.subject ?? 'Group'} src={chat?.avatarUrl} size={32} />
           ) : (
             <Avatar
               src={chat?.peer?.avatarUrl ?? null}

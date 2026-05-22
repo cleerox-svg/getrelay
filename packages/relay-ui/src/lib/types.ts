@@ -51,6 +51,11 @@ export interface Chat {
   id: string;
   type: '1to1' | 'group';
   subject: string | null;
+  // Resolved group avatar URL (R2 key resolves to /r/<key> via the
+  // worker, external avatar_url passes through). Null for 1to1 chats
+  // and for groups that haven't uploaded an avatar — clients render
+  // the hashed-letter GroupAvatar fallback in that case.
+  avatarUrl?: string | null;
   memberCount?: number;
   peer: ChatPeer | null;
   lastMessage: ChatLastMessage | null;
@@ -305,5 +310,14 @@ export type ServerMsg =
       t: 'member_left';
       chatId: string;
       userId: string;
+    }
+  | {
+      // Sent to every current member of a group after the subject or
+      // avatar changes. The editor receives it too — supports the
+      // "edit on device A, see on device B" multi-device case.
+      t: 'group_updated';
+      chatId: string;
+      subject: string | null;
+      avatarUrl: string | null;
     }
   | { t: 'error'; code: string; message?: string };

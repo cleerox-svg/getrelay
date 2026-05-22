@@ -631,7 +631,7 @@ export function Chat() {
             style={{ textDecoration: 'none' }}
           >
             {isGroup ? (
-              <GroupAvatar subject={chat?.subject ?? 'Group'} size={28} />
+              <GroupAvatar subject={chat?.subject ?? 'Group'} src={chat?.avatarUrl} size={28} />
             ) : (
               <Avatar
                 src={chat?.peer?.avatarUrl ?? null}

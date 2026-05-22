@@ -175,7 +175,7 @@ export function LegacyChats() {
                 onTouchCancel={onPressEnd}
               >
                 {isGroup ? (
-                  <GroupAvatar subject={c.subject ?? 'Group'} size={44} />
+                  <GroupAvatar subject={c.subject ?? 'Group'} src={c.avatarUrl} size={44} />
                 ) : (
                   <Avatar
                     src={c.peer?.avatarUrl ?? null}

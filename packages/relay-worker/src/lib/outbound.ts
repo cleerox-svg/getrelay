@@ -21,7 +21,8 @@ export type NotifyKind =
   | 'edited'
   | 'reaction'
   | 'member_joined'
-  | 'member_left';
+  | 'member_left'
+  | 'group_updated';
 
 export function outboundKindFor(kind: NotifyKind): OutboundKind | null {
   switch (kind) {
@@ -31,6 +32,7 @@ export function outboundKindFor(kind: NotifyKind): OutboundKind | null {
     case 'reaction':
     case 'member_joined':
     case 'member_left':
+    case 'group_updated':
       return null; // ephemeral
     default:
       return kind;
