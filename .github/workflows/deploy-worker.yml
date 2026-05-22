@@ -132,21 +132,6 @@ jobs:
             echo "messages.media_url column already present"
           fi
 
-          # Expand the messages.message_type CHECK to allow 'sticker'.
-          # SQLite can't ALTER a CHECK in place — the migration file does
-          # the table-rebuild dance. Idempotency: probe sqlite_master for
-          # the literal 'sticker' in the messages CHECK text and only
-          # apply the migration when it's missing.
-          probe=$(pnpm exec wrangler d1 execute relay-db --remote --json \
-            --command "SELECT sql FROM sqlite_master WHERE type='table' AND name='messages';")
-          if echo "$probe" | jq -r '.[0].results[0].sql' | grep -q "'sticker'"; then
-            echo "messages.message_type already allows 'sticker'"
-          else
-            echo "Rebuilding messages table to allow message_type='sticker'"
-            pnpm exec wrangler d1 execute relay-db --remote \
-              --file=migrations/0004_add_sticker_message_type.sql
-          fi
-
           # Per-event sports notification toggles. Each runs against
           # pragma_table_info so re-applying is a no-op.
           for col in sports_notify_start sports_notify_score sports_notify_final; do

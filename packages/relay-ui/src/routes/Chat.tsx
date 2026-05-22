@@ -17,6 +17,7 @@ import { PingChip } from '../components/PingChip';
 import { Receipt } from '../components/Receipt';
 import { TypingDots } from '../components/TypingDots';
 import { ApiError, api } from '../lib/api';
+import { isStickerUrl } from '../lib/stickers';
 import { useStore } from '../lib/store';
 import type { UiMessage } from '../lib/types';
 
@@ -296,7 +297,11 @@ export function Chat() {
     const mine = m.from === me?.id;
     const recalled = !!m.deletedAt;
     const isPing = m.type === 'ping';
-    const isSticker = m.type === 'sticker';
+    // Stickers ride the type='image' rail; isStickerUrl() looks at the
+    // mediaUrl path (/stickers/*.svg on the PWA origin). We do this
+    // here rather than introducing a 'sticker' message type so the wire
+    // protocol and DB CHECK constraint stay simple.
+    const isSticker = isStickerUrl(m.mediaUrl);
     // GIFs from Giphy carry only mediaUrl (no R2 key) — fall back to
     // mediaUrl alone so the bubble renders the external GIF. Stickers
     // have their own render branch below and skip the media bubble

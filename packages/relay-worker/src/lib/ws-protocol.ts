@@ -6,14 +6,16 @@ export type ClientMsg =
       t: 'send';
       tempId: string;
       chatId: string;
-      type: 'text' | 'ping' | 'image' | 'sticker';
+      type: 'text' | 'ping' | 'image';
       body?: string;
       mediaKey?: string;
-      // External media URL. Carries the Giphy CDN URL for type='image'
-      // GIFs, or the bundled sticker URL (e.g. https://relay.averrow.com
-      // /stickers/wink.svg) for type='sticker'. Either mediaKey or
-      // mediaUrl is acceptable for image-type messages; stickers always
-      // use mediaUrl.
+      // External media URL. Carries the Giphy CDN URL for GIFs and the
+      // bundled sticker URL (e.g. https://relay.averrow.com/stickers/
+      // wink.svg) for stickers. Stickers are stored as type='image' on
+      // the wire and in the DB — the client discriminates sticker-vs-
+      // photo by URL pattern (/stickers/*.svg). This keeps the wire
+      // protocol and message_type CHECK constraint simple at the cost
+      // of "image" being a slightly broader category.
       mediaUrl?: string;
       replyTo?: string;
     }

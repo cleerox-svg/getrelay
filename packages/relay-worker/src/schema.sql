@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS messages (
   chat_id TEXT NOT NULL REFERENCES chats(id),
   sender_id TEXT NOT NULL REFERENCES users(id),
   sequence INTEGER NOT NULL,
-  message_type TEXT NOT NULL CHECK(message_type IN ('text','image','voice','ping','system','sticker')),
+  message_type TEXT NOT NULL CHECK(message_type IN ('text','image','voice','ping','system')),
   body TEXT,
   media_r2_key TEXT,
   -- External media URL (e.g. Tenor for GIFs). Used in lieu of
