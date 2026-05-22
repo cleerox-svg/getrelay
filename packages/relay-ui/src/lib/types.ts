@@ -8,7 +8,12 @@ export interface Me {
   statusMessage: string | null;
   avatarUrl: string | null;
   isAdmin: boolean;
+  // Master sports kill switch; the three notify_* flags only matter
+  // when this is true.
   sportsNotifications: boolean;
+  sportsNotifyStart: boolean;
+  sportsNotifyScore: boolean;
+  sportsNotifyFinal: boolean;
 }
 
 export interface Contact {
@@ -81,6 +86,12 @@ export interface SportsTeam {
   score: number | null;
 }
 
+export interface SportsSeries {
+  round: string | null;
+  gameLabel: string; // "Game 4 of 7"
+  seriesLabel: string; // "MTL leads series 2-1"
+}
+
 export interface SportsGame {
   id: string;
   league: 'NHL' | 'MLB';
@@ -92,6 +103,29 @@ export interface SportsGame {
   awayTeam: SportsTeam;
   venue: string | null;
   ourSide: 'home' | 'away';
+  series?: SportsSeries;
+}
+
+// One per-team entry in the per-user sports feed: today's game (if
+// any) plus the most recent final game so the user can always see the
+// last score.
+export interface SportsSub {
+  league: 'NHL' | 'MLB';
+  teamKey: string;
+  current: SportsGame | null;
+  previous: SportsGame | null;
+}
+
+export interface SportsTeamMeta {
+  key: string;
+  abbr: string;
+  name: string;
+  logo: string | null;
+}
+
+export interface SportsTeamLists {
+  nhl: SportsTeamMeta[];
+  mlb: SportsTeamMeta[];
 }
 
 export interface SportsLinescorePeriod {

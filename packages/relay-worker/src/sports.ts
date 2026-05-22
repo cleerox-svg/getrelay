@@ -1,19 +1,38 @@
 import { Hono } from 'hono';
 import type { Env } from './env';
+import { readAuthedUser } from './auth';
 import { sendPush, type VapidKeys } from './lib/web-push';
 
-// Today's game (if any) for the Montreal Canadiens (NHL) and Toronto
-// Blue Jays (MLB). No D1 usage — we hit the official league APIs and
-// cache responses in caches.default (~30s live, ~5 min otherwise).
+// Per-user sports feed. Each user follows zero-or-more (league, team)
+// pairs in user_sports_subs; the feed and the cron broadcast both pivot
+// off those rows. The Canadiens and Blue Jays remain the default seed
+// for legacy users — see the deploy-worker.yml backfill — but nothing
+// in this module is hardcoded to either team.
+//
+// External APIs we proxy:
+//   - NHL: api-web.nhle.com (schedule, gamecenter landing + boxscore).
+//   - MLB: statsapi.mlb.com (schedule with hydrate, feed/live for detail).
+//
+// All upstream responses are cached in caches.default — 30s during a
+// live game, 5 min otherwise.
 
-const NHL_TEAM_ABBR = 'MTL';
-const MLB_TEAM_ID = 141; // Toronto Blue Jays
+const DEFAULT_NHL_ABBR = 'MTL';
+const DEFAULT_MLB_ID = '141'; // Toronto Blue Jays — string for storage parity.
 
 interface Team {
   abbr: string;
   name: string;
   logo: string | null;
   score: number | null;
+}
+
+// Playoff context, attached to a Game when both the schedule and league
+// API expose it. `gameLabel` is "Game 4" / "Game 7 (if necessary)";
+// `seriesLabel` is "MTL leads 2-1" / "Series tied 1-1" / "MTL wins 4-2".
+interface Series {
+  round: string | null; // "First Round" / "ALDS" — null when unknown
+  gameLabel: string; // "Game 4 of 7"
+  seriesLabel: string; // "MTL leads series 2-1"
 }
 
 interface Game {
@@ -29,6 +48,17 @@ interface Game {
   awayTeam: Team;
   venue: string | null;
   ourSide: 'home' | 'away';
+  series?: Series; // playoffs only
+}
+
+// One entry in /sports — combines today's game (if any) with the most
+// recent final, so the feed can always show *something* relevant for
+// each followed team.
+interface SubGames {
+  league: 'NHL' | 'MLB';
+  teamKey: string; // NHL: abbrev. MLB: numeric team id as string.
+  current: Game | null;
+  previous: Game | null;
 }
 
 interface LinescoreTotal {
@@ -95,19 +125,45 @@ export function sportsRoutes() {
 
   app.get('/sports', async (c) => {
     const ymd = todayInToronto();
+    const me = await readAuthedUser(c.env, c.req.raw);
+    const subs = await loadSubs(c.env, me?.id ?? null);
+
+    // Per-user cache key — anonymous shares one entry, authed users get
+    // their own. Still cheap because the upstream API responses are
+    // cached separately and reused across cache misses here.
+    const subKey = subs.map((s) => `${s.league}:${s.teamKey}`).join(',');
     const cache = (caches as unknown as { default: Cache }).default;
-    const cacheKey = new Request(`https://relay-cache.local/sports/${ymd}`);
+    const cacheKey = new Request(
+      `https://relay-cache.local/sports/${ymd}?subs=${encodeURIComponent(subKey)}`,
+    );
     const cached = await cache.match(cacheKey);
     if (cached) return cached;
 
-    const [nhl, mlb] = await Promise.all([fetchNhlMtl(ymd), fetchMlbTor(ymd)]);
-    const games: Game[] = [];
-    if (nhl) games.push(nhl);
-    if (mlb) games.push(mlb);
+    const items = await Promise.all(
+      subs.map(async (s) => ({
+        league: s.league,
+        teamKey: s.teamKey,
+        current:
+          s.league === 'NHL'
+            ? await fetchNhlForTeam(s.teamKey, ymd)
+            : await fetchMlbForTeam(s.teamKey, ymd),
+        previous:
+          s.league === 'NHL'
+            ? await fetchNhlPrevious(s.teamKey, ymd)
+            : await fetchMlbPrevious(s.teamKey, ymd),
+      })),
+    );
+
+    // Backwards-compat: clients that only know `.games` still see a flat
+    // array of today's games. The new `.subs` carries the full
+    // current+previous per team.
+    const games = items
+      .map((i) => i.current)
+      .filter((g): g is Game => g !== null);
 
     const hasLive = games.some((g) => g.status === 'live');
     const ttl = hasLive ? 30 : 300;
-    const resp = new Response(JSON.stringify({ games }), {
+    const resp = new Response(JSON.stringify({ games, subs: items }), {
       headers: {
         'content-type': 'application/json',
         'cache-control': `public, max-age=${ttl}`,
@@ -117,17 +173,41 @@ export function sportsRoutes() {
     return resp;
   });
 
+  // Static-ish list of selectable teams. The NHL teams endpoint and MLB
+  // teams endpoint don't change often, so we lean on the upstream cache
+  // headers — 24h is plenty.
+  app.get('/sports/teams', async (c) => {
+    const cache = (caches as unknown as { default: Cache }).default;
+    const cacheKey = new Request('https://relay-cache.local/sports/teams');
+    const cached = await cache.match(cacheKey);
+    if (cached) return cached;
+    const [nhl, mlb] = await Promise.all([fetchNhlTeams(), fetchMlbTeams()]);
+    const resp = new Response(JSON.stringify({ nhl, mlb }), {
+      headers: {
+        'content-type': 'application/json',
+        'cache-control': 'public, max-age=86400',
+      },
+    });
+    c.executionCtx.waitUntil(cache.put(cacheKey, resp.clone()));
+    return resp;
+  });
+
   // Per-game detail. Cached by id so a tap on the card doesn't fan out
   // to the league API every time. TTL matches the list endpoint: short
   // while the game's live so the line score / scoring summary updates.
+  // `?abbr=` / `?teamId=` overrides which side gets the "ours" highlight
+  // so a fan of either team in the matchup sees their own perspective.
   app.get('/sports/nhl/:id', async (c) => {
     const id = c.req.param('id');
     if (!/^\d+$/.test(id)) return c.json({ error: 'bad id' }, 400);
+    const ourAbbr = (c.req.query('abbr') ?? DEFAULT_NHL_ABBR).toUpperCase();
     const cache = (caches as unknown as { default: Cache }).default;
-    const cacheKey = new Request(`https://relay-cache.local/sports/nhl/${id}`);
+    const cacheKey = new Request(
+      `https://relay-cache.local/sports/nhl/${id}?abbr=${ourAbbr}`,
+    );
     const cached = await cache.match(cacheKey);
     if (cached) return cached;
-    const detail = await fetchNhlDetail(id);
+    const detail = await fetchNhlDetail(id, ourAbbr);
     if (!detail) return c.json({ error: 'not found' }, 404);
     const ttl = detail.status === 'live' ? 30 : 300;
     const resp = new Response(JSON.stringify(detail), {
@@ -143,11 +223,14 @@ export function sportsRoutes() {
   app.get('/sports/mlb/:id', async (c) => {
     const id = c.req.param('id');
     if (!/^\d+$/.test(id)) return c.json({ error: 'bad id' }, 400);
+    const ourTeamId = c.req.query('teamId') ?? DEFAULT_MLB_ID;
     const cache = (caches as unknown as { default: Cache }).default;
-    const cacheKey = new Request(`https://relay-cache.local/sports/mlb/${id}`);
+    const cacheKey = new Request(
+      `https://relay-cache.local/sports/mlb/${id}?teamId=${ourTeamId}`,
+    );
     const cached = await cache.match(cacheKey);
     if (cached) return cached;
-    const detail = await fetchMlbDetail(id);
+    const detail = await fetchMlbDetail(id, Number(ourTeamId) || Number(DEFAULT_MLB_ID));
     if (!detail) return c.json({ error: 'not found' }, 404);
     const ttl = detail.status === 'live' ? 30 : 300;
     const resp = new Response(JSON.stringify(detail), {
@@ -161,6 +244,32 @@ export function sportsRoutes() {
   });
 
   return app;
+}
+
+// ---- Subscriptions -----------------------------------------------------
+
+interface SubRow {
+  league: 'NHL' | 'MLB';
+  teamKey: string;
+}
+
+async function loadSubs(env: Env, userId: string | null): Promise<SubRow[]> {
+  if (userId) {
+    const rows = await env.DB.prepare(
+      `SELECT league, team_key FROM user_sports_subs
+        WHERE user_id = ? ORDER BY league, team_key`,
+    )
+      .bind(userId)
+      .all<{ league: 'NHL' | 'MLB'; team_key: string }>();
+    const list = (rows.results ?? []).map((r) => ({ league: r.league, teamKey: r.team_key }));
+    if (list.length > 0) return list;
+  }
+  // Anon viewers (and authed users with no rows yet) get the legacy
+  // MTL + TOR pair so the feed always has content.
+  return [
+    { league: 'NHL', teamKey: DEFAULT_NHL_ABBR },
+    { league: 'MLB', teamKey: DEFAULT_MLB_ID },
+  ];
 }
 
 function todayInToronto(): string {
@@ -207,14 +316,14 @@ function ordinalInning(n: number): string {
 
 // ---- NHL ----------------------------------------------------------------
 
-async function fetchNhlMtl(ymd: string): Promise<Game | null> {
+async function fetchNhlForTeam(abbr: string, ymd: string): Promise<Game | null> {
   try {
-    // Team-specific weekly schedule. Includes every Canadiens game in the
-    // current week regardless of state (FUT / PRE / LIVE / OFF / FINAL),
-    // unlike /score/now which only surfaces games already underway. That's
-    // why pre-game evening games for the Habs weren't appearing.
+    // Team-specific weekly schedule. Includes every game for `abbr` in
+    // the current week regardless of state (FUT / PRE / LIVE / OFF /
+    // FINAL), unlike /score/now which only surfaces games already
+    // underway. That's why pre-game evening games weren't appearing.
     const r = await fetch(
-      `https://api-web.nhle.com/v1/club-schedule/${NHL_TEAM_ABBR}/week/now`,
+      `https://api-web.nhle.com/v1/club-schedule/${abbr}/week/now`,
       { cf: { cacheTtl: 30 } } as RequestInit,
     );
     if (!r.ok) return null;
@@ -226,7 +335,82 @@ async function fetchNhlMtl(ymd: string): Promise<Game | null> {
       data.games ?? (data.gamesByDate ?? []).flatMap((d) => d.games ?? []);
     const ev = flat.find((g) => g?.gameDate === ymd);
     if (!ev) return null;
-    return parseNhlGame(ev);
+    const game = parseNhlGame(ev, abbr);
+    if (ev.gameType === 3) {
+      game.series = (await fetchNhlSeries(String(ev.id ?? ''), abbr)) ?? undefined;
+    }
+    return game;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchNhlPrevious(abbr: string, beforeYmd: string): Promise<Game | null> {
+  try {
+    // Full-season schedule. The "previous" definition is "most recent
+    // game that has finished" — gameState in (OFF, FINAL) and gameDate
+    // < today. We sort the result client-side rather than trusting the
+    // API to give them back in any particular order.
+    const r = await fetch(
+      `https://api-web.nhle.com/v1/club-schedule-season/${abbr}/now`,
+      { cf: { cacheTtl: 300 } } as RequestInit,
+    );
+    if (!r.ok) return null;
+    const data = (await r.json()) as { games?: NhlRawGame[] };
+    const candidates = (data.games ?? []).filter(
+      (g) =>
+        g?.gameDate &&
+        g.gameDate < beforeYmd &&
+        (g.gameState === 'OFF' || g.gameState === 'FINAL'),
+    );
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => (a.gameDate ?? '').localeCompare(b.gameDate ?? ''));
+    const ev = candidates[candidates.length - 1]!;
+    const game = parseNhlGame(ev, abbr);
+    if (ev.gameType === 3) {
+      game.series = (await fetchNhlSeries(String(ev.id ?? ''), abbr)) ?? undefined;
+    }
+    return game;
+  } catch {
+    return null;
+  }
+}
+
+// Series info for an NHL playoff game. Pulled from gamecenter/landing
+// which carries `seriesStatus` with topSeed/bottomSeed wins and game
+// number. Best-effort — returns null if either endpoint fails.
+async function fetchNhlSeries(gameId: string, ourAbbr: string): Promise<Series | null> {
+  if (!gameId) return null;
+  try {
+    const r = await fetch(
+      `https://api-web.nhle.com/v1/gamecenter/${gameId}/landing`,
+      { cf: { cacheTtl: 300 } } as RequestInit,
+    );
+    if (!r.ok) return null;
+    const data = (await r.json()) as {
+      seriesStatus?: {
+        round?: number;
+        seriesAbbrev?: string;
+        seriesLetter?: string;
+        seriesTitle?: string;
+        gameNumberOfSeries?: number;
+        topSeedTeamAbbrev?: string;
+        topSeedWins?: number;
+        bottomSeedTeamAbbrev?: string;
+        bottomSeedWins?: number;
+        neededToWin?: number;
+      };
+    };
+    const s = data.seriesStatus;
+    if (!s) return null;
+    return buildSeries({
+      title: s.seriesTitle ?? null,
+      gameNumber: s.gameNumberOfSeries ?? null,
+      neededToWin: s.neededToWin ?? 4,
+      a: { abbr: s.topSeedTeamAbbrev ?? '', wins: s.topSeedWins ?? 0 },
+      b: { abbr: s.bottomSeedTeamAbbrev ?? '', wins: s.bottomSeedWins ?? 0 },
+      ourAbbr,
+    });
   } catch {
     return null;
   }
@@ -246,12 +430,13 @@ interface NhlRawGame {
   homeTeam?: NhlRawTeam;
   awayTeam?: NhlRawTeam;
   gameState?: string;
+  gameType?: number; // 2 = regular, 3 = playoffs
   period?: number;
   clock?: { timeRemaining?: string; running?: boolean; inIntermission?: boolean };
   venue?: { default?: string };
 }
 
-function parseNhlGame(ev: NhlRawGame): Game {
+function parseNhlGame(ev: NhlRawGame, ourAbbr: string): Game {
   const state = String(ev.gameState ?? '');
   const status: 'pre' | 'live' | 'final' =
     state === 'LIVE' || state === 'CRIT'
@@ -261,7 +446,7 @@ function parseNhlGame(ev: NhlRawGame): Game {
         : 'pre';
   const home = ev.homeTeam ?? {};
   const away = ev.awayTeam ?? {};
-  const ourSide: 'home' | 'away' = home.abbrev === NHL_TEAM_ABBR ? 'home' : 'away';
+  const ourSide: 'home' | 'away' = home.abbrev === ourAbbr ? 'home' : 'away';
   const start = Date.parse(ev.startTimeUTC ?? '');
   const startTime = Number.isFinite(start) ? start : 0;
   const startTimeLocal = localTime(startTime);
@@ -306,29 +491,97 @@ function parseNhlTeam(t: NhlRawTeam): Team {
 
 // ---- MLB ----------------------------------------------------------------
 
-async function fetchMlbTor(ymd: string): Promise<Game | null> {
+async function fetchMlbForTeam(teamKey: string, ymd: string): Promise<Game | null> {
+  const teamId = Number(teamKey);
+  if (!Number.isFinite(teamId)) return null;
   try {
     const url =
       'https://statsapi.mlb.com/api/v1/schedule?sportId=1' +
-      `&teamId=${MLB_TEAM_ID}&date=${ymd}&hydrate=linescore,team,venue`;
+      `&teamId=${teamId}&date=${ymd}&hydrate=linescore,team,venue,seriesStatus`;
     const r = await fetch(url, { cf: { cacheTtl: 30 } } as RequestInit);
     if (!r.ok) return null;
     const data = (await r.json()) as { dates?: { games?: MlbRawGame[] }[] };
     const game = data.dates?.[0]?.games?.[0];
     if (!game) return null;
-    return parseMlbGame(game);
+    return parseMlbGame(game, teamId);
   } catch {
     return null;
   }
 }
 
+async function fetchMlbPrevious(teamKey: string, beforeYmd: string): Promise<Game | null> {
+  const teamId = Number(teamKey);
+  if (!Number.isFinite(teamId)) return null;
+  try {
+    // 14-day backstop covers regular-season off days and post-season
+    // travel days. The schedule API will return only days that have
+    // games; we sort and pick the most recent final.
+    const end = beforeYmd;
+    const start = shiftYmd(beforeYmd, -14);
+    const url =
+      'https://statsapi.mlb.com/api/v1/schedule?sportId=1' +
+      `&teamId=${teamId}&startDate=${start}&endDate=${end}` +
+      `&hydrate=linescore,team,venue,seriesStatus`;
+    const r = await fetch(url, { cf: { cacheTtl: 300 } } as RequestInit);
+    if (!r.ok) return null;
+    const data = (await r.json()) as {
+      dates?: { date?: string; games?: MlbRawGame[] }[];
+    };
+    const candidates: MlbRawGame[] = [];
+    for (const d of data.dates ?? []) {
+      for (const g of d.games ?? []) {
+        if (!g.gameDate) continue;
+        // Skip today — we want games strictly before today.
+        const ymdOfGame = (g.gameDate ?? '').slice(0, 10);
+        if (ymdOfGame >= beforeYmd) continue;
+        const abs = g.status?.abstractGameState ?? '';
+        const det = g.status?.detailedState ?? '';
+        if (abs === 'Final' || det === 'Final' || det === 'Game Over') {
+          candidates.push(g);
+        }
+      }
+    }
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => (a.gameDate ?? '').localeCompare(b.gameDate ?? ''));
+    return parseMlbGame(candidates[candidates.length - 1]!, teamId);
+  } catch {
+    return null;
+  }
+}
+
+function shiftYmd(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  if (!y || !m || !d) return ymd;
+  const date = new Date(Date.UTC(y, m - 1, d));
+  date.setUTCDate(date.getUTCDate() + days);
+  const yy = date.getUTCFullYear();
+  const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(date.getUTCDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
 interface MlbRawTeam {
   team?: { id?: number; name?: string; abbreviation?: string };
   score?: number;
+  // Hydrated when ?hydrate includes seriesStatus.
+  seriesStatus?: MlbSeriesStatus;
+}
+interface MlbSeriesStatus {
+  shortName?: string; // "Wild Card" / "ALDS"
+  gameNumber?: number;
+  totalGames?: number; // best-of
+  description?: string; // "MTL leads 2-1"
+  wins?: number;
+  losses?: number;
+  result?: string; // "win" / "lose" / "tied"
 }
 interface MlbRawGame {
   gamePk?: number;
   gameDate?: string;
+  gameType?: string; // "R" regular, "F"/"D"/"L"/"W" postseason rounds
+  seriesDescription?: string;
+  seriesGameNumber?: number;
+  gamesInSeries?: number;
   status?: { abstractGameState?: string; detailedState?: string };
   teams?: { home?: MlbRawTeam; away?: MlbRawTeam };
   linescore?: {
@@ -343,7 +596,7 @@ interface MlbRawGame {
   venue?: { name?: string };
 }
 
-function parseMlbGame(g: MlbRawGame): Game {
+function parseMlbGame(g: MlbRawGame, ourTeamId: number): Game {
   const abs = String(g.status?.abstractGameState ?? '');
   const detailed = String(g.status?.detailedState ?? '');
   const status: 'pre' | 'live' | 'final' =
@@ -358,7 +611,7 @@ function parseMlbGame(g: MlbRawGame): Game {
 
   const home = g.teams?.home ?? {};
   const away = g.teams?.away ?? {};
-  const ourSide: 'home' | 'away' = home.team?.id === MLB_TEAM_ID ? 'home' : 'away';
+  const ourSide: 'home' | 'away' = home.team?.id === ourTeamId ? 'home' : 'away';
 
   // statsapi schedule's per-team score may be missing during a live game;
   // linescore.teams has the running run total.
@@ -390,6 +643,34 @@ function parseMlbGame(g: MlbRawGame): Game {
     statusDetail = 'Final';
   }
 
+  // Series context for postseason games. statsapi exposes either a
+  // per-team seriesStatus (with wins/losses + a pre-formatted
+  // description) or schedule-level seriesGameNumber/gamesInSeries.
+  // gameType "R" is regular season; anything else is post.
+  let series: Series | undefined;
+  const isPost = !!g.gameType && g.gameType !== 'R';
+  if (isPost) {
+    const ourSS = ourSide === 'home' ? home.seriesStatus : away.seriesStatus;
+    const total =
+      ourSS?.totalGames ??
+      g.gamesInSeries ??
+      // Default best-of for MLB rounds: WC=3, DS=5, LCS/WS=7. Fall back to
+      // 7 when unknown so the label still reads sensibly.
+      7;
+    const ourTeam = ourSide === 'home' ? home : away;
+    const oppTeam = ourSide === 'home' ? away : home;
+    const ourWins = ourSS?.wins ?? 0;
+    const oppWins = ourSS?.losses ?? 0;
+    series = buildSeries({
+      title: ourSS?.shortName ?? g.seriesDescription ?? null,
+      gameNumber: ourSS?.gameNumber ?? g.seriesGameNumber ?? null,
+      neededToWin: Math.ceil(total / 2),
+      a: { abbr: ourTeam.team?.abbreviation ?? '', wins: ourWins },
+      b: { abbr: oppTeam.team?.abbreviation ?? '', wins: oppWins },
+      ourAbbr: ourTeam.team?.abbreviation ?? '',
+    });
+  }
+
   return {
     id: g.gamePk != null ? String(g.gamePk) : '',
     league: 'MLB',
@@ -401,7 +682,44 @@ function parseMlbGame(g: MlbRawGame): Game {
     awayTeam: parseMlbTeam(away, awayScore),
     venue: g.venue?.name ?? null,
     ourSide,
+    series,
   };
+}
+
+// Shared series-label builder. Either side can be passed first; the
+// `ourAbbr` argument resolves the perspective so the output reads
+// naturally from the user's team's POV.
+function buildSeries(input: {
+  title: string | null;
+  gameNumber: number | null;
+  neededToWin: number;
+  a: { abbr: string; wins: number };
+  b: { abbr: string; wins: number };
+  ourAbbr: string;
+}): Series {
+  const { title, gameNumber, neededToWin, a, b, ourAbbr } = input;
+  const totalGames = neededToWin * 2 - 1; // best-of
+  const ours = a.abbr === ourAbbr ? a : b;
+  const theirs = a.abbr === ourAbbr ? b : a;
+
+  let seriesLabel: string;
+  if (ours.wins === neededToWin) {
+    seriesLabel = `${ours.abbr} wins series ${ours.wins}-${theirs.wins}`;
+  } else if (theirs.wins === neededToWin) {
+    seriesLabel = `${theirs.abbr} wins series ${theirs.wins}-${ours.wins}`;
+  } else if (ours.wins === theirs.wins) {
+    seriesLabel = `Series tied ${ours.wins}-${theirs.wins}`;
+  } else if (ours.wins > theirs.wins) {
+    seriesLabel = `${ours.abbr} leads series ${ours.wins}-${theirs.wins}`;
+  } else {
+    seriesLabel = `${theirs.abbr} leads series ${theirs.wins}-${ours.wins}`;
+  }
+
+  const gameLabel = gameNumber
+    ? `Game ${gameNumber} of ${totalGames}`
+    : `Best of ${totalGames}`;
+
+  return { round: title ?? null, gameLabel, seriesLabel };
 }
 
 function parseMlbTeam(t: MlbRawTeam, score: number | null): Team {
@@ -441,16 +759,32 @@ interface SportsEvent {
 
 export async function runSportsCron(env: Env): Promise<void> {
   const ymd = todayInToronto();
-  const [nhl, mlb] = await Promise.all([fetchNhlMtl(ymd), fetchMlbTor(ymd)]);
-  // Short-circuit when neither team plays today — zero D1 work.
-  if (!nhl && !mlb) return;
-  for (const g of [nhl, mlb]) {
-    if (g) await processGameUpdate(env, ymd, g);
+  // Union of every (league, team) that at least one user follows. The
+  // cron does zero work for a team nobody follows.
+  const subRows = await env.DB.prepare(
+    `SELECT DISTINCT league, team_key FROM user_sports_subs`,
+  ).all<{ league: 'NHL' | 'MLB'; team_key: string }>();
+  const subs = subRows.results ?? [];
+  if (subs.length === 0) return;
+
+  for (const sub of subs) {
+    const g =
+      sub.league === 'NHL'
+        ? await fetchNhlForTeam(sub.team_key, ymd)
+        : await fetchMlbForTeam(sub.team_key, ymd);
+    if (g) await processGameUpdate(env, ymd, sub.team_key, g);
   }
 }
 
-async function processGameUpdate(env: Env, ymd: string, g: Game): Promise<void> {
-  const key = `sports:${g.league}:${ymd}`;
+async function processGameUpdate(
+  env: Env,
+  ymd: string,
+  teamKey: string,
+  g: Game,
+): Promise<void> {
+  // Per-team kv key so multiple followed teams don't clobber each
+  // other's state in the same league on the same date.
+  const key = `sports:${g.league}:${teamKey}:${ymd}`;
   // 1 read per game per tick.
   const prevRow = await env.DB.prepare(
     `SELECT value FROM kv_state WHERE key = ?`,
@@ -495,7 +829,11 @@ async function processGameUpdate(env: Env, ymd: string, g: Game): Promise<void> 
 
   if (!prev) return; // First sighting — set baseline; never push on cold start.
 
-  const events: SportsEvent[] = [];
+  interface QueuedEvent {
+    payload: SportsEvent;
+    kind: 'start' | 'score' | 'final';
+  }
+  const events: QueuedEvent[] = [];
   const emoji = g.league === 'NHL' ? '🏒' : '⚾';
   const goalWord = g.league === 'NHL' ? 'goal' : 'score';
   // Deep-link target — empty when the upstream API didn't expose the
@@ -509,49 +847,92 @@ async function processGameUpdate(env: Env, ymd: string, g: Game): Promise<void> 
   const prevOurScore = g.ourSide === 'home' ? prev.homeScore : prev.awayScore;
   const prevTheirScore = g.ourSide === 'home' ? prev.awayScore : prev.homeScore;
 
+  // Pre-game → in-progress transition triggers the optional "start" push.
+  if (prev.status === 'pre' && cur.status === 'live') {
+    events.push({
+      kind: 'start',
+      payload: {
+        title: `${emoji} ${ours.name} game starting`,
+        body: `${ours.abbr} vs ${theirs.abbr} · ${g.statusDetail}`,
+        tag: `sports-${g.league}-${teamKey}-start`,
+        url,
+      },
+    });
+  }
+
   if (ourScore > prevOurScore) {
     events.push({
-      title: `${emoji} ${ours.name} ${goalWord}!`,
-      body: `${ours.abbr} ${ourScore} – ${theirScore} ${theirs.abbr} · ${g.statusDetail}`,
-      tag: `sports-${g.league}-score`,
-      url,
+      kind: 'score',
+      payload: {
+        title: `${emoji} ${ours.name} ${goalWord}!`,
+        body: `${ours.abbr} ${ourScore} – ${theirScore} ${theirs.abbr} · ${g.statusDetail}`,
+        tag: `sports-${g.league}-${teamKey}-score`,
+        url,
+      },
     });
   } else if (theirScore > prevTheirScore) {
     events.push({
-      title: `${emoji} ${theirs.name} ${goalWord}`,
-      body: `${ours.abbr} ${ourScore} – ${theirScore} ${theirs.abbr} · ${g.statusDetail}`,
-      tag: `sports-${g.league}-score`,
-      url,
+      kind: 'score',
+      payload: {
+        title: `${emoji} ${theirs.name} ${goalWord}`,
+        body: `${ours.abbr} ${ourScore} – ${theirScore} ${theirs.abbr} · ${g.statusDetail}`,
+        tag: `sports-${g.league}-${teamKey}-score`,
+        url,
+      },
     });
   }
 
   if (prev.status !== 'final' && cur.status === 'final') {
     const won = ourScore > theirScore;
     events.push({
-      title: won ? `${emoji} ${ours.name} win!` : `${emoji} ${ours.name} fall`,
-      body: `Final · ${ours.abbr} ${ourScore} – ${theirScore} ${theirs.abbr}`,
-      tag: `sports-${g.league}-final`,
-      url,
+      kind: 'final',
+      payload: {
+        title: won ? `${emoji} ${ours.name} win!` : `${emoji} ${ours.name} fall`,
+        body: `Final · ${ours.abbr} ${ourScore} – ${theirScore} ${theirs.abbr}`,
+        tag: `sports-${g.league}-${teamKey}-final`,
+        url,
+      },
     });
   }
 
   for (const ev of events) {
-    await broadcastSportsPush(env, ev);
+    await broadcastSportsPush(env, g.league, teamKey, ev.kind, ev.payload);
   }
 }
 
-async function broadcastSportsPush(env: Env, payload: SportsEvent): Promise<void> {
+async function broadcastSportsPush(
+  env: Env,
+  league: 'NHL' | 'MLB',
+  teamKey: string,
+  kind: 'start' | 'score' | 'final',
+  payload: SportsEvent,
+): Promise<void> {
   const keys = vapidKeys(env);
   if (!keys) {
     console.warn('sports: VAPID not configured; skipping push');
     return;
   }
+  // The right per-event toggle gates this push. The master switch
+  // (sports_notifications) still applies — turning it off silences all
+  // sports pushes regardless of the per-event toggles.
+  const toggleCol =
+    kind === 'start'
+      ? 'sports_notify_start'
+      : kind === 'score'
+        ? 'sports_notify_score'
+        : 'sports_notify_final';
   const rows = await env.DB.prepare(
     `SELECT ps.endpoint, ps.p256dh, ps.auth
      FROM push_subscriptions ps
      JOIN users u ON u.id = ps.user_id
-     WHERE COALESCE(u.sports_notifications, 1) = 1`,
-  ).all<{ endpoint: string; p256dh: string; auth: string }>();
+     JOIN user_sports_subs s ON s.user_id = u.id
+     WHERE COALESCE(u.sports_notifications, 1) = 1
+       AND COALESCE(u.${toggleCol}, 1) = 1
+       AND s.league = ?
+       AND s.team_key = ?`,
+  )
+    .bind(league, teamKey)
+    .all<{ endpoint: string; p256dh: string; auth: string }>();
   const subs = rows.results ?? [];
   if (subs.length === 0) return;
 
@@ -591,7 +972,7 @@ function vapidKeys(env: Env): VapidKeys | null {
 
 // ---- NHL detail ---------------------------------------------------------
 
-async function fetchNhlDetail(gameId: string): Promise<GameDetail | null> {
+async function fetchNhlDetail(gameId: string, ourAbbr: string): Promise<GameDetail | null> {
   try {
     const [landingResp, boxResp] = await Promise.all([
       fetch(`https://api-web.nhle.com/v1/gamecenter/${gameId}/landing`, {
@@ -604,7 +985,7 @@ async function fetchNhlDetail(gameId: string): Promise<GameDetail | null> {
     if (!landingResp.ok) return null;
     const landing = (await landingResp.json()) as NhlLanding;
     const box = boxResp.ok ? ((await boxResp.json()) as NhlBoxscore) : null;
-    return parseNhlDetail(landing, box);
+    return parseNhlDetail(landing, box, ourAbbr);
   } catch {
     return null;
   }
@@ -614,12 +995,24 @@ interface NhlLanding {
   id?: number;
   gameState?: string;
   gameDate?: string;
+  gameType?: number;
   startTimeUTC?: string;
   period?: number;
   clock?: { timeRemaining?: string; inIntermission?: boolean };
   awayTeam?: NhlRawTeam & { sog?: number };
   homeTeam?: NhlRawTeam & { sog?: number };
   venue?: { default?: string };
+  seriesStatus?: {
+    round?: number;
+    seriesAbbrev?: string;
+    seriesTitle?: string;
+    gameNumberOfSeries?: number;
+    topSeedTeamAbbrev?: string;
+    topSeedWins?: number;
+    bottomSeedTeamAbbrev?: string;
+    bottomSeedWins?: number;
+    neededToWin?: number;
+  };
   summary?: {
     linescore?: {
       byPeriod?: {
@@ -704,7 +1097,11 @@ interface NhlBoxscore {
   };
 }
 
-function parseNhlDetail(landing: NhlLanding, box: NhlBoxscore | null): GameDetail {
+function parseNhlDetail(
+  landing: NhlLanding,
+  box: NhlBoxscore | null,
+  ourAbbr: string,
+): GameDetail {
   const state = String(landing.gameState ?? '');
   const status: 'pre' | 'live' | 'final' =
     state === 'LIVE' || state === 'CRIT'
@@ -714,7 +1111,7 @@ function parseNhlDetail(landing: NhlLanding, box: NhlBoxscore | null): GameDetai
         : 'pre';
   const homeRaw = landing.homeTeam ?? {};
   const awayRaw = landing.awayTeam ?? {};
-  const ourSide: 'home' | 'away' = homeRaw.abbrev === NHL_TEAM_ABBR ? 'home' : 'away';
+  const ourSide: 'home' | 'away' = homeRaw.abbrev === ourAbbr ? 'home' : 'away';
   const start = Date.parse(landing.startTimeUTC ?? '');
   const startTime = Number.isFinite(start) ? start : 0;
   const startTimeLocal = localTime(startTime);
@@ -836,6 +1233,21 @@ function parseNhlDetail(landing: NhlLanding, box: NhlBoxscore | null): GameDetai
     stats: awayStatRows,
   };
 
+  // Landing exposes seriesStatus directly on playoff games. Cheaper than
+  // the secondary fetch the list endpoint uses.
+  let series: Series | undefined;
+  const ss = landing.seriesStatus;
+  if (ss && (ss.topSeedTeamAbbrev || ss.bottomSeedTeamAbbrev)) {
+    series = buildSeries({
+      title: ss.seriesTitle ?? null,
+      gameNumber: ss.gameNumberOfSeries ?? null,
+      neededToWin: ss.neededToWin ?? 4,
+      a: { abbr: ss.topSeedTeamAbbrev ?? '', wins: ss.topSeedWins ?? 0 },
+      b: { abbr: ss.bottomSeedTeamAbbrev ?? '', wins: ss.bottomSeedWins ?? 0 },
+      ourAbbr,
+    });
+  }
+
   return {
     id: landing.id != null ? String(landing.id) : '',
     league: 'NHL',
@@ -847,6 +1259,7 @@ function parseNhlDetail(landing: NhlLanding, box: NhlBoxscore | null): GameDetai
     awayTeam: parseNhlTeam(awayRaw),
     venue: landing.venue?.default ?? null,
     ourSide,
+    series,
     linescore,
     totals,
     scoringPlays,
@@ -937,7 +1350,10 @@ function joinName(first?: string, last?: string): string {
 
 // ---- MLB detail ---------------------------------------------------------
 
-async function fetchMlbDetail(gamePk: string): Promise<GameDetail | null> {
+async function fetchMlbDetail(
+  gamePk: string,
+  ourTeamId: number,
+): Promise<GameDetail | null> {
   try {
     const r = await fetch(
       `https://statsapi.mlb.com/api/v1.1/game/${gamePk}/feed/live`,
@@ -945,7 +1361,7 @@ async function fetchMlbDetail(gamePk: string): Promise<GameDetail | null> {
     );
     if (!r.ok) return null;
     const data = (await r.json()) as MlbFeedLive;
-    return parseMlbDetail(gamePk, data);
+    return parseMlbDetail(gamePk, data, ourTeamId);
   } catch {
     return null;
   }
@@ -1052,7 +1468,11 @@ interface MlbFeedLive {
   };
 }
 
-function parseMlbDetail(gamePk: string, d: MlbFeedLive): GameDetail {
+function parseMlbDetail(
+  gamePk: string,
+  d: MlbFeedLive,
+  ourTeamId: number,
+): GameDetail {
   const abs = String(d.gameData?.status?.abstractGameState ?? '');
   const detailed = String(d.gameData?.status?.detailedState ?? '');
   const status: 'pre' | 'live' | 'final' =
@@ -1063,7 +1483,7 @@ function parseMlbDetail(gamePk: string, d: MlbFeedLive): GameDetail {
         : 'pre';
   const home = d.gameData?.teams?.home ?? {};
   const away = d.gameData?.teams?.away ?? {};
-  const ourSide: 'home' | 'away' = home.id === MLB_TEAM_ID ? 'home' : 'away';
+  const ourSide: 'home' | 'away' = home.id === ourTeamId ? 'home' : 'away';
 
   const start = Date.parse(d.gameData?.datetime?.dateTime ?? '');
   const startTime = Number.isFinite(start) ? start : 0;
@@ -1233,4 +1653,115 @@ function mlbBoxFor(t: MlbBoxTeam | undefined, dec: MlbDecisions | undefined): Te
     pitchers,
     stats,
   };
+}
+
+// ---- Team lists ---------------------------------------------------------
+
+export interface TeamMeta {
+  key: string; // value the picker writes into user_sports_subs.team_key
+  abbr: string;
+  name: string;
+  logo: string | null;
+}
+
+async function fetchNhlTeams(): Promise<TeamMeta[]> {
+  // The static /stats/rest/en/team list returns every franchise the NHL
+  // recognises (including historical). We narrow to active teams using
+  // the standings endpoint's roster — but rather than hit two endpoints,
+  // we just rely on the v1 web schedule-now endpoint which lists current
+  // teams. Falling back to a hardcoded set on failure keeps the UI
+  // functional even if the NHL API is down.
+  try {
+    const r = await fetch('https://api.nhle.com/stats/rest/en/team', {
+      cf: { cacheTtl: 86400 },
+    } as RequestInit);
+    if (!r.ok) return fallbackNhlTeams();
+    const data = (await r.json()) as {
+      data?: { id?: number; triCode?: string; fullName?: string }[];
+    };
+    const out: TeamMeta[] = [];
+    for (const t of data.data ?? []) {
+      const abbr = (t.triCode ?? '').toUpperCase();
+      const name = t.fullName ?? abbr;
+      if (!abbr || !name) continue;
+      out.push({
+        key: abbr,
+        abbr,
+        name,
+        logo: `https://assets.nhle.com/logos/nhl/svg/${abbr}_light.svg`,
+      });
+    }
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    return out.length > 0 ? out : fallbackNhlTeams();
+  } catch {
+    return fallbackNhlTeams();
+  }
+}
+
+function fallbackNhlTeams(): TeamMeta[] {
+  // Pared-down hardcoded list for outages. Just covers the most likely
+  // picks; the full list returns from the live endpoint normally.
+  const teams: [string, string][] = [
+    ['MTL', 'Montreal Canadiens'],
+    ['TOR', 'Toronto Maple Leafs'],
+    ['BOS', 'Boston Bruins'],
+    ['NYR', 'New York Rangers'],
+    ['EDM', 'Edmonton Oilers'],
+    ['VAN', 'Vancouver Canucks'],
+    ['OTT', 'Ottawa Senators'],
+  ];
+  return teams.map(([abbr, name]) => ({
+    key: abbr,
+    abbr,
+    name,
+    logo: `https://assets.nhle.com/logos/nhl/svg/${abbr}_light.svg`,
+  }));
+}
+
+async function fetchMlbTeams(): Promise<TeamMeta[]> {
+  try {
+    const r = await fetch(
+      'https://statsapi.mlb.com/api/v1/teams?sportId=1&activeStatus=Y',
+      { cf: { cacheTtl: 86400 } } as RequestInit,
+    );
+    if (!r.ok) return fallbackMlbTeams();
+    const data = (await r.json()) as {
+      teams?: { id?: number; abbreviation?: string; name?: string }[];
+    };
+    const out: TeamMeta[] = [];
+    for (const t of data.teams ?? []) {
+      const id = t.id;
+      const abbr = t.abbreviation ?? '';
+      const name = t.name ?? abbr;
+      if (id == null || !abbr || !name) continue;
+      out.push({
+        key: String(id),
+        abbr,
+        name,
+        logo: `https://www.mlbstatic.com/team-logos/${id}.svg`,
+      });
+    }
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    return out.length > 0 ? out : fallbackMlbTeams();
+  } catch {
+    return fallbackMlbTeams();
+  }
+}
+
+function fallbackMlbTeams(): TeamMeta[] {
+  const teams: [number, string, string][] = [
+    [141, 'TOR', 'Toronto Blue Jays'],
+    [147, 'NYY', 'New York Yankees'],
+    [111, 'BOS', 'Boston Red Sox'],
+    [119, 'LAD', 'Los Angeles Dodgers'],
+    [137, 'SF', 'San Francisco Giants'],
+    [110, 'BAL', 'Baltimore Orioles'],
+    [117, 'HOU', 'Houston Astros'],
+  ];
+  return teams.map(([id, abbr, name]) => ({
+    key: String(id),
+    abbr,
+    name,
+    logo: `https://www.mlbstatic.com/team-logos/${id}.svg`,
+  }));
 }

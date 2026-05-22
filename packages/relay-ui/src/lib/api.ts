@@ -6,6 +6,8 @@ import type {
   Me,
   SportsGame,
   SportsGameDetail,
+  SportsSub,
+  SportsTeamLists,
 } from './types';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8787').replace(
@@ -53,7 +55,17 @@ export const api = {
     displayName?: string;
     statusMessage?: string;
     sportsNotifications?: boolean;
+    sportsNotifyStart?: boolean;
+    sportsNotifyScore?: boolean;
+    sportsNotifyFinal?: boolean;
   }) => request<{ ok: true }>('/me', { method: 'PATCH', body: JSON.stringify(body) }),
+  getSportsSubs: () =>
+    request<{ subs: { league: 'NHL' | 'MLB'; teamKey: string }[] }>('/me/sports/subs'),
+  setSportsSubs: (subs: { league: 'NHL' | 'MLB'; teamKey: string }[]) =>
+    request<{ ok: boolean; count: number }>('/me/sports/subs', {
+      method: 'PUT',
+      body: JSON.stringify({ subs }),
+    }),
   signout: () => request<void>('/auth/signout', { method: 'POST' }),
   uploadAvatar: async (file: File): Promise<{ ok: boolean; key: string }> => {
     const form = new FormData();
@@ -142,9 +154,21 @@ export const api = {
   deleteChat: (chatId: string) =>
     request<{ ok: true }>(`/chats/${encodeURIComponent(chatId)}`, { method: 'DELETE' }),
   listFeed: () => request<{ statuses: ContactStatus[] }>('/feed'),
-  getSports: () => request<{ games: SportsGame[] }>('/sports'),
-  getSportsGame: (league: 'nhl' | 'mlb', id: string) =>
-    request<SportsGameDetail>(`/sports/${league}/${encodeURIComponent(id)}`),
+  getSports: () =>
+    request<{ games: SportsGame[]; subs: SportsSub[] }>('/sports'),
+  getSportsTeams: () => request<SportsTeamLists>('/sports/teams'),
+  getSportsGame: (league: 'nhl' | 'mlb', id: string, teamKey?: string) => {
+    const params = new URLSearchParams();
+    if (teamKey) {
+      // NHL passes the abbrev as `abbr`; MLB passes the numeric team id
+      // as `teamId`. The worker uses whichever matches the league.
+      params.set(league === 'nhl' ? 'abbr' : 'teamId', teamKey);
+    }
+    const qs = params.toString();
+    return request<SportsGameDetail>(
+      `/sports/${league}/${encodeURIComponent(id)}${qs ? `?${qs}` : ''}`,
+    );
+  },
   searchGifs: (q: string, pos?: string) => {
     const usp = new URLSearchParams();
     if (q) usp.set('q', q);

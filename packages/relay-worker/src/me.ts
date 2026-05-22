@@ -19,7 +19,11 @@ export function meRoutes() {
 
     const row = await c.env.DB.prepare(
       `SELECT id, email, pin, display_name, status_message, avatar_url, avatar_r2_key,
-              is_admin, COALESCE(sports_notifications, 1) AS sports_notifications
+              is_admin,
+              COALESCE(sports_notifications, 1) AS sports_notifications,
+              COALESCE(sports_notify_start,  1) AS sports_notify_start,
+              COALESCE(sports_notify_score,  1) AS sports_notify_score,
+              COALESCE(sports_notify_final,  1) AS sports_notify_final
        FROM users WHERE id = ?`,
     ).bind(me.id).first<{
       id: string;
@@ -31,6 +35,9 @@ export function meRoutes() {
       avatar_r2_key: string | null;
       is_admin: number;
       sports_notifications: number;
+      sports_notify_start: number;
+      sports_notify_score: number;
+      sports_notify_final: number;
     }>();
     if (!row) return c.json({ error: 'user_not_found' }, 404);
 
@@ -44,6 +51,9 @@ export function meRoutes() {
       avatarUrl: avatarUrlFor(origin, row),
       isAdmin: row.is_admin === 1,
       sportsNotifications: row.sports_notifications === 1,
+      sportsNotifyStart: row.sports_notify_start === 1,
+      sportsNotifyScore: row.sports_notify_score === 1,
+      sportsNotifyFinal: row.sports_notify_final === 1,
     });
   });
 
@@ -55,6 +65,9 @@ export function meRoutes() {
       displayName?: string;
       statusMessage?: string;
       sportsNotifications?: boolean;
+      sportsNotifyStart?: boolean;
+      sportsNotifyScore?: boolean;
+      sportsNotifyFinal?: boolean;
     }>();
 
     const updates: string[] = [];
@@ -77,6 +90,18 @@ export function meRoutes() {
       updates.push('sports_notifications = ?');
       values.push(body.sportsNotifications ? 1 : 0);
     }
+    if (typeof body.sportsNotifyStart === 'boolean') {
+      updates.push('sports_notify_start = ?');
+      values.push(body.sportsNotifyStart ? 1 : 0);
+    }
+    if (typeof body.sportsNotifyScore === 'boolean') {
+      updates.push('sports_notify_score = ?');
+      values.push(body.sportsNotifyScore ? 1 : 0);
+    }
+    if (typeof body.sportsNotifyFinal === 'boolean') {
+      updates.push('sports_notify_final = ?');
+      values.push(body.sportsNotifyFinal ? 1 : 0);
+    }
     if (updates.length === 0) return c.json({ ok: true });
 
     values.push(me.id);
@@ -85,6 +110,63 @@ export function meRoutes() {
     ).bind(...values).run();
 
     return c.json({ ok: true });
+  });
+
+  // ---- Sports team subscriptions -----------------------------------------
+  //
+  // GET returns the user's followed (league, team_key) rows. PUT replaces
+  // them in a single transaction so the UI can ship a whole set at once
+  // and not deal with per-row diffing.
+
+  app.get('/me/sports/subs', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+    const rows = await c.env.DB.prepare(
+      `SELECT league, team_key FROM user_sports_subs
+        WHERE user_id = ? ORDER BY league, team_key`,
+    )
+      .bind(me.id)
+      .all<{ league: 'NHL' | 'MLB'; team_key: string }>();
+    return c.json({
+      subs: (rows.results ?? []).map((r) => ({ league: r.league, teamKey: r.team_key })),
+    });
+  });
+
+  app.put('/me/sports/subs', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+    const body = await c.req.json<{
+      subs?: { league?: string; teamKey?: string }[];
+    }>();
+    const input = Array.isArray(body.subs) ? body.subs : [];
+    // Validate + dedupe. Bound at 50 follows just so a runaway client
+    // can't drop a giant payload.
+    const seen = new Set<string>();
+    const valid: { league: 'NHL' | 'MLB'; teamKey: string }[] = [];
+    for (const row of input) {
+      const league = String(row.league ?? '').toUpperCase();
+      const teamKey = String(row.teamKey ?? '').trim();
+      if ((league !== 'NHL' && league !== 'MLB') || !teamKey) continue;
+      if (teamKey.length > 32) continue;
+      const k = `${league}:${teamKey}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      valid.push({ league: league as 'NHL' | 'MLB', teamKey });
+      if (valid.length >= 50) break;
+    }
+
+    const now = Date.now();
+    const ops = [
+      c.env.DB.prepare(`DELETE FROM user_sports_subs WHERE user_id = ?`).bind(me.id),
+      ...valid.map((v) =>
+        c.env.DB.prepare(
+          `INSERT OR IGNORE INTO user_sports_subs (user_id, league, team_key, created_at)
+           VALUES (?, ?, ?, ?)`,
+        ).bind(me.id, v.league, v.teamKey, now),
+      ),
+    ];
+    await c.env.DB.batch(ops);
+    return c.json({ ok: true, count: valid.length });
   });
 
   return app;
