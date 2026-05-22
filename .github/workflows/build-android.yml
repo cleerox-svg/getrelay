@@ -15,6 +15,28 @@ name: Build Android APK / AAB
 #   PLAY_SERVICE_ACCOUNT_JSON  (from Google Cloud → Service Accounts)
 # When this secret is missing the upload step is skipped and the AAB
 # is left as a workflow artifact for manual upload.
+#
+# -----------------------------------------------------------------------
+# When do you actually need to run this?
+# -----------------------------------------------------------------------
+# The Capacitor WebView loads from `server_url` (default
+# https://relay.averrow.com), so the Android app is effectively a thin
+# shell over the deployed Pages build. Web-only changes (routes,
+# components, worker endpoints, schema, styling) reach Android users
+# the moment `deploy-ui` finishes — no new AAB, no Play review.
+#
+# You only need to cut a new AAB when something *native* changes:
+#   - Add/remove a Capacitor plugin (camera, biometrics, push, etc.)
+#   - New Android permission in AndroidManifest.xml
+#   - App icon / splash bundled in the AAB
+#   - targetSdkVersion bump (Play policy)
+#   - applicationId or signing config change
+#   - Cosmetic version bump for the store listing
+#
+# That means it's fine — and intended — to batch several native changes
+# into one AAB. Don't trigger this workflow per commit; queue native
+# changes up and ship them together to keep Play review churn down.
+# Each AAB upload kicks off an independent Play review.
 
 on:
   workflow_dispatch:
