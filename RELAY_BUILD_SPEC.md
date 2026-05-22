@@ -972,4 +972,184 @@ GitHub Actions on push + PR:
 
 ---
 
+## 19. Research Dossier — BBM Channels (v2+ planning artifact)
+
+> **Status:** Research-only. Not on the v1 roadmap. Captured here so it doesn't get lost when we scope Channels post-E1–E7. The "v1+ Roadmap" table in §16 explicitly marks `BBM Channels` as out-of-roadmap; this section keeps the door open with a sourced product/architecture brief.
+
+### 19.1 What BBM Channels actually was
+
+BlackBerry announced BBM Channels in beta on **May 14, 2013** at BlackBerry Live in Orlando, alongside the news that BBM would go cross-platform to iOS and Android ([Engadget, 14 May 2013](https://www.engadget.com/2013/05/14/blackberry-announces-bbm-channels/)). Open beta landed on BlackBerry 10 and BBOS 5–7.1 in late 2013; iOS and Android shipped with **BBM 2.0 on Feb 13, 2014**, alongside BBM Voice ([TechCrunch, 13 Feb 2014](https://techcrunch.com/2014/02/13/bbm-update-adds-voice-calls-channels-dropbox-and-location-sharing-for-ios-and-android-users/); [Engadget, 13 Feb 2014](https://www.engadget.com/2014-02-13-bbm-channels-and-voice-come-to-android-and-iphone.html)).
+
+BlackBerry positioned Channels as a "social engagement platform within BBM" connecting people to businesses, brands, celebrities, and groups. Message-board-style: hybrid between a Twitter feed (one-to-many broadcast) and a chat room (subscribers could comment and even open 1:1 chats with the owner during published "chat hours").
+
+Both consumers and brands could create channels. Anyone with a BBM account could spin one up via the **BBM Channels Manager** web portal, or in-app on BlackBerry 10. Launch brand partners included Time, Rolling Stone, CNBC, Virgin Atlantic, Coca-Cola, UPS, and Mercedes-Benz ([CrackBerry – BBM Channels hub](https://crackberry.com/bbm-channels); [Wikipedia – BBM (software)](https://en.wikipedia.org/wiki/BBM_(software))).
+
+Content: text posts up to ~400 chars with an optional title and a photo/GIF attachment. Native video posting was **not** a launch feature — videos were linked via URLs. Polls were not first-class.
+
+Discovery: (a) a hand-curated **Featured** carousel; (b) a **Discover** tab with category browsing; (c) **search** by title, description, or Channel PIN. Owners could embed a Channel PIN HTML widget / QR code on their site to pull subscribers in from the open web.
+
+Subscriber interactions: owner-broadcast with two-way comments — *not* pure one-way like Telegram/WhatsApp Channels. Subscribers could **comment** (threaded after a 2014 update), **react/like**, **repost**, and **open a direct 1:1** with the channel owner during the owner's published **chat hours** ([CrackBerry – Set chatting hours, threaded conversations](https://crackberry.com/bbm-channels-updated-set-chatting-hours-threaded-conversations-and-more)). That "broadcast + structured 1:1" combo was BBM Channels' most distinctive design move.
+
+By March 2014: **85M MAU / 113M registered users / ~500,000 channels** ([TechCrunch, 28 Mar 2014](https://techcrunch.com/2014/03/28/bbm-usage/)).
+
+### 19.2 Identity & moderation
+
+**Identity scheme.** User PINs were 8 hex-style chars (e.g., `1234ABCD`). **Channel PINs were prefixed with `C`** (e.g., `C0030899F`), textually disjoint from user PINs ([CrackBerry – Exploring PIN culture](https://crackberry.com/exploring-pin-culture); [forums.crackberry.com](https://forums.crackberry.com/general-bbm-chat-f404/url-bbm-pins-channels-1076886/)). The PIN was the canonical identifier; the channel also had a separate display title and description for search.
+
+**Verification.** A blue-style **verified badge** appeared in the channel profile, search results, and Featured carousel — explicitly modeled after Twitter's blue check. Consistent, high-quality posting was a path to being verified and featured.
+
+**Owner controls.**
+- **Multiple admins** via the BBM Channels Manager web portal (added in 2014 after a delayed rollout) — invite contributors by email, accept via BlackBerry ID.
+- **Comment moderation:** delete comments, disable commenting per post, or **require approval before publication**.
+- **PIN-spam blocking:** an update added auto-block for comments containing PINs/Channel PINs (response to spammers posting their own channel PINs in popular channels — [CrackBerry](https://crackberry.com/bbm-channels-udpated-brings-ability-block-comments-pins)).
+- **Scheduled chat hours:** owners published chat windows for 1:1 subscriber DMs.
+- **Hootsuite integration** for filtering pending/flagged comments at scale.
+
+**Reporting/abuse.** Users could report channels, posts, or comments. Rules in the [BBM Channels Content Guidelines](https://www.blackberry.com/content/dam/blackberry-com/Documents/pdf/legal/bbm-channels-content-guidelines/BBM_Channels_Content_Guidelines_Polish.pdf) and [BBM Channel Terms](https://www.blackberry.com/us/en/legal/bbm-channel-terms/bbm-channel-terms).
+
+### 19.3 Differentiation from competitors
+
+| Platform | Launch | Direction | Distinctive trait |
+|---|---|---|---|
+| **BBM Channels** | May 2013 / Feb 2014 (iOS+Android) | Owner broadcast + comments + 1:1 chat hours | PIN-based identity; chat-hours hybrid; verified badge; Hootsuite |
+| **Telegram Channels** | Sept 2015 | One-way broadcast + linked discussion group | Unlimited subs, polls, native video, public directory ([Telegram blog](https://telegram.org/blog/channels)) |
+| **Discord servers** | 2015 | Many-to-many, role-based | Voice rooms, granular roles, bots |
+| **Instagram Broadcast Channels** | Feb 2023 | One-to-many; reactions + polls only | Voice notes, creator-only sending ([Meta](https://about.fb.com/news/2023/02/instagram-broadcast-channels-creators-deepen-connections-with-followers/)) |
+| **WhatsApp Channels** | Jun → Sept 2023 (global) | One-to-many broadcast | Hidden PII, emoji reactions; polls/voice added Jan 2024 ([Meta](https://about.fb.com/news/2023/09/whatsapp-channels-global-launch/); [TechCrunch](https://techcrunch.com/2023/09/13/whatsapp-is-launching-its-channels-feature-globally/)) |
+| **X/Twitter Communities** | 2021 | Many-to-many, topical | Community-moderated, in-feed |
+
+**Distinct ideas worth resurrecting:**
+1. **PIN-as-identity** — keep BBM's pseudonymous identity; you don't need a phone number for the channel handle; QR/widget for offline marketing.
+2. **Scheduled chat hours** — bridging broadcast and 1:1 support is unusual then and still rare now. Nobody else built an explicit office-hours UI.
+3. **Threaded text comments** — Telegram routes to a linked group; WhatsApp still allows only reactions.
+4. **Hootsuite-class owner dashboard** — was unusually mature creator tooling for 2013–14.
+
+**What apparently failed:**
+- Late cross-platform launch (Feb 2014); WhatsApp was already at ~450M MAU.
+- No native video, no polls — parity gap widened fast.
+- Hand-curated Featured rail, no algorithmic trending.
+- Bound to a dying host client.
+
+### 19.4 Engagement mechanics
+
+- **Read receipts on posts:** No public per-post indicator (unlike BBM 1:1's D/R). Reach was surfaced via an owner-only analytics dashboard.
+- **Push notifications:** New-post pushes for subscribers; comment-reply pushes for owners and threaded participants.
+- **Categories/topics:** Self-tagged; surfaced under Discover.
+- **Subscriber counts:** Publicly visible on the channel profile.
+- **Multiple admins:** Yes (post-2014 web portal feature).
+- **Pinned / scheduled posts:** Not a first-class feature (Telegram added both; BBM did not).
+- **Reposts:** First-class "repost to my channel" action, promoted as a discovery driver.
+- **Threaded comments:** Added 2014 with per-thread notifications.
+- **Reactions:** Like-style reactions on posts.
+
+### 19.5 Post-mortem
+
+**Timeline.**
+- May 2013: Beta on BlackBerry devices.
+- Feb 2014: Cross-platform launch with BBM 2.0 ([TechCrunch](https://techcrunch.com/2014/02/13/bbm-update-adds-voice-calls-channels-dropbox-and-location-sharing-for-ios-and-android-users/)).
+- Jun 2016: Indonesia's **Emtek** acquires BBM consumer licensing in a 6-year, $207M deal.
+- Jun 27, 2018: Channels and the paid BBM Shop discontinued on BB10/BBOS; alive on Android/iOS under Emtek.
+- Apr 18, 2019: Emtek announces full consumer-BBM shutdown for May 31 ([TechCrunch](https://techcrunch.com/2019/04/18/the-consumer-version-of-bbm-is-shutting-down-on-may-31/); [Android Authority](https://www.androidauthority.com/bbm-blackberry-messenger-shuts-down-may-31-977490/)).
+- **May 31, 2019:** Consumer BBM (and Channels) goes dark. BBM Enterprise survives as a paid BlackBerry UEM SKU ([CBS NY](https://www.cbsnews.com/newyork/news/blackberry-messenger-shut-down/); [Trusted Reviews](https://www.trustedreviews.com/news/bbm-blackberry-messenger-shut-down-3699034)).
+
+**Why it died (industry consensus):**
+- **Platform decline came first, feature dependency second.** BBM lost the messaging war by 2016; Channels inherited its fate.
+- **Emtek bloat anti-pattern.** Post-mortems argue the Emtek-era addition of *channels, games, and ads* made BBM feel bloated — the opposite of WhatsApp's deliberate minimalism ([Android Authority](https://www.androidauthority.com/bbm-blackberry-messenger-shuts-down-may-31-977490/); [KitGuru](https://www.kitguru.net/lifestyle/mobile/damien-cox/emtek-is-closing-down-bbm-for-good-as-blackberry-publicly-releases-its-enterprise-messenger/)).
+- **Single-country dependency.** By Jan 2018, BBM had 63M MAU concentrated in Indonesia. Emtek couldn't grow beyond it.
+- **Feature lag.** No native video / polls / stories → brand spend migrated to Instagram and WhatsApp.
+
+**Lessons for Relay v2+ Channels:**
+1. Don't ship Channels until 1:1 + group has product-market fit; Channels rides on existing engagement.
+2. Resist "channels + games + ads" bundling. Keep Channels feature-pure.
+3. Polls + native video are table stakes today. Don't ship without them.
+4. Discovery is the moat — invest in trending/category surfaces, not just a hand-curated Featured rail.
+5. The chat-hours bridge between broadcast and 1:1 is an underused idea worth resurrecting.
+
+### 19.6 Adapting to the Relay stack (Workers + D1 + DOs + R2)
+
+**Channel as a Durable Object.** One named DO per channel (`CHANNEL_DO.idFromName(channelId)`) owns:
+- post sequencing (monotonic `post_seq` counter in DO storage),
+- the subscriber WebSocket fan-out using **Hibernatable WebSockets** so idle channels burn no CPU (one DO holds thousands of sockets — [DO docs](https://developers.cloudflare.com/durable-objects/)),
+- moderation state (banned PINs, pending-approval queue),
+- the per-channel SQLite store for hot post cache and counters.
+
+Mirrors the per-room DO pattern in Cloudflare's [DO examples](https://developers.cloudflare.com/durable-objects/examples/) and community work like [jw-12138/durable-objects-channel](https://github.com/jw-12138/durable-objects-channel/).
+
+**D1 as system of record.**
+
+```sql
+channels(channel_pin PK, owner_pin, title, description, category, verified, created_at)
+channel_admins(channel_pin, admin_pin, role)
+channel_subscriptions(channel_pin, subscriber_pin, joined_at, muted) -- subscription edge
+channel_posts(channel_pin, post_seq, author_pin, body, media_r2_key, created_at, deleted_at)
+  -- composite PK (channel_pin, post_seq) aligns with DO sequencer
+channel_comments(channel_pin, post_seq, comment_id, parent_comment_id, author_pin, body, status)
+  -- status: 'pending' | 'approved' | 'rejected'
+channel_reports(target_type, target_id, reporter_pin, reason, created_at)
+channel_chat_hours(channel_pin, day_of_week, start_utc, end_utc)
+```
+
+Shard by `channel_pin` hash if you outgrow a single D1.
+
+**Fan-out via the existing `outbound_events` queue.** Reuse, don't reinvent. On `POST /channels/{pin}/posts`:
+1. Worker authenticates author, writes post to D1.
+2. Worker calls the channel DO to assign `post_seq` and push to live WebSocket subscribers.
+3. Channel DO enqueues a single `channel.post.created` event into `outbound_events`.
+4. A consumer worker reads the event and **fan-outs via batched queue messages** — one message per N subscribers, or one per shard.
+
+For >100k subscriber channels: **two-tier fan-out**. Channel DO posts a fan-out command `(channel_pin, post_seq)`; sharded fan-out workers each read a hashed subscriber range and emit pushes.
+
+**R2 for channel media.** Direct-to-R2 upload via signed URL → `r2://relay-channel-media/{channel_pin}/{post_seq}/{filename}`. Persist key on `channel_posts.media_r2_key`. Public-read bucket fronted by a Worker enforcing channel-private vs public visibility. For video, layer **Cloudflare Stream** in front for HLS.
+
+**Channel PIN format.** Keep BBM's `C`-prefix. Cheap deeplink (`relay://channel/C0030899F`) and printable QR for offline marketing come for free.
+
+**Verification.** `verified BOOLEAN, verified_at TIMESTAMP` on `channels`, gated behind a server-only admin endpoint; small badge next to title in client.
+
+**Discovery.**
+- **Featured / Trending:** materialized view in D1, recomputed every N minutes by a scheduled Worker from post counts + subscriber growth (last 24h).
+- **Search:** D1 FTS5 on `channels(title, description)`. Fine for the first 10k channels; graduate later.
+- **Category browse:** `WHERE category = ?`.
+
+**Moderation primitives day-one:** soft-delete via `deleted_at`; per-channel PIN-blocklist (BBM had to retrofit this — don't); comment approval queue via `channel_comments.status`; global report sink with reporter throttling.
+
+**Push.** Reuse Relay's existing 1:1 push pipeline (already E7-done). Add `channel_subscriptions.muted` and per-channel notification preferences (all posts / mentions / owner-only).
+
+**Scheduled chat hours (the BBM differentiator worth keeping).** `channel_chat_hours` table; "DM the owner" button gated client- and server-side against current UTC window. Cheap to ship, and nobody else has it.
+
+**Explicitly NOT in v2:** multi-admin (do single-owner first), Hootsuite-style external integrations, ads.
+
+### 19.7 Primary citations
+
+- Engadget – [BBM Channels announced (14 May 2013)](https://www.engadget.com/2013/05/14/blackberry-announces-bbm-channels/)
+- Engadget – [Channels + Voice on Android/iPhone (13 Feb 2014)](https://www.engadget.com/2014-02-13-bbm-channels-and-voice-come-to-android-and-iphone.html)
+- TechCrunch – [BBM 2.0 update (13 Feb 2014)](https://techcrunch.com/2014/02/13/bbm-update-adds-voice-calls-channels-dropbox-and-location-sharing-for-ios-and-android-users/)
+- TechCrunch – [85M MAU / 500k channels (28 Mar 2014)](https://techcrunch.com/2014/03/28/bbm-usage/)
+- TechCrunch – [Consumer BBM shutdown (18 Apr 2019)](https://techcrunch.com/2019/04/18/the-consumer-version-of-bbm-is-shutting-down-on-may-31/)
+- Android Authority – [BBM shuts down May 31](https://www.androidauthority.com/bbm-blackberry-messenger-shuts-down-may-31-977490/)
+- CBS New York – [BlackBerry Messenger officially extinct](https://www.cbsnews.com/newyork/news/blackberry-messenger-shut-down/)
+- Trusted Reviews – [RIP BBM](https://www.trustedreviews.com/news/bbm-blackberry-messenger-shut-down-3699034)
+- KitGuru – [Emtek closing down BBM](https://www.kitguru.net/lifestyle/mobile/damien-cox/emtek-is-closing-down-bbm-for-good-as-blackberry-publicly-releases-its-enterprise-messenger/)
+- CrackBerry – [BBM Channels hub](https://crackberry.com/bbm-channels)
+- CrackBerry – [How to use BBM Channels on BB10](https://crackberry.com/how-use-bbm-channels)
+- CrackBerry – [Multiple admin feature](https://crackberry.com/multiple-admins-bbm-channels-now-available)
+- CrackBerry – [Chat hours + threaded comments](https://crackberry.com/bbm-channels-updated-set-chatting-hours-threaded-conversations-and-more)
+- CrackBerry – [Block comments with PINs](https://crackberry.com/bbm-channels-udpated-brings-ability-block-comments-pins)
+- CrackBerry – [Channel PIN badge for websites](https://crackberry.com/create-channel-pin-badge-your-website-blog-using-bbm-channels-manager)
+- CrackBerry – [Exploring PIN culture](https://crackberry.com/exploring-pin-culture)
+- CrackBerry – [Emtek consumer-BBM closure](https://crackberry.com/emtek-consumer-bbm)
+- CrackBerry forums – [URL for BBM PINs / Channels?](https://forums.crackberry.com/general-bbm-chat-f404/url-bbm-pins-channels-1076886/)
+- BlackBerry – [BBM Channel Terms](https://www.blackberry.com/us/en/legal/bbm-channel-terms/bbm-channel-terms)
+- BlackBerry – [Content Guidelines (PDF)](https://www.blackberry.com/content/dam/blackberry-com/Documents/pdf/legal/bbm-channels-content-guidelines/BBM_Channels_Content_Guidelines_Polish.pdf)
+- BlackBerry blogs – [Getting Started with BBM Channels (Nov 2013)](https://blogs.blackberry.com/en/2013/11/getting-started-with-bbm-channels)
+- Wikipedia – [BBM (software)](https://en.wikipedia.org/wiki/BBM_(software))
+- Telegram – [Channels: Broadcasting Done Right (Sept 2015)](https://telegram.org/blog/channels)
+- Meta – [Instagram Broadcast Channels (Feb 2023)](https://about.fb.com/news/2023/02/instagram-broadcast-channels-creators-deepen-connections-with-followers/)
+- Meta – [WhatsApp Channels global (Sept 2023)](https://about.fb.com/news/2023/09/whatsapp-channels-global-launch/)
+- TechCrunch – [WhatsApp Channels global (13 Sept 2023)](https://techcrunch.com/2023/09/13/whatsapp-is-launching-its-channels-feature-globally/)
+- Cloudflare – [Durable Objects overview](https://developers.cloudflare.com/durable-objects/)
+- Cloudflare – [DO examples](https://developers.cloudflare.com/durable-objects/examples/)
+- GitHub – [jw-12138/durable-objects-channel](https://github.com/jw-12138/durable-objects-channel/)
+
+---
+
 *End of spec. v2 — Google OAuth, two-DO hibernating realtime, offline-correct D/R, BBM-grade UX. Print this. Tape it to your monitor. Ship Session 1 this weekend.*
