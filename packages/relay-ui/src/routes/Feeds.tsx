@@ -83,7 +83,7 @@ export function Feeds() {
           </div>
         </Block>
       ) : (
-        <List strongIos insetIos>
+        <List strong inset>
           {statuses.map((s) => (
             <ListItem
               key={s.userId}

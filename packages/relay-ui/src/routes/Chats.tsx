@@ -140,7 +140,7 @@ export function Chats() {
           );
         }
         return (
-          <List strongIos insetIos>
+          <List strong inset>
             {visible.map((c) => {
               const isGroup = c.type === 'group';
             const peerOnline = c.peer ? presence[c.peer.id]?.online ?? false : false;

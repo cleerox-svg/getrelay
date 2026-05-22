@@ -85,7 +85,7 @@ export function NewGroup() {
         }
       />
 
-      <List strongIos insetIos>
+      <List strong inset>
         <ListInput
           label="Subject"
           type="text"
@@ -96,7 +96,7 @@ export function NewGroup() {
         />
       </List>
 
-      <List strongIos insetIos>
+      <List strong inset>
         <ListInput
           type="text"
           placeholder="Search contacts"
@@ -116,7 +116,7 @@ export function NewGroup() {
         {selectedIds.length} selected
       </Block>
 
-      <List strongIos insetIos>
+      <List strong inset>
         {filtered.length === 0 ? (
           <ListItem
             title={
