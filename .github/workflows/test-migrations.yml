@@ -1,0 +1,58 @@
+name: Test relay-worker migrations
+
+# Lint and functionally apply migrations before merge. Triggered on
+# pull requests that touch the worker schema or migrations folder so
+# we never push a migration like PR #75 / #76 to prod without first
+# checking that:
+#
+#   - it doesn't use D1-forbidden patterns (BEGIN TRANSACTION,
+#     PRAGMA foreign_keys=ON/OFF, SAVEPOINT, ATTACH)
+#   - it actually applies cleanly to a local D1 with referencing
+#     rows present, AND preserves those rows (catches silent
+#     ON DELETE CASCADE data loss during table rebuilds)
+
+on:
+  pull_request:
+    paths:
+      - "packages/relay-worker/src/schema.sql"
+      - "packages/relay-worker/migrations/**"
+      - "packages/relay-worker/scripts/lint-migrations.sh"
+      - "packages/relay-worker/scripts/test-migrations.sh"
+      - ".github/workflows/test-migrations.yml"
+
+concurrency:
+  # One run per PR head ref so we don't pile up runs on rapid
+  # force-pushes.
+  group: test-migrations-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint migrations for D1-forbidden patterns
+        working-directory: packages/relay-worker
+        run: bash scripts/lint-migrations.sh
+
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Apply schema + migrations to a fresh local D1
+        working-directory: packages/relay-worker
+        run: bash scripts/test-migrations.sh
