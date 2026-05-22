@@ -220,11 +220,13 @@ export type ClientMsg =
       t: 'send';
       tempId: string;
       chatId: string;
-      type: 'text' | 'ping' | 'image' | 'sticker';
+      type: 'text' | 'ping' | 'image';
       body?: string;
       mediaKey?: string;
-      // External media URL. Carries the Giphy CDN URL for image-type
-      // GIFs or the bundled sticker URL for sticker-type messages.
+      // External media URL. Carries Giphy CDN URLs for GIFs and the
+      // bundled-asset URL for stickers. Stickers ride the type='image'
+      // rail; the client discriminates via the /stickers/*.svg URL
+      // pattern (see lib/stickers.ts isStickerUrl).
       mediaUrl?: string;
       replyTo?: string;
     }

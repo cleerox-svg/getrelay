@@ -5,6 +5,7 @@ import { GifPicker } from '../components/GifPicker';
 import { StickerPicker } from '../components/StickerPicker';
 import { GroupAvatar } from '../components/GroupAvatar';
 import { ApiError, api } from '../lib/api';
+import { isStickerUrl } from '../lib/stickers';
 import { useStore } from '../lib/store';
 import type { UiMessage } from '../lib/types';
 
@@ -223,7 +224,9 @@ export function LegacyChat() {
     const mine = m.from === me?.id;
     const recalled = !!m.deletedAt;
     const isPing = m.type === 'ping';
-    const isSticker = m.type === 'sticker';
+    // Stickers ride the type='image' rail; isStickerUrl() picks them
+    // out by URL path (/stickers/*.svg). See lib/stickers.ts.
+    const isSticker = isStickerUrl(m.mediaUrl);
     // GIFs from Giphy carry only mediaUrl (no R2 key). Stickers also
     // carry only mediaUrl but render via their own branch below, so
     // exclude them from the generic media bubble.

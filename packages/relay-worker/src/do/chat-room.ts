@@ -16,11 +16,11 @@ import {
 type PersistInput = {
   senderId: string;
   tempId: string;
-  type: 'text' | 'ping' | 'image' | 'sticker';
+  type: 'text' | 'ping' | 'image';
   body: string | null;
   mediaKey?: string | null;
-  // External media URL. Holds the Giphy CDN URL for image-type GIFs
-  // or the bundled sticker URL for sticker-type messages.
+  // External media URL. Holds Giphy CDN URLs for GIFs and bundled
+  // sticker URLs for stickers (both ride the type='image' rail).
   mediaUrl?: string | null;
   replyTo?: string | null;
 };
@@ -121,18 +121,12 @@ export class ChatRoom implements DurableObject {
 
   // ---------- /persist ----------
   private async persist(input: PersistInput & { chatId?: string }): Promise<Response> {
-    if (
-      input.type !== 'text' &&
-      input.type !== 'ping' &&
-      input.type !== 'image' &&
-      input.type !== 'sticker'
-    ) {
+    if (input.type !== 'text' && input.type !== 'ping' && input.type !== 'image') {
       throw new RoomError('bad_json', 400);
     }
     const isMedia = input.type === 'image';
-    const isSticker = input.type === 'sticker';
     const body =
-      input.type === 'ping' || isSticker ? null : (input.body ?? '').trim() || null;
+      input.type === 'ping' ? null : (input.body ?? '').trim() || null;
     if (input.type === 'text') {
       if (!body || body.length === 0) throw new RoomError('bad_json', 400);
       if (body.length > MAX_BODY_LEN) throw new RoomError('payload_too_large', 413);
@@ -148,16 +142,6 @@ export class ChatRoom implements DurableObject {
       if (body && body.length > MAX_BODY_LEN) {
         throw new RoomError('payload_too_large', 413);
       }
-    }
-    if (isSticker) {
-      // Stickers carry only a mediaUrl pointing at a bundled SVG on the
-      // PWA origin (e.g. https://relay.averrow.com/stickers/wink.svg).
-      // No mediaKey — these aren't R2-hosted. No body — stickers are
-      // standalone.
-      const hasUrl =
-        typeof input.mediaUrl === 'string' &&
-        /^https:\/\/[^\s]+$/.test(input.mediaUrl);
-      if (!hasUrl) throw new RoomError('bad_json', 400);
     }
 
     const chatId = input.chatId ?? (await this.state.storage.get<string>('chatId'));
@@ -177,7 +161,7 @@ export class ChatRoom implements DurableObject {
     const now = Date.now();
     const seq = await this.nextSequence();
     const mediaKey = isMedia ? input.mediaKey ?? null : null;
-    const mediaUrl = isMedia || isSticker ? input.mediaUrl ?? null : null;
+    const mediaUrl = isMedia ? input.mediaUrl ?? null : null;
     // Validate replyTo: must be a non-deleted message in this chat.
     let replyToId: string | null = null;
     let replyPreview: ReplyPreview | null = null;
@@ -448,7 +432,7 @@ export class ChatRoom implements DurableObject {
     targetId: string,
   ): Promise<ReplyPreview | null> {
     const row = await this.env.DB.prepare(
-      `SELECT m.id, m.sender_id, m.message_type, m.body, u.display_name
+      `SELECT m.id, m.sender_id, m.message_type, m.body, m.media_url, u.display_name
        FROM messages m
        JOIN users u ON u.id = m.sender_id
        WHERE m.id = ? AND m.chat_id = ? AND m.deleted_at IS NULL`,
@@ -459,17 +443,20 @@ export class ChatRoom implements DurableObject {
         sender_id: string;
         message_type: string;
         body: string | null;
+        media_url: string | null;
         display_name: string;
       }>();
     if (!row) return null;
     const preview =
       row.message_type === 'image'
-        ? row.body && row.body.trim() ? truncate(row.body, 80) : '📷 Photo'
-        : row.message_type === 'sticker'
+        ? isStickerMediaUrl(row.media_url)
           ? '🌟 Sticker'
-          : row.message_type === 'ping'
-            ? 'PING!!'
-            : truncate(row.body ?? '', 80);
+          : row.body && row.body.trim()
+            ? truncate(row.body, 80)
+            : '📷 Photo'
+        : row.message_type === 'ping'
+          ? 'PING!!'
+          : truncate(row.body ?? '', 80);
     return {
       id: row.id,
       from: row.sender_id,
@@ -554,4 +541,19 @@ function fireAndForget<T>(p: Promise<T>): Promise<void> {
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
   return s.slice(0, max - 1) + '…';
+}
+
+// Stickers are sent as type='image' with a media_url pointing at one of
+// the bundled SVGs served from /stickers/*.svg on the PWA origin. The
+// reply-preview text differs from a regular photo ("🌟 Sticker" vs
+// "📷 Photo"), so we discriminate here. Lives in chat-room rather than
+// a shared lib to keep the DO's import surface tight.
+function isStickerMediaUrl(url: string | null | undefined): boolean {
+  if (!url) return false;
+  try {
+    const path = new URL(url).pathname;
+    return path.startsWith('/stickers/') && path.endsWith('.svg');
+  } catch {
+    return false;
+  }
 }

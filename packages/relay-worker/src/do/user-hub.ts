@@ -272,17 +272,11 @@ export class UserHub implements DurableObject {
     att: Attachment,
     cmd: Extract<ClientMsg, { t: 'send' }>,
   ): Promise<void> {
-    if (
-      cmd.type !== 'text' &&
-      cmd.type !== 'ping' &&
-      cmd.type !== 'image' &&
-      cmd.type !== 'sticker'
-    ) {
+    if (cmd.type !== 'text' && cmd.type !== 'ping' && cmd.type !== 'image') {
       return this.sendError(ws, 'bad_json');
     }
-    const isSticker = cmd.type === 'sticker';
     const body =
-      cmd.type === 'ping' || isSticker ? null : (cmd.body ?? '').trim() || null;
+      cmd.type === 'ping' ? null : (cmd.body ?? '').trim() || null;
     if (cmd.type === 'text') {
       if (!body || body.length === 0) return this.sendError(ws, 'bad_json');
       if (body.length > MAX_BODY_LEN) return this.sendError(ws, 'payload_too_large');
@@ -298,11 +292,6 @@ export class UserHub implements DurableObject {
         return this.sendError(ws, 'payload_too_large');
       }
     }
-    if (isSticker) {
-      const hasUrl =
-        typeof cmd.mediaUrl === 'string' && /^https:\/\/[^\s]+$/.test(cmd.mediaUrl);
-      if (!hasUrl) return this.sendError(ws, 'bad_json');
-    }
 
     const res = await this.callChatRoom(cmd.chatId, '/persist', {
       senderId: att.userId,
@@ -310,7 +299,7 @@ export class UserHub implements DurableObject {
       type: cmd.type,
       body,
       mediaKey: cmd.type === 'image' ? cmd.mediaKey : null,
-      mediaUrl: cmd.type === 'image' || isSticker ? cmd.mediaUrl ?? null : null,
+      mediaUrl: cmd.type === 'image' ? cmd.mediaUrl ?? null : null,
       replyTo: cmd.replyTo ?? null,
       chatId: cmd.chatId,
     });
@@ -474,7 +463,6 @@ async function buildPushPayload(
   const ev = payload as {
     chatId?: string;
     from?: string;
-    type?: string;
     body?: string | null;
     mediaKey?: string | null;
     mediaUrl?: string | null;
@@ -510,14 +498,16 @@ async function buildPushPayload(
   }
 
   // Media-only previews (no caption): icon + label so it reads at a glance.
+  // Stickers ride the type='image' rail with a media_url at /stickers/*.svg;
+  // detect that URL pattern to use the sticker preview instead of "GIF".
   const trimmed = (ev.body ?? '').trim();
   let preview: string;
-  if (ev.type === 'sticker') {
-    preview = '🌟 Sticker';
-  } else if (trimmed.length > 0) {
+  if (trimmed.length > 0) {
     preview = trimmed.slice(0, 140);
   } else if (ev.mediaKey) {
     preview = /\.(mp4|webm|mov)$/i.test(ev.mediaKey) ? '🎬 Video' : '📷 Photo';
+  } else if (ev.mediaUrl && isStickerMediaUrl(ev.mediaUrl)) {
+    preview = '🌟 Sticker';
   } else if (ev.mediaUrl) {
     // External media (Giphy). Read the URL to spot videos; default to GIF.
     preview = /\.(mp4|webm|mov)(\?|$)/i.test(ev.mediaUrl) ? '🎬 Video' : '🎞️ GIF';
@@ -556,4 +546,17 @@ function isErrorCode(s: string): s is ErrorCode {
     'cannot_edit',
     'cannot_recall',
   ].includes(s);
+}
+
+// Stickers ride the type='image' rail with media_url pointing at one of
+// the bundled SVGs (/stickers/*.svg). Detect that here so the push
+// preview reads "🌟 Sticker" instead of the generic "🎞️ GIF" branch.
+function isStickerMediaUrl(url: string | null | undefined): boolean {
+  if (!url) return false;
+  try {
+    const path = new URL(url).pathname;
+    return path.startsWith('/stickers/') && path.endsWith('.svg');
+  } catch {
+    return false;
+  }
 }

@@ -357,6 +357,11 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   sendSticker: (chatId, stickerUrl, replyTo) => {
+    // Stickers ride the type='image' rail; the receiving client picks
+    // sticker vs photo rendering via isStickerUrl(mediaUrl). This keeps
+    // the wire protocol and DB CHECK constraint unchanged while still
+    // giving the UI everything it needs to render stickers without a
+    // bubble.
     const tempId = crypto.randomUUID();
     set((s) => {
       const chat = ensureChat(s, chatId);
@@ -366,7 +371,7 @@ export const useStore = create<AppState>((set, get) => ({
         chatId,
         from: s.me?.id ?? '',
         sequence: null,
-        type: 'sticker',
+        type: 'image',
         body: null,
         mediaKey: null,
         mediaUrl: stickerUrl,
@@ -384,7 +389,7 @@ export const useStore = create<AppState>((set, get) => ({
       t: 'send',
       tempId,
       chatId,
-      type: 'sticker',
+      type: 'image',
       mediaUrl: stickerUrl,
       replyTo,
     });
