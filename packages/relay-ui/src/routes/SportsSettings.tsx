@@ -33,6 +33,8 @@ export function SportsSettings() {
   const [subs, setSubs] = useState<Set<string>>(new Set());
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const loadSports = useStore((s) => s.loadSports);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,6 +60,7 @@ export function SportsSettings() {
   async function commit(next: Set<string>): Promise<void> {
     setSubs(next);
     setSaving(true);
+    setSaveError(null);
     try {
       const payload: SubKey[] = [];
       for (const id of next) {
@@ -66,6 +69,27 @@ export function SportsSettings() {
         payload.push({ league, teamKey: rest.join(':') });
       }
       await api.setSportsSubs(payload);
+      // Refresh the store-level subs so the /sports tab and the
+      // live-game badge see the new follow immediately — without
+      // this they'd stay stale until the next poll tick (30s-5min).
+      loadSports().catch(() => undefined);
+    } catch (err) {
+      // Roll the optimistic UI back to whatever the server says is
+      // truth, and surface a banner so the user knows it didn't
+      // save. Previously this catch was missing and failures were
+      // completely silent — pill flipped, server unchanged, no
+      // feedback (this is what was happening before the PR #91
+      // CORS fix; this catch is the defense-in-depth so the next
+      // failure mode can't ghost us the same way).
+      setSaveError(
+        err instanceof Error ? err.message || 'failed' : 'failed',
+      );
+      try {
+        const { subs: serverSubs } = await api.getSportsSubs();
+        setSubs(new Set(serverSubs.map(subId)));
+      } catch {
+        /* if the GET also fails, leave the optimistic state up */
+      }
     } finally {
       setSaving(false);
     }
@@ -108,6 +132,16 @@ export function SportsSettings() {
           />
         }
       />
+
+      {saveError ? (
+        <Block
+          inset
+          className="!mt-2 text-center text-sm"
+          style={{ color: 'var(--ping)' }}
+        >
+          Couldn't save changes: {saveError}. Try again in a moment.
+        </Block>
+      ) : null}
 
       <BlockTitle>Notifications</BlockTitle>
       <Block strong inset className="!py-0">
