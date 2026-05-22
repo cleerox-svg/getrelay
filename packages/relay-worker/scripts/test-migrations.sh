@@ -71,6 +71,12 @@ echo "== seeding representative rows =="
 # A 1to1 chat for FK satisfaction. A message. A reaction on that
 # message — this is the row whose survival catches FK-CASCADE
 # data loss during a table rebuild.
+#
+# Sports subs: one active NHL sub (MTL) and one defunct NHL sub (ATL,
+# the 1970s Atlanta Flames franchise — gone since 1980). Migration
+# 0004 should delete ATL and leave MTL in place. If a future
+# table-rebuild migration silently drops user_sports_subs via FK
+# CASCADE, both rows would vanish and the MTL assertion would fail.
 run_sql "
 INSERT INTO users (id, google_sub, email, pin, display_name, created_at, last_seen_at) VALUES
   ('u_test_a','gs_a','a@test.local','AAAA1111','Tester A',1700000000000,1700000000000),
@@ -86,6 +92,11 @@ INSERT INTO receipts (message_id, recipient_id, delivered_at, read_at) VALUES
   ('m_test','u_test_b',1700000000001,NULL);
 INSERT INTO message_reactions (message_id, user_id, emoji, created_at) VALUES
   ('m_test','u_test_b','👍',1700000000002);
+INSERT INTO user_sports_subs (user_id, league, team_key, created_at) VALUES
+  ('u_test_a','NHL','MTL',1700000000000),
+  ('u_test_a','NHL','ATL',1700000000000),
+  ('u_test_a','MLB','141',1700000000000),
+  ('u_test_a','MLB','999',1700000000000);
 "
 
 echo "== applying migrations in order =="
@@ -113,6 +124,17 @@ assert_eq "users count includes seeded" "2" \
   "$(scalar "SELECT COUNT(*) AS v FROM users WHERE id IN ('u_test_a','u_test_b')")"
 assert_eq "chat_participants for c_test" "2" \
   "$(scalar "SELECT COUNT(*) AS v FROM chat_participants WHERE chat_id = 'c_test'")"
+
+# Migration 0004 should have deleted the defunct subs (ATL Flames /
+# MLB id 999) while leaving the active ones (MTL / 141) intact.
+assert_eq "active NHL sub (MTL) survived" "1" \
+  "$(scalar "SELECT COUNT(*) AS v FROM user_sports_subs WHERE user_id = 'u_test_a' AND league = 'NHL' AND team_key = 'MTL'")"
+assert_eq "defunct NHL sub (ATL) deleted" "0" \
+  "$(scalar "SELECT COUNT(*) AS v FROM user_sports_subs WHERE user_id = 'u_test_a' AND league = 'NHL' AND team_key = 'ATL'")"
+assert_eq "active MLB sub (141 = Blue Jays) survived" "1" \
+  "$(scalar "SELECT COUNT(*) AS v FROM user_sports_subs WHERE user_id = 'u_test_a' AND league = 'MLB' AND team_key = '141'")"
+assert_eq "defunct MLB sub (999 = bogus) deleted" "0" \
+  "$(scalar "SELECT COUNT(*) AS v FROM user_sports_subs WHERE user_id = 'u_test_a' AND league = 'MLB' AND team_key = '999'")"
 
 echo ""
 echo "All migrations applied cleanly with no data loss."

@@ -156,7 +156,14 @@ export const api = {
   listFeed: () => request<{ statuses: ContactStatus[] }>('/feed'),
   getSports: () =>
     request<{ games: SportsGame[]; subs: SportsSub[] }>('/sports'),
-  getSportsTeams: () => request<SportsTeamLists>('/sports/teams'),
+  // ?v=2 is a client-side cache-bust to match the worker-side cache
+  // key bump in PR #81 — without it, browsers that loaded the defunct-
+  // team list before the worker fix can keep serving that response
+  // from their HTTP cache for up to 24h. Bumping the query param
+  // makes the URL distinct from the browser cache's perspective so it
+  // refetches immediately. (The worker doesn't read this param; it
+  // serves the response from its internal `?v=2`-keyed cache entry.)
+  getSportsTeams: () => request<SportsTeamLists>('/sports/teams?v=2'),
   getSportsGame: (league: 'nhl' | 'mlb', id: string, teamKey?: string) => {
     const params = new URLSearchParams();
     if (teamKey) {
