@@ -117,6 +117,15 @@ jobs:
           sed -i -E 's/compileSdkVersion = [0-9]+/compileSdkVersion = 35/' android/variables.gradle
           sed -i -E 's/targetSdkVersion = [0-9]+/targetSdkVersion = 35/' android/variables.gradle
           grep -E "compileSdkVersion|targetSdkVersion" android/variables.gradle
+          # Declare CAMERA permission so the WebView's getUserMedia
+          # (used by the in-app QR scanner) can trigger Android's
+          # runtime permission prompt. Capacitor's BridgeWebChromeClient
+          # auto-handles the WebView side once the manifest declares it.
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          if ! grep -q "android.permission.CAMERA" "$MANIFEST"; then
+            sed -i 's#</manifest>#    <uses-permission android:name="android.permission.CAMERA" />\n</manifest>#' "$MANIFEST"
+          fi
+          grep "uses-permission" "$MANIFEST"
           # Replace the default Capacitor template launcher icon + splash
           # with the Relay brand mark. Reads packages/relay-ui/assets/ and
           # writes adaptive icons + splash drawables into

@@ -15,6 +15,7 @@ import {
 } from 'konsta/react';
 import { Avatar } from '../components/Avatar';
 import { PinDisplay } from '../components/PinDisplay';
+import { QrCodeDisplay } from '../components/QrCodeDisplay';
 import { ApiError, api } from '../lib/api';
 import { setLegacyUi, useLegacyUi } from '../lib/legacy';
 import {
@@ -237,6 +238,17 @@ export function Profile() {
           }
         />
       </List>
+
+      <BlockTitle>Add me on Relay</BlockTitle>
+      <Block strong inset>
+        <QrCodeDisplay pin={me.pin} />
+        <div
+          className="text-center text-sm"
+          style={{ color: 'var(--text-dim)', marginTop: 12 }}
+        >
+          Anyone with the Relay app can scan this to add you.
+        </div>
+      </Block>
 
       <BlockTitle>Display</BlockTitle>
       <List strong inset>

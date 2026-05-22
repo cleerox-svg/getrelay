@@ -79,6 +79,7 @@ export function App() {
             <Route path="/chats/:id" element={legacy ? <LegacyChat /> : <Chat />} />
             <Route path="/contacts/:id" element={<ContactProfile />} />
             <Route path="/add-contact" element={<AddContact />} />
+            <Route path="/add" element={<AddContact />} />
             <Route path="/new-group" element={<NewGroup />} />
             <Route path="/profile" element={<Profile />} />
             <Route path="/sports/:league/:id" element={<SportsDetail />} />
