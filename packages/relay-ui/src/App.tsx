@@ -10,6 +10,7 @@ import { Chat } from './routes/Chat';
 import { Chats } from './routes/Chats';
 import { ContactProfile } from './routes/ContactProfile';
 import { Contacts } from './routes/Contacts';
+import { EditGroup } from './routes/EditGroup';
 import { Feeds } from './routes/Feeds';
 import { GroupInfo } from './routes/GroupInfo';
 import { LegacyChat } from './routes/LegacyChat';
@@ -85,6 +86,7 @@ export function App() {
             <Route path="/new-group" element={<NewGroup />} />
             <Route path="/groups/:id" element={<GroupInfo />} />
             <Route path="/groups/:id/add" element={<AddGroupMembers />} />
+            <Route path="/groups/:id/edit" element={<EditGroup />} />
             <Route path="/profile" element={<Profile />} />
             <Route path="/sports/:league/:id" element={<SportsDetail />} />
             <Route path="/settings/sports" element={<SportsSettings />} />

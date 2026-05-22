@@ -214,6 +214,38 @@ export const api = {
     request<{ members: GroupMember[] }>(
       `/chats/${encodeURIComponent(chatId)}/members`,
     ),
+  renameGroup: (chatId: string, subject: string) =>
+    request<{ ok: boolean; subject: string }>(
+      `/chats/${encodeURIComponent(chatId)}`,
+      { method: 'PATCH', body: JSON.stringify({ subject }) },
+    ),
+  uploadGroupAvatar: async (
+    chatId: string,
+    file: File,
+  ): Promise<{ ok: boolean; key: string }> => {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(
+      `${API_BASE}/chats/${encodeURIComponent(chatId)}/avatar`,
+      { method: 'POST', credentials: 'include', body: form },
+    );
+    if (!res.ok) {
+      let code = 'http_error';
+      try {
+        const b = (await res.json()) as { error?: string };
+        if (b.error) code = b.error;
+      } catch {
+        /* ignore */
+      }
+      throw new ApiError(res.status, code);
+    }
+    return (await res.json()) as { ok: boolean; key: string };
+  },
+  removeGroupAvatar: (chatId: string) =>
+    request<{ ok: true }>(
+      `/chats/${encodeURIComponent(chatId)}/avatar`,
+      { method: 'DELETE' },
+    ),
   listChatMessages: (chatId: string, opts?: { before?: number; limit?: number }) => {
     const qs = new URLSearchParams();
     if (opts?.before != null) qs.set('before', String(opts.before));

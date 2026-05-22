@@ -15,13 +15,40 @@ function hashIndex(s: string, modulo: number): number {
 
 interface Props {
   subject: string;
+  // Optional uploaded group avatar (already-resolved URL from
+  // `chat.avatarUrl`). When present, renders as a rounded-square
+  // image. Falls back to the hashed-letter tile when null/undefined.
+  src?: string | null;
   size?: number;
 }
 
-export function GroupAvatar({ subject, size = 44 }: Props) {
+export function GroupAvatar({ subject, src, size = 44 }: Props) {
   const trimmed = subject.trim();
   const letter = (trimmed[0] ?? '#').toUpperCase();
   const bg = PALETTE[hashIndex(trimmed || 'group', PALETTE.length)] ?? '#8E8E93';
+  const radius = Math.round(size * 0.28);
+
+  if (src) {
+    return (
+      <img
+        src={src}
+        alt=""
+        referrerPolicy="no-referrer"
+        style={{
+          width: size,
+          height: size,
+          borderRadius: radius,
+          objectFit: 'cover',
+          display: 'inline-block',
+          flex: '0 0 auto',
+          // Mirror the depth treatment we apply to image-variant
+          // user avatars so groups feel consistent in the chat list.
+          boxShadow:
+            'inset 0 0 0 1px rgba(255,255,255,0.10), 0 1px 2px rgba(0,0,0,0.18)',
+        }}
+      />
+    );
+  }
 
   return (
     <span

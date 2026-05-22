@@ -64,6 +64,14 @@ CREATE TABLE IF NOT EXISTS chats (
   id TEXT PRIMARY KEY,
   type TEXT NOT NULL CHECK(type IN ('1to1','group')),
   subject TEXT,
+  -- Group avatar. Both nullable: a fresh group has neither, the
+  -- client renders the hashed-letter GroupAvatar fallback in that
+  -- case. avatar_r2_key is the canonical store (uploaded image
+  -- lives in the AVATARS bucket under ga-<uuid>.<ext>); avatar_url
+  -- is reserved for any future external-url variant (eg cropped
+  -- preset) and is currently unused.
+  avatar_url TEXT,
+  avatar_r2_key TEXT,
   created_by TEXT NOT NULL REFERENCES users(id),
   created_at INTEGER NOT NULL
 );

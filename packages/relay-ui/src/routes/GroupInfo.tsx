@@ -79,18 +79,33 @@ export function GroupInfo() {
             onClick={() => nav(`/chats/${encodeURIComponent(chatId)}`)}
           />
         }
+        right={
+          <button
+            type="button"
+            onClick={() => nav(`/groups/${encodeURIComponent(chatId)}/edit`)}
+            className="pill-link"
+          >
+            Edit
+          </button>
+        }
       />
 
       <Block strong inset className="text-center">
-        <div className="flex flex-col items-center gap-3 py-2">
-          <GroupAvatar subject={chat?.subject ?? 'Group'} size={84} />
+        <button
+          type="button"
+          onClick={() => nav(`/groups/${encodeURIComponent(chatId)}/edit`)}
+          aria-label="Edit group"
+          className="flex flex-col items-center gap-3 py-2 w-full"
+          style={{ background: 'transparent', border: 0, padding: 0, cursor: 'pointer' }}
+        >
+          <GroupAvatar subject={chat?.subject ?? 'Group'} src={chat?.avatarUrl} size={84} />
           <div className="text-xl font-bold" style={{ color: 'var(--text)' }}>
             {chat?.subject ?? 'Group'}
           </div>
           <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
             {chat?.memberCount ?? members?.length ?? '–'} members
           </div>
-        </div>
+        </button>
       </Block>
 
       <Block inset>

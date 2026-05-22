@@ -80,6 +80,18 @@ export type ServerMsg =
       userId: string;
     }
   | {
+      // Sent to every current member of a group after the subject
+      // or avatar changes (PATCH /chats/:id, POST/DELETE
+      // /chats/:id/avatar). Includes the new state so the receiver
+      // can update local chat metadata without a separate /chats
+      // refetch. The editor receives it too — supports the
+      // "edit on device A, see on device B" multi-device case.
+      t: 'group_updated';
+      chatId: string;
+      subject: string | null;
+      avatarUrl: string | null;
+    }
+  | {
       t: 'reaction';
       chatId: string;
       messageId: string;

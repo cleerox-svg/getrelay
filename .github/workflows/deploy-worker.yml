@@ -132,6 +132,21 @@ jobs:
             echo "messages.media_url column already present"
           fi
 
+          # Group avatar columns on chats. Both nullable so existing
+          # rows don't need backfill — clients render the hashed-letter
+          # GroupAvatar fallback whenever both are null.
+          for col in avatar_url avatar_r2_key; do
+            probe=$(pnpm exec wrangler d1 execute relay-db --remote --json \
+              --command "SELECT name FROM pragma_table_info('chats') WHERE name='${col}';")
+            if ! echo "$probe" | jq -e '.[0].results | length > 0' > /dev/null; then
+              echo "Adding chats.${col} column"
+              pnpm exec wrangler d1 execute relay-db --remote \
+                --command "ALTER TABLE chats ADD COLUMN ${col} TEXT;"
+            else
+              echo "chats.${col} column already present"
+            fi
+          done
+
           # Per-event sports notification toggles. Each runs against
           # pragma_table_info so re-applying is a no-op.
           for col in sports_notify_start sports_notify_score sports_notify_final; do
