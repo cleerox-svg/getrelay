@@ -110,6 +110,24 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ pin }),
     }),
+  listBlocks: () =>
+    request<{
+      blocked: {
+        id: string;
+        pin: string;
+        displayName: string;
+        statusMessage: string | null;
+        avatarUrl: string | null;
+        blockedAt: number;
+      }[];
+    }>('/me/blocks'),
+  blockUser: (userId: string) =>
+    request<{ ok: true }>('/me/blocks', {
+      method: 'POST',
+      body: JSON.stringify({ userId }),
+    }),
+  unblockUser: (userId: string) =>
+    request<{ ok: true }>(`/me/blocks/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
   listChats: () => request<{ chats: Chat[] }>('/chats'),
   openOneToOne: (contactId: string) =>
     request<{ id: string; type: '1to1'; createdAt: number; created: boolean }>('/chats/1to1', {

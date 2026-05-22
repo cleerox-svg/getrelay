@@ -137,3 +137,16 @@ CREATE TABLE IF NOT EXISTS kv_state (
   value TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+-- A blocks B: hides B from A's contact list / chats / status feed and
+-- causes the message gateway to drop new direct messages from B → A.
+-- One-directional by design — the blocked party doesn't know they
+-- were blocked.
+CREATE TABLE IF NOT EXISTS user_blocks (
+  blocker_id TEXT NOT NULL REFERENCES users(id),
+  blocked_id TEXT NOT NULL REFERENCES users(id),
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (blocker_id, blocked_id)
+);
+CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON user_blocks(blocker_id);
+CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON user_blocks(blocked_id);

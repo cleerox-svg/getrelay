@@ -92,6 +92,7 @@ self.addEventListener('push', (event) => {
     const title = data.title || 'Relay';
     const body = data.body || '';
     const chatId = data.chatId || '';
+    const url = typeof data.url === 'string' ? data.url : '';
     const tag = data.tag || chatId || 'relay-message';
 
     // If a Relay tab is currently focused on THIS device, silence the
@@ -120,7 +121,7 @@ self.addEventListener('push', (event) => {
         silent: focused,
         icon: '/icon-192.png',
         badge: '/icon-192.png',
-        data: { chatId },
+        data: { chatId, url },
       });
     } catch (err) {
       // Last-ditch fallback so Chrome doesn't revoke the sub.
@@ -135,10 +136,17 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const chatId = event.notification.data?.chatId || '';
-  const targetPath = chatId
-    ? `/chats/${encodeURIComponent(chatId)}`
-    : '/chats';
+  const data = event.notification.data || {};
+  // Prefer an explicit deep-link path when the producer set one
+  // (e.g. /sports/nhl/:id). Falls back to the chat that fired the
+  // push, or the chats list when there's nothing better.
+  const explicitUrl = typeof data.url === 'string' ? data.url : '';
+  const chatId = data.chatId || '';
+  const targetPath = explicitUrl
+    ? explicitUrl
+    : chatId
+      ? `/chats/${encodeURIComponent(chatId)}`
+      : '/chats';
 
   event.waitUntil(
     (async () => {

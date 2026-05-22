@@ -45,6 +45,16 @@ export function Profile() {
   const [pushError, setPushError] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<PushTestResult[] | null>(null);
   const [testing, setTesting] = useState(false);
+  const [blocked, setBlocked] = useState<
+    {
+      id: string;
+      pin: string;
+      displayName: string;
+      statusMessage: string | null;
+      avatarUrl: string | null;
+      blockedAt: number;
+    }[]
+  >([]);
   const legacyOn = useLegacyUi();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const nav = useNavigate();
@@ -52,7 +62,17 @@ export function Profile() {
   useEffect(() => {
     setThemeMode(getTheme());
     currentPushState().then(setPushState).catch(() => undefined);
+    api.listBlocks().then((r) => setBlocked(r.blocked)).catch(() => undefined);
   }, []);
+
+  async function unblock(userId: string) {
+    try {
+      await api.unblockUser(userId);
+      setBlocked((bs) => bs.filter((b) => b.id !== userId));
+    } catch {
+      /* ignore */
+    }
+  }
 
   async function runPushTest() {
     setTesting(true);
@@ -477,6 +497,30 @@ export function Profile() {
           </a>
         </div>
       </Block>
+
+      {blocked.length > 0 ? (
+        <>
+          <BlockTitle>Blocked users</BlockTitle>
+          <List strongIos insetIos>
+            {blocked.map((b) => (
+              <ListItem
+                key={b.id}
+                media={<Avatar src={b.avatarUrl} name={b.displayName} size={36} />}
+                title={b.displayName}
+                after={
+                  <button
+                    onClick={() => unblock(b.id)}
+                    className="text-sm font-medium"
+                    style={{ color: 'var(--accent)' }}
+                  >
+                    Unblock
+                  </button>
+                }
+              />
+            ))}
+          </List>
+        </>
+      ) : null}
 
       <Block className="mt-6">
         <Button

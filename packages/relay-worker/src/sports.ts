@@ -436,6 +436,7 @@ interface SportsEvent {
   title: string;
   body: string;
   tag: string;
+  url?: string; // deep-link path for the SW's notificationclick handler
 }
 
 export async function runSportsCron(env: Env): Promise<void> {
@@ -497,6 +498,9 @@ async function processGameUpdate(env: Env, ymd: string, g: Game): Promise<void> 
   const events: SportsEvent[] = [];
   const emoji = g.league === 'NHL' ? '🏒' : '⚾';
   const goalWord = g.league === 'NHL' ? 'goal' : 'score';
+  // Deep-link target — empty when the upstream API didn't expose the
+  // game id (shouldn't happen in practice; the SW falls back to /chats).
+  const url = g.id ? `/sports/${g.league.toLowerCase()}/${g.id}` : undefined;
 
   const ours = g.ourSide === 'home' ? g.homeTeam : g.awayTeam;
   const theirs = g.ourSide === 'home' ? g.awayTeam : g.homeTeam;
@@ -510,12 +514,14 @@ async function processGameUpdate(env: Env, ymd: string, g: Game): Promise<void> 
       title: `${emoji} ${ours.name} ${goalWord}!`,
       body: `${ours.abbr} ${ourScore} – ${theirScore} ${theirs.abbr} · ${g.statusDetail}`,
       tag: `sports-${g.league}-score`,
+      url,
     });
   } else if (theirScore > prevTheirScore) {
     events.push({
       title: `${emoji} ${theirs.name} ${goalWord}`,
       body: `${ours.abbr} ${ourScore} – ${theirScore} ${theirs.abbr} · ${g.statusDetail}`,
       tag: `sports-${g.league}-score`,
+      url,
     });
   }
 
@@ -525,6 +531,7 @@ async function processGameUpdate(env: Env, ymd: string, g: Game): Promise<void> 
       title: won ? `${emoji} ${ours.name} win!` : `${emoji} ${ours.name} fall`,
       body: `Final · ${ours.abbr} ${ourScore} – ${theirScore} ${theirs.abbr}`,
       tag: `sports-${g.league}-final`,
+      url,
     });
   }
 

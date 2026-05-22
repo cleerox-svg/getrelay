@@ -21,11 +21,12 @@ export function statusRoutes() {
               OR u.id IN (SELECT contact_id FROM contacts WHERE owner_id = ?))
          AND u.status_message IS NOT NULL
          AND TRIM(u.status_message) != ''
+         AND u.id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = ?)
        ORDER BY (u.id = ?) DESC,
                 COALESCE(u.last_seen_at, 0) DESC,
                 u.display_name ASC`,
     )
-      .bind(me.id, me.id, me.id)
+      .bind(me.id, me.id, me.id, me.id)
       .all<{
         id: string;
         display_name: string;
