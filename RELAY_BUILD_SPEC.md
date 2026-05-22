@@ -33,19 +33,25 @@ No blind fixes. No bandaids. No partial implementations that "we'll come back to
 **Name:** Relay
 **Tagline candidate:** *"Your PIN. Your line. No phone number required."*
 
-### Palette (locked)
+### Palette
 
-| Token | Hex | Usage |
-|---|---|---|
-| `--bg` | `#0A0A0E` | Page background (near-black) |
-| `--surface` | `#15151C` | Incoming chat bubble |
-| `--surface-2` | `#1F1F28` | Input fields, cards |
-| `--text` | `#F2F2F5` | Primary text |
-| `--text-dim` | `#8A8A95` | Secondary text, timestamps |
-| `--accent` | `#FF5C2A` | Relay Signal Orange — primary action, outgoing bubble tint |
-| `--receipt-d` | `#8A8A95` | Delivered receipt (dim) |
-| `--receipt-r` | `#FF5C2A` | Read receipt (signal orange) |
-| `--online` | `#00D964` | Presence dot |
+The brand mark (launcher icon, favicon, splash, og:image) is **Averrow red `#C83C3C`** — the same red the parent brand uses. That gives Relay a visible family link without forcing red chrome onto a chat app, which would fight platform conventions.
+
+In-app chrome (nav, tab bar, messagebar, bubbles) is themed by **Konsta UI** with iOS-native system colors. The PWA manifest pins `theme_color` and `background_color` to `#0A0A0E` so the OS chrome around the install matches the dark theme.
+
+Custom tokens defined in `src/styles/global.css` for the bits Konsta doesn't paint (Avatar, PinDisplay, Receipt, PingChip, animations, caret):
+
+| Token | Light | Dark | Usage |
+|---|---|---|---|
+| `--accent` | `#007AFF` | `#0A84FF` | iOS system blue — caret, primary action affordances, R-receipt |
+| `--receipt-d` | `#6E6E73` | (inherits) | iOS systemGray — Delivered receipt glyph |
+| `--receipt-r` | `#007AFF` | `#0A84FF` | iOS system blue — Read receipt glyph |
+| `--online` | `#34C759` | `#30D158` | iOS system green — presence dot |
+| `--ping` | `#FF3B30` | `#FF453A` | iOS system red — PING!! attention color |
+| `--red` | `#C83C3C` | (same) | Averrow brand red — shared with launcher icon, exposed for any custom UI |
+| `--text` | `#000000` | `#FFFFFF` | Pinned explicitly so Konsta can't be overridden by OS dark-mode defaults |
+| `--text-dim` | `#6E6E73` | `#98989F` | iOS systemGray scale — timestamps, secondary text |
+| `--bubble-them` | `#E5E5EA` | `#2C2C2E` | Konsta's incoming-bubble color, pinned for animations that need it |
 
 ### Typography
 
@@ -869,7 +875,7 @@ All cross-origin requests use `credentials: 'include'` so the session cookie tra
 - Relay shares the averrow.com **zone** for DNS convenience and Cloudflare account simplicity, but is a **separate product surface**
 - No shared D1 database. Relay gets its own D1 (`relay-db`).
 - No shared user table. Averrow auth ≠ Relay auth.
-- No shared design system. Averrow uses Afterburner Amber (#E5A832); Relay uses Signal Orange (#FF5C2A). Distinct on purpose.
+- No shared design system. Averrow's primary accent is Afterburner Amber (#E5A832); Relay's launcher icon uses Averrow's red (#C83C3C) for family resemblance but the in-app chrome uses iOS-native system blue via Konsta — a messenger needs to feel native, not branded.
 - Footer on `relay.averrow.com` says "from LRX Enterprises" — keeps the option open to split to `getrelay.app` without rebrand.
 
 ---
