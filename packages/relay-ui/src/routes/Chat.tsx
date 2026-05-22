@@ -377,6 +377,18 @@ export function Chat() {
           onClick={() => {
             if (!recalled && !isPing) setActionsFor(m);
           }}
+          // bubble-own / bubble-them classes are no-ops in modern
+          // and classic; in beta mode html.beta selectors in
+          // global.css override `background:` with a gradient + add
+          // an inset highlight (see PR adding beta mode). Skipped
+          // for transparent-bg states (ping, sticker, recalled).
+          className={
+            !recalled && !isPing && !isSticker
+              ? mine
+                ? 'bubble-own'
+                : 'bubble-them'
+              : undefined
+          }
           style={{
             maxWidth: 'calc(100% - 44px)',
             background: bg,

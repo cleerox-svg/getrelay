@@ -16,6 +16,7 @@ import {
 import { Avatar } from '../components/Avatar';
 import { BrandTitle } from '../components/BrandTitle';
 import { GroupAvatar } from '../components/GroupAvatar';
+import { useBetaUi } from '../lib/legacy';
 import { useStore } from '../lib/store';
 import type { Chat } from '../lib/types';
 
@@ -34,6 +35,7 @@ export function Chats() {
   const chats = useStore((s) => s.chats);
   const presence = useStore((s) => s.presence);
   const loadChats = useStore((s) => s.loadChats);
+  const beta = useBetaUi();
   const deleteChat = useStore((s) => s.deleteChat);
   const setChatMuted = useStore((s) => s.setChatMuted);
   const setChatPinned = useStore((s) => s.setChatPinned);
@@ -137,6 +139,83 @@ export function Chats() {
                 </>
               )}
             </Block>
+          );
+        }
+        // Beta mode renders each chat as a lifted card (matches the
+        // /sports surface); modern stays on Konsta's <ListItem>.
+        // Same data + same handlers, two layouts.
+        if (beta) {
+          return (
+            <div className="chat-card-list">
+              {visible.map((c) => {
+                const isGroup = c.type === 'group';
+                const peerOnline = c.peer
+                  ? presence[c.peer.id]?.online ?? false
+                  : false;
+                const last = c.lastMessage;
+                const preview = last?.deletedAt
+                  ? 'Message recalled'
+                  : last?.messageType === 'ping'
+                    ? 'sent a PING!!'
+                    : (last?.body ?? '');
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    className="chat-card"
+                    onClick={() => onPressClick(c)}
+                    onMouseDown={() => onPressStart(c)}
+                    onMouseUp={onPressEnd}
+                    onMouseLeave={onPressEnd}
+                    onTouchStart={() => onPressStart(c)}
+                    onTouchEnd={onPressEnd}
+                    onTouchCancel={onPressEnd}
+                  >
+                    {isGroup ? (
+                      <GroupAvatar
+                        subject={c.subject ?? 'Group'}
+                        src={c.avatarUrl}
+                        size={44}
+                      />
+                    ) : (
+                      <Avatar
+                        src={c.peer?.avatarUrl ?? null}
+                        name={c.peer?.displayName ?? c.subject ?? 'Chat'}
+                        size={44}
+                        online={peerOnline}
+                      />
+                    )}
+                    <div className="chat-card-meta">
+                      <span className="chat-card-title">
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {c.peer?.displayName ?? c.subject ?? 'Chat'}
+                        </span>
+                        {c.pinnedAt ? <span style={{ fontSize: 12 }}>📌</span> : null}
+                        {c.muted ? <span style={{ fontSize: 12 }}>🔕</span> : null}
+                      </span>
+                      <span className="chat-card-preview">
+                        {preview || (isGroup ? `${c.memberCount ?? '–'} members` : ' ')}
+                      </span>
+                    </div>
+                    <div className="chat-card-right">
+                      <span className="chat-card-time">
+                        {formatRelative(c.lastActivityAt)}
+                      </span>
+                      {c.unreadCount > 0 ? (
+                        <span
+                          className="inline-flex items-center justify-center min-w-[22px] h-[22px] px-1.5 rounded-full text-[12px] font-bold text-white"
+                          style={{
+                            background: c.muted ? 'var(--text-dim)' : 'var(--accent)',
+                          }}
+                        >
+                          {c.unreadCount > 99 ? '99+' : c.unreadCount}
+                        </span>
+                      ) : null}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           );
         }
         return (

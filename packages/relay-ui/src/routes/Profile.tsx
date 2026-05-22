@@ -18,7 +18,7 @@ import { PillToggle } from '../components/PillToggle';
 import { PinDisplay } from '../components/PinDisplay';
 import { QrCodeDisplay } from '../components/QrCodeDisplay';
 import { ApiError, api } from '../lib/api';
-import { setLegacyUi, useLegacyUi } from '../lib/legacy';
+import { setUiMode, useUiMode, type UiMode } from '../lib/legacy';
 import {
   currentPushState,
   diagnosePush,
@@ -57,7 +57,7 @@ export function Profile() {
       blockedAt: number;
     }[]
   >([]);
-  const legacyOn = useLegacyUi();
+  const uiMode = useUiMode();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const nav = useNavigate();
 
@@ -446,21 +446,34 @@ export function Profile() {
           Auto follows your device's setting.
         </div>
         <div
-          className="flex items-center justify-between gap-3 mt-4 pt-3"
+          className="mt-4 pt-3"
           style={{ borderTop: '1px solid var(--separator, rgba(0,0,0,0.08))' }}
         >
-          <div>
-            <div className="font-medium">Classic theme</div>
-            <div className="text-xs" style={{ color: 'var(--text-dim)' }}>
-              Switch Chats and the chat window to the classic skin.
-            </div>
+          <div className="font-medium mb-1">UI style</div>
+          <Segmented strong>
+            {(
+              [
+                { id: 'classic', label: 'Classic' },
+                { id: 'modern', label: 'Modern' },
+                { id: 'beta', label: 'Beta' },
+              ] satisfies { id: UiMode; label: string }[]
+            ).map((m) => (
+              <SegmentedButton
+                key={m.id}
+                active={uiMode === m.id}
+                onClick={() => setUiMode(m.id)}
+              >
+                {m.label}
+              </SegmentedButton>
+            ))}
+          </Segmented>
+          <div className="text-xs mt-2" style={{ color: 'var(--text-dim)' }}>
+            {uiMode === 'classic'
+              ? 'Classic — BBM-era chat list and bubbles. Tab strip on top, tight rows.'
+              : uiMode === 'modern'
+                ? 'Modern — iOS-native styling via Konsta. The default.'
+                : 'Beta — preview of the upcoming look: every chat row and message bubble gets the lifted-card treatment from /sports. Try it before we replace Modern.'}
           </div>
-          <PillToggle
-            on={legacyOn}
-            onChange={(v) => setLegacyUi(v)}
-            onLabel="On"
-            offLabel="Off"
-          />
         </div>
       </Block>
 
