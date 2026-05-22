@@ -5,11 +5,13 @@ import { useLegacyUi } from './lib/legacy';
 import { KONSTA_THEME } from './lib/platform';
 import { wireWsToStore } from './lib/store';
 import { AddContact } from './routes/AddContact';
+import { AddGroupMembers } from './routes/AddGroupMembers';
 import { Chat } from './routes/Chat';
 import { Chats } from './routes/Chats';
 import { ContactProfile } from './routes/ContactProfile';
 import { Contacts } from './routes/Contacts';
 import { Feeds } from './routes/Feeds';
+import { GroupInfo } from './routes/GroupInfo';
 import { LegacyChat } from './routes/LegacyChat';
 import { LegacyChats } from './routes/LegacyChats';
 import { MainLayout } from './routes/MainLayout';
@@ -81,6 +83,8 @@ export function App() {
             <Route path="/add-contact" element={<AddContact />} />
             <Route path="/add" element={<AddContact />} />
             <Route path="/new-group" element={<NewGroup />} />
+            <Route path="/groups/:id" element={<GroupInfo />} />
+            <Route path="/groups/:id/add" element={<AddGroupMembers />} />
             <Route path="/profile" element={<Profile />} />
             <Route path="/sports/:league/:id" element={<SportsDetail />} />
             <Route path="/settings/sports" element={<SportsSettings />} />

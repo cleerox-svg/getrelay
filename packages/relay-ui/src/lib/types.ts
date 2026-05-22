@@ -286,4 +286,24 @@ export type ServerMsg =
   | { t: 'ping'; chatId: string; from: string; ts: number }
   | { t: 'recalled'; messageId: string; chatId: string; ts: number }
   | { t: 'edited'; messageId: string; chatId: string; body: string; editedAt: number }
+  | {
+      // Group membership change. Sent to every current member of the
+      // chat after a successful add. Receiving member_joined with
+      // userId === me is the "I was added to a new chat" signal —
+      // the client refreshes /chats so the new chat appears.
+      t: 'member_joined';
+      chatId: string;
+      userId: string;
+      displayName: string;
+      avatarUrl: string | null;
+      joinedAt: number;
+    }
+  | {
+      // Sent to remaining group members after someone leaves. The
+      // leaver doesn't receive this — they update locally on success
+      // of their own DELETE /chats/:id.
+      t: 'member_left';
+      chatId: string;
+      userId: string;
+    }
   | { t: 'error'; code: string; message?: string };
