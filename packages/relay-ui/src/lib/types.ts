@@ -198,6 +198,11 @@ export interface UiMessage {
   id: string;
   chatId: string;
   from: string;
+  // Denormalized sender identity from the server for history fetches.
+  // Undefined for messages that arrived live over the WebSocket — the
+  // Chat renderer falls back to the contacts list for those.
+  senderName?: string | null;
+  senderAvatarUrl?: string | null;
   sequence: number | null;
   type: string;
   body: string | null;
@@ -208,8 +213,18 @@ export interface UiMessage {
   ts: number;
   editedAt: number | null;
   deletedAt: number | null;
+  // delivered/read carry the "any recipient" booleans for groups, and
+  // the plain per-recipient state for 1to1 — matches the existing
+  // semantics so callers that only care about a yes/no don't need to
+  // change. The new triple (deliveredCount, readCount, totalRecipients)
+  // is sender-view-only (undefined for messages I didn't send) and
+  // drives the BBM-style gray-D-when-partial / colored-D-when-all
+  // rendering in the Receipt component.
   delivered: boolean;
   read: boolean;
+  deliveredCount?: number;
+  readCount?: number;
+  totalRecipients?: number;
   pending?: boolean;
   tempId?: string;
 }

@@ -222,6 +222,11 @@ export interface HistoryMessage {
   id: string;
   chatId: string;
   from: string;
+  // Denormalized by the server (JOIN users) so each historical
+  // message knows its sender's display name + avatar without the
+  // client having to maintain a per-chat members cache.
+  senderName?: string | null;
+  senderAvatarUrl?: string | null;
   sequence: number;
   type: string;
   body: string | null;
@@ -239,6 +244,12 @@ export interface HistoryMessage {
   deletedAt: number | null;
   delivered: boolean;
   read: boolean;
+  // Sender-view-only aggregate (omitted for messages the caller
+  // didn't send). Drives the BBM-style gray-D / colored-D rendering
+  // for groups; for 1to1 total is always 1 so the counts collapse.
+  deliveredCount?: number;
+  readCount?: number;
+  totalRecipients?: number;
 }
 
 export const GOOGLE_SIGNIN_URL = `${API_BASE}/auth/google`;

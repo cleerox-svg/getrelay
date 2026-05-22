@@ -53,6 +53,7 @@ export function Chat() {
   const me = useStore((s) => s.me);
   const chat = useStore((s) => s.chats.find((c) => c.id === chatId));
   const chatState = useStore((s) => s.byChat[chatId]);
+  const contacts = useStore((s) => s.contacts);
   const presence = useStore((s) => s.presence);
   const ensureChatState = useStore((s) => s.ensureChatState);
   const subscribeChat = useStore((s) => s.subscribeChat);
@@ -307,16 +308,35 @@ export function Chat() {
     // have their own render branch below and skip the media bubble
     // entirely.
     const hasMedia = !isSticker && ((!!m.mediaKey && !!m.mediaUrl) || !!m.mediaUrl);
-    const senderName = mine
-      ? me?.displayName ?? 'Me'
-      : chat?.peer?.id === m.from
-        ? chat?.peer?.displayName ?? '?'
-        : `User ${m.from.slice(0, 4)}`;
-    const senderAvatarSrc = mine
-      ? me?.avatarUrl ?? null
-      : chat?.peer?.id === m.from
-        ? chat?.peer?.avatarUrl ?? null
-        : null;
+    // Resolve sender identity in priority order: (1) my own profile
+    // for outgoing messages; (2) the server-denormalized senderName/
+    // senderAvatarUrl on the message (set by GET /chats/:id/messages
+    // for historical fetches); (3) the 1to1 peer if it matches;
+    // (4) a contacts-table lookup, which catches live WS messages in
+    // groups where the sender doesn't ride on the chat.peer field;
+    // (5) a generic "Member" fallback so we never render the raw user
+    // id slice as the headline name.
+    let senderName: string;
+    let senderAvatarSrc: string | null;
+    if (mine) {
+      senderName = me?.displayName ?? 'Me';
+      senderAvatarSrc = me?.avatarUrl ?? null;
+    } else if (m.senderName) {
+      senderName = m.senderName;
+      senderAvatarSrc = m.senderAvatarUrl ?? null;
+    } else if (chat?.peer?.id === m.from) {
+      senderName = chat.peer.displayName;
+      senderAvatarSrc = chat.peer.avatarUrl ?? null;
+    } else {
+      const fromContacts = contacts.find((c) => c.id === m.from);
+      if (fromContacts) {
+        senderName = fromContacts.alias ?? fromContacts.displayName;
+        senderAvatarSrc = fromContacts.avatarUrl ?? null;
+      } else {
+        senderName = `Member ${m.from.slice(0, 4)}`;
+        senderAvatarSrc = null;
+      }
+    }
 
     const bg = recalled
       ? 'transparent'
@@ -522,7 +542,14 @@ export function Chat() {
             <span>{formatTime(m.ts)}</span>
             {m.editedAt && !recalled ? <span>· edited</span> : null}
             {mine && !recalled ? (
-              <Receipt delivered={m.delivered} read={m.read} onAccent={!isPing} />
+              <Receipt
+                delivered={m.delivered}
+                read={m.read}
+                deliveredCount={m.deliveredCount}
+                readCount={m.readCount}
+                totalRecipients={m.totalRecipients}
+                onAccent={!isPing && !isSticker}
+              />
             ) : null}
           </div>
         </div>

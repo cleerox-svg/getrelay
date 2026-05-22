@@ -202,6 +202,8 @@ export const useStore = create<AppState>((set, get) => ({
           id: m.id,
           chatId: m.chatId,
           from: m.from,
+          senderName: m.senderName ?? null,
+          senderAvatarUrl: m.senderAvatarUrl ?? null,
           sequence: m.sequence,
           type: m.type,
           body: m.body,
@@ -214,6 +216,9 @@ export const useStore = create<AppState>((set, get) => ({
           deletedAt: m.deletedAt,
           delivered: m.delivered,
           read: m.read,
+          deliveredCount: m.deliveredCount,
+          readCount: m.readCount,
+          totalRecipients: m.totalRecipients,
         };
         const idx = merged.findIndex((x) => x.id === m.id);
         if (idx >= 0) merged[idx] = { ...merged[idx], ...ui };
@@ -536,9 +541,21 @@ export const useStore = create<AppState>((set, get) => ({
       case 'delivered':
         set((s) => {
           const chat = ensureChat(s, msg.chatId);
-          chat.messages = chat.messages.map((m) =>
-            m.id === msg.messageId ? { ...m, delivered: true } : m,
-          );
+          chat.messages = chat.messages.map((m) => {
+            if (m.id !== msg.messageId) return m;
+            // Sender-view of a group message: bump deliveredCount,
+            // clamped to totalRecipients to keep multi-device
+            // duplicate-delivery events idempotent. For 1to1 (no
+            // counts on the message) it's just the delivered boolean.
+            if (m.totalRecipients === undefined) {
+              return { ...m, delivered: true };
+            }
+            const next = Math.min(
+              (m.deliveredCount ?? 0) + 1,
+              m.totalRecipients,
+            );
+            return { ...m, delivered: true, deliveredCount: next };
+          });
           return { byChat: { ...s.byChat, [msg.chatId]: { ...chat } } };
         });
         break;
@@ -546,9 +563,30 @@ export const useStore = create<AppState>((set, get) => ({
       case 'read':
         set((s) => {
           const chat = ensureChat(s, msg.chatId);
-          chat.messages = chat.messages.map((m) =>
-            m.id === msg.messageId ? { ...m, delivered: true, read: true } : m,
-          );
+          chat.messages = chat.messages.map((m) => {
+            if (m.id !== msg.messageId) return m;
+            if (m.totalRecipients === undefined) {
+              return { ...m, delivered: true, read: true };
+            }
+            // Reading implies delivery; bump both counts. Clamp each
+            // to totalRecipients so we can't overshoot if events
+            // arrive out of order.
+            const nextRead = Math.min(
+              (m.readCount ?? 0) + 1,
+              m.totalRecipients,
+            );
+            const nextDelivered = Math.min(
+              Math.max((m.deliveredCount ?? 0) + 1, nextRead),
+              m.totalRecipients,
+            );
+            return {
+              ...m,
+              delivered: true,
+              read: true,
+              deliveredCount: nextDelivered,
+              readCount: nextRead,
+            };
+          });
           return { byChat: { ...s.byChat, [msg.chatId]: { ...chat } } };
         });
         break;
