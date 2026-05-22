@@ -35,7 +35,11 @@ app.use('*', async (c, next) => {
       return null;
     },
     credentials: true,
-    allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    // PUT is needed for /me/sports/subs (replace-all team list). Without
+    // it the browser preflight reports PUT as not allowed and the actual
+    // request never goes out — the Sports Settings pill animates but
+    // nothing saves.
+    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
   return cb(c, next);
 });
