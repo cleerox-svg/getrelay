@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Env } from './env';
 import { readAuthedUser } from './auth';
 import { mediaUrlFor } from './media';
+import { avatarUrlFor } from './me';
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -36,27 +37,28 @@ export function messagesRoutes() {
     );
 
     // Pull the slice we want by descending sequence, then reverse for UI.
+    // JOIN users so each message ships its sender's display name + avatar —
+    // groups can't rely on the chat-list-level peer record (no peer for
+    // multi-party chats) and falling back to "User abcd…" looks broken.
     const rows = await c.env.DB.prepare(
       `SELECT m.id, m.sender_id, m.sequence, m.message_type, m.body,
               m.media_r2_key, m.media_url, m.reply_to,
               m.created_at, m.edited_at, m.deleted_at,
+              u.display_name AS sender_display_name,
+              u.avatar_url   AS sender_avatar_url,
+              u.avatar_r2_key AS sender_avatar_r2_key,
               CASE WHEN m.sender_id = ?
-                THEN (SELECT MAX(CASE WHEN delivered_at IS NULL THEN 0 ELSE 1 END)
-                        FROM receipts WHERE message_id = m.id)
-                ELSE 1
-              END AS delivered,
-              CASE WHEN m.sender_id = ?
-                THEN (SELECT MAX(CASE WHEN read_at IS NULL THEN 0 ELSE 1 END)
-                        FROM receipts WHERE message_id = m.id)
+                THEN 1
                 ELSE (SELECT CASE WHEN read_at IS NULL THEN 0 ELSE 1 END
                         FROM receipts WHERE message_id = m.id AND recipient_id = ?)
               END AS read_flag
        FROM messages m
+       LEFT JOIN users u ON u.id = m.sender_id
        WHERE m.chat_id = ? AND m.sequence < ?
        ORDER BY m.sequence DESC
        LIMIT ?`,
     )
-      .bind(me.id, me.id, me.id, chatId, before, limit)
+      .bind(me.id, me.id, chatId, before, limit)
       .all<{
         id: string;
         sender_id: string;
@@ -69,16 +71,51 @@ export function messagesRoutes() {
         created_at: number;
         edited_at: number | null;
         deleted_at: number | null;
-        delivered: number | null;
+        sender_display_name: string | null;
+        sender_avatar_url: string | null;
+        sender_avatar_r2_key: string | null;
         read_flag: number | null;
       }>();
 
     const list = (rows.results ?? []).slice().reverse();
     const origin = new URL(c.req.url).origin;
     const msgIds = list.map((r) => r.id);
+    const myMsgIds = list.filter((r) => r.sender_id === me.id).map((r) => r.id);
     const replyTargetIds = Array.from(
       new Set(list.map((r) => r.reply_to).filter((s): s is string => !!s)),
     );
+
+    // Receipt aggregate for messages I sent — one row per (message,
+    // recipient) in the receipts table, with NULL delivered_at / read_at
+    // for recipients who haven't acked yet. For groups, this lets the
+    // sender's UI render gray-D (some delivered) vs colored-D (all
+    // delivered), same for R. For 1to1, total=1 always so the counts
+    // collapse to the single recipient's state.
+    const receiptAggByMsg = new Map<
+      string,
+      { total: number; delivered: number; read: number }
+    >();
+    if (myMsgIds.length > 0) {
+      const ph = myMsgIds.map(() => '?').join(',');
+      const rr = await c.env.DB.prepare(
+        `SELECT message_id,
+                COUNT(*) AS total,
+                SUM(CASE WHEN delivered_at IS NULL THEN 0 ELSE 1 END) AS delivered,
+                SUM(CASE WHEN read_at IS NULL THEN 0 ELSE 1 END) AS read_count
+         FROM receipts
+         WHERE message_id IN (${ph})
+         GROUP BY message_id`,
+      )
+        .bind(...myMsgIds)
+        .all<{ message_id: string; total: number; delivered: number; read_count: number }>();
+      for (const row of rr.results ?? []) {
+        receiptAggByMsg.set(row.message_id, {
+          total: row.total,
+          delivered: row.delivered,
+          read: row.read_count,
+        });
+      }
+    }
 
     // Reactions for everything in the slice.
     const reactionsByMsg = new Map<
@@ -142,29 +179,57 @@ export function messagesRoutes() {
       }
     }
 
-    const messages = list.map((r) => ({
-      id: r.id,
-      chatId,
-      from: r.sender_id,
-      sequence: r.sequence,
-      type: r.message_type,
-      body: r.deleted_at ? null : r.body,
-      mediaKey: r.deleted_at ? null : r.media_r2_key,
-      // Prefer the external URL (Giphy) when present, otherwise
-      // resolve the R2 key against the worker origin.
-      mediaUrl: r.deleted_at
-        ? null
-        : r.media_url ?? mediaUrlFor(origin, r.media_r2_key),
-      replyTo: r.deleted_at
-        ? null
-        : (r.reply_to ? replyPreviewById.get(r.reply_to) ?? null : null),
-      reactions: reactionsByMsg.get(r.id) ?? [],
-      ts: r.created_at,
-      editedAt: r.edited_at,
-      deletedAt: r.deleted_at,
-      delivered: (r.delivered ?? 0) === 1,
-      read: (r.read_flag ?? 0) === 1,
-    }));
+    const messages = list.map((r) => {
+      const mine = r.sender_id === me.id;
+      const agg = mine ? receiptAggByMsg.get(r.id) : undefined;
+      // For my own sends: delivered/read are "any recipient" booleans —
+      // matches the existing 1to1 semantics so the UI doesn't break,
+      // and the group nuance lives in the counts. For others' sends:
+      // delivered=true (I have it; that's why I'm reading it) and
+      // read=my own read_at.
+      const delivered = mine ? (agg?.delivered ?? 0) > 0 : true;
+      const read = mine
+        ? (agg?.read ?? 0) > 0
+        : (r.read_flag ?? 0) === 1;
+      return {
+        id: r.id,
+        chatId,
+        from: r.sender_id,
+        senderName: r.sender_display_name ?? null,
+        senderAvatarUrl: avatarUrlFor(origin, {
+          avatar_r2_key: r.sender_avatar_r2_key,
+          avatar_url: r.sender_avatar_url,
+        }),
+        sequence: r.sequence,
+        type: r.message_type,
+        body: r.deleted_at ? null : r.body,
+        mediaKey: r.deleted_at ? null : r.media_r2_key,
+        // Prefer the external URL (Giphy) when present, otherwise
+        // resolve the R2 key against the worker origin.
+        mediaUrl: r.deleted_at
+          ? null
+          : r.media_url ?? mediaUrlFor(origin, r.media_r2_key),
+        replyTo: r.deleted_at
+          ? null
+          : (r.reply_to ? replyPreviewById.get(r.reply_to) ?? null : null),
+        reactions: reactionsByMsg.get(r.id) ?? [],
+        ts: r.created_at,
+        editedAt: r.edited_at,
+        deletedAt: r.deleted_at,
+        delivered,
+        read,
+        // Sender-view-only aggregate. Undefined for messages I didn't
+        // send. Lets the UI render gray-vs-colored receipt for groups
+        // without separately fetching member counts.
+        ...(mine && agg
+          ? {
+              deliveredCount: agg.delivered,
+              readCount: agg.read,
+              totalRecipients: agg.total,
+            }
+          : {}),
+      };
+    });
 
     return c.json({ messages, hasMore: list.length === limit });
   });

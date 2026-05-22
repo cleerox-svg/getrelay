@@ -39,6 +39,7 @@ export function LegacyChat() {
   const me = useStore((s) => s.me);
   const chat = useStore((s) => s.chats.find((c) => c.id === chatId));
   const chatState = useStore((s) => s.byChat[chatId]);
+  const contacts = useStore((s) => s.contacts);
   const presence = useStore((s) => s.presence);
   const ensureChatState = useStore((s) => s.ensureChatState);
   const subscribeChat = useStore((s) => s.subscribeChat);
@@ -231,16 +232,31 @@ export function LegacyChat() {
     // carry only mediaUrl but render via their own branch below, so
     // exclude them from the generic media bubble.
     const hasMedia = !isSticker && ((!!m.mediaKey && !!m.mediaUrl) || !!m.mediaUrl);
-    const senderName = mine
-      ? me?.displayName ?? 'Me'
-      : chat?.peer?.id === m.from
-        ? chat?.peer?.displayName ?? '?'
-        : `User ${m.from.slice(0, 4)}`;
-    const senderAvatarSrc = mine
-      ? me?.avatarUrl ?? null
-      : chat?.peer?.id === m.from
-        ? chat?.peer?.avatarUrl ?? null
-        : null;
+    // Sender lookup priority: own profile → server-denormalized
+    // sender info from history → chat peer (1to1) → contacts table
+    // (live group messages) → generic fallback. Same logic as the
+    // modern Chat route; see comment there.
+    let senderName: string;
+    let senderAvatarSrc: string | null;
+    if (mine) {
+      senderName = me?.displayName ?? 'Me';
+      senderAvatarSrc = me?.avatarUrl ?? null;
+    } else if (m.senderName) {
+      senderName = m.senderName;
+      senderAvatarSrc = m.senderAvatarUrl ?? null;
+    } else if (chat?.peer?.id === m.from) {
+      senderName = chat.peer.displayName;
+      senderAvatarSrc = chat.peer.avatarUrl ?? null;
+    } else {
+      const fromContacts = contacts.find((c) => c.id === m.from);
+      if (fromContacts) {
+        senderName = fromContacts.alias ?? fromContacts.displayName;
+        senderAvatarSrc = fromContacts.avatarUrl ?? null;
+      } else {
+        senderName = `Member ${m.from.slice(0, 4)}`;
+        senderAvatarSrc = null;
+      }
+    }
 
     if (isPing) {
       stacked.push(
