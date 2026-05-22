@@ -19,7 +19,9 @@ export type NotifyKind =
   | 'typing'
   | 'recalled'
   | 'edited'
-  | 'reaction';
+  | 'reaction'
+  | 'member_joined'
+  | 'member_left';
 
 export function outboundKindFor(kind: NotifyKind): OutboundKind | null {
   switch (kind) {
@@ -27,6 +29,8 @@ export function outboundKindFor(kind: NotifyKind): OutboundKind | null {
     case 'recalled':
     case 'edited':
     case 'reaction':
+    case 'member_joined':
+    case 'member_left':
       return null; // ephemeral
     default:
       return kind;

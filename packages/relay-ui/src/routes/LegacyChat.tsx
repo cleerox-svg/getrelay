@@ -485,7 +485,7 @@ export function LegacyChat() {
         <Link
           to={
             isGroup
-              ? `/chats/${encodeURIComponent(chatId)}`
+              ? `/groups/${encodeURIComponent(chatId)}`
               : chat?.peer
                 ? `/contacts/${encodeURIComponent(chat.peer.id)}`
                 : '#'

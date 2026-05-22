@@ -58,6 +58,28 @@ export type ServerMsg =
   | { t: 'recalled'; messageId: string; chatId: string; ts: number }
   | { t: 'edited'; messageId: string; chatId: string; body: string; editedAt: number }
   | {
+      // Sent to every member of a group when participants change.
+      // Existing members get "someone joined" (update local member
+      // count + clear members cache). The newly-added member also
+      // receives it for themselves — their client treats userId
+      // === me as "I was added to a new chat" and refreshes the
+      // chat list.
+      t: 'member_joined';
+      chatId: string;
+      userId: string;
+      displayName: string;
+      avatarUrl: string | null;
+      joinedAt: number;
+    }
+  | {
+      // Sent to remaining group members when someone leaves
+      // (DELETE /chats/:id). The leaver doesn't receive it — their
+      // client updates locally on API success.
+      t: 'member_left';
+      chatId: string;
+      userId: string;
+    }
+  | {
       t: 'reaction';
       chatId: string;
       messageId: string;

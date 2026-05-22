@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Env } from './env';
 import { readAuthedUser } from './auth';
 import { isBlockedEitherWay } from './blocks';
+import { notifyUserHub } from './lib/outbound';
 import { avatarUrlFor } from './me';
 
 export function chatsRoutes() {
@@ -165,6 +166,53 @@ export function chatsRoutes() {
       ).bind(chatId, rid, now),
     );
     await c.env.DB.batch(ops);
+
+    // Broadcast member_joined to every current member of the chat (the
+    // newly-added ones included — receiving member_joined with userId
+    // === self is how their client learns "I was just added to a new
+    // chat, refresh the chat list"). Skip the caller; they already
+    // know from the HTTP success.
+    const origin = new URL(c.req.url).origin;
+    const [membersRow, addedInfo] = await Promise.all([
+      c.env.DB.prepare(
+        `SELECT user_id FROM chat_participants WHERE chat_id = ?`,
+      )
+        .bind(chatId)
+        .all<{ user_id: string }>(),
+      c.env.DB.prepare(
+        `SELECT id, display_name, avatar_url, avatar_r2_key
+         FROM users WHERE id IN (${validIds.map(() => '?').join(',')})`,
+      )
+        .bind(...validIds)
+        .all<{
+          id: string;
+          display_name: string;
+          avatar_url: string | null;
+          avatar_r2_key: string | null;
+        }>(),
+    ]);
+    const allMemberIds = (membersRow.results ?? [])
+      .map((r) => r.user_id)
+      .filter((id) => id !== me.id);
+    const sends: Promise<void>[] = [];
+    for (const added of addedInfo.results ?? []) {
+      const payload = {
+        t: 'member_joined' as const,
+        chatId,
+        userId: added.id,
+        displayName: added.display_name,
+        avatarUrl: avatarUrlFor(origin, added),
+        joinedAt: now,
+      };
+      for (const memberId of allMemberIds) {
+        sends.push(
+          notifyUserHub(c.env, memberId, 'member_joined', payload).catch(
+            () => undefined,
+          ),
+        );
+      }
+    }
+    await Promise.all(sends);
 
     return c.json({ ok: true, added: validIds.length });
   });
@@ -391,6 +439,17 @@ export function chatsRoutes() {
       .first<{ ok: number }>();
     if (!member) return c.json({ error: 'not_in_chat' }, 403);
 
+    // Look up chat type up front — we only fan out member_left for
+    // groups. 1to1 leave is a "hide this conversation" gesture that's
+    // private to the caller; the peer doesn't need to know (and
+    // re-opening the conversation will re-insert the participant row
+    // anyway, so "left" isn't even a durable state).
+    const chatType = await c.env.DB.prepare(
+      `SELECT type FROM chats WHERE id = ?`,
+    )
+      .bind(chatId)
+      .first<{ type: '1to1' | 'group' }>();
+
     await c.env.DB.batch([
       c.env.DB.prepare(
         `DELETE FROM receipts
@@ -401,6 +460,26 @@ export function chatsRoutes() {
         `DELETE FROM chat_participants WHERE chat_id = ? AND user_id = ?`,
       ).bind(chatId, me.id),
     ]);
+
+    if (chatType?.type === 'group') {
+      const remaining = await c.env.DB.prepare(
+        `SELECT user_id FROM chat_participants WHERE chat_id = ?`,
+      )
+        .bind(chatId)
+        .all<{ user_id: string }>();
+      const payload = {
+        t: 'member_left' as const,
+        chatId,
+        userId: me.id,
+      };
+      await Promise.all(
+        (remaining.results ?? []).map((r) =>
+          notifyUserHub(c.env, r.user_id, 'member_left', payload).catch(
+            () => undefined,
+          ),
+        ),
+      );
+    }
 
     return c.json({ ok: true });
   });

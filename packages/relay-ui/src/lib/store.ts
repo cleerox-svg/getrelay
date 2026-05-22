@@ -703,6 +703,44 @@ export const useStore = create<AppState>((set, get) => ({
         });
         break;
 
+      case 'member_joined': {
+        const myId = get().me?.id;
+        const haveChat = get().chats.some((c) => c.id === msg.chatId);
+        if (msg.userId === myId && !haveChat) {
+          // I was added to a chat I don't know about yet — fetch the
+          // chat list so it appears.
+          get().loadChats().catch(() => undefined);
+        } else if (haveChat) {
+          // Existing chat I'm already in: bump the member count.
+          // Detail screen (if mounted) refreshes its own members
+          // list on receiving this event.
+          set((s) => ({
+            chats: s.chats.map((c) =>
+              c.id === msg.chatId
+                ? { ...c, memberCount: (c.memberCount ?? 0) + 1 }
+                : c,
+            ),
+          }));
+        }
+        break;
+      }
+
+      case 'member_left':
+        // The leaver themselves never receives this event (server
+        // skips them in fan-out); we always handle it as "someone
+        // else left a group I'm still in".
+        set((s) => ({
+          chats: s.chats.map((c) =>
+            c.id === msg.chatId
+              ? {
+                  ...c,
+                  memberCount: Math.max((c.memberCount ?? 1) - 1, 1),
+                }
+              : c,
+          ),
+        }));
+        break;
+
       case 'error':
         console.warn('[ws] error from server', msg.code, msg.message);
         break;
