@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
-import { useStore } from '../lib/store';
+import { stopSportsPoller, useStore, wireSportsPoller } from '../lib/store';
 import { ws } from '../lib/ws';
 
 export function RequireAuth() {
@@ -15,6 +15,18 @@ export function RequireAuth() {
 
   useEffect(() => {
     if (me) ws.start();
+  }, [me]);
+
+  // Start the sports poller when the user lands signed-in; stop it
+  // on sign-out. Lives at this level (not inside MainLayout or the
+  // /sports route) so the bottom-nav live-game badge stays current
+  // even when the user is on a different tab.
+  useEffect(() => {
+    if (me) {
+      wireSportsPoller();
+      return () => stopSportsPoller();
+    }
+    return undefined;
   }, [me]);
 
   if (!loaded) {

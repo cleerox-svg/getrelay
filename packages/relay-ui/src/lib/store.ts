@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { api, API_BASE } from './api';
 import { ws } from './ws';
-import type { Chat, Contact, Me, ServerMsg, UiMessage } from './types';
+import type { Chat, Contact, Me, ServerMsg, SportsSub, UiMessage } from './types';
 
 function mediaUrlFor(mediaKey: string | null | undefined): string | null {
   if (!mediaKey) return null;
@@ -21,8 +21,15 @@ interface AppState {
   contacts: Contact[];
   byChat: Record<string, ChatState>;
   presence: Record<string, { online: boolean; lastSeen: number | null }>;
+  // Most recent /sports response. One poller writes here (see
+  // wireSportsPoller in this file); both the /sports route and the
+  // bottom-nav live-game badge read from it, so we never have two
+  // pollers fighting for the same data.
+  sportsSubs: SportsSub[];
+  sportsLoaded: boolean;
 
   loadMe: () => Promise<void>;
+  loadSports: () => Promise<void>;
   signout: () => Promise<void>;
 
   loadContacts: () => Promise<void>;
@@ -96,6 +103,8 @@ export const useStore = create<AppState>((set, get) => ({
   contacts: [],
   byChat: {},
   presence: {},
+  sportsSubs: [],
+  sportsLoaded: false,
 
   loadMe: async () => {
     try {
@@ -103,6 +112,16 @@ export const useStore = create<AppState>((set, get) => ({
       set({ me, meLoaded: true });
     } catch {
       set({ me: null, meLoaded: true });
+    }
+  },
+  loadSports: async () => {
+    try {
+      const r = await api.getSports();
+      set({ sportsSubs: r.subs ?? [], sportsLoaded: true });
+    } catch {
+      // Don't reset subs on failure — keep the last good snapshot
+      // so a transient blip doesn't blank the screen.
+      set({ sportsLoaded: true });
     }
   },
   signout: async () => {
@@ -768,4 +787,31 @@ export function wireWsToStore(): void {
   if (wired) return;
   wired = true;
   ws.onMessage((msg) => useStore.getState().handleServerMsg(msg));
+}
+
+// Periodic /sports fetch — re-arms itself at 30s while any followed
+// team has a live game and 5min otherwise. One instance per signed-
+// in app lifetime. Both the /sports route and the bottom-nav live-
+// game badge read from useStore.sportsSubs so a single poll feeds
+// the whole UI; without this lift, the page-local poller meant the
+// tab badge wouldn't tick until the user opened the Sports tab.
+let sportsTimer: number | undefined;
+export function wireSportsPoller(): void {
+  // Re-entry on remount: clear any prior timer so we don't end up
+  // with two timers racing.
+  if (sportsTimer !== undefined) window.clearTimeout(sportsTimer);
+  const tick = async () => {
+    await useStore.getState().loadSports();
+    const live = useStore
+      .getState()
+      .sportsSubs.some((s) => s.current?.status === 'live');
+    sportsTimer = window.setTimeout(tick, live ? 30_000 : 300_000);
+  };
+  tick();
+}
+export function stopSportsPoller(): void {
+  if (sportsTimer !== undefined) {
+    window.clearTimeout(sportsTimer);
+    sportsTimer = undefined;
+  }
 }
