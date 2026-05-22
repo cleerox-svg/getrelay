@@ -346,7 +346,7 @@ export function SportsDetail() {
         title="Game details"
         left={<NavbarBackLink onClick={() => window.history.back()} />}
       />
-      <div style={{ padding: '12px 14px' }}>
+      <div style={{ padding: '4px 14px 24px' }}>
         {!isLeague ? (
           <div style={{ color: 'var(--text-dim)' }}>Unknown league.</div>
         ) : !loaded ? (
@@ -355,102 +355,117 @@ export function SportsDetail() {
           <div style={{ color: 'var(--text-dim)' }}>Couldn't load this game.</div>
         ) : (
           <>
-            {/* Header */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                marginBottom: 12,
-              }}
-            >
-              <span
-                style={{
-                  background: leagueAccent(detail.league),
-                  color: 'white',
-                  fontSize: 10,
-                  fontWeight: 700,
-                  letterSpacing: 0.6,
-                  padding: '2px 8px',
-                  borderRadius: 999,
-                }}
-              >
-                {detail.league}
-              </span>
-              <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-dim)' }}>
-                {detail.statusDetail}
-              </span>
-            </div>
-
-            <div
-              style={{
-                fontSize: 18,
-                fontWeight: 700,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 12,
-                marginBottom: 4,
-                fontVariantNumeric: 'tabular-nums',
-              }}
-            >
-              <span>{detail.awayTeam.abbr}</span>
-              <span style={{ fontWeight: 800 }}>{detail.awayTeam.score ?? '–'}</span>
-              <span style={{ color: 'var(--text-dim)', fontSize: 13, fontWeight: 500 }}>at</span>
-              <span style={{ fontWeight: 800 }}>{detail.homeTeam.score ?? '–'}</span>
-              <span>{detail.homeTeam.abbr}</span>
-            </div>
-            {detail.series ? (
+            {/* Header card — score lock-up. Gets the same lifted-tile
+                treatment as everything below so it reads as the headline
+                card of a stack rather than as a flat page header. */}
+            <div className="detail-card">
               <div
                 style={{
                   display: 'flex',
-                  flexWrap: 'wrap',
                   alignItems: 'center',
-                  gap: 8,
-                  fontSize: 12,
-                  fontWeight: 700,
-                  color: 'var(--text-dim)',
-                  letterSpacing: 0.4,
-                  textTransform: 'uppercase',
-                  marginBottom: 8,
+                  gap: 10,
+                  marginBottom: 10,
                 }}
               >
-                {detail.series.round ? (
-                  <span
-                    style={{
-                      background: 'var(--bubble-them, #E5E5EA)',
-                      color: 'var(--text)',
-                      padding: '2px 8px',
-                      borderRadius: 999,
-                    }}
-                  >
-                    {detail.series.round}
-                  </span>
-                ) : null}
-                <span>{detail.series.gameLabel}</span>
-                <span aria-hidden>·</span>
-                <span>{detail.series.seriesLabel}</span>
+                <span
+                  style={{
+                    background: `linear-gradient(180deg, color-mix(in srgb, ${leagueAccent(detail.league)} 88%, white) 0%, ${leagueAccent(detail.league)} 100%)`,
+                    color: 'white',
+                    fontSize: 10,
+                    fontWeight: 700,
+                    letterSpacing: 0.6,
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    boxShadow:
+                      'inset 0 1px 0 rgba(255,255,255,0.20), 0 1px 2px rgba(0,0,0,0.18)',
+                    textShadow: '0 1px 0 rgba(0,0,0,0.18)',
+                  }}
+                >
+                  {detail.league}
+                </span>
+                <span
+                  style={{
+                    marginLeft: 'auto',
+                    fontSize: 12,
+                    color: 'var(--text-dim)',
+                    fontWeight: 600,
+                  }}
+                >
+                  {detail.statusDetail}
+                </span>
               </div>
-            ) : null}
 
-            {detail.venue ? (
-              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 14 }}>
-                {detail.venue}
+              <div
+                style={{
+                  fontSize: 22,
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'baseline',
+                  gap: 12,
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                <span>{detail.awayTeam.abbr}</span>
+                <span style={{ fontWeight: 800, fontSize: 28 }}>
+                  {detail.awayTeam.score ?? '–'}
+                </span>
+                <span style={{ color: 'var(--text-dim)', fontSize: 14, fontWeight: 500 }}>
+                  at
+                </span>
+                <span style={{ fontWeight: 800, fontSize: 28 }}>
+                  {detail.homeTeam.score ?? '–'}
+                </span>
+                <span>{detail.homeTeam.abbr}</span>
               </div>
-            ) : null}
+              {detail.series ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                    gap: 8,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: 'var(--text-dim)',
+                    letterSpacing: 0.4,
+                    textTransform: 'uppercase',
+                    marginTop: 8,
+                  }}
+                >
+                  {detail.series.round ? (
+                    <span
+                      style={{
+                        background: 'var(--bubble-them, #E5E5EA)',
+                        color: 'var(--text)',
+                        padding: '2px 8px',
+                        borderRadius: 999,
+                      }}
+                    >
+                      {detail.series.round}
+                    </span>
+                  ) : null}
+                  <span>{detail.series.gameLabel}</span>
+                  <span aria-hidden>·</span>
+                  <span>{detail.series.seriesLabel}</span>
+                </div>
+              ) : null}
+
+              {detail.venue ? (
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: 'var(--text-dim)',
+                    marginTop: 8,
+                  }}
+                >
+                  {detail.venue}
+                </div>
+              ) : null}
+            </div>
 
             {/* Linescore */}
-            <section style={{ marginBottom: 18 }}>
-              <h3
-                style={{
-                  fontSize: 12,
-                  fontWeight: 700,
-                  letterSpacing: 0.6,
-                  color: 'var(--text-dim)',
-                  margin: '0 0 6px',
-                }}
-              >
-                LINESCORE
-              </h3>
+            <section className="detail-card">
+              <h3 className="detail-card-title">Linescore</h3>
               <LinescoreTable
                 periods={detail.linescore}
                 totals={detail.totals}
@@ -460,49 +475,36 @@ export function SportsDetail() {
             </section>
 
             {/* Scoring */}
-            <section style={{ marginBottom: 18 }}>
-              <h3
-                style={{
-                  fontSize: 12,
-                  fontWeight: 700,
-                  letterSpacing: 0.6,
-                  color: 'var(--text-dim)',
-                  margin: '0 0 6px',
-                }}
-              >
-                SCORING
-              </h3>
+            <section className="detail-card">
+              <h3 className="detail-card-title">Scoring</h3>
               <ScoringPlayList plays={detail.scoringPlays} league={detail.league} />
             </section>
 
-            {/* Three stars (NHL) */}
+            {/* Three stars (NHL) — ranked medallions */}
             {detail.threeStars && detail.threeStars.length > 0 ? (
-              <section style={{ marginBottom: 18 }}>
-                <h3
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 700,
-                    letterSpacing: 0.6,
-                    color: 'var(--text-dim)',
-                    margin: '0 0 6px',
-                  }}
-                >
-                  THREE STARS
-                </h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <section className="detail-card">
+                <h3 className="detail-card-title">Three Stars</h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {detail.threeStars.map((s) => (
                     <div
                       key={s.star}
                       style={{
                         display: 'flex',
-                        alignItems: 'baseline',
-                        gap: 8,
+                        alignItems: 'center',
+                        gap: 10,
                         fontSize: 14,
                       }}
                     >
-                      <span style={{ fontWeight: 800, width: 16 }}>{s.star}.</span>
+                      <span
+                        className="three-star-rank"
+                        data-star={String(s.star)}
+                      >
+                        {s.star}
+                      </span>
                       <span style={{ fontWeight: 600 }}>{s.name}</span>
-                      <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>{s.teamAbbr}</span>
+                      <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+                        {s.teamAbbr}
+                      </span>
                       {s.note ? (
                         <span
                           style={{
@@ -521,33 +523,17 @@ export function SportsDetail() {
               </section>
             ) : null}
 
-            {/* Box scores */}
-            <section style={{ marginBottom: 18 }}>
-              <h3
-                style={{
-                  fontSize: 12,
-                  fontWeight: 700,
-                  letterSpacing: 0.6,
-                  color: 'var(--text-dim)',
-                  margin: '0 0 8px',
-                }}
-              >
-                {detail.awayTeam.abbr || 'AWAY'} BOX
+            {/* Box scores — one card per team */}
+            <section className="detail-card">
+              <h3 className="detail-card-title">
+                {detail.awayTeam.abbr || 'Away'} Box
               </h3>
               <BoxSection box={detail.awayBox} league={detail.league} />
             </section>
 
-            <section style={{ marginBottom: 24 }}>
-              <h3
-                style={{
-                  fontSize: 12,
-                  fontWeight: 700,
-                  letterSpacing: 0.6,
-                  color: 'var(--text-dim)',
-                  margin: '0 0 8px',
-                }}
-              >
-                {detail.homeTeam.abbr || 'HOME'} BOX
+            <section className="detail-card">
+              <h3 className="detail-card-title">
+                {detail.homeTeam.abbr || 'Home'} Box
               </h3>
               <BoxSection box={detail.homeBox} league={detail.league} />
             </section>

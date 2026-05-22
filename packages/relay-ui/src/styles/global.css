@@ -253,6 +253,83 @@ input {
   transform: scale(0.995);
 }
 
+/* Detail-page card: same depth treatment as .sports-card but with
+   built-in internal padding so a SportsDetail section can be a
+   single card containing its own title + body. The drill-down was
+   "ultra bland" because every section was a flat <section> on raw
+   page bg; wrapping each in this class stacks them as a column of
+   lifted tiles, matching the main-feed SportsCard treatment. */
+.detail-card {
+  border-radius: 14px;
+  padding: 14px;
+  margin-top: 10px;
+  border: 1px solid var(--separator, rgba(0, 0, 0, 0.08));
+  background: linear-gradient(
+    180deg,
+    var(--card-bg, #FFFFFF) 0%,
+    color-mix(in srgb, var(--card-bg, #FFFFFF) 96%, black) 100%
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 2px 8px rgba(0, 0, 0, 0.06);
+}
+:root[data-theme="dark"] .detail-card,
+.dark .detail-card {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 1px 2px rgba(0, 0, 0, 0.35),
+    0 4px 14px rgba(0, 0, 0, 0.35);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .detail-card {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.05),
+      0 1px 2px rgba(0, 0, 0, 0.35),
+      0 4px 14px rgba(0, 0, 0, 0.35);
+  }
+}
+.detail-card-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  margin: 0 0 10px;
+}
+
+/* Three-stars rank medallion: 1st gold, 2nd silver, 3rd bronze.
+   Tiny gradient + inset highlight so it reads as a metallic chip
+   rather than a flat number. */
+.three-star-rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  color: #FFFFFF;
+  flex: 0 0 auto;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.30),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.18),
+    0 1px 2px rgba(0, 0, 0, 0.18);
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.20);
+}
+.three-star-rank[data-star="1"] {
+  background: linear-gradient(180deg, #FFD86A 0%, #C99213 100%);
+}
+.three-star-rank[data-star="2"] {
+  background: linear-gradient(180deg, #E7E9EA 0%, #9DA3A8 100%);
+  color: #2C2C2E;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.30);
+}
+.three-star-rank[data-star="3"] {
+  background: linear-gradient(180deg, #D89870 0%, #8C572A 100%);
+}
+
 /* Sticker picker grid cells: inset shadow gives a "pressed-in well"
    feel that signals the cell is tappable. Highlight + press use the
    same press idiom as PillToggle for consistency. */
