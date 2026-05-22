@@ -68,7 +68,7 @@ export function Contacts() {
 
       <h1 className="text-[34px] font-bold tracking-tight px-4 pt-3 pb-1">Contacts</h1>
 
-      <List strongIos insetIos>
+      <List strong inset>
         <ListInput
           type="text"
           placeholder="Search"
@@ -85,7 +85,7 @@ export function Contacts() {
         </Block>
       ) : (
         grouped.map(([letter, items]) => (
-          <List key={letter} strongIos insetIos>
+          <List key={letter} strong inset>
             <ListItem title={letter} groupTitle />
             {items.map((c) => (
               <ListItem

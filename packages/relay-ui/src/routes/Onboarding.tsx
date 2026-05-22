@@ -63,7 +63,7 @@ export function Onboarding() {
           {copied ? 'Copied' : 'Copy PIN'}
         </Button>
       </Block>
-      <List strongIos insetIos>
+      <List strong inset>
         <ListInput
           label="Display name"
           type="text"

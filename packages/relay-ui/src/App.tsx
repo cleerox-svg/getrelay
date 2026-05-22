@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { App as KonstaApp } from 'konsta/react';
 import { useLegacyUi } from './lib/legacy';
+import { KONSTA_THEME } from './lib/platform';
 import { wireWsToStore } from './lib/store';
 import { AddContact } from './routes/AddContact';
 import { Chat } from './routes/Chat';
@@ -66,7 +67,7 @@ export function App() {
   const legacy = useLegacyUi();
 
   return (
-    <KonstaApp theme="ios" dark={dark} safeAreas>
+    <KonstaApp theme={KONSTA_THEME} dark={dark} safeAreas>
       <BrowserRouter>
         <SwNavigationBridge />
         <Routes>

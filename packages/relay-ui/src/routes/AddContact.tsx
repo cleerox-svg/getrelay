@@ -44,7 +44,7 @@ export function AddContact() {
         title="Add Contact"
         left={<NavbarBackLink text="Chats" onClick={() => nav('/chats')} />}
       />
-      <List strongIos insetIos>
+      <List strong inset>
         <ListInput
           label="Their PIN"
           type="text"

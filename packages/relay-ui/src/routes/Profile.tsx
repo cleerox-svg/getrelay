@@ -223,7 +223,7 @@ export function Profile() {
       </Block>
 
       <BlockTitle>PIN (Username)</BlockTitle>
-      <List strongIos insetIos>
+      <List strong inset>
         <ListItem
           title={<PinDisplay pin={me.pin} />}
           after={
@@ -239,7 +239,7 @@ export function Profile() {
       </List>
 
       <BlockTitle>Display</BlockTitle>
-      <List strongIos insetIos>
+      <List strong inset>
         <ListInput
           label="Display name"
           type="text"
@@ -501,7 +501,7 @@ export function Profile() {
       {blocked.length > 0 ? (
         <>
           <BlockTitle>Blocked users</BlockTitle>
-          <List strongIos insetIos>
+          <List strong inset>
             {blocked.map((b) => (
               <ListItem
                 key={b.id}

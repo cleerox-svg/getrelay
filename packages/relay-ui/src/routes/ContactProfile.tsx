@@ -143,7 +143,7 @@ export function ContactProfile() {
       </Block>
 
       <BlockTitle>PIN (Username)</BlockTitle>
-      <List strongIos insetIos>
+      <List strong inset>
         <ListItem
           title={<PinDisplay pin={contact.pin} />}
           after={
@@ -163,7 +163,7 @@ export function ContactProfile() {
       </Block>
 
       <BlockTitle>Safety</BlockTitle>
-      <List strongIos insetIos>
+      <List strong inset>
         <ListItem
           link
           title="Report this user"
