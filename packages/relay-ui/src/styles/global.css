@@ -15,6 +15,13 @@
   --text: #000000;
   --text-dim: #6E6E73; /* WCAG AA-compatible against white */
   --bubble-them: #E5E5EA;
+  /* Surface tokens used by custom components (SportsCard, GifPicker,
+     Chat avatar ring). Must be defined for both themes — GifPicker's
+     search input and SportsCard's card background fall through to
+     white-fallback otherwise, which renders invisible text on dark. */
+  --page-bg: #FFFFFF;
+  --card-bg: #FFFFFF;
+  --separator: rgba(0, 0, 0, 0.1);
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
@@ -27,6 +34,31 @@
   --text: #FFFFFF;
   --text-dim: #98989F;
   --bubble-them: #2C2C2E;
+  --page-bg: #000000;
+  --card-bg: #1C1C1E; /* iOS systemGray6 — lifts the card off pure-black bg */
+  --separator: rgba(255, 255, 255, 0.12);
+}
+
+/* Auto-dark: the user hasn't picked a theme (no data-theme on :root)
+   and the OS prefers dark. Mirror the explicit-dark block. The body
+   bg + text already track the OS in the @media block below; this
+   propagates the same precedence to the custom-property tokens that
+   our components read, otherwise auto-dark users get a dark page
+   with light-mode token values (white card backgrounds on black
+   page, dim text invisible against white inputs, etc). */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --accent: #0A84FF;
+    --ping: #FF453A;
+    --receipt-r: #0A84FF;
+    --online: #30D158;
+    --text: #FFFFFF;
+    --text-dim: #98989F;
+    --bubble-them: #2C2C2E;
+    --page-bg: #000000;
+    --card-bg: #1C1C1E;
+    --separator: rgba(255, 255, 255, 0.12);
+  }
 }
 
 html,
