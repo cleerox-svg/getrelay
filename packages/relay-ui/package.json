@@ -12,6 +12,7 @@
     "store-assets": "node scripts/build-store-assets.mjs",
     "cap:sync": "cap sync android",
     "cap:add:android": "cap add android",
+    "cap:assets": "capacitor-assets generate --android --assetPath assets",
     "android:build:debug": "pnpm build && pnpm cap:sync && cd android && ./gradlew assembleDebug"
   },
   "dependencies": {
@@ -27,6 +28,7 @@
     "zustand": "^5.0.2"
   },
   "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
     "@capacitor/cli": "^6.2.0",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
