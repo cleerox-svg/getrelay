@@ -30,7 +30,10 @@ export function GroupAvatar({ subject, size = 44 }: Props) {
         width: size,
         height: size,
         borderRadius: Math.round(size * 0.28),
-        background: bg,
+        // Subtle tonal lift in the same hue family — top edge +14%
+        // lightness, bottom -8% — so the square reads as a slightly-
+        // raised tile rather than printed flat on the page.
+        background: `linear-gradient(180deg, color-mix(in srgb, ${bg} 86%, white) 0%, ${bg} 70%, color-mix(in srgb, ${bg} 92%, black) 100%)`,
         color: '#FFFFFF',
         display: 'inline-flex',
         alignItems: 'center',
@@ -38,6 +41,9 @@ export function GroupAvatar({ subject, size = 44 }: Props) {
         fontWeight: 600,
         fontSize: Math.floor(size * 0.46),
         flex: '0 0 auto',
+        boxShadow:
+          'inset 0 1px 0 rgba(255,255,255,0.18), inset 0 -1px 0 rgba(0,0,0,0.10), 0 1px 2px rgba(0,0,0,0.18)',
+        textShadow: '0 1px 0 rgba(0,0,0,0.10)',
       }}
     >
       {letter}

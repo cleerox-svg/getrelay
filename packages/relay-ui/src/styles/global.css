@@ -130,7 +130,11 @@ input {
   overflow: hidden;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
-  transition: color 180ms ease-out, border-color 180ms ease-out;
+  transition:
+    color 180ms ease-out,
+    border-color 180ms ease-out,
+    transform 90ms ease-out,
+    box-shadow 180ms ease-out;
 }
 .pill-toggle[data-destructive="true"] {
   border-color: var(--ping);
@@ -138,21 +142,42 @@ input {
 }
 .pill-toggle[data-on="true"] {
   color: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
 }
 .pill-toggle:disabled {
   opacity: 0.45;
   cursor: default;
 }
+/* Tactile press: dip on tap. Skipped when disabled so the
+   "pressing-but-nothing-happens" feel doesn't read as broken. */
+.pill-toggle:not(:disabled):active {
+  transform: scale(0.96);
+}
 .pill-toggle-fill {
   position: absolute;
   inset: 0;
-  background: var(--accent);
+  /* Subtle "lit from above" gradient in the accent hue. The top
+     edge is +12% lightness so the pill looks like a slightly
+     raised lozenge rather than a flat color swatch. inset-1px
+     highlight at the very top reinforces the lift. */
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent) 88%, white) 0%,
+    var(--accent) 100%
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.20),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.12);
   transform: scaleX(0);
   transform-origin: left center;
   transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .pill-toggle[data-destructive="true"] .pill-toggle-fill {
-  background: var(--ping);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--ping) 88%, white) 0%,
+    var(--ping) 100%
+  );
 }
 .pill-toggle[data-on="true"] .pill-toggle-fill {
   transform: scaleX(1);
@@ -193,6 +218,82 @@ input {
   line-height: 1;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  transition: opacity 90ms ease-out;
+}
+.pill-link:active {
+  opacity: 0.6;
+}
+
+/* SportsCard depth: soft drop shadow + faint top-edge highlight.
+   Tonal lift is on the inline gradient in SportsCard.tsx; this class
+   layers the shadow and active-state press. */
+.sports-card {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 2px 8px rgba(0, 0, 0, 0.06);
+  transition: transform 90ms ease-out, box-shadow 180ms ease-out;
+}
+:root[data-theme="dark"] .sports-card,
+.dark .sports-card {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 1px 2px rgba(0, 0, 0, 0.35),
+    0 4px 14px rgba(0, 0, 0, 0.35);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .sports-card {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.05),
+      0 1px 2px rgba(0, 0, 0, 0.35),
+      0 4px 14px rgba(0, 0, 0, 0.35);
+  }
+}
+.sports-card:active {
+  transform: scale(0.995);
+}
+
+/* Sticker picker grid cells: inset shadow gives a "pressed-in well"
+   feel that signals the cell is tappable. Highlight + press use the
+   same press idiom as PillToggle for consistency. */
+.sticker-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1 / 1;
+  border: 0;
+  border-radius: 12px;
+  padding: 8px;
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.04);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.04);
+  transition: transform 90ms ease-out, background-color 180ms ease-out;
+  -webkit-tap-highlight-color: transparent;
+}
+:root[data-theme="dark"] .sticker-cell,
+.dark .sticker-cell {
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .sticker-cell {
+    background: rgba(255, 255, 255, 0.05);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.06),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  }
+}
+.sticker-cell:active {
+  transform: scale(0.95);
+  background: rgba(0, 0, 0, 0.08);
+}
+:root[data-theme="dark"] .sticker-cell:active,
+.dark .sticker-cell:active {
+  background: rgba(255, 255, 255, 0.10);
 }
 
 /* Konsta's Messagebar textarea has a fixed-ish height pill. Add a
