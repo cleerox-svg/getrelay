@@ -5,6 +5,18 @@
 -- dance: create a new table with the new schema, copy data, drop the
 -- old, rename.
 --
+-- D1 specifics: do NOT use BEGIN TRANSACTION / COMMIT or
+-- PRAGMA foreign_keys=ON/OFF here. D1 rejects explicit transactions
+-- in user SQL — its --file import already wraps the whole file in a
+-- coordinated transaction with automatic rollback on failure
+-- (see the wrangler warning "your DB will return to its original
+-- state and you can safely retry"). For deferring the FK from
+-- message_reactions(message_id) → messages(id) across the DROP
+-- TABLE messages step, use PRAGMA defer_foreign_keys = ON, which
+-- works inside the implicit transaction and defers FK checks to
+-- commit time. By commit time the new messages table holds the same
+-- rows under the same ids, so the FK checks pass.
+--
 -- This file is idempotent at the workflow layer: deploy-worker.yml
 -- probes sqlite_master for the literal 'sticker' in the messages CHECK
 -- text and skips this migration when it's already present.
@@ -14,9 +26,7 @@
 -- schema.sql declares. We use an explicit column list on the INSERT to
 -- be order-safe regardless.
 
-PRAGMA foreign_keys=OFF;
-
-BEGIN TRANSACTION;
+PRAGMA defer_foreign_keys = ON;
 
 CREATE TABLE messages_new (
   id TEXT PRIMARY KEY,
@@ -48,11 +58,3 @@ ALTER TABLE messages_new RENAME TO messages;
 
 CREATE UNIQUE INDEX idx_messages_chat_seq ON messages(chat_id, sequence);
 CREATE INDEX idx_messages_reply_to ON messages(reply_to);
-
-COMMIT;
-
-PRAGMA foreign_keys=ON;
-
--- Sanity check: must return zero rows. If anything appears here the
--- migration corrupted FK relationships and the deploy should abort.
-PRAGMA foreign_key_check;
