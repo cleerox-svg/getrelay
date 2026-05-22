@@ -68,19 +68,38 @@ export function SportsSettings() {
         if (league !== 'NHL' && league !== 'MLB') continue;
         payload.push({ league, teamKey: rest.join(':') });
       }
-      await api.setSportsSubs(payload);
-      // Refresh the store-level subs so the /sports tab and the
-      // live-game badge see the new follow immediately — without
-      // this they'd stay stale until the next poll tick (30s-5min).
+      // eslint-disable-next-line no-console
+      console.log('[sports] PUT /me/sports/subs', { count: payload.length, payload });
+      const res = await api.setSportsSubs(payload);
+      // eslint-disable-next-line no-console
+      console.log('[sports] PUT response', res);
+      // Verify the server actually persisted what we sent. If the
+      // count on the response is less than what we sent, the server
+      // dropped rows (validation, allowlist, dedupe). Surface that
+      // so we can see the mismatch instead of pretending it saved.
+      if (res?.count !== payload.length) {
+        setSaveError(
+          `server saved ${res?.count ?? '?'} of ${payload.length} subs`,
+        );
+      }
+      // Refresh the store-level subs so the /sports tab + live-game
+      // badge update immediately.
       loadSports().catch(() => undefined);
+      // Also re-fetch our local state so the pills match server
+      // truth (in case the server filtered any row out). This makes
+      // any silent server-side trim visible — pill bounces back.
+      try {
+        const { subs: serverSubs } = await api.getSportsSubs();
+        // eslint-disable-next-line no-console
+        console.log('[sports] GET after PUT — server subs', serverSubs);
+        setSubs(new Set(serverSubs.map(subId)));
+      } catch (gerr) {
+        // eslint-disable-next-line no-console
+        console.warn('[sports] verification GET failed', gerr);
+      }
     } catch (err) {
-      // Roll the optimistic UI back to whatever the server says is
-      // truth, and surface a banner so the user knows it didn't
-      // save. Previously this catch was missing and failures were
-      // completely silent — pill flipped, server unchanged, no
-      // feedback (this is what was happening before the PR #91
-      // CORS fix; this catch is the defense-in-depth so the next
-      // failure mode can't ghost us the same way).
+      // eslint-disable-next-line no-console
+      console.error('[sports] PUT failed', err);
       setSaveError(
         err instanceof Error ? err.message || 'failed' : 'failed',
       );
