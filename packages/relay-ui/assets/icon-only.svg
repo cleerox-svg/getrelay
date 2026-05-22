@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Relay native app icon (Android non-adaptive fallback + iOS).
+       Full composition: R glyph on a black disc filling the canvas. -->
+  <circle cx="512" cy="512" r="512" fill="#0A0A0A"/>
+  <path fill="#C83C3C" fill-rule="evenodd" d="
+    M 240 184 H 400 V 840 H 240 Z
+    M 400 184 A 200 200 0 0 1 400 584 Z
+    M 400 572 L 584 572 L 856 840 L 672 840 Z
+    M 400 308 A 76 76 0 0 1 400 460 Z
+  "/>
+</svg>

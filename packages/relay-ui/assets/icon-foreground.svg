@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Adaptive-icon FOREGROUND layer (Android 8+).
+       Transparent background; R glyph sits inside the inner 66% safe
+       zone so the launcher's circle/squircle mask never clips it. -->
+  <path fill="#C83C3C" fill-rule="evenodd" d="
+    M 304 264 H 432 V 788 H 304 Z
+    M 432 264 A 160 160 0 0 1 432 584 Z
+    M 432 574 L 580 574 L 796 788 L 648 788 Z
+    M 432 364 A 60 60 0 0 1 432 484 Z
+  "/>
+</svg>

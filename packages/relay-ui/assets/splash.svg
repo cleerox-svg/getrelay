@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2732 2732">
+  <!-- Native splash screen. Black canvas with the R glyph centred,
+       sized to ~28% of the canvas so it reads well on tablets too. -->
+  <rect width="2732" height="2732" fill="#0A0A0A"/>
+  <g transform="translate(686.5 731) scale(2.48)">
+    <path fill="#C83C3C" fill-rule="evenodd" d="
+      M 120 92 H 200 V 420 H 120 Z
+      M 200 92 A 100 100 0 0 1 200 292 Z
+      M 200 286 L 292 286 L 428 420 L 336 420 Z
+      M 200 154 A 38 38 0 0 1 200 230 Z
+    "/>
+  </g>
+</svg>

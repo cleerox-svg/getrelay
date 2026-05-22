@@ -3,8 +3,9 @@
 All assets here are generated from the SVG sources in this folder by
 `scripts/build-store-assets.mjs`. Run `pnpm store-assets` to regenerate.
 
-The actual app icon (separate from the feature graphic) is
-`../public/icon-512.png`.
+The app icon (`app-icon-512.png`) is rendered from the canonical
+`../public/icon.svg` by the same script, so it never drifts from the
+PWA / native launcher icon.
 
 ## What goes where in Play Console
 

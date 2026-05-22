@@ -117,6 +117,12 @@ jobs:
           sed -i -E 's/compileSdkVersion = [0-9]+/compileSdkVersion = 35/' android/variables.gradle
           sed -i -E 's/targetSdkVersion = [0-9]+/targetSdkVersion = 35/' android/variables.gradle
           grep -E "compileSdkVersion|targetSdkVersion" android/variables.gradle
+          # Replace the default Capacitor template launcher icon + splash
+          # with the Relay brand mark. Reads packages/relay-ui/assets/ and
+          # writes adaptive icons + splash drawables into
+          # android/app/src/main/res/. Without this step the AAB ships the
+          # generic teal Capacitor placeholder on the user's home screen.
+          pnpm cap:assets
           pnpm exec cap sync android
 
       - name: Bump versionCode + versionName from git
