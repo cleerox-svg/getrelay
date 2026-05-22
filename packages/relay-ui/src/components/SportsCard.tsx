@@ -122,11 +122,17 @@ export function SportsCard({ game, teamKey, label }: Props) {
 
   const card = (
     <div
+      className="sports-card"
       style={{
         border: '1px solid var(--separator, rgba(0,0,0,0.08))',
         borderRadius: 14,
         padding: '12px 14px',
-        background: 'var(--card-bg, #FFFFFF)',
+        // Slight tonal lift on the card surface (top edge is the base
+        // --card-bg, bottom is ~4% darker) so the card reads as a
+        // raised tile against the page. Drop shadow + inset highlight
+        // come from the .sports-card class in global.css.
+        background:
+          'linear-gradient(180deg, var(--card-bg, #FFFFFF) 0%, color-mix(in srgb, var(--card-bg, #FFFFFF) 96%, black) 100%)',
         marginTop: 10,
         cursor: canDrillDown ? 'pointer' : 'default',
       }}

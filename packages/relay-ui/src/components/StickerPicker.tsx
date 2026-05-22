@@ -82,17 +82,7 @@ export function StickerPicker({ open, onClose, onPick }: Props) {
               type="button"
               onClick={() => pick(s)}
               aria-label={`Send ${s.label} sticker`}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                aspectRatio: '1 / 1',
-                background: 'rgba(0,0,0,0.04)',
-                border: 0,
-                borderRadius: 12,
-                padding: 8,
-                cursor: 'pointer',
-              }}
+              className="sticker-cell"
             >
               <img
                 src={s.path}

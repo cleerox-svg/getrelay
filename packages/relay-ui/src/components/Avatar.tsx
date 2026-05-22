@@ -47,6 +47,11 @@ export function Avatar({ src, name, size = 40, online = false }: Props) {
             borderRadius: 999,
             objectFit: 'cover',
             display: 'block',
+            // Faint inner ring + soft drop reads as a slightly-lifted
+            // circle, the iOS-system-avatar treatment. Doesn't compete
+            // with the avatar art at all — tiny alpha values.
+            boxShadow:
+              'inset 0 0 0 1px rgba(255,255,255,0.10), 0 1px 2px rgba(0,0,0,0.18)',
           }}
         />
       ) : (
@@ -56,7 +61,11 @@ export function Avatar({ src, name, size = 40, online = false }: Props) {
             width: size,
             height: size,
             borderRadius: 999,
-            background: bg,
+            // Light-from-above tonal lift on the hash-derived color
+            // bubble. The gradient stays in the same hue family (the
+            // top is +14% lightness via color-mix) so the avatar
+            // identity is preserved.
+            background: `linear-gradient(180deg, color-mix(in srgb, ${bg} 86%, white) 0%, ${bg} 70%, color-mix(in srgb, ${bg} 92%, black) 100%)`,
             color: '#FFFFFF',
             display: 'inline-flex',
             alignItems: 'center',
@@ -64,6 +73,11 @@ export function Avatar({ src, name, size = 40, online = false }: Props) {
             fontWeight: 600,
             fontSize: Math.floor(size * 0.46),
             letterSpacing: 0,
+            boxShadow:
+              'inset 0 1px 0 rgba(255,255,255,0.18), inset 0 -1px 0 rgba(0,0,0,0.10), 0 1px 2px rgba(0,0,0,0.18)',
+            // Tiny inner-highlight on the initial too so it reads as
+            // lit rather than printed flat on the disc.
+            textShadow: '0 1px 0 rgba(0,0,0,0.10)',
           }}
         >
           {initials(label)}
