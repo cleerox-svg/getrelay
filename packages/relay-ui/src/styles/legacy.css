@@ -414,6 +414,18 @@ html.legacy[data-theme='dark'] {
   justify-content: center;
   line-height: 1;
 }
+/* Dot variant for the Sports tab live-game indicator — no number,
+   smaller, subtle pulse so it reads as "something happening" not
+   "you have N unread" (which is what the number badge means). */
+.legacy-tabbar .l-tab-badge-dot {
+  min-width: 10px;
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  top: -2px;
+  right: -4px;
+  animation: live-dot-pulse 1.6s ease-in-out infinite;
+}
 
 .legacy-tabbar .l-tab-label {
   font-size: 10px;

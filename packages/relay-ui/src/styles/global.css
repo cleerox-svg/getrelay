@@ -253,6 +253,24 @@ input {
   transform: scale(0.995);
 }
 
+/* Live-game indicator pulse on the Sports tab badge. Subtle —
+   ~10% scale, ~30% opacity dip — so it reads as "live now"
+   without flickering aggressively. Matches the iOS Sports app's
+   live-dot animation in spirit. */
+@keyframes live-dot-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.10);
+    opacity: 0.70;
+  }
+}
+.live-dot {
+  animation: live-dot-pulse 1.6s ease-in-out infinite;
+}
+
 /* Detail-page card: same depth treatment as .sports-card but with
    built-in internal padding so a SportsDetail section can be a
    single card containing its own title + body. The drill-down was

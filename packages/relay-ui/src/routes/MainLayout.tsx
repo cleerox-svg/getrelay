@@ -18,6 +18,14 @@ export function MainLayout() {
   const loc = useLocation();
   const legacy = useLegacyUi();
   const unread = useStore((s) => s.chats.reduce((n, c) => n + (c.unreadCount ?? 0), 0));
+  // True when any followed team has a live game right now. Drives a
+  // small red dot on the Sports tab so the user notices without
+  // having to switch tabs to check. Selector is a `.some()` over a
+  // typically-2-element array — cheap enough to recompute every
+  // render even if Zustand re-fires.
+  const anyLive = useStore((s) =>
+    s.sportsSubs.some((sub) => sub.current?.status === 'live'),
+  );
 
   // Classic mode gets its own tab bar instead of Konsta's. Same
   // five destinations so the user isn't locked into Chats.
@@ -50,6 +58,12 @@ export function MainLayout() {
                     <span className="l-tab-badge">
                       {unread > 99 ? '99+' : unread}
                     </span>
+                  ) : null}
+                  {t.to === '/sports' && anyLive ? (
+                    <span
+                      className="l-tab-badge l-tab-badge-dot"
+                      aria-label="live game"
+                    />
                   ) : null}
                 </span>
                 <span className="l-tab-label">{t.label}</span>
@@ -85,6 +99,17 @@ export function MainLayout() {
                     >
                       {unread > 99 ? '99+' : unread}
                     </span>
+                  ) : null}
+                  {t.to === '/sports' && anyLive ? (
+                    <span
+                      aria-label="live game"
+                      className="absolute -top-0.5 -right-1 inline-block w-[10px] h-[10px] rounded-full live-dot"
+                      style={{
+                        background: 'var(--ping)',
+                        boxShadow:
+                          '0 0 0 2px var(--page-bg, #FFFFFF), inset 0 1px 0 rgba(255,255,255,0.3)',
+                      }}
+                    />
                   ) : null}
                 </span>
               }
