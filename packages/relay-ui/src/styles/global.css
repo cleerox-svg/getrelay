@@ -107,6 +107,94 @@ input {
   caret-color: var(--accent);
 }
 
+/* PillToggle — animated on/off pill used in SportsSettings (team
+   follow, notification toggles) and Profile (push, classic theme).
+   The fill block scales in from the leading edge so toggling reads
+   as a wave sweeping across the pill. */
+.pill-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 14px;
+  border: 1.5px solid var(--accent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.1px;
+  line-height: 1;
+  cursor: pointer;
+  overflow: hidden;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 180ms ease-out, border-color 180ms ease-out;
+}
+.pill-toggle[data-destructive="true"] {
+  border-color: var(--ping);
+  color: var(--ping);
+}
+.pill-toggle[data-on="true"] {
+  color: #ffffff;
+}
+.pill-toggle:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.pill-toggle-fill {
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.pill-toggle[data-destructive="true"] .pill-toggle-fill {
+  background: var(--ping);
+}
+.pill-toggle[data-on="true"] .pill-toggle-fill {
+  transform: scaleX(1);
+}
+.pill-toggle-label {
+  position: relative;
+  z-index: 1;
+  display: inline-grid;
+  /* Both labels overlap in the same grid cell so the pill's width is
+     always the wider of the two — the ghost label reserves space, the
+     visible one overlays. Prevents the button width from changing as
+     "Follow" → "Following" during the animation. */
+  grid-template-areas: 'label';
+}
+.pill-toggle-ghost {
+  grid-area: label;
+  visibility: hidden;
+  pointer-events: none;
+}
+.pill-toggle-visible {
+  grid-area: label;
+  transition: opacity 180ms ease-out;
+}
+
+/* Content-sized text-only nav button used in Profile's Sports row.
+   Same height as PillToggle so the rows line up vertically, but
+   borderless (matches the iOS settings-row link convention). */
+.pill-link {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 4px;
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
 /* Konsta's Messagebar textarea has a fixed-ish height pill. Add a
    reasonable min-height + line-height-based vertical centering for the
    single-line case so the "Message" placeholder doesn't hang at the top
