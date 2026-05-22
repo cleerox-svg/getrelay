@@ -178,7 +178,12 @@ export function sportsRoutes() {
   // headers — 24h is plenty.
   app.get('/sports/teams', async (c) => {
     const cache = (caches as unknown as { default: Cache }).default;
-    const cacheKey = new Request('https://relay-cache.local/sports/teams');
+    // Cache key is versioned so we can bust stale responses without
+    // waiting for max-age. v2 forces a refetch after switching the NHL
+    // source from /stats/rest/en/team (all franchises ever) to
+    // /v1/standings/now (active 32 only) — without this, browsers
+    // would keep seeing the Atlanta Flames etc for up to 24h.
+    const cacheKey = new Request('https://relay-cache.local/sports/teams?v=2');
     const cached = await cache.match(cacheKey);
     if (cached) return cached;
     const [nhl, mlb] = await Promise.all([fetchNhlTeams(), fetchMlbTeams()]);
@@ -1665,25 +1670,43 @@ export interface TeamMeta {
 }
 
 async function fetchNhlTeams(): Promise<TeamMeta[]> {
-  // The static /stats/rest/en/team list returns every franchise the NHL
-  // recognises (including historical). We narrow to active teams using
-  // the standings endpoint's roster — but rather than hit two endpoints,
-  // we just rely on the v1 web schedule-now endpoint which lists current
-  // teams. Falling back to a hardcoded set on failure keeps the UI
-  // functional even if the NHL API is down.
+  // Active franchises only. The /stats/rest/en/team list we used to hit
+  // returns every franchise the NHL has ever recognised — including the
+  // Atlanta Flames, Atlanta Thrashers, California Golden Seals,
+  // Cleveland Barons, Brooklyn Americans, Detroit Cougars / Falcons,
+  // Hartford Whalers, Quebec Nordiques, etc. Those rendered as
+  // followable teams in Sports settings, which is just noise.
+  //
+  // The v1 web standings endpoint only contains the 32 currently-active
+  // franchises (since they have to have a current win/loss record to
+  // appear in the standings), so it's the right authority for "is this
+  // team an NHL team you can follow today".
   try {
-    const r = await fetch('https://api.nhle.com/stats/rest/en/team', {
+    const r = await fetch('https://api-web.nhle.com/v1/standings/now', {
       cf: { cacheTtl: 86400 },
     } as RequestInit);
     if (!r.ok) return fallbackNhlTeams();
     const data = (await r.json()) as {
-      data?: { id?: number; triCode?: string; fullName?: string }[];
+      standings?: {
+        teamAbbrev?: { default?: string };
+        teamName?: { default?: string };
+        teamCommonName?: { default?: string };
+        placeName?: { default?: string };
+      }[];
     };
     const out: TeamMeta[] = [];
-    for (const t of data.data ?? []) {
-      const abbr = (t.triCode ?? '').toUpperCase();
-      const name = t.fullName ?? abbr;
-      if (!abbr || !name) continue;
+    const seen = new Set<string>();
+    for (const row of data.standings ?? []) {
+      const abbr = (row.teamAbbrev?.default ?? '').toUpperCase();
+      if (!abbr || seen.has(abbr)) continue;
+      seen.add(abbr);
+      // teamName.default reads as "Anaheim Ducks"; fall back to
+      // place + common name and finally the abbr.
+      const name =
+        row.teamName?.default ??
+        (row.placeName?.default && row.teamCommonName?.default
+          ? `${row.placeName.default} ${row.teamCommonName.default}`
+          : abbr);
       out.push({
         key: abbr,
         abbr,

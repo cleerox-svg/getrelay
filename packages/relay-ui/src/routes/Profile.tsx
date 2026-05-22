@@ -14,6 +14,7 @@ import {
   SegmentedButton,
 } from 'konsta/react';
 import { Avatar } from '../components/Avatar';
+import { PillToggle } from '../components/PillToggle';
 import { PinDisplay } from '../components/PinDisplay';
 import { QrCodeDisplay } from '../components/QrCodeDisplay';
 import { ApiError, api } from '../lib/api';
@@ -348,24 +349,14 @@ export function Profile() {
                     : 'Get notified when someone messages you and the app is closed.'}
                 </div>
               </div>
-              <Button
-                small
-                onClick={togglePush}
-                className={
-                  pushBusy
-                    ? 'opacity-50 pointer-events-none'
-                    : pushState === 'subscribed'
-                      ? '!border-red-500 !text-red-500'
-                      : undefined
-                }
-                outline={pushState === 'subscribed'}
-              >
-                {pushBusy
-                  ? '…'
-                  : pushState === 'subscribed'
-                    ? 'Disable'
-                    : 'Enable'}
-              </Button>
+              <PillToggle
+                on={pushState === 'subscribed'}
+                disabled={pushBusy}
+                onChange={togglePush}
+                onLabel={pushBusy ? '…' : 'Enabled'}
+                offLabel={pushBusy ? '…' : 'Enable'}
+                destructive={pushState === 'subscribed'}
+              />
             </div>
               {pushError ? (
                 <div className="text-xs mt-2" style={{ color: 'var(--ping)' }}>
@@ -425,9 +416,13 @@ export function Profile() {
               Follow teams and tune which pushes you receive.
             </div>
           </div>
-          <Button small onClick={() => nav('/settings/sports')}>
-            Open
-          </Button>
+          <button
+            type="button"
+            onClick={() => nav('/settings/sports')}
+            className="pill-link"
+          >
+            Settings
+          </button>
         </div>
       </Block>
 
@@ -460,13 +455,12 @@ export function Profile() {
               Switch Chats and the chat window to the classic skin.
             </div>
           </div>
-          <Button
-            small
-            onClick={() => setLegacyUi(!legacyOn)}
-            outline={legacyOn}
-          >
-            {legacyOn ? 'On' : 'Off'}
-          </Button>
+          <PillToggle
+            on={legacyOn}
+            onChange={(v) => setLegacyUi(v)}
+            onLabel="On"
+            offLabel="Off"
+          />
         </div>
       </Block>
 

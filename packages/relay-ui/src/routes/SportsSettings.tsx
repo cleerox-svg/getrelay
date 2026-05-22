@@ -3,13 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import {
   Block,
   BlockTitle,
-  Button,
   List,
   ListItem,
   Navbar,
   NavbarBackLink,
   Page,
 } from 'konsta/react';
+import { PillToggle } from '../components/PillToggle';
 import { api } from '../lib/api';
 import { useStore } from '../lib/store';
 import type { SportsTeamMeta } from '../lib/types';
@@ -116,55 +116,51 @@ export function SportsSettings() {
             title="Sports alerts"
             subtitle="Master switch for all sports pushes."
             after={
-              <Button
-                small
-                outline={!master}
-                onClick={() => toggleNotify('sportsNotifications')}
-              >
-                {master ? 'On' : 'Off'}
-              </Button>
+              <PillToggle
+                on={master}
+                onChange={() => toggleNotify('sportsNotifications')}
+                onLabel="On"
+                offLabel="Off"
+              />
             }
           />
           <ListItem
             title="Game starting"
             subtitle="Push when a followed team's game goes live."
             after={
-              <Button
-                small
-                outline={!startOn}
+              <PillToggle
+                on={startOn}
                 disabled={!master}
-                onClick={() => toggleNotify('sportsNotifyStart')}
-              >
-                {startOn ? 'On' : 'Off'}
-              </Button>
+                onChange={() => toggleNotify('sportsNotifyStart')}
+                onLabel="On"
+                offLabel="Off"
+              />
             }
           />
           <ListItem
             title="Score changes"
             subtitle="Goals (NHL) and runs scored (MLB)."
             after={
-              <Button
-                small
-                outline={!scoreOn}
+              <PillToggle
+                on={scoreOn}
                 disabled={!master}
-                onClick={() => toggleNotify('sportsNotifyScore')}
-              >
-                {scoreOn ? 'On' : 'Off'}
-              </Button>
+                onChange={() => toggleNotify('sportsNotifyScore')}
+                onLabel="On"
+                offLabel="Off"
+              />
             }
           />
           <ListItem
             title="Final result"
             subtitle="Win / loss when the game ends."
             after={
-              <Button
-                small
-                outline={!finalOn}
+              <PillToggle
+                on={finalOn}
                 disabled={!master}
-                onClick={() => toggleNotify('sportsNotifyFinal')}
-              >
-                {finalOn ? 'On' : 'Off'}
-              </Button>
+                onChange={() => toggleNotify('sportsNotifyFinal')}
+                onLabel="On"
+                offLabel="Off"
+              />
             }
           />
         </List>
@@ -217,14 +213,13 @@ export function SportsSettings() {
                     )
                   }
                   after={
-                    <Button
-                      small
-                      outline={!on}
+                    <PillToggle
+                      on={on}
                       disabled={saving}
-                      onClick={() => toggleTeam('NHL', t.key)}
-                    >
-                      {on ? 'Following' : 'Follow'}
-                    </Button>
+                      onChange={() => toggleTeam('NHL', t.key)}
+                      onLabel="Following"
+                      offLabel="Follow"
+                    />
                   }
                 />
               );
@@ -280,14 +275,13 @@ export function SportsSettings() {
                     )
                   }
                   after={
-                    <Button
-                      small
-                      outline={!on}
+                    <PillToggle
+                      on={on}
                       disabled={saving}
-                      onClick={() => toggleTeam('MLB', t.key)}
-                    >
-                      {on ? 'Following' : 'Follow'}
-                    </Button>
+                      onChange={() => toggleTeam('MLB', t.key)}
+                      onLabel="Following"
+                      offLabel="Follow"
+                    />
                   }
                 />
               );
