@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from './env';
 import { readAuthedUser } from './auth';
+import { isBlockedEitherWay } from './blocks';
 import { avatarUrlFor } from './me';
 
 export function chatsRoutes() {
@@ -23,6 +24,10 @@ export function chatsRoutes() {
       .bind(contactId)
       .first<{ id: string }>();
     if (!other) return c.json({ error: 'not_found' }, 404);
+
+    if (await isBlockedEitherWay(c.env, me.id, contactId)) {
+      return c.json({ error: 'blocked' }, 403);
+    }
 
     const chatId = oneToOneChatId(me.id, contactId);
     const now = Date.now();
@@ -261,12 +266,19 @@ export function chatsRoutes() {
        FROM chats ch
        JOIN my_chats mc ON mc.chat_id = ch.id
        LEFT JOIN last_msg lm ON lm.chat_id = ch.id
+       WHERE NOT (
+         ch.type = '1to1' AND EXISTS (
+           SELECT 1 FROM chat_participants cp3
+             JOIN user_blocks b ON b.blocker_id = ? AND b.blocked_id = cp3.user_id
+            WHERE cp3.chat_id = ch.id AND cp3.user_id != ?
+         )
+       )
        ORDER BY
          CASE WHEN mc.pinned_at IS NOT NULL THEN 0 ELSE 1 END,
          mc.pinned_at DESC,
          COALESCE(lm.created_at, ch.created_at) DESC`,
     )
-      .bind(me.id, me.id, me.id)
+      .bind(me.id, me.id, me.id, me.id, me.id)
       .all<{
         chat_id: string;
         chat_type: '1to1' | 'group';

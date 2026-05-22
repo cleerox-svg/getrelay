@@ -74,6 +74,32 @@ export class ChatRoom implements DurableObject {
     return (rows.results ?? []).map((r) => r.user_id);
   }
 
+  // Drop any recipient who has blocked the sender (or whom the sender
+  // has blocked). The dropped recipients get no receipt row and no
+  // fan-out — the message exists in the sender's history but is
+  // invisible to the blocked party.
+  private async filterBlockedRecipients(
+    senderId: string,
+    recipients: string[],
+  ): Promise<string[]> {
+    if (recipients.length === 0) return recipients;
+    const placeholders = recipients.map(() => '?').join(',');
+    const rows = await this.env.DB.prepare(
+      `SELECT blocker_id, blocked_id FROM user_blocks
+        WHERE (blocker_id IN (${placeholders}) AND blocked_id = ?)
+           OR (blocker_id = ? AND blocked_id IN (${placeholders}))`,
+    )
+      .bind(...recipients, senderId, senderId, ...recipients)
+      .all<{ blocker_id: string; blocked_id: string }>();
+    const dropped = new Set<string>();
+    for (const r of rows.results ?? []) {
+      // Either side of the block edge that's a recipient gets dropped.
+      if (r.blocker_id !== senderId) dropped.add(r.blocker_id);
+      if (r.blocked_id !== senderId) dropped.add(r.blocked_id);
+    }
+    return recipients.filter((r) => !dropped.has(r));
+  }
+
   private async assertParticipant(chatId: string, userId: string): Promise<void> {
     const row = await this.env.DB.prepare(
       `SELECT 1 AS ok FROM chat_participants WHERE chat_id = ? AND user_id = ?`,
@@ -121,6 +147,9 @@ export class ChatRoom implements DurableObject {
     await this.assertParticipant(chatId, input.senderId);
 
     const recipients = await this.recipientIds(chatId, input.senderId);
+    // Anyone the sender has blocked, or who has blocked the sender,
+    // is invisible to the delivery pipeline — no receipt, no fan-out.
+    const deliverable = await this.filterBlockedRecipients(input.senderId, recipients);
     const id = crypto.randomUUID();
     const now = Date.now();
     const seq = await this.nextSequence();
@@ -139,7 +168,7 @@ export class ChatRoom implements DurableObject {
            (id, chat_id, sender_id, sequence, message_type, body, media_r2_key, reply_to, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).bind(id, chatId, input.senderId, seq, input.type, body, mediaKey, replyToId, now),
-      ...recipients.map((rid) =>
+      ...deliverable.map((rid) =>
         this.env.DB.prepare(
           `INSERT INTO receipts (message_id, recipient_id) VALUES (?, ?)`,
         ).bind(id, rid),
@@ -168,7 +197,7 @@ export class ChatRoom implements DurableObject {
           };
 
     await Promise.all(
-      recipients.map((rid) =>
+      deliverable.map((rid) =>
         fireAndForget(notifyUserHub(this.env, rid, fanoutKind, eventPayload)),
       ),
     );

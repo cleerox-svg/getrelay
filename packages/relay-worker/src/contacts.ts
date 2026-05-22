@@ -51,6 +51,10 @@ export function contactsRoutes() {
        FROM contacts c
        JOIN users u ON u.id = c.contact_id
        WHERE c.owner_id = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM user_blocks b
+            WHERE b.blocker_id = c.owner_id AND b.blocked_id = c.contact_id
+         )
        ORDER BY u.display_name COLLATE NOCASE ASC`,
     )
       .bind(me.id)
