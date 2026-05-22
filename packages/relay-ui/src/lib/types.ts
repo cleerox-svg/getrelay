@@ -82,6 +82,7 @@ export interface SportsTeam {
 }
 
 export interface SportsGame {
+  id: string;
   league: 'NHL' | 'MLB';
   status: 'pre' | 'live' | 'final';
   statusDetail: string;
@@ -91,6 +92,59 @@ export interface SportsGame {
   awayTeam: SportsTeam;
   venue: string | null;
   ourSide: 'home' | 'away';
+}
+
+export interface SportsLinescorePeriod {
+  label: string;
+  home: number | null;
+  away: number | null;
+}
+
+export interface SportsLinescoreTotal {
+  label: string; // "G" / "SOG" / "R" / "H" / "E"
+  home: number;
+  away: number;
+}
+
+export interface SportsScoringPlay {
+  period: string;
+  clock?: string;
+  teamAbbr: string;
+  description: string;
+  homeScore: number;
+  awayScore: number;
+}
+
+export interface SportsThreeStar {
+  star: 1 | 2 | 3;
+  name: string;
+  teamAbbr: string;
+  note?: string;
+}
+
+export interface SportsBoxPlayer {
+  name: string;
+  pos?: string;
+  line: string;
+  decision?: 'W' | 'L' | 'SV' | 'BS';
+}
+
+export interface SportsTeamBox {
+  teamAbbr: string;
+  batters?: SportsBoxPlayer[];
+  pitchers?: SportsBoxPlayer[];
+  skaters?: SportsBoxPlayer[];
+  goalies?: SportsBoxPlayer[];
+  stats?: { label: string; value: string }[];
+}
+
+export interface SportsGameDetail extends SportsGame {
+  linescore: SportsLinescorePeriod[];
+  totals: SportsLinescoreTotal[];
+  scoringPlays: SportsScoringPlay[];
+  threeStars?: SportsThreeStar[];
+  homeBox: SportsTeamBox;
+  awayBox: SportsTeamBox;
 }
 
 export interface ReplyPreview {
