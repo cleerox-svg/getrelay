@@ -132,18 +132,25 @@ export const useStore = create<AppState>((set, get) => ({
       // seen lag the actual game state for many minutes. The per-
       // game detail endpoint hits MLB's /feed/live (gumbo) and the
       // NHL gamecenter landing, which match what the user sees on
-      // the drill-down page. For every live game in the list, fetch
-      // the detail and overlay score/inning so the main page matches
-      // the truth.
-      const liveTargets = subs
+      // the drill-down page. For every non-final game, fetch the
+      // detail and overlay status / score / inning so the main page
+      // matches the truth.
+      //
+      // We deliberately include `pre` games (not just `live`) here
+      // because NHL's boxscore has been observed sitting on
+      // gameState='PRE' for many minutes after puck drop — meaning
+      // the list would never flip the card to 'live' and we'd never
+      // know to overlay. The detail endpoint reads from landing,
+      // which transitions reliably.
+      const overlayTargets = subs
         .map((s) => ({ sub: s, game: s.current }))
         .filter(
           (x): x is { sub: SportsSub; game: NonNullable<SportsSub['current']> } =>
-            !!x.game && x.game.status === 'live',
+            !!x.game && x.game.status !== 'final',
         );
-      if (liveTargets.length === 0) return;
+      if (overlayTargets.length === 0) return;
       const overlays = await Promise.all(
-        liveTargets.map(async ({ sub, game }) => {
+        overlayTargets.map(async ({ sub, game }) => {
           try {
             const d = await api.getSportsGame(
               sub.league.toLowerCase() as 'nhl' | 'mlb',
@@ -173,9 +180,21 @@ export const useStore = create<AppState>((set, get) => ({
             current: {
               ...s.current,
               status: d.status,
-              statusDetail: d.statusDetail,
-              homeTeam: { ...s.current.homeTeam, score: d.homeTeam.score },
-              awayTeam: { ...s.current.awayTeam, score: d.awayTeam.score },
+              // Fall back to the list value when detail returned an
+              // empty string (e.g. pre-game with no clock yet) so we
+              // don't blank out "8:00 PM ET" with nothing.
+              statusDetail: d.statusDetail || s.current.statusDetail,
+              homeTeam: {
+                ...s.current.homeTeam,
+                // Same fallback for scores — landing can briefly
+                // return null mid-fetch; the list's last-good number
+                // is better than rendering "–".
+                score: d.homeTeam.score ?? s.current.homeTeam.score,
+              },
+              awayTeam: {
+                ...s.current.awayTeam,
+                score: d.awayTeam.score ?? s.current.awayTeam.score,
+              },
             },
           };
         }),
