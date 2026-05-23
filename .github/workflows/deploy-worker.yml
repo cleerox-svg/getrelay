@@ -22,6 +22,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Pass the workflow token explicitly. checkout@v4 reads
+          # `github.token` by default, but on some org / runner
+          # configurations the default credential install ends up
+          # writing an empty `http.extraheader`, which makes Git
+          # fall back to prompting for a username and fail the fetch
+          # with "could not read Username for 'https://github.com'".
+          # Naming the secret directly forces a non-empty Basic
+          # header so the shallow fetch succeeds.
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: pnpm/action-setup@v4
         with:
