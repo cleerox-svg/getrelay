@@ -238,6 +238,54 @@ export function SportsCard({ game, teamKey, label }: Props) {
         </span>
       </div>
 
+      {game.series ? (
+        // Prominent playoff context bar between the league header and
+        // the matchup — round name + "Game N of M". Mirrors how
+        // dedicated sports apps frame postseason cards ("ROUND 3 ·
+        // GAME 2"). The natural-language `seriesLabel` continues to
+        // appear below the matchup so the score / clinch state reads
+        // there at a glance.
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            gap: 8,
+            marginBottom: 8,
+            paddingBottom: 8,
+            borderBottom: '1px solid var(--separator, rgba(0,0,0,0.08))',
+          }}
+        >
+          {game.series.round ? (
+            <span
+              style={{
+                background: accent.bg,
+                color: accent.chip,
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: 0.6,
+                padding: '2px 8px',
+                borderRadius: 999,
+                textTransform: 'uppercase',
+              }}
+            >
+              {game.series.round}
+            </span>
+          ) : null}
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: 0.6,
+              color: 'var(--text)',
+              textTransform: 'uppercase',
+            }}
+          >
+            {game.series.gameLabel}
+          </span>
+        </div>
+      ) : null}
+
       <TeamRow
         team={game.awayTeam}
         ourSide={game.ourSide}
@@ -255,39 +303,11 @@ export function SportsCard({ game, teamKey, label }: Props) {
         <div
           style={{
             marginTop: 8,
-            display: 'flex',
-            flexWrap: 'wrap',
-            alignItems: 'center',
-            gap: 6,
-            fontSize: 11,
+            fontSize: 12,
             color: 'var(--text-dim)',
           }}
         >
-          {game.series.round ? (
-            <span
-              style={{
-                background: 'var(--bubble-them, #E5E5EA)',
-                color: 'var(--text)',
-                padding: '2px 7px',
-                borderRadius: 999,
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: 0.4,
-                textTransform: 'uppercase',
-              }}
-            >
-              {game.series.round}
-            </span>
-          ) : null}
-          {/* Short tokens (Game / round chip) stay uppercase + bold for
-              the compact tag look; the longer natural-language series
-              label uses sentence case so "Montreal up 1 game to 0 over
-              Carolina" stays readable. */}
-          <span style={{ fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase' }}>
-            {game.series.gameLabel}
-          </span>
-          <span aria-hidden>·</span>
-          <span>{game.series.seriesLabel}</span>
+          {game.series.seriesLabel}
         </div>
       ) : null}
 

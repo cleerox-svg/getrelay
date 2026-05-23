@@ -102,13 +102,48 @@ Both the Sports tab and the detail page poll on a `setTimeout` cadence:
 
 ## Series labels
 
-Postseason cards show the round chip + "Game N of M" + a natural-language
-series label, e.g. `Montreal up 1 game to 0 over Carolina`. Built by
-`buildSeries()` in the worker; consumes home/away full team names so the
-label reads with team names rather than abbreviations. Series is fetched
-for any game with an NHL gameId or MLB postseason gameType — the
-`gameType === 3` gate was dropped because the schedule's `gameType` field
-has been observed missing on some late-round playoff entries.
+Postseason cards split the series treatment into two pieces so the
+context reads at a glance and the human sentence reads cleanly:
+
+1. **Top bar** — a colored round chip + `GAME N OF M` tag, rendered
+   between the league header and the matchup. Mirrors how dedicated
+   sports apps frame postseason cards ("ROUND 3 · GAME 2").
+2. **Bottom line** — natural-language series state below the matchup,
+   e.g. `Montreal up 1 game to 0 over Carolina`. Built by
+   `buildSeries()` in the worker; consumes home/away full team names
+   so the label uses team names rather than abbreviations.
+
+Series is fetched for any game with an NHL gameId or MLB postseason
+gameType — the `gameType === 3` gate was dropped because the schedule's
+`gameType` field has been observed missing on some late-round playoff
+entries. The detail page wears the same split layout.
+
+### Pregame detail layout
+
+When `status === 'pre'`, the detail page hides the score lockup (which
+would otherwise render as "AWAY – at – HOME" with stray em-dashes) and
+shows a centered `AWAY vs HOME` with a `Sat · 7:00 PM ET`-style line
+underneath. Live and final games keep the score lockup as-is.
+
+## Starting goalies (NHL pregame)
+
+The NHL detail page surfaces a "Starting Goalies" card between the
+header and the linescore, pulled from `landing.matchup.goalieComparison`
+on `/v1/gamecenter/{id}/landing`. Worker exposes one probable starter
+per side (the row marked `starter: true` if any, else the first listed —
+NHL orders them likely → backup) with their season-to-date stats:
+
+| Field | Source | Notes |
+|---|---|---|
+| `name` | goalie's `name.default` (falls back to `firstName + lastName`) | |
+| `starter` | `starter === true` | Renders a "Likely" pill |
+| `wins / losses / otLosses / shutouts` | matching numeric fields | Each independently nullable for short-season backups |
+| `gaa` | `goalsAgainstAverage` | Formatted to two decimals |
+| `savePct` | `savePercentage` (0–1) | Formatted ".932" — NHL convention, no leading zero |
+
+The list is only filled while `matchup.goalieComparison` is present,
+which is the pregame window. Once the puck drops the boxscore's
+`playerByGameStats.goalies` takes over and the section disappears.
 
 ## Push notifications
 

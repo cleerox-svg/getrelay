@@ -7,11 +7,119 @@ import type {
   SportsGameDetail,
   SportsLinescorePeriod,
   SportsLinescoreTotal,
+  SportsStartingGoalie,
   SportsTeamBox,
 } from '../lib/types';
 
 function leagueAccent(league: 'NHL' | 'MLB'): string {
   return league === 'NHL' ? '#AF1E2D' : '#134A8E';
+}
+
+// Tiny stat tile for the StartingGoalies card. Right-aligned numeric
+// columns share a fixed width so the W / L / OTL / SO / GAA / SV%
+// stack lines up across home / away. Renders an em-dash when the
+// upstream omits a value (rookies or short-season backups).
+function GoalieStat({ label, value }: { label: string; value: string | null }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 36 }}>
+      <span
+        style={{
+          fontSize: 10,
+          fontWeight: 700,
+          letterSpacing: 0.6,
+          color: 'var(--text-dim)',
+          textTransform: 'uppercase',
+        }}
+      >
+        {label}
+      </span>
+      <span
+        style={{
+          fontSize: 14,
+          fontWeight: 700,
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        {value ?? '—'}
+      </span>
+    </div>
+  );
+}
+
+function formatSavePct(n: number | null): string | null {
+  if (n == null || !Number.isFinite(n)) return null;
+  // ".932" — NHL convention, no leading zero, three decimals.
+  return n.toFixed(3).replace(/^0/, '');
+}
+
+function GoalieRow({ g }: { g: SportsStartingGoalie }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '6px 0',
+        flexWrap: 'wrap',
+      }}
+    >
+      <div style={{ flex: '1 1 auto', minWidth: 0 }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            gap: 8,
+            flexWrap: 'wrap',
+          }}
+        >
+          <span style={{ fontSize: 14, fontWeight: 700 }}>{g.name}</span>
+          <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)' }}>
+            {g.teamAbbr}
+          </span>
+          {g.starter ? (
+            <span
+              style={{
+                background: 'var(--bubble-them, #E5E5EA)',
+                color: 'var(--text)',
+                padding: '1px 7px',
+                borderRadius: 999,
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: 0.4,
+                textTransform: 'uppercase',
+              }}
+            >
+              Likely
+            </span>
+          ) : null}
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 4 }}>
+        <GoalieStat label="W" value={g.wins == null ? null : String(g.wins)} />
+        <GoalieStat label="L" value={g.losses == null ? null : String(g.losses)} />
+        <GoalieStat label="OTL" value={g.otLosses == null ? null : String(g.otLosses)} />
+        <GoalieStat label="SO" value={g.shutouts == null ? null : String(g.shutouts)} />
+        <GoalieStat label="GAA" value={g.gaa == null ? null : g.gaa.toFixed(2)} />
+        <GoalieStat label="SV%" value={formatSavePct(g.savePct)} />
+      </div>
+    </div>
+  );
+}
+
+// "Sat · 7:00 PM ET" for the pregame matchup card.
+// Worker hands us startTimeLocal already formatted ("7:00 PM ET") and
+// startTime as ms epoch; we just prepend the short weekday in the
+// viewer's locale.
+function formatPreKickoff(startTime: number, startTimeLocal: string): string {
+  if (!startTime) return startTimeLocal;
+  try {
+    const day = new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(
+      new Date(startTime),
+    );
+    return `${day} · ${startTimeLocal}`;
+  } catch {
+    return startTimeLocal;
+  }
 }
 
 function LinescoreTable({
@@ -412,58 +520,127 @@ export function SportsDetail() {
                 </span>
               </div>
 
-              <div
-                style={{
-                  fontSize: 22,
-                  fontWeight: 700,
-                  display: 'flex',
-                  alignItems: 'baseline',
-                  gap: 12,
-                  fontVariantNumeric: 'tabular-nums',
-                }}
-              >
-                <span>{detail.awayTeam.abbr}</span>
-                <span style={{ fontWeight: 800, fontSize: 28 }}>
-                  {detail.awayTeam.score ?? '–'}
-                </span>
-                <span style={{ color: 'var(--text-dim)', fontSize: 14, fontWeight: 500 }}>
-                  at
-                </span>
-                <span style={{ fontWeight: 800, fontSize: 28 }}>
-                  {detail.homeTeam.score ?? '–'}
-                </span>
-                <span>{detail.homeTeam.abbr}</span>
-              </div>
               {detail.series ? (
+                // Playoff context bar above the matchup. Matches the
+                // list card's "ROUND 3 · GAME 2" treatment so the
+                // detail page reads as a continuation of the same
+                // card rather than a different layout.
                 <div
                   style={{
                     display: 'flex',
                     flexWrap: 'wrap',
                     alignItems: 'center',
                     gap: 8,
-                    fontSize: 12,
-                    fontWeight: 700,
-                    color: 'var(--text-dim)',
-                    letterSpacing: 0.4,
-                    textTransform: 'uppercase',
-                    marginTop: 8,
+                    marginBottom: 10,
+                    paddingBottom: 10,
+                    borderBottom: '1px solid var(--separator, rgba(0,0,0,0.08))',
                   }}
                 >
                   {detail.series.round ? (
                     <span
                       style={{
-                        background: 'var(--bubble-them, #E5E5EA)',
-                        color: 'var(--text)',
+                        background: leagueAccent(detail.league),
+                        color: 'white',
+                        fontSize: 10,
+                        fontWeight: 700,
+                        letterSpacing: 0.6,
                         padding: '2px 8px',
                         borderRadius: 999,
+                        textTransform: 'uppercase',
                       }}
                     >
                       {detail.series.round}
                     </span>
                   ) : null}
-                  <span>{detail.series.gameLabel}</span>
-                  <span aria-hidden>·</span>
-                  <span>{detail.series.seriesLabel}</span>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 700,
+                      letterSpacing: 0.6,
+                      color: 'var(--text)',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    {detail.series.gameLabel}
+                  </span>
+                </div>
+              ) : null}
+
+              {detail.status === 'pre' ? (
+                // Pregame: no scores yet, so the old "AWAY – at – HOME"
+                // lockup printed two stray em-dashes that read as
+                // "blank at blank". Render a centered "AWAY  vs  HOME"
+                // with the day-of-week + start time underneath.
+                <div style={{ textAlign: 'center', padding: '4px 0' }}>
+                  <div
+                    style={{
+                      fontSize: 26,
+                      fontWeight: 800,
+                      display: 'flex',
+                      alignItems: 'baseline',
+                      justifyContent: 'center',
+                      gap: 14,
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    <span>{detail.awayTeam.abbr}</span>
+                    <span
+                      style={{
+                        color: 'var(--text-dim)',
+                        fontSize: 14,
+                        fontWeight: 500,
+                        letterSpacing: 0.3,
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      vs
+                    </span>
+                    <span>{detail.homeTeam.abbr}</span>
+                  </div>
+                  <div
+                    style={{
+                      marginTop: 6,
+                      fontSize: 13,
+                      color: 'var(--text-dim)',
+                      fontWeight: 600,
+                    }}
+                  >
+                    {formatPreKickoff(detail.startTime, detail.startTimeLocal)}
+                  </div>
+                </div>
+              ) : (
+                <div
+                  style={{
+                    fontSize: 22,
+                    fontWeight: 700,
+                    display: 'flex',
+                    alignItems: 'baseline',
+                    gap: 12,
+                    fontVariantNumeric: 'tabular-nums',
+                  }}
+                >
+                  <span>{detail.awayTeam.abbr}</span>
+                  <span style={{ fontWeight: 800, fontSize: 28 }}>
+                    {detail.awayTeam.score ?? '–'}
+                  </span>
+                  <span style={{ color: 'var(--text-dim)', fontSize: 14, fontWeight: 500 }}>
+                    at
+                  </span>
+                  <span style={{ fontWeight: 800, fontSize: 28 }}>
+                    {detail.homeTeam.score ?? '–'}
+                  </span>
+                  <span>{detail.homeTeam.abbr}</span>
+                </div>
+              )}
+              {detail.series ? (
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: 'var(--text-dim)',
+                    marginTop: 8,
+                  }}
+                >
+                  {detail.series.seriesLabel}
                 </div>
               ) : null}
 
@@ -479,6 +656,22 @@ export function SportsDetail() {
                 </div>
               ) : null}
             </div>
+
+            {/* Starting goalies (NHL pregame). Worker only fills the
+                array when landing.matchup.goalieComparison is
+                present, which is the pregame window — once the puck
+                drops the boxscore goalies take over. */}
+            {detail.startingGoalies && detail.startingGoalies.length > 0 ? (
+              <section className="detail-card">
+                <h3 className="detail-card-title">Starting Goalies</h3>
+                {detail.startingGoalies
+                  .slice()
+                  .sort((a, b) => (a.side === 'away' ? -1 : 1))
+                  .map((g, i) => (
+                    <GoalieRow key={`g-${g.side}-${i}`} g={g} />
+                  ))}
+              </section>
+            ) : null}
 
             {/* Linescore */}
             <section className="detail-card">
