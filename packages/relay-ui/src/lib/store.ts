@@ -16,6 +16,18 @@ function mediaUrlFor(mediaKey: string | null | undefined): string | null {
   return `${API_BASE}/m/${encodeURIComponent(mediaKey)}`;
 }
 
+// Today in Toronto (YYYY-MM-DD). Matches the worker's notion of
+// "today" so the day-selector tab the user sees as today maps to
+// the same cache key the worker uses for today.
+export function todayYmdToronto(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Toronto',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
 interface ChatState {
   messages: UiMessage[];
   typing: Record<string, boolean>; // userId -> typing
@@ -35,9 +47,16 @@ interface AppState {
   // pollers fighting for the same data.
   sportsSubs: SportsSub[];
   sportsLoaded: boolean;
+  // Per-day cache for the Sports-tab day selector. Today's entry
+  // duplicates `sportsSubs`; non-today days only fill on demand
+  // when the user taps the selector. Keyed YYYY-MM-DD (Toronto).
+  sportsByDate: Record<string, SportsSub[]>;
+  selectedSportsDate: string; // YYYY-MM-DD (Toronto)
 
   loadMe: () => Promise<void>;
   loadSports: () => Promise<void>;
+  loadSportsForDate: (ymd: string) => Promise<void>;
+  setSelectedSportsDate: (ymd: string) => void;
   signout: () => Promise<void>;
 
   loadContacts: () => Promise<void>;
@@ -113,6 +132,8 @@ export const useStore = create<AppState>((set, get) => ({
   presence: {},
   sportsSubs: [],
   sportsLoaded: false,
+  sportsByDate: {},
+  selectedSportsDate: todayYmdToronto(),
 
   loadMe: async () => {
     try {
@@ -126,7 +147,14 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const r = await api.getSports();
       const subs = r.subs ?? [];
-      set({ sportsSubs: subs, sportsLoaded: true });
+      // Mirror today's snapshot into the per-day cache so the day
+      // selector can read the same response without an extra fetch.
+      const todayKey = todayYmdToronto();
+      set({
+        sportsSubs: subs,
+        sportsLoaded: true,
+        sportsByDate: { ...useStore.getState().sportsByDate, [todayKey]: subs },
+      });
       // The /sports list pulls scores from MLB's lightweight
       // /linescore endpoint and NHL's /boxscore, both of which we've
       // seen lag the actual game state for many minutes. The per-
@@ -171,43 +199,67 @@ export const useStore = create<AppState>((set, get) => ({
       // Re-read the current sportsSubs in case another tick raced
       // in between; merge onto the latest snapshot.
       const latest = useStore.getState().sportsSubs;
-      set({
-        sportsSubs: latest.map((s) => {
-          const d = byKey.get(`${s.league}:${s.teamKey}`);
-          if (!d || !s.current) return s;
-          return {
-            ...s,
-            current: {
-              ...s.current,
-              status: d.status,
-              // Fall back to the list value when detail returned an
-              // empty string (e.g. pre-game with no clock yet) so we
-              // don't blank out "8:00 PM ET" with nothing.
-              statusDetail: d.statusDetail || s.current.statusDetail,
-              homeTeam: {
-                ...s.current.homeTeam,
-                // Same fallback for scores — landing can briefly
-                // return null mid-fetch; the list's last-good number
-                // is better than rendering "–".
-                score: d.homeTeam.score ?? s.current.homeTeam.score,
-              },
-              awayTeam: {
-                ...s.current.awayTeam,
-                score: d.awayTeam.score ?? s.current.awayTeam.score,
-              },
-              // Prefer the detail's series (landing is the canonical
-              // source for seriesStatus and may have it when the
-              // list endpoint didn't fetch / parse it).
-              series: d.series ?? s.current.series,
+      const merged = latest.map((s) => {
+        const d = byKey.get(`${s.league}:${s.teamKey}`);
+        if (!d || !s.current) return s;
+        return {
+          ...s,
+          current: {
+            ...s.current,
+            status: d.status,
+            // Fall back to the list value when detail returned an
+            // empty string (e.g. pre-game with no clock yet) so we
+            // don't blank out "8:00 PM ET" with nothing.
+            statusDetail: d.statusDetail || s.current.statusDetail,
+            homeTeam: {
+              ...s.current.homeTeam,
+              // Same fallback for scores — landing can briefly
+              // return null mid-fetch; the list's last-good number
+              // is better than rendering "–".
+              score: d.homeTeam.score ?? s.current.homeTeam.score,
             },
-          };
-        }),
+            awayTeam: {
+              ...s.current.awayTeam,
+              score: d.awayTeam.score ?? s.current.awayTeam.score,
+            },
+            // Prefer the detail's series (landing is the canonical
+            // source for seriesStatus and may have it when the
+            // list endpoint didn't fetch / parse it).
+            series: d.series ?? s.current.series,
+          },
+        };
+      });
+      const today = todayYmdToronto();
+      set({
+        sportsSubs: merged,
+        sportsByDate: { ...useStore.getState().sportsByDate, [today]: merged },
       });
     } catch {
       // Don't reset subs on failure — keep the last good snapshot
       // so a transient blip doesn't blank the screen.
       set({ sportsLoaded: true });
     }
+  },
+  loadSportsForDate: async (ymd: string) => {
+    // Today routes through loadSports() so the live-overlay pass
+    // still happens and sportsSubs (the polled snapshot the badge
+    // reads) stays in sync.
+    if (ymd === todayYmdToronto()) {
+      await useStore.getState().loadSports();
+      return;
+    }
+    try {
+      const r = await api.getSports(ymd);
+      const subs = r.subs ?? [];
+      set({
+        sportsByDate: { ...useStore.getState().sportsByDate, [ymd]: subs },
+      });
+    } catch {
+      // Keep prior snapshot on transient failure.
+    }
+  },
+  setSelectedSportsDate: (ymd: string) => {
+    set({ selectedSportsDate: ymd });
   },
   signout: async () => {
     try {

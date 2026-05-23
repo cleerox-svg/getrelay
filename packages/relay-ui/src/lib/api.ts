@@ -154,8 +154,10 @@ export const api = {
   deleteChat: (chatId: string) =>
     request<{ ok: true }>(`/chats/${encodeURIComponent(chatId)}`, { method: 'DELETE' }),
   listFeed: () => request<{ statuses: ContactStatus[] }>('/feed'),
-  getSports: () =>
-    request<{ games: SportsGame[]; subs: SportsSub[] }>('/sports'),
+  getSports: (date?: string) =>
+    request<{ games: SportsGame[]; subs: SportsSub[] }>(
+      date ? `/sports?date=${encodeURIComponent(date)}` : '/sports',
+    ),
   // ?v=2 is a client-side cache-bust to match the worker-side cache
   // key bump in PR #81 — without it, browsers that loaded the defunct-
   // team list before the worker fix can keep serving that response

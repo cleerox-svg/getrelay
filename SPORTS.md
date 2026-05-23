@@ -18,6 +18,7 @@ field on a card means. The implementation lives in
 | `/sports/:league/:id` | Detail page: scoreboard, linescore, scoring plays, three stars (NHL), per-team box scores. |
 | `/settings/sports` | Manage followed teams and per-event push toggles (start, score, final). |
 | Bottom-nav badge | Red dot on the Sports tab when any followed team has a live game. |
+| Day selector | Horizontal `Thu / Fri / Sat / Sun / Mon` strip on the Sports tab — tap a day to view that date's matchups. Selected date persists in store while the tab is mounted. |
 | Web Push | Goal / score / final notifications. Per-event opt-out. |
 
 ## Upstream APIs
@@ -49,7 +50,7 @@ data (rosters, standings) has long TTLs.
 
 | Route | Returns |
 |---|---|
-| `GET /sports` | `{ games: SportsGame[], subs: SportsSub[] }` — flat today list plus per-team current + previous. Per-user cached for 5min when no live games; bypassed during live play. |
+| `GET /sports?date=YYYY-MM-DD` | `{ games: SportsGame[], subs: SportsSub[] }` — flat list plus per-team current + previous for the requested date (Toronto). `?date` is optional; defaults to today. Per-user-per-day cached for 5min when no live games; the live-bypass only applies to the today view. |
 | `GET /sports/teams?v=2` | Selectable teams per league (cached 24h). |
 | `GET /sports/nhl/:id?abbr=XXX` | `SportsGameDetail`. Bypasses our cache on live games. |
 | `GET /sports/mlb/:id?teamId=N` | `SportsGameDetail`. Bypasses our cache on live games. |
@@ -99,6 +100,12 @@ Both the Sports tab and the detail page poll on a `setTimeout` cadence:
 **30s when any game is live, 5min otherwise.** Mobile browsers throttle
 `setTimeout` while the PWA is backgrounded, so both pollers subscribe to
 `visibilitychange` + `online` and force-refresh on resume.
+
+The poller always targets **today** — its results write to `sportsSubs`
+which both the tab (when its day selector is on today) and the
+bottom-nav badge consume. Non-today days fetched via the day selector
+land in a separate per-date cache (`sportsByDate`) and don't repoll;
+switching back to today resumes the live experience.
 
 ## Series labels
 

@@ -1,9 +1,10 @@
+import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Block, Navbar, Page } from 'konsta/react';
 import { Avatar } from '../components/Avatar';
 import { BrandTitle } from '../components/BrandTitle';
 import { SportsCard } from '../components/SportsCard';
-import { useStore } from '../lib/store';
+import { todayYmdToronto, useStore } from '../lib/store';
 import type { SportsGame, SportsSub } from '../lib/types';
 
 interface CardItem {
@@ -55,14 +56,140 @@ function sortItems(subs: SportsSub[]): CardItem[] {
   return items;
 }
 
+// Shift a YYYY-MM-DD by N days in UTC. Day arithmetic is calendar-
+// based, not wall-clock, so it doesn't drift across DST.
+function shiftYmd(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  if (!y || !m || !d) return ymd;
+  const date = new Date(Date.UTC(y, m - 1, d));
+  date.setUTCDate(date.getUTCDate() + days);
+  const yy = date.getUTCFullYear();
+  const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(date.getUTCDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
+function shortWeekday(ymd: string): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  if (!y || !m || !d) return '';
+  return new Intl.DateTimeFormat('en-US', {
+    weekday: 'short',
+    timeZone: 'UTC',
+  }).format(new Date(Date.UTC(y, m - 1, d)));
+}
+
+function shortMonthDay(ymd: string): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  if (!y || !m || !d) return '';
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  }).format(new Date(Date.UTC(y, m - 1, d)));
+}
+
+// Horizontal day-picker strip. Renders 3 days back + today + 3 days
+// forward; the selected day is highlighted and the today column is
+// underlined. Horizontally scrollable so we don't have to make the
+// chips smaller on narrow screens.
+function DayTabs({
+  selected,
+  onChange,
+}: {
+  selected: string;
+  onChange: (ymd: string) => void;
+}) {
+  const today = todayYmdToronto();
+  const days: string[] = [];
+  for (let off = -3; off <= 3; off++) days.push(shiftYmd(today, off));
+  return (
+    <div
+      style={{
+        display: 'flex',
+        gap: 4,
+        overflowX: 'auto',
+        padding: '4px 16px 8px',
+        scrollSnapType: 'x mandatory',
+      }}
+    >
+      {days.map((d) => {
+        const isSelected = d === selected;
+        const isToday = d === today;
+        return (
+          <button
+            key={d}
+            onClick={() => onChange(d)}
+            style={{
+              flex: '0 0 auto',
+              minWidth: 56,
+              scrollSnapAlign: 'center',
+              border: 'none',
+              background: isSelected ? 'var(--accent, #007AFF)' : 'transparent',
+              color: isSelected ? 'white' : 'var(--text)',
+              padding: '6px 10px',
+              borderRadius: 10,
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              lineHeight: 1.15,
+            }}
+          >
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: 0.5,
+                textTransform: 'uppercase',
+                opacity: isSelected ? 0.85 : 0.65,
+              }}
+            >
+              {shortWeekday(d)}
+            </span>
+            <span
+              style={{
+                fontSize: 13,
+                fontWeight: 700,
+                textDecoration: isToday && !isSelected ? 'underline' : 'none',
+              }}
+            >
+              {shortMonthDay(d)}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // Dedicated /sports tab. Reads from the store-level poller (started
 // in RequireAuth) so the data stays warm even when this tab isn't
 // mounted — that's what makes the bottom-nav live-game badge possible.
 export function Sports() {
   const me = useStore((s) => s.me);
-  const subs = useStore((s) => s.sportsSubs);
+  const sportsSubs = useStore((s) => s.sportsSubs);
+  const sportsByDate = useStore((s) => s.sportsByDate);
   const loaded = useStore((s) => s.sportsLoaded);
+  const selectedDate = useStore((s) => s.selectedSportsDate);
+  const setSelectedSportsDate = useStore((s) => s.setSelectedSportsDate);
+  const loadSportsForDate = useStore((s) => s.loadSportsForDate);
+
+  const today = todayYmdToronto();
+  // For today we read sportsSubs directly (the poller writes there).
+  // For other days we read the per-day cache, falling back to an
+  // empty list while the fetch is in flight.
+  const subs = selectedDate === today ? sportsSubs : sportsByDate[selectedDate] ?? [];
   const items = sortItems(subs);
+
+  // When the selected day is anything other than today, fetch it
+  // on first reveal. The poller continues to keep today fresh.
+  useEffect(() => {
+    if (selectedDate === today) return;
+    if (sportsByDate[selectedDate] === undefined) {
+      void loadSportsForDate(selectedDate);
+    }
+  }, [selectedDate, today, sportsByDate, loadSportsForDate]);
 
   return (
     <Page>
@@ -80,6 +207,8 @@ export function Sports() {
       />
 
       <h1 className="text-[34px] font-bold tracking-tight px-4 pt-3 pb-1">Sports</h1>
+
+      <DayTabs selected={selectedDate} onChange={setSelectedSportsDate} />
 
       {items.length > 0 ? (
         // Bottom padding leaves the last card breathing room above
@@ -105,7 +234,7 @@ export function Sports() {
             />
           ))}
         </div>
-      ) : subs.length === 0 && loaded ? (
+      ) : sportsSubs.length === 0 && loaded ? (
         <Block className="text-center !mt-8" style={{ color: 'var(--text-dim)' }}>
           <div className="text-base mb-2">No teams followed yet</div>
           <div className="text-sm">
@@ -115,6 +244,13 @@ export function Sports() {
             </Link>{' '}
             to see scores here.
           </div>
+        </Block>
+      ) : selectedDate !== today && sportsByDate[selectedDate] !== undefined ? (
+        // The picked day's response came back empty (no followed
+        // teams played) — say so explicitly rather than rendering
+        // a blank page.
+        <Block className="text-center !mt-8" style={{ color: 'var(--text-dim)' }}>
+          <div className="text-sm">No games for your teams on this day.</div>
         </Block>
       ) : null}
     </Page>
