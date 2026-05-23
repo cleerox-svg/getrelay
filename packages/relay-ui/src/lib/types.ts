@@ -199,6 +199,23 @@ export interface SportsStartingGoalie {
   savePct: number | null; // 0-1; formatted ".932" on the client
 }
 
+// Per-team season stats for the detail-page comparison bars (NHL).
+// All numeric fields stay nullable so the renderer can show "—" for
+// teams the upstream returned no qualifying row for (e.g. asking for
+// postseason stats on a team that didn't make the playoffs).
+export interface SportsTeamSeasonStats {
+  gfPerGame: number | null;
+  gaPerGame: number | null;
+  ppPct: number | null;
+  pkPct: number | null;
+}
+
+export interface SportsTeamSeasonStatsPair {
+  period: 'postseason' | 'regular';
+  home?: SportsTeamSeasonStats;
+  away?: SportsTeamSeasonStats;
+}
+
 // Recent head-to-head matchup. Both abbrs are the abbreviations the
 // game was actually played by; `homeScore` / `awayScore` always
 // numeric (worker filters incomplete rows).
@@ -217,6 +234,7 @@ export interface SportsGameDetail extends SportsGame {
   threeStars?: SportsThreeStar[];
   startingGoalies?: SportsStartingGoalie[];
   recentMatchups?: SportsRecentMatchup[];
+  teamSeasonStats?: SportsTeamSeasonStatsPair;
   homeBox: SportsTeamBox;
   awayBox: SportsTeamBox;
 }

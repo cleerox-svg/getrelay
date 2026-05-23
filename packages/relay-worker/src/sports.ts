@@ -136,6 +136,25 @@ interface StartingGoalie {
   savePct: number | null; // 0–1, formatted on the client to ".932"
 }
 
+// Team-level season stats for the comparison-bars card on the detail
+// page. Sourced from NHL's /stats/rest/en/team/summary endpoint;
+// `period` tells the client whether to label the section "Postseason"
+// or "Regular Season". All numeric fields stay nullable because the
+// upstream omits rows for teams with no qualifying games (e.g.
+// non-playoff teams when we ask for gameTypeId=3).
+interface TeamSeasonStats {
+  gfPerGame: number | null; // goals for per game
+  gaPerGame: number | null; // goals against per game
+  ppPct: number | null; // 0–1, power-play efficiency
+  pkPct: number | null; // 0–1, penalty-kill efficiency
+}
+
+interface TeamSeasonStatsPair {
+  period: 'postseason' | 'regular';
+  home?: TeamSeasonStats;
+  away?: TeamSeasonStats;
+}
+
 // Recent head-to-head matchup. Worker pulls the last few finals
 // between the two teams currently on the detail card. Both abbrs
 // are the actual team abbreviations the game was played by (so the
@@ -156,6 +175,7 @@ interface GameDetail extends Game {
   threeStars?: ThreeStar[]; // NHL only
   startingGoalies?: StartingGoalie[]; // NHL pregame only
   recentMatchups?: RecentMatchup[]; // last N final head-to-head games
+  teamSeasonStats?: TeamSeasonStatsPair; // NHL only — comparison bars
   homeBox: TeamBox;
   awayBox: TeamBox;
 }
@@ -441,6 +461,65 @@ function nhlBroadcastLabel(
   return names.length > 0 ? names.join(', ') : null;
 }
 
+// "20252026" for the 2025-26 NHL season. The season flips in
+// October — for any month before that, we're still finishing the
+// previous season (e.g. May playoffs still belong to the season
+// that started the prior October). Uses UTC because the answer
+// shouldn't depend on the viewer's timezone.
+function currentNhlSeasonId(): string {
+  const now = new Date();
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth() + 1;
+  const startYear = month >= 10 ? year : year - 1;
+  return `${startYear}${startYear + 1}`;
+}
+
+interface NhlTeamSummaryRow {
+  teamId?: number;
+  teamFullName?: string;
+  gamesPlayed?: number;
+  goalsFor?: number;
+  goalsAgainst?: number;
+  goalsForPerGame?: number;
+  goalsAgainstPerGame?: number;
+  powerPlayPct?: number;
+  penaltyKillPct?: number;
+  wins?: number;
+  losses?: number;
+  otLosses?: number;
+}
+
+// All-teams team summary for one game type (2 = regular season,
+// 3 = postseason). Used to populate the comparison bars on the
+// detail page. One fetch covers both sides of the matchup.
+async function fetchNhlTeamSummary(gameTypeId: number): Promise<NhlTeamSummaryRow[]> {
+  try {
+    const seasonId = currentNhlSeasonId();
+    const cayenne = encodeURIComponent(`seasonId=${seasonId} and gameTypeId=${gameTypeId}`);
+    const r = await fetch(
+      `https://api.nhle.com/stats/rest/en/team/summary?isAggregate=false&isGame=false&cayenneExp=${cayenne}`,
+      { cf: { cacheTtl: 600 } } as RequestInit,
+    );
+    if (!r.ok) return [];
+    const data = (await r.json()) as { data?: NhlTeamSummaryRow[] };
+    return data.data ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function compactTeamStats(row: NhlTeamSummaryRow | undefined): TeamSeasonStats | undefined {
+  if (!row) return undefined;
+  const num = (v: number | undefined): number | null =>
+    typeof v === 'number' && Number.isFinite(v) ? v : null;
+  return {
+    gfPerGame: num(row.goalsForPerGame),
+    gaPerGame: num(row.goalsAgainstPerGame),
+    ppPct: num(row.powerPlayPct),
+    pkPct: num(row.penaltyKillPct),
+  };
+}
+
 async function fetchNhlForTeam(
   abbr: string,
   ymd: string,
@@ -640,6 +719,7 @@ function nameLookupForGame(g: Game): Record<string, string> {
 }
 
 interface NhlRawTeam {
+  id?: number; // teamId — matches the stats API's `teamId` field
   abbrev?: string;
   name?: { default?: string };
   placeName?: { default?: string };
@@ -1336,6 +1416,28 @@ async function fetchNhlDetail(gameId: string, ourAbbr: string): Promise<GameDeta
     const awayAbbr = detail.awayTeam.abbr;
     if (homeAbbr && awayAbbr) {
       detail.recentMatchups = await fetchNhlRecentMatchups(homeAbbr, awayAbbr);
+    }
+    // Team comparison stats. Postseason when the game has a series
+    // attached, regular season otherwise. The teamId comes off the
+    // landing's home/away blocks; we match against the all-teams
+    // summary by id rather than name to dodge place-name encoding
+    // gotchas (e.g. "Montréal" vs "Montreal").
+    const homeId = landing.homeTeam?.id;
+    const awayId = landing.awayTeam?.id;
+    if (homeId || awayId) {
+      const gameTypeId = detail.series ? 3 : 2;
+      const rows = await fetchNhlTeamSummary(gameTypeId);
+      const home = rows.find((r) => r.teamId === homeId);
+      const away = rows.find((r) => r.teamId === awayId);
+      const homeStats = compactTeamStats(home);
+      const awayStats = compactTeamStats(away);
+      if (homeStats || awayStats) {
+        detail.teamSeasonStats = {
+          period: gameTypeId === 3 ? 'postseason' : 'regular',
+          home: homeStats,
+          away: awayStats,
+        };
+      }
     }
     return detail;
   } catch {
