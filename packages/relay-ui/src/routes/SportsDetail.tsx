@@ -106,6 +106,15 @@ function GoalieRow({ g }: { g: SportsStartingGoalie }) {
   );
 }
 
+// "05/21" — short month/day for the recent matchups list. Parses
+// the worker's YYYY-MM-DD using the UTC slots so the displayed day
+// matches the stored date regardless of the viewer's timezone.
+function formatMatchupDate(ymd: string): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  if (!y || !m || !d) return ymd;
+  return `${String(m).padStart(2, '0')}/${String(d).padStart(2, '0')}`;
+}
+
 // "Sat · 7:00 PM ET" for the pregame matchup card.
 // Worker hands us startTimeLocal already formatted ("7:00 PM ET") and
 // startTime as ms epoch; we just prepend the short weekday in the
@@ -729,6 +738,69 @@ export function SportsDetail() {
                       ) : null}
                     </div>
                   ))}
+                </div>
+              </section>
+            ) : null}
+
+            {/* Recent head-to-head (NHL: full-season schedule;
+                MLB: schedule API filtered by opponentId). Hidden
+                when the upstream returned no qualifying finals
+                (e.g. first matchup of the season). */}
+            {detail.recentMatchups && detail.recentMatchups.length > 0 ? (
+              <section className="detail-card">
+                <h3 className="detail-card-title">Recent Matchups</h3>
+                <div>
+                  {detail.recentMatchups.map((m) => {
+                    const winnerAbbr =
+                      m.homeScore > m.awayScore
+                        ? m.homeAbbr
+                        : m.awayScore > m.homeScore
+                          ? m.awayAbbr
+                          : null;
+                    return (
+                      <div
+                        key={`${m.date}-${m.homeAbbr}-${m.awayAbbr}`}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'baseline',
+                          gap: 10,
+                          padding: '6px 0',
+                          borderTop: '1px solid var(--separator, rgba(0,0,0,0.06))',
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: 11,
+                            color: 'var(--text-dim)',
+                            minWidth: 56,
+                            fontVariantNumeric: 'tabular-nums',
+                          }}
+                        >
+                          {formatMatchupDate(m.date)}
+                        </span>
+                        <span style={{ flex: 1, fontSize: 13 }}>
+                          {/* Bold the winner — mirrors how broadcast box
+                              scores call attention to the result. */}
+                          <span style={{ fontWeight: winnerAbbr === m.awayAbbr ? 700 : 500 }}>
+                            {m.awayAbbr}
+                          </span>
+                          <span style={{ color: 'var(--text-dim)', margin: '0 6px' }}>@</span>
+                          <span style={{ fontWeight: winnerAbbr === m.homeAbbr ? 700 : 500 }}>
+                            {m.homeAbbr}
+                          </span>
+                        </span>
+                        <span
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 700,
+                            fontVariantNumeric: 'tabular-nums',
+                          }}
+                        >
+                          {m.awayScore}–{m.homeScore}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </section>
             ) : null}
