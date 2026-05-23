@@ -145,6 +145,23 @@ The list is only filled while `matchup.goalieComparison` is present,
 which is the pregame window. Once the puck drops the boxscore's
 `playerByGameStats.goalies` takes over and the section disappears.
 
+## Recent matchups (head-to-head)
+
+The detail page surfaces the last five completed games between the
+two teams currently on the card, rendered as a compact list with
+"AWAY @ HOME · away-home" rows and the winning side bolded.
+
+- **NHL**: filter `/v1/club-schedule-season/{homeAbbr}/now` for
+  finals where the opposing team is `awayAbbr` (or vice versa). The
+  same upstream is already CF-cached at 5 min from the "previous
+  game" list-card lookup, so the detail page reads warm.
+- **MLB**: `statsapi.mlb.com/api/v1/schedule?teamId=&opponentId=`
+  does the filter server-side — we just keep the most recent
+  finals from the last ~18 months window.
+
+Renders nothing when there are no qualifying finals (e.g. first
+matchup of the season).
+
 ## Push notifications
 
 Driven by `runSportsCron(env)` which fires every minute (Worker

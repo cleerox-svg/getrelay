@@ -136,12 +136,26 @@ interface StartingGoalie {
   savePct: number | null; // 0–1, formatted on the client to ".932"
 }
 
+// Recent head-to-head matchup. Worker pulls the last few finals
+// between the two teams currently on the detail card. Both abbrs
+// are the actual team abbreviations the game was played by (so the
+// renderer can show "MTL @ CAR 6-2" without needing to look anything
+// up).
+interface RecentMatchup {
+  date: string; // YYYY-MM-DD in the game's local zone
+  homeAbbr: string;
+  awayAbbr: string;
+  homeScore: number;
+  awayScore: number;
+}
+
 interface GameDetail extends Game {
   linescore: LinescorePeriod[];
   totals: LinescoreTotal[];
   scoringPlays: ScoringPlay[];
   threeStars?: ThreeStar[]; // NHL only
   startingGoalies?: StartingGoalie[]; // NHL pregame only
+  recentMatchups?: RecentMatchup[]; // last N final head-to-head games
   homeBox: TeamBox;
   awayBox: TeamBox;
 }
@@ -1313,9 +1327,64 @@ async function fetchNhlDetail(gameId: string, ourAbbr: string): Promise<GameDeta
     if (!landingResp.ok) return null;
     const landing = (await landingResp.json()) as NhlLanding;
     const box = boxResp.ok ? ((await boxResp.json()) as NhlBoxscore) : null;
-    return parseNhlDetail(landing, box, ourAbbr);
+    const detail = parseNhlDetail(landing, box, ourAbbr);
+    // Head-to-head — fire after parsing so we know the home/away
+    // abbrevs without re-reading the landing. Independent fetch
+    // against the home team's full-season schedule; CF-cached so
+    // repeat detail loads hit warm data.
+    const homeAbbr = detail.homeTeam.abbr;
+    const awayAbbr = detail.awayTeam.abbr;
+    if (homeAbbr && awayAbbr) {
+      detail.recentMatchups = await fetchNhlRecentMatchups(homeAbbr, awayAbbr);
+    }
+    return detail;
   } catch {
     return null;
+  }
+}
+
+// Most recent N final games between two NHL teams. Reuses the same
+// /club-schedule-season endpoint we already hit for the "previous"
+// card, so the upstream is warm in CF cache from the list call.
+async function fetchNhlRecentMatchups(
+  oneAbbr: string,
+  otherAbbr: string,
+  limit = 5,
+): Promise<RecentMatchup[]> {
+  try {
+    const r = await fetch(
+      `https://api-web.nhle.com/v1/club-schedule-season/${oneAbbr}/now`,
+      { cf: { cacheTtl: 300 } } as RequestInit,
+    );
+    if (!r.ok) return [];
+    const data = (await r.json()) as { games?: NhlRawGame[] };
+    const candidates = (data.games ?? []).filter((g) => {
+      const home = g.homeTeam?.abbrev ?? '';
+      const away = g.awayTeam?.abbrev ?? '';
+      const isFinal = g.gameState === 'OFF' || g.gameState === 'FINAL';
+      // Either side matched against the other abbr.
+      const includesOther = home === otherAbbr || away === otherAbbr;
+      return isFinal && includesOther;
+    });
+    candidates.sort((a, b) => (b.gameDate ?? '').localeCompare(a.gameDate ?? ''));
+    const out: RecentMatchup[] = [];
+    for (const g of candidates.slice(0, limit)) {
+      const homeAbbr = g.homeTeam?.abbrev ?? '';
+      const awayAbbr = g.awayTeam?.abbrev ?? '';
+      const homeScore = typeof g.homeTeam?.score === 'number' ? g.homeTeam.score : null;
+      const awayScore = typeof g.awayTeam?.score === 'number' ? g.awayTeam.score : null;
+      if (!homeAbbr || !awayAbbr || homeScore === null || awayScore === null) continue;
+      out.push({
+        date: (g.gameDate ?? '').slice(0, 10),
+        homeAbbr,
+        awayAbbr,
+        homeScore,
+        awayScore,
+      });
+    }
+    return out;
+  } catch {
+    return [];
   }
 }
 
@@ -1766,9 +1835,69 @@ async function fetchMlbDetail(
     );
     if (!r.ok) return null;
     const data = (await r.json()) as MlbFeedLive;
-    return parseMlbDetail(gamePk, data, ourTeamId);
+    const detail = parseMlbDetail(gamePk, data, ourTeamId);
+    const homeId = data.gameData?.teams?.home?.id;
+    const awayId = data.gameData?.teams?.away?.id;
+    if (homeId && awayId) {
+      detail.recentMatchups = await fetchMlbRecentMatchups(homeId, awayId);
+    }
+    return detail;
   } catch {
     return null;
+  }
+}
+
+// Most recent N final games between two MLB teams. statsapi's
+// schedule endpoint accepts a ?teamId=&opponentId= pair so the
+// filter happens server-side — we just take the latest finals.
+async function fetchMlbRecentMatchups(
+  oneTeamId: number,
+  otherTeamId: number,
+  limit = 5,
+): Promise<RecentMatchup[]> {
+  try {
+    // Year window covers the regular season + postseason carry-over;
+    // a fixed 18-month look-back is plenty for "last 5 head-to-head".
+    const end = todayInToronto();
+    const start = shiftYmd(end, -540);
+    const url =
+      'https://statsapi.mlb.com/api/v1/schedule?sportId=1' +
+      `&teamId=${oneTeamId}&opponentId=${otherTeamId}` +
+      `&startDate=${start}&endDate=${end}&hydrate=team`;
+    const r = await fetch(url, { cf: { cacheTtl: 300 } } as RequestInit);
+    if (!r.ok) return [];
+    const data = (await r.json()) as { dates?: { date?: string; games?: MlbRawGame[] }[] };
+    const finals: MlbRawGame[] = [];
+    for (const d of data.dates ?? []) {
+      for (const g of d.games ?? []) {
+        const abs = g.status?.abstractGameState ?? '';
+        const det = g.status?.detailedState ?? '';
+        if (abs === 'Final' || det === 'Final' || det === 'Game Over') {
+          finals.push(g);
+        }
+      }
+    }
+    finals.sort((a, b) => (b.gameDate ?? '').localeCompare(a.gameDate ?? ''));
+    const out: RecentMatchup[] = [];
+    for (const g of finals.slice(0, limit)) {
+      const home = g.teams?.home;
+      const away = g.teams?.away;
+      const homeAbbr = home?.team?.abbreviation ?? '';
+      const awayAbbr = away?.team?.abbreviation ?? '';
+      const homeScore = typeof home?.score === 'number' ? home.score : null;
+      const awayScore = typeof away?.score === 'number' ? away.score : null;
+      if (!homeAbbr || !awayAbbr || homeScore === null || awayScore === null) continue;
+      out.push({
+        date: (g.gameDate ?? '').slice(0, 10),
+        homeAbbr,
+        awayAbbr,
+        homeScore,
+        awayScore,
+      });
+    }
+    return out;
+  } catch {
+    return [];
   }
 }
 

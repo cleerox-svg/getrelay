@@ -199,12 +199,24 @@ export interface SportsStartingGoalie {
   savePct: number | null; // 0-1; formatted ".932" on the client
 }
 
+// Recent head-to-head matchup. Both abbrs are the abbreviations the
+// game was actually played by; `homeScore` / `awayScore` always
+// numeric (worker filters incomplete rows).
+export interface SportsRecentMatchup {
+  date: string; // YYYY-MM-DD
+  homeAbbr: string;
+  awayAbbr: string;
+  homeScore: number;
+  awayScore: number;
+}
+
 export interface SportsGameDetail extends SportsGame {
   linescore: SportsLinescorePeriod[];
   totals: SportsLinescoreTotal[];
   scoringPlays: SportsScoringPlay[];
   threeStars?: SportsThreeStar[];
   startingGoalies?: SportsStartingGoalie[];
+  recentMatchups?: SportsRecentMatchup[];
   homeBox: SportsTeamBox;
   awayBox: SportsTeamBox;
 }
