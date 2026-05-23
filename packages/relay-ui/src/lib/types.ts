@@ -216,6 +216,26 @@ export interface SportsTeamSeasonStatsPair {
   away?: SportsTeamSeasonStats;
 }
 
+// One stat leader (top points / goals / assists scorer on a team).
+// `name` is "F. Lastname" preformatted by the worker.
+export interface SportsStatLeader {
+  name: string;
+  teamAbbr: string;
+  value: number;
+}
+
+export interface SportsTeamLeaders {
+  points?: SportsStatLeader;
+  goals?: SportsStatLeader;
+  assists?: SportsStatLeader;
+}
+
+export interface SportsTeamLeadersPair {
+  period: 'postseason' | 'regular';
+  home?: SportsTeamLeaders;
+  away?: SportsTeamLeaders;
+}
+
 // Recent head-to-head matchup. Both abbrs are the abbreviations the
 // game was actually played by; `homeScore` / `awayScore` always
 // numeric (worker filters incomplete rows).
@@ -235,6 +255,7 @@ export interface SportsGameDetail extends SportsGame {
   startingGoalies?: SportsStartingGoalie[];
   recentMatchups?: SportsRecentMatchup[];
   teamSeasonStats?: SportsTeamSeasonStatsPair;
+  teamLeaders?: SportsTeamLeadersPair;
   homeBox: SportsTeamBox;
   awayBox: SportsTeamBox;
 }

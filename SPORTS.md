@@ -186,6 +186,26 @@ The section is hidden when both teams' rows are missing (e.g.
 asking for postseason stats on two teams that didn't make the
 playoffs). Individual values render `—` when omitted.
 
+## Team leaders (NHL)
+
+Alongside the comparison bars, the NHL detail page surfaces a
+"Team Leaders" card with per-team **points / goals / assists**
+leaders. Same `period` field — postseason when the matchup has a
+series, regular season otherwise.
+
+Data source: `https://api-web.nhle.com/v1/club-stats-season/{abbr}/{seasonId}/{gameTypeId}` —
+one fetch per side. The skaters array is iterated locally to pick
+the top in each category (so the points leader and the goals leader
+can differ, mirroring how dedicated apps surface this). Names are
+preformatted to "F. Lastname" by the worker. Both fetches are
+CF-cached at 10 min.
+
+A leader is only emitted when at least one skater has a positive
+value in that stat — keeps the card from displaying "Leader:
+nobody, 0 goals" for a team with zero appearances. Rows where
+neither side has a leader are hidden; the whole card disappears
+when neither team has any leaders at all.
+
 ## Push notifications
 
 Driven by `runSportsCron(env)` which fires every minute (Worker
