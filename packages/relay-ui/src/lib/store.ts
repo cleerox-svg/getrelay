@@ -1,7 +1,15 @@
 import { create } from 'zustand';
 import { api, API_BASE } from './api';
 import { ws } from './ws';
-import type { Chat, Contact, Me, ServerMsg, SportsSub, UiMessage } from './types';
+import type {
+  Chat,
+  Contact,
+  Me,
+  ServerMsg,
+  SportsGameDetail,
+  SportsSub,
+  UiMessage,
+} from './types';
 
 function mediaUrlFor(mediaKey: string | null | undefined): string | null {
   if (!mediaKey) return null;
@@ -117,7 +125,61 @@ export const useStore = create<AppState>((set, get) => ({
   loadSports: async () => {
     try {
       const r = await api.getSports();
-      set({ sportsSubs: r.subs ?? [], sportsLoaded: true });
+      const subs = r.subs ?? [];
+      set({ sportsSubs: subs, sportsLoaded: true });
+      // The /sports list pulls scores from MLB's lightweight
+      // /linescore endpoint and NHL's /boxscore, both of which we've
+      // seen lag the actual game state for many minutes. The per-
+      // game detail endpoint hits MLB's /feed/live (gumbo) and the
+      // NHL gamecenter landing, which match what the user sees on
+      // the drill-down page. For every live game in the list, fetch
+      // the detail and overlay score/inning so the main page matches
+      // the truth.
+      const liveTargets = subs
+        .map((s) => ({ sub: s, game: s.current }))
+        .filter(
+          (x): x is { sub: SportsSub; game: NonNullable<SportsSub['current']> } =>
+            !!x.game && x.game.status === 'live',
+        );
+      if (liveTargets.length === 0) return;
+      const overlays = await Promise.all(
+        liveTargets.map(async ({ sub, game }) => {
+          try {
+            const d = await api.getSportsGame(
+              sub.league.toLowerCase() as 'nhl' | 'mlb',
+              game.id,
+              sub.teamKey,
+            );
+            return { key: `${sub.league}:${sub.teamKey}`, detail: d };
+          } catch {
+            return null;
+          }
+        }),
+      );
+      const byKey = new Map<string, SportsGameDetail>();
+      for (const o of overlays) {
+        if (o) byKey.set(o.key, o.detail);
+      }
+      if (byKey.size === 0) return;
+      // Re-read the current sportsSubs in case another tick raced
+      // in between; merge onto the latest snapshot.
+      const latest = useStore.getState().sportsSubs;
+      set({
+        sportsSubs: latest.map((s) => {
+          const d = byKey.get(`${s.league}:${s.teamKey}`);
+          if (!d || !s.current) return s;
+          return {
+            ...s,
+            current: {
+              ...s.current,
+              status: d.status,
+              statusDetail: d.statusDetail,
+              homeTeam: { ...s.current.homeTeam, score: d.homeTeam.score },
+              awayTeam: { ...s.current.awayTeam, score: d.awayTeam.score },
+            },
+          };
+        }),
+      });
     } catch {
       // Don't reset subs on failure — keep the last good snapshot
       // so a transient blip doesn't blank the screen.
