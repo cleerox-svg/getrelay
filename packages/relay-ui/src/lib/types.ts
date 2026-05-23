@@ -183,11 +183,28 @@ export interface SportsTeamBox {
   stats?: { label: string; value: string }[];
 }
 
+// Pregame "Starting Goalies" — NHL only. Both numeric stat fields
+// stay nullable because the upstream returns partial rows for
+// goalies with limited appearances.
+export interface SportsStartingGoalie {
+  side: 'home' | 'away';
+  name: string;
+  teamAbbr: string;
+  starter: boolean; // true → "Likely starter" pill
+  wins: number | null;
+  losses: number | null;
+  otLosses: number | null;
+  shutouts: number | null;
+  gaa: number | null;
+  savePct: number | null; // 0-1; formatted ".932" on the client
+}
+
 export interface SportsGameDetail extends SportsGame {
   linescore: SportsLinescorePeriod[];
   totals: SportsLinescoreTotal[];
   scoringPlays: SportsScoringPlay[];
   threeStars?: SportsThreeStar[];
+  startingGoalies?: SportsStartingGoalie[];
   homeBox: SportsTeamBox;
   awayBox: SportsTeamBox;
 }

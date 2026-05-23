@@ -125,6 +125,26 @@ would otherwise render as "AWAY – at – HOME" with stray em-dashes) and
 shows a centered `AWAY vs HOME` with a `Sat · 7:00 PM ET`-style line
 underneath. Live and final games keep the score lockup as-is.
 
+## Starting goalies (NHL pregame)
+
+The NHL detail page surfaces a "Starting Goalies" card between the
+header and the linescore, pulled from `landing.matchup.goalieComparison`
+on `/v1/gamecenter/{id}/landing`. Worker exposes one probable starter
+per side (the row marked `starter: true` if any, else the first listed —
+NHL orders them likely → backup) with their season-to-date stats:
+
+| Field | Source | Notes |
+|---|---|---|
+| `name` | goalie's `name.default` (falls back to `firstName + lastName`) | |
+| `starter` | `starter === true` | Renders a "Likely" pill |
+| `wins / losses / otLosses / shutouts` | matching numeric fields | Each independently nullable for short-season backups |
+| `gaa` | `goalsAgainstAverage` | Formatted to two decimals |
+| `savePct` | `savePercentage` (0–1) | Formatted ".932" — NHL convention, no leading zero |
+
+The list is only filled while `matchup.goalieComparison` is present,
+which is the pregame window. Once the puck drops the boxscore's
+`playerByGameStats.goalies` takes over and the section disappears.
+
 ## Push notifications
 
 Driven by `runSportsCron(env)` which fires every minute (Worker

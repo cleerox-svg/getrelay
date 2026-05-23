@@ -118,11 +118,30 @@ interface TeamBox {
   stats?: { label: string; value: string }[];
 }
 
+// Pregame "Starting Goalies" matchup card. NHL only — landing's
+// matchup.goalieComparison populates probable starters with their
+// season-to-date W-L-OTL, shutouts, GAA, SV%. All numeric fields are
+// optional because the upstream returns partial rows when a goalie
+// has limited appearances.
+interface StartingGoalie {
+  side: 'home' | 'away';
+  name: string;
+  teamAbbr: string;
+  starter: boolean; // true → "Likely" starter (highlight)
+  wins: number | null;
+  losses: number | null;
+  otLosses: number | null;
+  shutouts: number | null;
+  gaa: number | null; // goals-against average
+  savePct: number | null; // 0–1, formatted on the client to ".932"
+}
+
 interface GameDetail extends Game {
   linescore: LinescorePeriod[];
   totals: LinescoreTotal[];
   scoringPlays: ScoringPlay[];
   threeStars?: ThreeStar[]; // NHL only
+  startingGoalies?: StartingGoalie[]; // NHL pregame only
   homeBox: TeamBox;
   awayBox: TeamBox;
 }
@@ -1368,6 +1387,29 @@ interface NhlLanding {
       homeValue?: number | string;
     }[];
   };
+  // Pregame matchup chrome. NHL only fills `goalieComparison` for
+  // games that haven't started; once the puck drops the actual
+  // in-net goalies show up in playerByGameStats.goalies (boxscore).
+  matchup?: {
+    goalieComparison?: {
+      awayTeam?: { goalies?: NhlMatchupGoalie[] };
+      homeTeam?: { goalies?: NhlMatchupGoalie[] };
+    };
+  };
+}
+
+interface NhlMatchupGoalie {
+  playerId?: number;
+  firstName?: { default?: string } | string;
+  lastName?: { default?: string } | string;
+  name?: { default?: string } | string;
+  starter?: boolean; // "Likely" starter flag
+  wins?: number;
+  losses?: number;
+  otLosses?: number;
+  shutouts?: number;
+  goalsAgainstAverage?: number;
+  savePercentage?: number;
 }
 
 interface NhlBoxSkater {
@@ -1564,6 +1606,8 @@ function parseNhlDetail(
     });
   }
 
+  const startingGoalies = parseStartingGoalies(landing, homeRaw.abbrev ?? '', awayRaw.abbrev ?? '');
+
   return {
     id: landing.id != null ? String(landing.id) : '',
     league: 'NHL',
@@ -1580,9 +1624,54 @@ function parseNhlDetail(
     totals,
     scoringPlays,
     threeStars: threeStars.length ? threeStars : undefined,
+    startingGoalies: startingGoalies.length ? startingGoalies : undefined,
     homeBox,
     awayBox,
   };
+}
+
+// Extract probable starters from `landing.matchup.goalieComparison`.
+// Returns at most one goalie per side — the one flagged starter when
+// the upstream marks one, otherwise the first listed (NHL orders them
+// likely → backup). Returns [] for in-progress / final games where
+// `goalieComparison` is absent.
+function parseStartingGoalies(
+  landing: NhlLanding,
+  homeAbbr: string,
+  awayAbbr: string,
+): StartingGoalie[] {
+  const home = landing.matchup?.goalieComparison?.homeTeam?.goalies ?? [];
+  const away = landing.matchup?.goalieComparison?.awayTeam?.goalies ?? [];
+  const out: StartingGoalie[] = [];
+  const pick = (g: NhlMatchupGoalie, side: 'home' | 'away', teamAbbr: string) => {
+    const fn =
+      (typeof g.firstName === 'string' ? g.firstName : g.firstName?.default) ?? '';
+    const ln =
+      (typeof g.lastName === 'string' ? g.lastName : g.lastName?.default) ?? '';
+    const named =
+      (typeof g.name === 'string' ? g.name : g.name?.default) || joinName(fn, ln);
+    out.push({
+      side,
+      name: named,
+      teamAbbr,
+      starter: g.starter === true,
+      wins: typeof g.wins === 'number' ? g.wins : null,
+      losses: typeof g.losses === 'number' ? g.losses : null,
+      otLosses: typeof g.otLosses === 'number' ? g.otLosses : null,
+      shutouts: typeof g.shutouts === 'number' ? g.shutouts : null,
+      gaa: typeof g.goalsAgainstAverage === 'number' ? g.goalsAgainstAverage : null,
+      savePct: typeof g.savePercentage === 'number' ? g.savePercentage : null,
+    });
+  };
+  const oneFromEach = (rows: NhlMatchupGoalie[]): NhlMatchupGoalie | null => {
+    if (rows.length === 0) return null;
+    return rows.find((g) => g.starter === true) ?? rows[0]!;
+  };
+  const awayPick = oneFromEach(away);
+  const homePick = oneFromEach(home);
+  if (awayPick) pick(awayPick, 'away', awayAbbr);
+  if (homePick) pick(homePick, 'home', homeAbbr);
+  return out;
 }
 
 function sumShots(
