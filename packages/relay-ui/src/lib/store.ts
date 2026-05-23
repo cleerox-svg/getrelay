@@ -195,6 +195,10 @@ export const useStore = create<AppState>((set, get) => ({
                 ...s.current.awayTeam,
                 score: d.awayTeam.score ?? s.current.awayTeam.score,
               },
+              // Prefer the detail's series (landing is the canonical
+              // source for seriesStatus and may have it when the
+              // list endpoint didn't fetch / parse it).
+              series: d.series ?? s.current.series,
             },
           };
         }),

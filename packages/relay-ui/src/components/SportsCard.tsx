@@ -218,10 +218,7 @@ export function SportsCard({ game, teamKey, label }: Props) {
             alignItems: 'center',
             gap: 6,
             fontSize: 11,
-            fontWeight: 700,
             color: 'var(--text-dim)',
-            letterSpacing: 0.4,
-            textTransform: 'uppercase',
           }}
         >
           {game.series.round ? (
@@ -231,12 +228,22 @@ export function SportsCard({ game, teamKey, label }: Props) {
                 color: 'var(--text)',
                 padding: '2px 7px',
                 borderRadius: 999,
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: 0.4,
+                textTransform: 'uppercase',
               }}
             >
               {game.series.round}
             </span>
           ) : null}
-          <span>{game.series.gameLabel}</span>
+          {/* Short tokens (Game / round chip) stay uppercase + bold for
+              the compact tag look; the longer natural-language series
+              label uses sentence case so "Montreal up 1 game to 0 over
+              Carolina" stays readable. */}
+          <span style={{ fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase' }}>
+            {game.series.gameLabel}
+          </span>
           <span aria-hidden>·</span>
           <span>{game.series.seriesLabel}</span>
         </div>

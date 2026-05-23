@@ -359,8 +359,15 @@ async function fetchNhlForTeam(abbr: string, ymd: string): Promise<Game | null> 
     const ev = flat.find((g) => g?.gameDate === ymd);
     if (!ev) return null;
     const game = parseNhlGame(ev, abbr);
-    if (ev.gameType === 3) {
-      game.series = (await fetchNhlSeries(String(ev.id ?? ''), abbr)) ?? undefined;
+    // Always attempt the series fetch — the schedule's gameType
+    // field has been observed missing for late-round playoff games,
+    // so gating on `=== 3` could silently hide the series label.
+    // fetchNhlSeries returns null when landing has no seriesStatus
+    // (i.e. regular season) and the upstream call is CF-cached at
+    // 5 min, so the extra hit is cheap.
+    if (ev.id != null) {
+      game.series =
+        (await fetchNhlSeries(String(ev.id), abbr, nameLookupForGame(game))) ?? undefined;
     }
     // Always overlay gamecenter state — not gated on the schedule's
     // claimed status, because the schedule lags. CF caches boxscore
@@ -452,8 +459,9 @@ async function fetchNhlPrevious(abbr: string, beforeYmd: string): Promise<Game |
     candidates.sort((a, b) => (a.gameDate ?? '').localeCompare(b.gameDate ?? ''));
     const ev = candidates[candidates.length - 1]!;
     const game = parseNhlGame(ev, abbr);
-    if (ev.gameType === 3) {
-      game.series = (await fetchNhlSeries(String(ev.id ?? ''), abbr)) ?? undefined;
+    if (ev.id != null) {
+      game.series =
+        (await fetchNhlSeries(String(ev.id), abbr, nameLookupForGame(game))) ?? undefined;
     }
     return game;
   } catch {
@@ -463,8 +471,16 @@ async function fetchNhlPrevious(abbr: string, beforeYmd: string): Promise<Game |
 
 // Series info for an NHL playoff game. Pulled from gamecenter/landing
 // which carries `seriesStatus` with topSeed/bottomSeed wins and game
-// number. Best-effort — returns null if either endpoint fails.
-async function fetchNhlSeries(gameId: string, ourAbbr: string): Promise<Series | null> {
+// number. Best-effort — returns null if either endpoint fails or the
+// game isn't actually a playoff game (regular-season landing responses
+// don't include seriesStatus). The optional `nameByAbbr` map lets the
+// caller pass full team names so the label can read "Montreal up 1
+// game to 0 over Carolina" instead of "MTL up 1 game to 0 over CAR".
+async function fetchNhlSeries(
+  gameId: string,
+  ourAbbr: string,
+  nameByAbbr?: Record<string, string>,
+): Promise<Series | null> {
   if (!gameId) return null;
   try {
     const r = await fetch(
@@ -488,17 +504,28 @@ async function fetchNhlSeries(gameId: string, ourAbbr: string): Promise<Series |
     };
     const s = data.seriesStatus;
     if (!s) return null;
+    const topAbbr = s.topSeedTeamAbbrev ?? '';
+    const bottomAbbr = s.bottomSeedTeamAbbrev ?? '';
     return buildSeries({
       title: s.seriesTitle ?? null,
       gameNumber: s.gameNumberOfSeries ?? null,
       neededToWin: s.neededToWin ?? 4,
-      a: { abbr: s.topSeedTeamAbbrev ?? '', wins: s.topSeedWins ?? 0 },
-      b: { abbr: s.bottomSeedTeamAbbrev ?? '', wins: s.bottomSeedWins ?? 0 },
+      a: { abbr: topAbbr, wins: s.topSeedWins ?? 0, name: nameByAbbr?.[topAbbr] },
+      b: { abbr: bottomAbbr, wins: s.bottomSeedWins ?? 0, name: nameByAbbr?.[bottomAbbr] },
       ourAbbr,
     });
   } catch {
     return null;
   }
+}
+
+// Build the abbrev → full-name lookup buildSeries needs when both
+// sides of the matchup are sitting on a parsed Game.
+function nameLookupForGame(g: Game): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (g.homeTeam.abbr) out[g.homeTeam.abbr] = g.homeTeam.name;
+  if (g.awayTeam.abbr) out[g.awayTeam.abbr] = g.awayTeam.name;
+  return out;
 }
 
 interface NhlRawTeam {
@@ -806,8 +833,16 @@ function parseMlbGame(g: MlbRawGame, ourTeamId: number): Game {
       title: ourSS?.shortName ?? g.seriesDescription ?? null,
       gameNumber: ourSS?.gameNumber ?? g.seriesGameNumber ?? null,
       neededToWin: Math.ceil(total / 2),
-      a: { abbr: ourTeam.team?.abbreviation ?? '', wins: ourWins },
-      b: { abbr: oppTeam.team?.abbreviation ?? '', wins: oppWins },
+      a: {
+        abbr: ourTeam.team?.abbreviation ?? '',
+        wins: ourWins,
+        name: ourTeam.team?.name ?? '',
+      },
+      b: {
+        abbr: oppTeam.team?.abbreviation ?? '',
+        wins: oppWins,
+        name: oppTeam.team?.name ?? '',
+      },
       ourAbbr: ourTeam.team?.abbreviation ?? '',
     });
   }
@@ -829,31 +864,36 @@ function parseMlbGame(g: MlbRawGame, ourTeamId: number): Game {
 
 // Shared series-label builder. Either side can be passed first; the
 // `ourAbbr` argument resolves the perspective so the output reads
-// naturally from the user's team's POV.
+// naturally from the user's team's POV. Pass `name` when known and
+// we'll prefer it ("Montreal up 1 game to 0 over Carolina") over the
+// terse abbrev form.
 function buildSeries(input: {
   title: string | null;
   gameNumber: number | null;
   neededToWin: number;
-  a: { abbr: string; wins: number };
-  b: { abbr: string; wins: number };
+  a: { abbr: string; wins: number; name?: string };
+  b: { abbr: string; wins: number; name?: string };
   ourAbbr: string;
 }): Series {
   const { title, gameNumber, neededToWin, a, b, ourAbbr } = input;
   const totalGames = neededToWin * 2 - 1; // best-of
   const ours = a.abbr === ourAbbr ? a : b;
   const theirs = a.abbr === ourAbbr ? b : a;
+  const oursName = ours.name || ours.abbr;
+  const theirsName = theirs.name || theirs.abbr;
+  const gameWord = (n: number) => (n === 1 ? 'game' : 'games');
 
   let seriesLabel: string;
   if (ours.wins === neededToWin) {
-    seriesLabel = `${ours.abbr} wins series ${ours.wins}-${theirs.wins}`;
+    seriesLabel = `${oursName} wins series ${ours.wins} ${gameWord(ours.wins)} to ${theirs.wins} over ${theirsName}`;
   } else if (theirs.wins === neededToWin) {
-    seriesLabel = `${theirs.abbr} wins series ${theirs.wins}-${ours.wins}`;
+    seriesLabel = `${theirsName} wins series ${theirs.wins} ${gameWord(theirs.wins)} to ${ours.wins} over ${oursName}`;
   } else if (ours.wins === theirs.wins) {
-    seriesLabel = `Series tied ${ours.wins}-${theirs.wins}`;
+    seriesLabel = ours.wins === 0 ? 'Series tied' : `Series tied ${ours.wins}-${theirs.wins}`;
   } else if (ours.wins > theirs.wins) {
-    seriesLabel = `${ours.abbr} leads series ${ours.wins}-${theirs.wins}`;
+    seriesLabel = `${oursName} up ${ours.wins} ${gameWord(ours.wins)} to ${theirs.wins} over ${theirsName}`;
   } else {
-    seriesLabel = `${theirs.abbr} leads series ${theirs.wins}-${ours.wins}`;
+    seriesLabel = `${theirsName} up ${theirs.wins} ${gameWord(theirs.wins)} to ${ours.wins} over ${oursName}`;
   }
 
   const gameLabel = gameNumber
@@ -1379,12 +1419,19 @@ function parseNhlDetail(
   let series: Series | undefined;
   const ss = landing.seriesStatus;
   if (ss && (ss.topSeedTeamAbbrev || ss.bottomSeedTeamAbbrev)) {
+    const homeTeam = parseNhlTeam(homeRaw);
+    const awayTeam = parseNhlTeam(awayRaw);
+    const nameByAbbr: Record<string, string> = {};
+    if (homeTeam.abbr) nameByAbbr[homeTeam.abbr] = homeTeam.name;
+    if (awayTeam.abbr) nameByAbbr[awayTeam.abbr] = awayTeam.name;
+    const topAbbr = ss.topSeedTeamAbbrev ?? '';
+    const bottomAbbr = ss.bottomSeedTeamAbbrev ?? '';
     series = buildSeries({
       title: ss.seriesTitle ?? null,
       gameNumber: ss.gameNumberOfSeries ?? null,
       neededToWin: ss.neededToWin ?? 4,
-      a: { abbr: ss.topSeedTeamAbbrev ?? '', wins: ss.topSeedWins ?? 0 },
-      b: { abbr: ss.bottomSeedTeamAbbrev ?? '', wins: ss.bottomSeedWins ?? 0 },
+      a: { abbr: topAbbr, wins: ss.topSeedWins ?? 0, name: nameByAbbr[topAbbr] },
+      b: { abbr: bottomAbbr, wins: ss.bottomSeedWins ?? 0, name: nameByAbbr[bottomAbbr] },
       ourAbbr,
     });
   }
