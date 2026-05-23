@@ -162,6 +162,30 @@ two teams currently on the card, rendered as a compact list with
 Renders nothing when there are no qualifying finals (e.g. first
 matchup of the season).
 
+## Team comparison stats (NHL)
+
+The NHL detail page surfaces a "Team Stats" card with four
+side-by-side comparison bars — goals per game, goals against per
+game, power play %, penalty kill %. Postseason values are shown
+when the matchup has a series attached (i.e. the same playoff
+gating we use for the series header); otherwise the section reads
+"Team Stats — Regular Season".
+
+Data source: `https://api.nhle.com/stats/rest/en/team/summary?cayenneExp=seasonId={season} and gameTypeId={2|3}`.
+One fetch returns all 32 teams' rows; the worker matches the
+matchup's home / away teams by `teamId` (read from the landing
+response) to dodge place-name encoding gotchas like "Montréal" vs
+"Montreal". CF-cached at 10 min.
+
+`gameTypeId`: 2 for regular season, 3 for postseason. The current
+NHL season is derived from the wall clock — months 10–12 belong to
+the season starting that year, months 1–9 to the season that
+started the prior October.
+
+The section is hidden when both teams' rows are missing (e.g.
+asking for postseason stats on two teams that didn't make the
+playoffs). Individual values render `—` when omitted.
+
 ## Push notifications
 
 Driven by `runSportsCron(env)` which fires every minute (Worker

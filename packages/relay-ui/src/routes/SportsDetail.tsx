@@ -9,6 +9,7 @@ import type {
   SportsLinescoreTotal,
   SportsStartingGoalie,
   SportsTeamBox,
+  SportsTeamSeasonStats,
 } from '../lib/types';
 
 function leagueAccent(league: 'NHL' | 'MLB'): string {
@@ -113,6 +114,147 @@ function formatMatchupDate(ymd: string): string {
   const [y, m, d] = ymd.split('-').map(Number);
   if (!y || !m || !d) return ymd;
   return `${String(m).padStart(2, '0')}/${String(d).padStart(2, '0')}`;
+}
+
+// One row of the team-stat comparison card. Two values flanking a
+// label, with a single bar split proportionally between them so the
+// dominant team owns the wider share. `lowerIsBetter` flips the
+// color (and which side reads as the "leader") for stats like goals
+// against — bigger isn't better there.
+function StatComparisonRow({
+  label,
+  away,
+  home,
+  format,
+  lowerIsBetter = false,
+}: {
+  label: string;
+  away: number | null;
+  home: number | null;
+  format: (n: number) => string;
+  lowerIsBetter?: boolean;
+}) {
+  const a = away ?? 0;
+  const h = home ?? 0;
+  const total = a + h;
+  // Equal split when both sides are zero / missing — keeps the bar
+  // from collapsing into a single color.
+  const awayShare = total > 0 ? (a / total) * 100 : 50;
+  const homeShare = 100 - awayShare;
+  const awayLeads = lowerIsBetter ? a < h : a > h;
+  const homeLeads = lowerIsBetter ? h < a : h > a;
+  return (
+    <div style={{ padding: '8px 0' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'baseline',
+          justifyContent: 'space-between',
+          fontVariantNumeric: 'tabular-nums',
+          marginBottom: 4,
+        }}
+      >
+        <span style={{ fontSize: 16, fontWeight: 700, opacity: awayLeads ? 1 : 0.55 }}>
+          {away == null ? '—' : format(away)}
+        </span>
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: 0.6,
+            color: 'var(--text-dim)',
+            textTransform: 'uppercase',
+          }}
+        >
+          {label}
+        </span>
+        <span style={{ fontSize: 16, fontWeight: 700, opacity: homeLeads ? 1 : 0.55 }}>
+          {home == null ? '—' : format(home)}
+        </span>
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          height: 6,
+          borderRadius: 999,
+          overflow: 'hidden',
+          background: 'var(--separator, rgba(0,0,0,0.08))',
+        }}
+      >
+        <div
+          style={{
+            width: `${awayShare}%`,
+            background: awayLeads ? 'var(--accent, #007AFF)' : 'var(--bubble-them, #C7C7CC)',
+          }}
+        />
+        <div
+          style={{
+            width: `${homeShare}%`,
+            background: homeLeads ? 'var(--accent, #007AFF)' : 'var(--bubble-them, #C7C7CC)',
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function TeamStatsComparison({
+  away,
+  home,
+  awayAbbr,
+  homeAbbr,
+}: {
+  away?: SportsTeamSeasonStats;
+  home?: SportsTeamSeasonStats;
+  awayAbbr: string;
+  homeAbbr: string;
+}) {
+  const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
+  const dec = (n: number) => n.toFixed(2);
+  return (
+    <div>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: 0.5,
+          color: 'var(--text-dim)',
+          textTransform: 'uppercase',
+          marginBottom: 4,
+        }}
+      >
+        <span>{awayAbbr}</span>
+        <span>{homeAbbr}</span>
+      </div>
+      <StatComparisonRow
+        label="Goals per game"
+        away={away?.gfPerGame ?? null}
+        home={home?.gfPerGame ?? null}
+        format={dec}
+      />
+      <StatComparisonRow
+        label="Goals against per game"
+        away={away?.gaPerGame ?? null}
+        home={home?.gaPerGame ?? null}
+        format={dec}
+        lowerIsBetter
+      />
+      <StatComparisonRow
+        label="Power play %"
+        away={away?.ppPct ?? null}
+        home={home?.ppPct ?? null}
+        format={pct}
+      />
+      <StatComparisonRow
+        label="Penalty kill %"
+        away={away?.pkPct ?? null}
+        home={home?.pkPct ?? null}
+        format={pct}
+      />
+    </div>
+  );
 }
 
 // "Sat · 7:00 PM ET" for the pregame matchup card.
@@ -665,6 +807,28 @@ export function SportsDetail() {
                 </div>
               ) : null}
             </div>
+
+            {/* Team comparison stats (NHL only). Worker pulls
+                postseason-only stats when the game has a series
+                attached, regular-season otherwise — the period
+                drives the section title. */}
+            {detail.teamSeasonStats &&
+            (detail.teamSeasonStats.home || detail.teamSeasonStats.away) ? (
+              <section className="detail-card">
+                <h3 className="detail-card-title">
+                  Team Stats —{' '}
+                  {detail.teamSeasonStats.period === 'postseason'
+                    ? 'Postseason'
+                    : 'Regular Season'}
+                </h3>
+                <TeamStatsComparison
+                  away={detail.teamSeasonStats.away}
+                  home={detail.teamSeasonStats.home}
+                  awayAbbr={detail.awayTeam.abbr}
+                  homeAbbr={detail.homeTeam.abbr}
+                />
+              </section>
+            ) : null}
 
             {/* Starting goalies (NHL pregame). Worker only fills the
                 array when landing.matchup.goalieComparison is
