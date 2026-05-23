@@ -162,14 +162,22 @@ export function sportsRoutes() {
       .filter((g): g is Game => g !== null);
 
     const hasLive = games.some((g) => g.status === 'live');
-    const ttl = hasLive ? 30 : 300;
+    // When ANY followed team has a live game, bypass our caching
+    // layers entirely. The cache stack (browser HTTP cache 30s +
+    // worker response cache 30s + upstream schedule cache 30s) was
+    // adding up to ~90s of staleness during live play. The upstream
+    // boxscore CF cache (10s, set on each fetchNhl/MlbLiveScore
+    // call) remains as the only buffer, so live data is at most
+    // ~10s stale. For pre/final the long cache stays useful.
     const resp = new Response(JSON.stringify({ games, subs: items }), {
       headers: {
         'content-type': 'application/json',
-        'cache-control': `public, max-age=${ttl}`,
+        'cache-control': hasLive ? 'no-store' : 'public, max-age=300',
       },
     });
-    c.executionCtx.waitUntil(cache.put(cacheKey, resp.clone()));
+    if (!hasLive) {
+      c.executionCtx.waitUntil(cache.put(cacheKey, resp.clone()));
+    }
     return resp;
   });
 
@@ -210,18 +218,24 @@ export function sportsRoutes() {
     const cacheKey = new Request(
       `https://relay-cache.local/sports/nhl/${id}?abbr=${ourAbbr}`,
     );
+    // Only consult our own cache for non-live states (pre/final); for
+    // live games go straight to upstream every call so the drill-down
+    // matches what you'd expect after tapping into an in-progress game.
     const cached = await cache.match(cacheKey);
-    if (cached) return cached;
+    if (cached) {
+      const detail = (await cached.clone().json()) as { status?: string };
+      if (detail.status !== 'live') return cached;
+    }
     const detail = await fetchNhlDetail(id, ourAbbr);
     if (!detail) return c.json({ error: 'not found' }, 404);
-    const ttl = detail.status === 'live' ? 30 : 300;
+    const live = detail.status === 'live';
     const resp = new Response(JSON.stringify(detail), {
       headers: {
         'content-type': 'application/json',
-        'cache-control': `public, max-age=${ttl}`,
+        'cache-control': live ? 'no-store' : 'public, max-age=300',
       },
     });
-    c.executionCtx.waitUntil(cache.put(cacheKey, resp.clone()));
+    if (!live) c.executionCtx.waitUntil(cache.put(cacheKey, resp.clone()));
     return resp;
   });
 
@@ -234,17 +248,20 @@ export function sportsRoutes() {
       `https://relay-cache.local/sports/mlb/${id}?teamId=${ourTeamId}`,
     );
     const cached = await cache.match(cacheKey);
-    if (cached) return cached;
+    if (cached) {
+      const detail = (await cached.clone().json()) as { status?: string };
+      if (detail.status !== 'live') return cached;
+    }
     const detail = await fetchMlbDetail(id, Number(ourTeamId) || Number(DEFAULT_MLB_ID));
     if (!detail) return c.json({ error: 'not found' }, 404);
-    const ttl = detail.status === 'live' ? 30 : 300;
+    const live = detail.status === 'live';
     const resp = new Response(JSON.stringify(detail), {
       headers: {
         'content-type': 'application/json',
-        'cache-control': `public, max-age=${ttl}`,
+        'cache-control': live ? 'no-store' : 'public, max-age=300',
       },
     });
-    c.executionCtx.waitUntil(cache.put(cacheKey, resp.clone()));
+    if (!live) c.executionCtx.waitUntil(cache.put(cacheKey, resp.clone()));
     return resp;
   });
 
