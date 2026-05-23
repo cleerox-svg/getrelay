@@ -796,10 +796,12 @@ export function wireWsToStore(): void {
 // the whole UI; without this lift, the page-local poller meant the
 // tab badge wouldn't tick until the user opened the Sports tab.
 let sportsTimer: number | undefined;
+let sportsVisibilityHandler: (() => void) | undefined;
+let sportsOnlineHandler: (() => void) | undefined;
 export function wireSportsPoller(): void {
-  // Re-entry on remount: clear any prior timer so we don't end up
-  // with two timers racing.
-  if (sportsTimer !== undefined) window.clearTimeout(sportsTimer);
+  // Re-entry on remount: clear any prior timer/listeners so we don't
+  // end up with two pollers racing.
+  stopSportsPoller();
   const tick = async () => {
     await useStore.getState().loadSports();
     const live = useStore
@@ -807,11 +809,35 @@ export function wireSportsPoller(): void {
       .sportsSubs.some((s) => s.current?.status === 'live');
     sportsTimer = window.setTimeout(tick, live ? 30_000 : 300_000);
   };
-  tick();
+  // setTimeout is paused/throttled while the PWA is backgrounded or
+  // the tab is hidden, so the next tick can be many minutes overdue
+  // when the user comes back — leaving the list showing the inning
+  // and score from the last successful poll. Force an immediate
+  // refresh on resume so the Sports tab matches reality.
+  sportsVisibilityHandler = () => {
+    if (document.visibilityState !== 'visible') return;
+    if (sportsTimer !== undefined) window.clearTimeout(sportsTimer);
+    void tick();
+  };
+  sportsOnlineHandler = () => {
+    if (sportsTimer !== undefined) window.clearTimeout(sportsTimer);
+    void tick();
+  };
+  document.addEventListener('visibilitychange', sportsVisibilityHandler);
+  window.addEventListener('online', sportsOnlineHandler);
+  void tick();
 }
 export function stopSportsPoller(): void {
   if (sportsTimer !== undefined) {
     window.clearTimeout(sportsTimer);
     sportsTimer = undefined;
+  }
+  if (sportsVisibilityHandler) {
+    document.removeEventListener('visibilitychange', sportsVisibilityHandler);
+    sportsVisibilityHandler = undefined;
+  }
+  if (sportsOnlineHandler) {
+    window.removeEventListener('online', sportsOnlineHandler);
+    sportsOnlineHandler = undefined;
   }
 }
