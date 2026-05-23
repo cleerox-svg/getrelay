@@ -233,6 +233,15 @@ input {
     0 1px 2px rgba(0, 0, 0, 0.06),
     0 2px 8px rgba(0, 0, 0, 0.06);
   transition: transform 90ms ease-out, box-shadow 180ms ease-out;
+  /* GPU-compositing hints. Without these the gradient + multi-stop
+     box-shadow are repainted on every scroll frame, which on iOS
+     Safari produces visible jank with a long list of cards. The
+     translateZ(0) + will-change pair forces each card onto its own
+     compositor layer so scroll just translates already-rendered
+     pixels instead of repainting them. (No contain:paint here — it
+     would clip the outer drop shadow.) */
+  transform: translateZ(0);
+  will-change: transform;
 }
 :root[data-theme="dark"] .sports-card,
 .dark .sports-card {
@@ -307,6 +316,13 @@ input {
 }
 .chat-card:active {
   transform: scale(0.995);
+}
+/* Same GPU-compositing hint as .sports-card — needed because the
+   gradient + multi-stop shadow recipe is repaint-heavy on iOS. The
+   :active rule above still composes correctly with translateZ. */
+.chat-card {
+  transform: translateZ(0);
+  will-change: transform;
 }
 .chat-card-meta {
   flex: 1;
@@ -408,6 +424,11 @@ html.beta .bubble-them {
     inset 0 1px 0 rgba(255, 255, 255, 0.04),
     0 1px 2px rgba(0, 0, 0, 0.06),
     0 2px 8px rgba(0, 0, 0, 0.06);
+  /* Same GPU compositor hint as .sports-card and .chat-card. The
+     drill-down stacks five+ of these on top of each other in /sports/
+     details — without the hint, scrolling repaints all of them. */
+  transform: translateZ(0);
+  will-change: transform;
 }
 :root[data-theme="dark"] .detail-card,
 .dark .detail-card {
