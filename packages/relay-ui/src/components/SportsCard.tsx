@@ -71,29 +71,48 @@ function TeamRow({
         style={{
           flex: 1,
           minWidth: 0,
-          fontSize: 14,
-          fontWeight: isOurs ? 700 : 500,
-          overflow: 'hidden',
-          whiteSpace: 'nowrap',
-          textOverflow: 'ellipsis',
+          display: 'flex',
+          flexDirection: 'column',
+          lineHeight: 1.15,
         }}
       >
-        {team.name}
         <span
-          aria-hidden
           style={{
-            marginLeft: 8,
-            fontSize: 11,
-            fontWeight: 500,
-            color: 'var(--text-dim)',
+            fontSize: 14,
+            fontWeight: isOurs ? 700 : 500,
+            overflow: 'hidden',
+            whiteSpace: 'nowrap',
+            textOverflow: 'ellipsis',
           }}
         >
-          {ourSide === 'home' && isOurs
-            ? 'HOME'
-            : ourSide === 'away' && isOurs
-              ? 'AWAY'
-              : ''}
+          {team.name}
+          <span
+            aria-hidden
+            style={{
+              marginLeft: 8,
+              fontSize: 11,
+              fontWeight: 500,
+              color: 'var(--text-dim)',
+            }}
+          >
+            {ourSide === 'home' && isOurs
+              ? 'HOME'
+              : ourSide === 'away' && isOurs
+                ? 'AWAY'
+                : ''}
+          </span>
         </span>
+        {team.record ? (
+          <span
+            style={{
+              fontSize: 11,
+              color: 'var(--text-dim)',
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            {team.record}
+          </span>
+        ) : null}
       </span>
       {showScore ? (
         <span
@@ -187,12 +206,35 @@ export function SportsCard({ game, teamKey, label }: Props) {
         <span
           style={{
             marginLeft: 'auto',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
             fontSize: 12,
             color: 'var(--text-dim)',
             fontWeight: 600,
           }}
         >
-          {game.statusDetail}
+          {game.broadcast ? (
+            // Broadcast pill sits next to the time/inning so the
+            // header reads like "SN · 7:00 PM ET" or "TBS · Bot 8th".
+            <>
+              <span
+                style={{
+                  background: 'var(--bubble-them, #E5E5EA)',
+                  color: 'var(--text)',
+                  padding: '1px 6px',
+                  borderRadius: 4,
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: 0.3,
+                }}
+              >
+                {game.broadcast}
+              </span>
+              <span aria-hidden>·</span>
+            </>
+          ) : null}
+          <span>{game.statusDetail}</span>
         </span>
       </div>
 
