@@ -207,7 +207,14 @@ export function sportsRoutes() {
   const app = new Hono<{ Bindings: Env }>();
 
   app.get('/sports', async (c) => {
-    const ymd = todayInToronto();
+    // Optional ?date=YYYY-MM-DD lets the client navigate the day
+    // selector. Falls back to today (Toronto) on missing/invalid
+    // input — same default the cron uses. The selected date is
+    // also threaded into the cache key so each day is cached as
+    // its own response.
+    const requested = c.req.query('date');
+    const ymd = isValidYmd(requested) ? requested : todayInToronto();
+    const isToday = ymd === todayInToronto();
     const me = await readAuthedUser(c.env, c.req.raw);
     const subs = await loadSubs(c.env, me?.id ?? null);
 
@@ -252,7 +259,7 @@ export function sportsRoutes() {
       .map((i) => i.current)
       .filter((g): g is Game => g !== null);
 
-    const hasLive = games.some((g) => g.status === 'live');
+    const hasLive = isToday && games.some((g) => g.status === 'live');
     // When ANY followed team has a live game, bypass our caching
     // layers entirely. The cache stack (browser HTTP cache 30s +
     // worker response cache 30s + upstream schedule cache 30s) was
@@ -260,6 +267,10 @@ export function sportsRoutes() {
     // boxscore CF cache (10s, set on each fetchNhl/MlbLiveScore
     // call) remains as the only buffer, so live data is at most
     // ~10s stale. For pre/final the long cache stays useful.
+    //
+    // Only the today view triggers the no-store path — other days
+    // can't be "live right now" from this client's perspective and
+    // benefit from the longer cache.
     const resp = new Response(JSON.stringify({ games, subs: items }), {
       headers: {
         'content-type': 'application/json',
@@ -383,6 +394,13 @@ async function loadSubs(env: Env, userId: string | null): Promise<SubRow[]> {
     { league: 'NHL', teamKey: DEFAULT_NHL_ABBR },
     { league: 'MLB', teamKey: DEFAULT_MLB_ID },
   ];
+}
+
+// Type guard for the optional ?date= query — accepts strict
+// YYYY-MM-DD only. Wider parsing (e.g. ISO timestamps) would let
+// callers tunnel a non-canonical key into the per-day cache.
+function isValidYmd(s: string | undefined): s is string {
+  return !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
 }
 
 function todayInToronto(): string {
