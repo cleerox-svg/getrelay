@@ -333,10 +333,27 @@ export function SportsDetail() {
         }
       }
     }
-    load();
+    // Mobile browsers throttle setTimeout while the tab/PWA is
+    // hidden, so the next poll can be far overdue when the user
+    // returns. Force a refresh on visibility-restore and on network
+    // reconnect so the live scoreboard isn't frozen on resume.
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (timer !== undefined) window.clearTimeout(timer);
+      void load();
+    };
+    const onOnline = () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      void load();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('online', onOnline);
+    void load();
     return () => {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('online', onOnline);
     };
   }, [isLeague, leagueLc, id, teamKey]);
 
