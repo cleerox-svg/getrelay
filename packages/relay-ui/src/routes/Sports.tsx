@@ -31,7 +31,14 @@ export function Sports() {
       <h1 className="text-[34px] font-bold tracking-tight px-4 pt-3 pb-1">Sports</h1>
 
       {subs.length > 0 ? (
-        <div className="px-4">
+        // Bottom padding leaves the last card breathing room above
+        // the fixed Tabbar. Without it the card's bottom edge sits
+        // under the tab bar and the page can feel scroll-locked when
+        // the user's touch starts in that overlap zone.
+        <div
+          className="px-4"
+          style={{ paddingBottom: 'calc(96px + env(safe-area-inset-bottom, 0px))' }}
+        >
           {subs.map((s) => (
             <div key={`${s.league}-${s.teamKey}`}>
               {s.current ? (
