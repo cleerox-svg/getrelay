@@ -344,7 +344,45 @@ async function fetchNhlForTeam(abbr: string, ymd: string): Promise<Game | null> 
     if (ev.gameType === 3) {
       game.series = (await fetchNhlSeries(String(ev.id ?? ''), abbr)) ?? undefined;
     }
+    // The schedule endpoint doesn't tick scores during a live game —
+    // it returns whatever score was baked into the schedule snapshot.
+    // For live games we layer the gamecenter boxscore on top so the
+    // /sports list shows the same score the drill-down does. Falls
+    // back silently if the boxscore call hiccups; better stale than
+    // empty.
+    if (game.status === 'live' && ev.id != null) {
+      const live = await fetchNhlLiveScore(String(ev.id));
+      if (live) {
+        game.homeTeam.score = live.homeScore;
+        game.awayTeam.score = live.awayScore;
+      }
+    }
     return game;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchNhlLiveScore(
+  gameId: string,
+): Promise<{ homeScore: number; awayScore: number } | null> {
+  try {
+    const r = await fetch(
+      `https://api-web.nhle.com/v1/gamecenter/${gameId}/boxscore`,
+      // Tight TTL — this only fires for live games, and the polling
+      // cadence at the worker level is already 30s. 10s here gives
+      // us at most 10s of additional lag from upstream.
+      { cf: { cacheTtl: 10 } } as RequestInit,
+    );
+    if (!r.ok) return null;
+    const data = (await r.json()) as {
+      homeTeam?: { score?: number };
+      awayTeam?: { score?: number };
+    };
+    const homeScore = Number(data.homeTeam?.score);
+    const awayScore = Number(data.awayTeam?.score);
+    if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) return null;
+    return { homeScore, awayScore };
   } catch {
     return null;
   }
@@ -508,7 +546,43 @@ async function fetchMlbForTeam(teamKey: string, ymd: string): Promise<Game | nul
     const data = (await r.json()) as { dates?: { games?: MlbRawGame[] }[] };
     const game = data.dates?.[0]?.games?.[0];
     if (!game) return null;
-    return parseMlbGame(game, teamId);
+    const parsed = parseMlbGame(game, teamId);
+    // Same logic as NHL: the schedule snapshot lags live scoring.
+    // Hit the per-game boxscore (tiny payload, 10s edge TTL) when
+    // the game is live so the score on the list ticks at the same
+    // rate as the drill-down.
+    if (parsed.status === 'live' && game.gamePk != null) {
+      const live = await fetchMlbLiveScore(String(game.gamePk));
+      if (live) {
+        parsed.homeTeam.score = live.homeScore;
+        parsed.awayTeam.score = live.awayScore;
+      }
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchMlbLiveScore(
+  gamePk: string,
+): Promise<{ homeScore: number; awayScore: number } | null> {
+  try {
+    const r = await fetch(
+      `https://statsapi.mlb.com/api/v1/game/${gamePk}/boxscore`,
+      { cf: { cacheTtl: 10 } } as RequestInit,
+    );
+    if (!r.ok) return null;
+    const data = (await r.json()) as {
+      teams?: {
+        home?: { teamStats?: { batting?: { runs?: number } } };
+        away?: { teamStats?: { batting?: { runs?: number } } };
+      };
+    };
+    const homeScore = Number(data.teams?.home?.teamStats?.batting?.runs);
+    const awayScore = Number(data.teams?.away?.teamStats?.batting?.runs);
+    if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) return null;
+    return { homeScore, awayScore };
   } catch {
     return null;
   }
