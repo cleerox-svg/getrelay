@@ -155,6 +155,28 @@ interface TeamSeasonStatsPair {
   away?: TeamSeasonStats;
 }
 
+// One stat leader (points / goals / assists). `name` is preformatted
+// "F. Lastname" so the renderer doesn't have to know how NHL splits
+// firstName / lastName. `value` is the numeric stat — always a whole
+// number for these three stats.
+interface StatLeader {
+  name: string;
+  teamAbbr: string;
+  value: number;
+}
+
+interface TeamLeaders {
+  points?: StatLeader;
+  goals?: StatLeader;
+  assists?: StatLeader;
+}
+
+interface TeamLeadersPair {
+  period: 'postseason' | 'regular';
+  home?: TeamLeaders;
+  away?: TeamLeaders;
+}
+
 // Recent head-to-head matchup. Worker pulls the last few finals
 // between the two teams currently on the detail card. Both abbrs
 // are the actual team abbreviations the game was played by (so the
@@ -176,6 +198,7 @@ interface GameDetail extends Game {
   startingGoalies?: StartingGoalie[]; // NHL pregame only
   recentMatchups?: RecentMatchup[]; // last N final head-to-head games
   teamSeasonStats?: TeamSeasonStatsPair; // NHL only — comparison bars
+  teamLeaders?: TeamLeadersPair; // NHL only — per-team P/G/A leaders
   homeBox: TeamBox;
   awayBox: TeamBox;
 }
@@ -518,6 +541,73 @@ function compactTeamStats(row: NhlTeamSummaryRow | undefined): TeamSeasonStats |
     ppPct: num(row.powerPlayPct),
     pkPct: num(row.penaltyKillPct),
   };
+}
+
+interface NhlClubStatsSkater {
+  playerId?: number;
+  firstName?: { default?: string };
+  lastName?: { default?: string };
+  goals?: number;
+  assists?: number;
+  points?: number;
+}
+
+// Per-team skater stats for one season + game type. Used to derive
+// the points / goals / assists leaders for the comparison card.
+// CF-cached 10 min so repeat detail loads share the response.
+async function fetchNhlClubStats(
+  abbr: string,
+  gameTypeId: number,
+): Promise<NhlClubStatsSkater[]> {
+  if (!abbr) return [];
+  try {
+    const seasonId = currentNhlSeasonId();
+    const r = await fetch(
+      `https://api-web.nhle.com/v1/club-stats-season/${abbr}/${seasonId}/${gameTypeId}`,
+      { cf: { cacheTtl: 600 } } as RequestInit,
+    );
+    if (!r.ok) return [];
+    const data = (await r.json()) as { skaters?: NhlClubStatsSkater[] };
+    return data.skaters ?? [];
+  } catch {
+    return [];
+  }
+}
+
+// Pick the top skater for a single stat. Returns null when no row
+// has a positive value — keeps us from showing "Leader: nobody, 0
+// points" on a team with zero appearances.
+function pickLeader(
+  rows: NhlClubStatsSkater[],
+  field: 'points' | 'goals' | 'assists',
+  teamAbbr: string,
+): StatLeader | undefined {
+  let best: NhlClubStatsSkater | null = null;
+  let bestVal = -1;
+  for (const s of rows) {
+    const v = typeof s[field] === 'number' ? (s[field] as number) : 0;
+    if (v > bestVal) {
+      bestVal = v;
+      best = s;
+    }
+  }
+  if (!best || bestVal <= 0) return undefined;
+  const fn = best.firstName?.default ?? '';
+  const ln = best.lastName?.default ?? '';
+  const display = fn && ln ? `${fn[0]}. ${ln}` : ln || fn;
+  return { name: display, teamAbbr, value: bestVal };
+}
+
+function buildLeaders(
+  rows: NhlClubStatsSkater[],
+  teamAbbr: string,
+): TeamLeaders | undefined {
+  if (rows.length === 0) return undefined;
+  const points = pickLeader(rows, 'points', teamAbbr);
+  const goals = pickLeader(rows, 'goals', teamAbbr);
+  const assists = pickLeader(rows, 'assists', teamAbbr);
+  if (!points && !goals && !assists) return undefined;
+  return { points, goals, assists };
 }
 
 async function fetchNhlForTeam(
@@ -1424,8 +1514,8 @@ async function fetchNhlDetail(gameId: string, ourAbbr: string): Promise<GameDeta
     // gotchas (e.g. "Montréal" vs "Montreal").
     const homeId = landing.homeTeam?.id;
     const awayId = landing.awayTeam?.id;
+    const gameTypeId = detail.series ? 3 : 2;
     if (homeId || awayId) {
-      const gameTypeId = detail.series ? 3 : 2;
       const rows = await fetchNhlTeamSummary(gameTypeId);
       const home = rows.find((r) => r.teamId === homeId);
       const away = rows.find((r) => r.teamId === awayId);
@@ -1436,6 +1526,24 @@ async function fetchNhlDetail(gameId: string, ourAbbr: string): Promise<GameDeta
           period: gameTypeId === 3 ? 'postseason' : 'regular',
           home: homeStats,
           away: awayStats,
+        };
+      }
+    }
+    // Per-team P/G/A leaders. One fetch per side from the NHL
+    // web API (postseason or regular per the series gate), then
+    // computed locally so the top in each category is independent.
+    if (homeAbbr || awayAbbr) {
+      const [homeRows, awayRows] = await Promise.all([
+        homeAbbr ? fetchNhlClubStats(homeAbbr, gameTypeId) : Promise.resolve([]),
+        awayAbbr ? fetchNhlClubStats(awayAbbr, gameTypeId) : Promise.resolve([]),
+      ]);
+      const home = buildLeaders(homeRows, homeAbbr);
+      const away = buildLeaders(awayRows, awayAbbr);
+      if (home || away) {
+        detail.teamLeaders = {
+          period: gameTypeId === 3 ? 'postseason' : 'regular',
+          home,
+          away,
         };
       }
     }

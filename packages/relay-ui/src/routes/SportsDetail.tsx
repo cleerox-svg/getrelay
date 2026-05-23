@@ -9,6 +9,7 @@ import type {
   SportsLinescoreTotal,
   SportsStartingGoalie,
   SportsTeamBox,
+  SportsTeamLeaders,
   SportsTeamSeasonStats,
 } from '../lib/types';
 
@@ -253,6 +254,104 @@ function TeamStatsComparison({
         home={home?.pkPct ?? null}
         format={pct}
       />
+    </div>
+  );
+}
+
+// One row of the team-leaders card: two side-by-side leader names
+// flanking a centered stat label, with the value next to each name.
+// Hides the row when neither side has a leader for that stat.
+function TeamLeadersRow({
+  label,
+  away,
+  home,
+}: {
+  label: string;
+  away?: { name: string; value: number };
+  home?: { name: string; value: number };
+}) {
+  if (!away && !home) return null;
+  return (
+    <div style={{ padding: '8px 0' }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'center',
+          fontSize: 10,
+          fontWeight: 700,
+          letterSpacing: 0.6,
+          color: 'var(--text-dim)',
+          textTransform: 'uppercase',
+          marginBottom: 4,
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'baseline',
+          justifyContent: 'space-between',
+          gap: 12,
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        <div style={{ flex: '1 1 0', minWidth: 0, textAlign: 'left' }}>
+          {away ? (
+            <>
+              <span style={{ fontSize: 18, fontWeight: 800, marginRight: 8 }}>{away.value}</span>
+              <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>{away.name}</span>
+            </>
+          ) : (
+            <span style={{ color: 'var(--text-dim)' }}>—</span>
+          )}
+        </div>
+        <div style={{ flex: '1 1 0', minWidth: 0, textAlign: 'right' }}>
+          {home ? (
+            <>
+              <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>{home.name}</span>
+              <span style={{ fontSize: 18, fontWeight: 800, marginLeft: 8 }}>{home.value}</span>
+            </>
+          ) : (
+            <span style={{ color: 'var(--text-dim)' }}>—</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TeamLeadersComparison({
+  away,
+  home,
+  awayAbbr,
+  homeAbbr,
+}: {
+  away?: SportsTeamLeaders;
+  home?: SportsTeamLeaders;
+  awayAbbr: string;
+  homeAbbr: string;
+}) {
+  return (
+    <div>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: 0.5,
+          color: 'var(--text-dim)',
+          textTransform: 'uppercase',
+          marginBottom: 4,
+        }}
+      >
+        <span>{awayAbbr}</span>
+        <span>{homeAbbr}</span>
+      </div>
+      <TeamLeadersRow label="Points" away={away?.points} home={home?.points} />
+      <TeamLeadersRow label="Goals" away={away?.goals} home={home?.goals} />
+      <TeamLeadersRow label="Assists" away={away?.assists} home={home?.assists} />
     </div>
   );
 }
@@ -824,6 +923,29 @@ export function SportsDetail() {
                 <TeamStatsComparison
                   away={detail.teamSeasonStats.away}
                   home={detail.teamSeasonStats.home}
+                  awayAbbr={detail.awayTeam.abbr}
+                  homeAbbr={detail.homeTeam.abbr}
+                />
+              </section>
+            ) : null}
+
+            {/* Team leaders (NHL only). Per-team points / goals /
+                assists leaders for the same period as the stat
+                comparison bars above. Hidden when neither side has
+                qualifying skater rows (e.g. asking for postseason
+                stats on a team that didn't make the playoffs). */}
+            {detail.teamLeaders &&
+            (detail.teamLeaders.home || detail.teamLeaders.away) ? (
+              <section className="detail-card">
+                <h3 className="detail-card-title">
+                  Team Leaders —{' '}
+                  {detail.teamLeaders.period === 'postseason'
+                    ? 'Postseason'
+                    : 'Regular Season'}
+                </h3>
+                <TeamLeadersComparison
+                  away={detail.teamLeaders.away}
+                  home={detail.teamLeaders.home}
                   awayAbbr={detail.awayTeam.abbr}
                   homeAbbr={detail.homeTeam.abbr}
                 />
