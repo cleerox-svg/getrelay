@@ -3,7 +3,9 @@
 PIN-to-PIN messaging app. BBM Consumer experience, rebuilt for 2026 on
 Cloudflare Workers + D1 + Durable Objects + R2 + React PWA.
 
-See **[`RELAY_BUILD_SPEC.md`](./RELAY_BUILD_SPEC.md)** for the full build spec.
+See **[`RELAY_BUILD_SPEC.md`](./RELAY_BUILD_SPEC.md)** for the full build
+spec, and **[`SPORTS.md`](./SPORTS.md)** for the Sports tab feature
+(NHL + MLB scores, polling, push notifications, upstream APIs).
 
 ---
 

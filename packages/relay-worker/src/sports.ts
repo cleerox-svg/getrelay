@@ -24,6 +24,10 @@ interface Team {
   name: string;
   logo: string | null;
   score: number | null;
+  // Season-to-date record. NHL: "48-24-10" (wins-losses-OT losses).
+  // MLB: "29-22" (wins-losses). Optional — null when the upstream
+  // didn't populate it.
+  record?: string | null;
 }
 
 // Playoff context, attached to a Game when both the schedule and league
@@ -49,6 +53,9 @@ interface Game {
   venue: string | null;
   ourSide: 'home' | 'away';
   series?: Series; // playoffs only
+  // Comma-separated TV network names ("SN", "TBS", "TBS, MLBN").
+  // Optional — best-effort from upstream broadcast fields.
+  broadcast?: string | null;
 }
 
 // One entry in /sports — combines today's game (if any) with the most
@@ -139,17 +146,25 @@ export function sportsRoutes() {
     const cached = await cache.match(cacheKey);
     if (cached) return cached;
 
+    // Pull the NHL records table once per /sports request. fetchNhl*
+    // for every followed NHL team shares it via the records arg, so
+    // there's a single upstream hit for the whole list regardless of
+    // how many NHL teams the user follows. Empty `{}` when no NHL
+    // subs are present (or the fetch fails) — the team parsers
+    // gracefully render `record: null` in that case.
+    const hasNhl = subs.some((s) => s.league === 'NHL');
+    const nhlRecords = hasNhl ? await fetchNhlRecords() : {};
     const items = await Promise.all(
       subs.map(async (s) => ({
         league: s.league,
         teamKey: s.teamKey,
         current:
           s.league === 'NHL'
-            ? await fetchNhlForTeam(s.teamKey, ymd)
+            ? await fetchNhlForTeam(s.teamKey, ymd, nhlRecords)
             : await fetchMlbForTeam(s.teamKey, ymd),
         previous:
           s.league === 'NHL'
-            ? await fetchNhlPrevious(s.teamKey, ymd)
+            ? await fetchNhlPrevious(s.teamKey, ymd, nhlRecords)
             : await fetchMlbPrevious(s.teamKey, ymd),
       })),
     );
@@ -338,7 +353,66 @@ function ordinalInning(n: number): string {
 
 // ---- NHL ----------------------------------------------------------------
 
-async function fetchNhlForTeam(abbr: string, ymd: string): Promise<Game | null> {
+// Cached "all 32 teams' season records" lookup. We hit /v1/standings/now
+// (already used to discover the team list) and parse out W-L-OTL per
+// abbrev. One fetch covers every NHL team in every followed sub on a
+// /sports call.
+async function fetchNhlRecords(): Promise<Record<string, string>> {
+  try {
+    const r = await fetch('https://api-web.nhle.com/v1/standings/now', {
+      cf: { cacheTtl: 300 },
+    } as RequestInit);
+    if (!r.ok) return {};
+    const data = (await r.json()) as {
+      standings?: {
+        teamAbbrev?: { default?: string };
+        wins?: number;
+        losses?: number;
+        otLosses?: number;
+      }[];
+    };
+    const out: Record<string, string> = {};
+    for (const row of data.standings ?? []) {
+      const abbr = (row.teamAbbrev?.default ?? '').toUpperCase();
+      if (!abbr) continue;
+      const w = Number(row.wins ?? 0);
+      const l = Number(row.losses ?? 0);
+      const otl = Number(row.otLosses ?? 0);
+      out[abbr] = `${w}-${l}-${otl}`;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function nhlBroadcastLabel(
+  rows: { network?: string; market?: string }[] | undefined,
+): string | null {
+  if (!rows || rows.length === 0) return null;
+  // National broadcasts ("N") shadow local ones for the headline
+  // label; if no nationals are listed, fall back to the first
+  // available network. Dedup case-insensitively.
+  const nationals = rows.filter((b) => (b.market ?? '').toUpperCase() === 'N');
+  const pool = nationals.length > 0 ? nationals : rows;
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const b of pool) {
+    const n = (b.network ?? '').trim();
+    if (!n) continue;
+    const key = n.toUpperCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(n);
+  }
+  return names.length > 0 ? names.join(', ') : null;
+}
+
+async function fetchNhlForTeam(
+  abbr: string,
+  ymd: string,
+  records: Record<string, string> = {},
+): Promise<Game | null> {
   try {
     // Team-specific weekly schedule. Used purely to discover today's
     // gameId + matchup + venue. The gameState field on the schedule
@@ -358,7 +432,7 @@ async function fetchNhlForTeam(abbr: string, ymd: string): Promise<Game | null> 
       data.games ?? (data.gamesByDate ?? []).flatMap((d) => d.games ?? []);
     const ev = flat.find((g) => g?.gameDate === ymd);
     if (!ev) return null;
-    const game = parseNhlGame(ev, abbr);
+    const game = parseNhlGame(ev, abbr, records);
     // Always attempt the series fetch — the schedule's gameType
     // field has been observed missing for late-round playoff games,
     // so gating on `=== 3` could silently hide the series label.
@@ -437,7 +511,11 @@ async function fetchNhlLiveState(gameId: string): Promise<LiveNhlState | null> {
   }
 }
 
-async function fetchNhlPrevious(abbr: string, beforeYmd: string): Promise<Game | null> {
+async function fetchNhlPrevious(
+  abbr: string,
+  beforeYmd: string,
+  records: Record<string, string> = {},
+): Promise<Game | null> {
   try {
     // Full-season schedule. The "previous" definition is "most recent
     // game that has finished" — gameState in (OFF, FINAL) and gameDate
@@ -458,7 +536,7 @@ async function fetchNhlPrevious(abbr: string, beforeYmd: string): Promise<Game |
     if (candidates.length === 0) return null;
     candidates.sort((a, b) => (a.gameDate ?? '').localeCompare(b.gameDate ?? ''));
     const ev = candidates[candidates.length - 1]!;
-    const game = parseNhlGame(ev, abbr);
+    const game = parseNhlGame(ev, abbr, records);
     if (ev.id != null) {
       game.series =
         (await fetchNhlSeries(String(ev.id), abbr, nameLookupForGame(game))) ?? undefined;
@@ -546,9 +624,17 @@ interface NhlRawGame {
   period?: number;
   clock?: { timeRemaining?: string; running?: boolean; inIntermission?: boolean };
   venue?: { default?: string };
+  // Per-game broadcast list — present on both club-schedule and
+  // gamecenter responses. `market` is "N" (national) or "H"/"A" for
+  // home/away local feeds.
+  tvBroadcasts?: { network?: string; market?: string }[];
 }
 
-function parseNhlGame(ev: NhlRawGame, ourAbbr: string): Game {
+function parseNhlGame(
+  ev: NhlRawGame,
+  ourAbbr: string,
+  records: Record<string, string> = {},
+): Game {
   const state = String(ev.gameState ?? '');
   const status: 'pre' | 'live' | 'final' =
     state === 'LIVE' || state === 'CRIT'
@@ -584,20 +670,23 @@ function parseNhlGame(ev: NhlRawGame, ourAbbr: string): Game {
     statusDetail,
     startTime,
     startTimeLocal,
-    homeTeam: parseNhlTeam(home),
-    awayTeam: parseNhlTeam(away),
+    homeTeam: parseNhlTeam(home, records),
+    awayTeam: parseNhlTeam(away, records),
     venue: ev?.venue?.default ?? null,
     ourSide,
+    broadcast: nhlBroadcastLabel(ev.tvBroadcasts),
   };
 }
 
-function parseNhlTeam(t: NhlRawTeam): Team {
+function parseNhlTeam(t: NhlRawTeam, records: Record<string, string> = {}): Team {
   const name = t.name?.default || t.placeName?.default || t.abbrev || '';
+  const abbr = t.abbrev ?? '';
   return {
-    abbr: t.abbrev ?? '',
+    abbr,
     name,
     logo: t.logo ?? null,
     score: typeof t.score === 'number' ? t.score : null,
+    record: abbr && records[abbr] ? records[abbr] : null,
   };
 }
 
@@ -609,7 +698,7 @@ async function fetchMlbForTeam(teamKey: string, ymd: string): Promise<Game | nul
   try {
     const url =
       'https://statsapi.mlb.com/api/v1/schedule?sportId=1' +
-      `&teamId=${teamId}&date=${ymd}&hydrate=linescore,team,venue,seriesStatus`;
+      `&teamId=${teamId}&date=${ymd}&hydrate=linescore,team(record),venue,seriesStatus,broadcasts(all)`;
     const r = await fetch(url, { cf: { cacheTtl: 30 } } as RequestInit);
     if (!r.ok) return null;
     const data = (await r.json()) as { dates?: { games?: MlbRawGame[] }[] };
@@ -689,7 +778,7 @@ async function fetchMlbPrevious(teamKey: string, beforeYmd: string): Promise<Gam
     const url =
       'https://statsapi.mlb.com/api/v1/schedule?sportId=1' +
       `&teamId=${teamId}&startDate=${start}&endDate=${end}` +
-      `&hydrate=linescore,team,venue,seriesStatus`;
+      `&hydrate=linescore,team(record),venue,seriesStatus,broadcasts(all)`;
     const r = await fetch(url, { cf: { cacheTtl: 300 } } as RequestInit);
     if (!r.ok) return null;
     const data = (await r.json()) as {
@@ -729,7 +818,15 @@ function shiftYmd(ymd: string, days: number): string {
 }
 
 interface MlbRawTeam {
-  team?: { id?: number; name?: string; abbreviation?: string };
+  team?: {
+    id?: number;
+    name?: string;
+    abbreviation?: string;
+    // Hydrated when ?hydrate includes team(record). leagueRecord
+    // carries the season-to-date W-L for the matchup snapshot, which
+    // is what fans want above the team name on the card.
+    record?: { leagueRecord?: { wins?: number; losses?: number } };
+  };
   score?: number;
   // Hydrated when ?hydrate includes seriesStatus.
   seriesStatus?: MlbSeriesStatus;
@@ -762,6 +859,35 @@ interface MlbRawGame {
     };
   };
   venue?: { name?: string };
+  // Hydrated when ?hydrate includes broadcasts(all). statsapi returns
+  // every market and channel; we filter to TV nationals first then
+  // fall back to anything available.
+  broadcasts?: { type?: string; name?: string; isNational?: boolean }[];
+}
+
+function mlbBroadcastLabel(rows: MlbRawGame['broadcasts']): string | null {
+  if (!rows || rows.length === 0) return null;
+  const tv = rows.filter((b) => String(b.type ?? '').toUpperCase() === 'TV');
+  const pool = tv.length > 0 ? tv : rows;
+  const nationals = pool.filter((b) => b.isNational);
+  const chosen = nationals.length > 0 ? nationals : pool;
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const b of chosen) {
+    const n = (b.name ?? '').trim();
+    if (!n) continue;
+    const key = n.toUpperCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(n);
+  }
+  return names.length > 0 ? names.join(', ') : null;
+}
+
+function mlbRecordLabel(t: MlbRawTeam): string | null {
+  const rec = t.team?.record?.leagueRecord;
+  if (!rec || typeof rec.wins !== 'number' || typeof rec.losses !== 'number') return null;
+  return `${rec.wins}-${rec.losses}`;
 }
 
 function parseMlbGame(g: MlbRawGame, ourTeamId: number): Game {
@@ -859,6 +985,7 @@ function parseMlbGame(g: MlbRawGame, ourTeamId: number): Game {
     venue: g.venue?.name ?? null,
     ourSide,
     series,
+    broadcast: mlbBroadcastLabel(g.broadcasts),
   };
 }
 
@@ -913,6 +1040,7 @@ function parseMlbTeam(t: MlbRawTeam, score: number | null): Team {
     name: t.team?.name ?? '',
     logo,
     score,
+    record: mlbRecordLabel(t),
   };
 }
 

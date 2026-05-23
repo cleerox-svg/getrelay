@@ -89,6 +89,9 @@ export interface SportsTeam {
   name: string;
   logo: string | null;
   score: number | null;
+  // Season-to-date record. NHL: "48-24-10" (W-L-OTL). MLB: "29-22"
+  // (W-L). Null when the upstream didn't populate it.
+  record?: string | null;
 }
 
 export interface SportsSeries {
@@ -109,6 +112,9 @@ export interface SportsGame {
   venue: string | null;
   ourSide: 'home' | 'away';
   series?: SportsSeries;
+  // Comma-separated TV network label, e.g. "SN", "TBS, MLBN". Null
+  // when upstream didn't expose a broadcast.
+  broadcast?: string | null;
 }
 
 // One per-team entry in the per-user sports feed: today's game (if
