@@ -102,13 +102,28 @@ Both the Sports tab and the detail page poll on a `setTimeout` cadence:
 
 ## Series labels
 
-Postseason cards show the round chip + "Game N of M" + a natural-language
-series label, e.g. `Montreal up 1 game to 0 over Carolina`. Built by
-`buildSeries()` in the worker; consumes home/away full team names so the
-label reads with team names rather than abbreviations. Series is fetched
-for any game with an NHL gameId or MLB postseason gameType — the
-`gameType === 3` gate was dropped because the schedule's `gameType` field
-has been observed missing on some late-round playoff entries.
+Postseason cards split the series treatment into two pieces so the
+context reads at a glance and the human sentence reads cleanly:
+
+1. **Top bar** — a colored round chip + `GAME N OF M` tag, rendered
+   between the league header and the matchup. Mirrors how dedicated
+   sports apps frame postseason cards ("ROUND 3 · GAME 2").
+2. **Bottom line** — natural-language series state below the matchup,
+   e.g. `Montreal up 1 game to 0 over Carolina`. Built by
+   `buildSeries()` in the worker; consumes home/away full team names
+   so the label uses team names rather than abbreviations.
+
+Series is fetched for any game with an NHL gameId or MLB postseason
+gameType — the `gameType === 3` gate was dropped because the schedule's
+`gameType` field has been observed missing on some late-round playoff
+entries. The detail page wears the same split layout.
+
+### Pregame detail layout
+
+When `status === 'pre'`, the detail page hides the score lockup (which
+would otherwise render as "AWAY – at – HOME" with stray em-dashes) and
+shows a centered `AWAY vs HOME` with a `Sat · 7:00 PM ET`-style line
+underneath. Live and final games keep the score lockup as-is.
 
 ## Push notifications
 
