@@ -119,6 +119,23 @@ jobs:
           grep -E "compileSdkVersion|targetSdkVersion" android/variables.gradle
           pnpm exec cap sync android
 
+      - name: Generate native launcher icon
+        working-directory: packages/relay-ui
+        run: |
+          set -euo pipefail
+          # cap add android scaffolds the project with Capacitor's DEFAULT
+          # icon. Regenerate the brand sources from the canonical SVGs and
+          # let @capacitor/assets overwrite res/mipmap-* with the Relay
+          # mark. Must run after the android/ project exists; cap sync does
+          # not touch res icons so order vs. sync is safe.
+          node scripts/build-native-icons.mjs
+          # assets/icon-foreground.png + assets/icon-background.png drive
+          # the adaptive icon; assets/icon-only.png covers the legacy
+          # square/round launcher icon for pre-API-26 devices.
+          pnpm dlx @capacitor/assets@3 generate --android
+          # Sanity check: fail loudly if the launcher icons weren't written.
+          ls android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png
+
       - name: Bump versionCode + versionName from git
         working-directory: packages/relay-ui/android/app
         env:

@@ -3,3 +3,7 @@ dist
 .env
 .env.local
 *.tsbuildinfo
+
+# Native launcher-icon sources, regenerated from public/ SVGs by
+# scripts/build-native-icons.mjs during the Android build.
+assets
