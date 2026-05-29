@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { api, API_BASE } from './api';
+import { getGiphyRandomId } from './giphy';
 import { ws } from './ws';
 import type {
   Chat,
@@ -84,7 +85,7 @@ interface AppState {
     caption?: string,
     replyTo?: string,
   ) => void;
-  sendGif: (chatId: string, gifUrl: string, replyTo?: string) => void;
+  sendGif: (chatId: string, gifUrl: string, replyTo?: string, onsentUrl?: string) => void;
   sendSticker: (chatId: string, stickerUrl: string, replyTo?: string) => void;
   sendTyping: (chatId: string, on: boolean) => void;
   markRead: (chatId: string, messageIds: string[]) => void;
@@ -483,7 +484,9 @@ export const useStore = create<AppState>((set, get) => ({
 
   // GIF from Giphy. No R2 upload — we just ride the external URL
   // through the existing image type.
-  sendGif: (chatId, gifUrl, replyTo) => {
+  sendGif: (chatId, gifUrl, replyTo, onsentUrl) => {
+    // Register the "sent" action with Giphy (best-effort, never blocks send).
+    api.registerGifAction(onsentUrl, getGiphyRandomId());
     const tempId = crypto.randomUUID();
     set((s) => {
       const chat = ensureChat(s, chatId);

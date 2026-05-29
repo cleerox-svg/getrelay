@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../lib/api';
+import { getGiphyRandomId } from '../lib/giphy';
 
-interface GifItem {
+export interface GifItem {
   id: string;
   description: string;
   previewUrl: string;
@@ -10,12 +11,15 @@ interface GifItem {
   gifUrl: string;
   gifWidth: number;
   gifHeight: number;
+  analytics: { onload?: string; onclick?: string; onsent?: string };
 }
 
 interface Props {
   open: boolean;
   onClose: () => void;
-  onPick: (gifUrl: string) => void;
+  // Receives the full item so the caller can fire the onsent pingback once
+  // the GIF is actually delivered to the chat.
+  onPick: (gif: GifItem) => void;
 }
 
 // 250ms debounce on the search box so we don't fire on every keystroke.
@@ -180,7 +184,10 @@ export function GifPicker({ open, onClose, onPick }: Props) {
                         key={it.id}
                         type="button"
                         onClick={() => {
-                          onPick(it.gifUrl);
+                          // Register the click with Giphy, then hand the
+                          // full item up so the caller can fire onsent.
+                          api.registerGifAction(it.analytics.onclick, getGiphyRandomId());
+                          onPick(it);
                           onClose();
                         }}
                         style={{

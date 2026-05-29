@@ -8,6 +8,16 @@ import { readAuthedUser } from './auth';
 //   2. Lets us cache responses in caches.default so a popular search
 //      term doesn't burn quota on every keystroke.
 
+interface GifAnalytics {
+  // Giphy "Action Register" pingback URLs. We forward these to the client
+  // and ping them back (via POST /gifs/register) when the user clicks/sends
+  // a GIF so Giphy can attribute usage. Required before Giphy will issue a
+  // non-rate-limited production key.
+  onload?: string;
+  onclick?: string;
+  onsent?: string;
+}
+
 interface GifItem {
   id: string;
   description: string;
@@ -17,6 +27,7 @@ interface GifItem {
   gifUrl: string; // full-quality, what we send through chat
   gifWidth: number;
   gifHeight: number;
+  analytics: GifAnalytics;
 }
 
 interface GifSearchResult {
@@ -29,12 +40,21 @@ interface GiphyImage {
   width?: string;
   height?: string;
 }
+interface GiphyAnalyticsEvent {
+  url?: string;
+}
 interface GiphyResult {
   id?: string;
   title?: string;
   images?: {
     fixed_width?: GiphyImage; // ~200px wide animated GIF — good preview
     original?: GiphyImage; // full-quality
+  };
+  // Per-result pingback URLs for the Action Register flow.
+  analytics?: {
+    onload?: GiphyAnalyticsEvent;
+    onclick?: GiphyAnalyticsEvent;
+    onsent?: GiphyAnalyticsEvent;
   };
 }
 interface GiphyResponse {
@@ -55,6 +75,11 @@ function project(r: GiphyResult): GifItem | null {
     gifUrl: full.url,
     gifWidth: Number(full.width ?? 0),
     gifHeight: Number(full.height ?? 0),
+    analytics: {
+      onload: r.analytics?.onload?.url,
+      onclick: r.analytics?.onclick?.url,
+      onsent: r.analytics?.onsent?.url,
+    },
   };
 }
 
@@ -122,6 +147,59 @@ export function gifsRoutes() {
     });
     c.executionCtx.waitUntil(cache.put(cacheKey, resp.clone()));
     return resp;
+  });
+
+  // Giphy Action Register endpoint.
+  //
+  // Each search result carries onload/onclick/onsent pingback URLs. We ping
+  // the relevant one when the user interacts with a GIF so Giphy can tune
+  // results and attribute usage — a prerequisite for getting off the beta
+  // key. We proxy this server-side rather than firing from the browser for
+  // two reasons:
+  //   1. *.giphy-analytics.giphy.com is on most ad/tracker blocklists, so
+  //      a client-side ping is silently dropped for a large share of users.
+  //   2. It keeps every Giphy hop behind the worker, matching the search proxy.
+  //
+  // Best-effort and fire-and-forget: analytics must never block sending a GIF,
+  // so we validate, kick off the ping via waitUntil, and return 204 right away.
+  app.post('/gifs/register', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    let body: { url?: unknown; randomId?: unknown };
+    try {
+      body = (await c.req.json()) as typeof body;
+    } catch {
+      return c.json({ error: 'bad_request' }, 400);
+    }
+
+    const raw = typeof body.url === 'string' ? body.url : '';
+    let target: URL;
+    try {
+      target = new URL(raw);
+    } catch {
+      return c.json({ error: 'bad_url' }, 400);
+    }
+    // Only ever fetch Giphy's own analytics hosts — never let the worker be
+    // turned into an open redirect/SSRF proxy for arbitrary URLs.
+    if (target.protocol !== 'https:' || !/(^|\.)giphy\.com$/.test(target.hostname)) {
+      return c.json({ error: 'bad_url' }, 400);
+    }
+
+    // Giphy wants ts (ms) and a per-session random_id appended at ping time.
+    // The random_id is a stable, non-PII id minted per device by the client.
+    target.searchParams.set('ts', String(Date.now()));
+    if (typeof body.randomId === 'string' && body.randomId) {
+      target.searchParams.set('random_id', body.randomId);
+    }
+
+    c.executionCtx.waitUntil(
+      fetch(target.toString(), { method: 'GET' }).then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return c.body(null, 204);
   });
 
   return app;
