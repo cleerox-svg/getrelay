@@ -726,7 +726,7 @@ export function LegacyChat() {
       <GifPicker
         open={gifOpen}
         onClose={() => setGifOpen(false)}
-        onPick={(gifUrl) => sendGif(chatId, gifUrl, replyingTo?.id)}
+        onPick={(gif) => sendGif(chatId, gif.gifUrl, replyingTo?.id, gif.analytics.onsent)}
       />
 
       <StickerPicker

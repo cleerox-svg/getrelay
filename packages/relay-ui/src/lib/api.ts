@@ -192,9 +192,19 @@ export const api = {
         gifUrl: string;
         gifWidth: number;
         gifHeight: number;
+        analytics: { onload?: string; onclick?: string; onsent?: string };
       }[];
       next: string | null;
     }>(`/gifs/search?${usp.toString()}`);
+  },
+  // Giphy Action Register pingback. Best-effort: failures are swallowed so
+  // analytics never interferes with sending a GIF.
+  registerGifAction: (url: string | undefined, randomId: string) => {
+    if (!url) return;
+    request<void>('/gifs/register', {
+      method: 'POST',
+      body: JSON.stringify({ url, randomId }),
+    }).catch(() => undefined);
   },
   createGroup: (subject: string, contactIds: string[]) =>
     request<{
