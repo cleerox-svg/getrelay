@@ -367,10 +367,307 @@ export function sportsRoutes() {
     return resp;
   });
 
+  // ---- News sub-page: league headlines via ESPN's public news API,
+  //      proxied so the WebView (relay.averrow.com) isn't blocked by
+  //      cross-origin. NHL + MLB merged, newest first. ----
+  app.get('/sports/news', async (c) => {
+    const [nhl, mlb] = await Promise.all([
+      fetchEspnNews('NHL', 'hockey/nhl'),
+      fetchEspnNews('MLB', 'baseball/mlb'),
+    ]);
+    const articles = [...nhl, ...mlb].sort((a, b) => b.published - a.published);
+    c.header('cache-control', 'public, max-age=600');
+    return c.json({ articles });
+  });
+
+  // ---- Stats sub-page: division standings + a few league leaders for
+  //      NHL and MLB. Reuses the native league APIs already used
+  //      elsewhere in this file; every upstream call is best-effort so a
+  //      single bad response degrades to an empty section, not a 500. ----
+  app.get('/sports/stats', async (c) => {
+    const season = Number(todayInToronto().slice(0, 4));
+    const [nhlStand, mlbStand, nhlLead, mlbLead] = await Promise.all([
+      fetchNhlStandings(),
+      fetchMlbStandings(season),
+      fetchNhlLeaders(),
+      fetchMlbLeaders(season),
+    ]);
+    c.header('cache-control', 'public, max-age=600');
+    return c.json({
+      standings: [...nhlStand, ...mlbStand],
+      leaders: [...nhlLead, ...mlbLead],
+    });
+  });
+
   return app;
 }
 
-// ---- Subscriptions -----------------------------------------------------
+// ---- Sports News + Stats (sub-page data sources) -----------------------
+
+interface NewsItem {
+  id: string;
+  league: 'NHL' | 'MLB';
+  headline: string;
+  description: string;
+  published: number; // epoch ms; 0 when upstream omits it
+  imageUrl: string | null;
+  url: string;
+}
+
+// ESPN's site API exposes a free, CORS-unfriendly news feed per league
+// (hence the worker proxy). `path` is e.g. "hockey/nhl" / "baseball/mlb".
+async function fetchEspnNews(league: 'NHL' | 'MLB', path: string): Promise<NewsItem[]> {
+  try {
+    const r = await fetch(
+      `https://site.api.espn.com/apis/site/v2/sports/${path}/news?limit=20`,
+      { cf: { cacheTtl: 600 } } as RequestInit,
+    );
+    if (!r.ok) return [];
+    const data = (await r.json()) as {
+      articles?: {
+        headline?: string;
+        description?: string;
+        published?: string;
+        links?: { web?: { href?: string } };
+        images?: { url?: string }[];
+      }[];
+    };
+    const out: NewsItem[] = [];
+    for (const a of data.articles ?? []) {
+      const url = a.links?.web?.href;
+      const headline = a.headline?.trim();
+      if (!url || !headline) continue;
+      const ts = a.published ? Date.parse(a.published) : NaN;
+      out.push({
+        id: `${league}:${url}`,
+        league,
+        headline,
+        description: (a.description ?? '').trim(),
+        published: Number.isFinite(ts) ? ts : 0,
+        imageUrl: a.images?.find((i) => i.url)?.url ?? null,
+        url,
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+interface StandingRow {
+  teamId: string;
+  name: string;
+  abbr: string;
+  logo: string | null;
+  wins: number;
+  losses: number;
+  ot: number | null; // NHL OT losses; null for MLB
+  points: number | null; // NHL points; null for MLB
+  pct: string | null; // MLB win %; null for NHL
+  gb: string | null; // MLB games back; null for NHL
+  gp: number | null;
+}
+
+interface StandingGroup {
+  league: 'NHL' | 'MLB';
+  division: string;
+  rows: StandingRow[];
+}
+
+async function fetchNhlStandings(): Promise<StandingGroup[]> {
+  try {
+    const r = await fetch('https://api-web.nhle.com/v1/standings/now', {
+      cf: { cacheTtl: 600 },
+    } as RequestInit);
+    if (!r.ok) return [];
+    const data = (await r.json()) as {
+      standings?: {
+        teamName?: { default?: string };
+        teamAbbrev?: { default?: string };
+        teamLogo?: string;
+        divisionName?: string;
+        wins?: number;
+        losses?: number;
+        otLosses?: number;
+        points?: number;
+        gamesPlayed?: number;
+      }[];
+    };
+    const byDiv = new Map<string, StandingRow[]>();
+    for (const row of data.standings ?? []) {
+      const division = row.divisionName ?? 'League';
+      const abbr = (row.teamAbbrev?.default ?? '').toUpperCase();
+      const arr = byDiv.get(division) ?? [];
+      arr.push({
+        teamId: abbr,
+        name: row.teamName?.default ?? abbr,
+        abbr,
+        logo: row.teamLogo ?? null,
+        wins: Number(row.wins ?? 0),
+        losses: Number(row.losses ?? 0),
+        ot: Number(row.otLosses ?? 0),
+        points: Number(row.points ?? 0),
+        pct: null,
+        gb: null,
+        gp: Number(row.gamesPlayed ?? 0),
+      });
+      byDiv.set(division, arr);
+    }
+    const groups: StandingGroup[] = [];
+    for (const [division, rows] of byDiv) {
+      rows.sort((a, b) => (b.points ?? 0) - (a.points ?? 0));
+      groups.push({ league: 'NHL', division, rows });
+    }
+    groups.sort((a, b) => a.division.localeCompare(b.division));
+    return groups;
+  } catch {
+    return [];
+  }
+}
+
+const MLB_DIVISIONS: Record<number, string> = {
+  200: 'AL West',
+  201: 'AL East',
+  202: 'AL Central',
+  203: 'NL West',
+  204: 'NL East',
+  205: 'NL Central',
+};
+
+async function fetchMlbStandings(season: number): Promise<StandingGroup[]> {
+  try {
+    const r = await fetch(
+      `https://statsapi.mlb.com/api/v1/standings?leagueId=103,104&season=${season}&standingsTypes=regularSeason`,
+      { cf: { cacheTtl: 600 } } as RequestInit,
+    );
+    if (!r.ok) return [];
+    const data = (await r.json()) as {
+      records?: {
+        division?: { id?: number };
+        teamRecords?: {
+          team?: { id?: number; name?: string };
+          wins?: number;
+          losses?: number;
+          winningPercentage?: string;
+          gamesBack?: string;
+        }[];
+      }[];
+    };
+    const groups: StandingGroup[] = [];
+    for (const rec of data.records ?? []) {
+      const division = MLB_DIVISIONS[rec.division?.id ?? 0] ?? 'Division';
+      const rows: StandingRow[] = (rec.teamRecords ?? []).map((t) => ({
+        teamId: String(t.team?.id ?? ''),
+        name: t.team?.name ?? '',
+        abbr: '',
+        logo: t.team?.id ? `https://www.mlbstatic.com/team-logos/${t.team.id}.svg` : null,
+        wins: Number(t.wins ?? 0),
+        losses: Number(t.losses ?? 0),
+        ot: null,
+        points: null,
+        pct: t.winningPercentage ?? null,
+        gb: t.gamesBack ?? null,
+        gp: null,
+      }));
+      rows.sort((a, b) => b.wins - a.wins);
+      groups.push({ league: 'MLB', division, rows });
+    }
+    return groups;
+  } catch {
+    return [];
+  }
+}
+
+interface LeaderRow {
+  rank: number;
+  name: string;
+  team: string;
+  value: string;
+}
+
+interface LeaderList {
+  league: 'NHL' | 'MLB';
+  category: string;
+  rows: LeaderRow[];
+}
+
+async function fetchNhlLeaders(): Promise<LeaderList[]> {
+  try {
+    const r = await fetch(
+      'https://api-web.nhle.com/v1/skater-stats-leaders/current?categories=points,goals&limit=5',
+      { cf: { cacheTtl: 600 } } as RequestInit,
+    );
+    if (!r.ok) return [];
+    const data = (await r.json()) as Record<
+      string,
+      {
+        firstName?: { default?: string };
+        lastName?: { default?: string };
+        value?: number;
+        teamAbbrev?: string | { default?: string };
+      }[]
+    >;
+    const cats: { key: string; label: string }[] = [
+      { key: 'points', label: 'Points' },
+      { key: 'goals', label: 'Goals' },
+    ];
+    const lists: LeaderList[] = [];
+    for (const { key, label } of cats) {
+      const arr = data[key];
+      if (!Array.isArray(arr)) continue;
+      const rows = arr.slice(0, 5).map((p, i) => ({
+        rank: i + 1,
+        name: `${p.firstName?.default ?? ''} ${p.lastName?.default ?? ''}`.trim(),
+        team:
+          typeof p.teamAbbrev === 'string' ? p.teamAbbrev : (p.teamAbbrev?.default ?? ''),
+        value: String(p.value ?? ''),
+      }));
+      if (rows.length) lists.push({ league: 'NHL', category: label, rows });
+    }
+    return lists;
+  } catch {
+    return [];
+  }
+}
+
+async function fetchMlbLeaders(season: number): Promise<LeaderList[]> {
+  try {
+    const r = await fetch(
+      `https://statsapi.mlb.com/api/v1/stats/leaders?leaderCategories=homeRuns,battingAverage&sportId=1&season=${season}&limit=5`,
+      { cf: { cacheTtl: 600 } } as RequestInit,
+    );
+    if (!r.ok) return [];
+    const data = (await r.json()) as {
+      leaderCategories?: {
+        leaderCategory?: string;
+        leaders?: {
+          rank?: number;
+          value?: string;
+          person?: { fullName?: string };
+          team?: { name?: string };
+        }[];
+      }[];
+    };
+    const labelMap: Record<string, string> = {
+      homeRuns: 'Home Runs',
+      battingAverage: 'Batting Avg',
+    };
+    const lists: LeaderList[] = [];
+    for (const cat of data.leaderCategories ?? []) {
+      const rows = (cat.leaders ?? []).slice(0, 5).map((l, i) => ({
+        rank: l.rank ?? i + 1,
+        name: l.person?.fullName ?? '',
+        team: l.team?.name ?? '',
+        value: String(l.value ?? ''),
+      }));
+      const cat_ = cat.leaderCategory ?? '';
+      if (rows.length) lists.push({ league: 'MLB', category: labelMap[cat_] ?? cat_, rows });
+    }
+    return lists;
+  } catch {
+    return [];
+  }
+}
 
 interface SubRow {
   league: 'NHL' | 'MLB';

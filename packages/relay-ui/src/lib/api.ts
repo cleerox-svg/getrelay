@@ -6,6 +6,8 @@ import type {
   Me,
   SportsGame,
   SportsGameDetail,
+  SportsNewsArticle,
+  SportsStatsResponse,
   SportsSub,
   SportsTeamLists,
 } from './types';
@@ -66,6 +68,8 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ subs }),
     }),
+  sportsNews: () => request<{ articles: SportsNewsArticle[] }>('/sports/news'),
+  sportsStats: () => request<SportsStatsResponse>('/sports/stats'),
   // Native (Capacitor) Google sign-in: exchange a Google ID token obtained
   // by the platform plugin for a Relay session cookie. The web build uses
   // the redirect flow (GOOGLE_SIGNIN_URL) instead.
