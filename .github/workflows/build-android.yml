@@ -121,11 +121,20 @@ jobs:
           # (used by the in-app QR scanner) can trigger Android's
           # runtime permission prompt. Capacitor's BridgeWebChromeClient
           # auto-handles the WebView side once the manifest declares it.
+          #
+          # The two uses-feature lines are not optional: declaring the
+          # CAMERA permission alone makes Google Play *imply*
+          # `android.hardware.camera` is REQUIRED, which silently drops
+          # every camera-less device (many tablets, TVs, emulators) from
+          # the supported list — Play flagged ~431 such devices on the
+          # first AAB to carry this permission. Marking the hardware
+          # required=false keeps those devices eligible; the QR scanner
+          # simply has nothing to open where there's no camera.
           MANIFEST=android/app/src/main/AndroidManifest.xml
           if ! grep -q "android.permission.CAMERA" "$MANIFEST"; then
-            sed -i 's#</manifest>#    <uses-permission android:name="android.permission.CAMERA" />\n</manifest>#' "$MANIFEST"
+            sed -i 's#</manifest>#    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />\n</manifest>#' "$MANIFEST"
           fi
-          grep "uses-permission" "$MANIFEST"
+          grep -E "uses-permission|uses-feature" "$MANIFEST"
           pnpm exec cap sync android
 
       - name: Generate native launcher icon + splash
