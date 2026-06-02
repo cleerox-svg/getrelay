@@ -126,28 +126,31 @@ jobs:
             sed -i 's#</manifest>#    <uses-permission android:name="android.permission.CAMERA" />\n</manifest>#' "$MANIFEST"
           fi
           grep "uses-permission" "$MANIFEST"
-          # Replace the default Capacitor template launcher icon + splash
-          # with the Relay brand mark. Reads packages/relay-ui/assets/ and
-          # writes adaptive icons + splash drawables into
-          # android/app/src/main/res/. Without this step the AAB ships the
-          # generic teal Capacitor placeholder on the user's home screen.
-          pnpm cap:assets
           pnpm exec cap sync android
 
-      - name: Generate native launcher icon
+      - name: Generate native launcher icon + splash
         working-directory: packages/relay-ui
         run: |
           set -euo pipefail
-          # cap add android scaffolds the project with Capacitor's DEFAULT
-          # icon. Regenerate the brand sources from the canonical SVGs and
-          # let @capacitor/assets overwrite res/mipmap-* with the Relay
-          # mark. Must run after the android/ project exists; cap sync does
-          # not touch res icons so order vs. sync is safe.
+          # `cap add android` scaffolds the project with Capacitor's DEFAULT
+          # teal placeholder icon, and the web manifest icons never reach the
+          # native launcher. This step is the single source of truth that
+          # overwrites res/mipmap-* + splash drawables with the Relay mark.
+          # It must run after the android/ project exists; `cap sync` does not
+          # touch res icons, so running after sync is safe.
+          #
+          # 1. Render the @capacitor/assets source images from the canonical
+          #    public/ SVGs so the launcher icon stays in lockstep with the
+          #    favicon / PWA icons:
+          #      assets/icon-foreground.png + icon-background.png -> adaptive icon
+          #      assets/icon-only.png                            -> legacy (pre-API-26)
+          #      assets/splash.png + splash-dark.png             -> splash
           node scripts/build-native-icons.mjs
-          # assets/icon-foreground.png + assets/icon-background.png drive
-          # the adaptive icon; assets/icon-only.png covers the legacy
-          # square/round launcher icon for pre-API-26 devices.
-          pnpm dlx @capacitor/assets@3 generate --android
+          # 2. Generate the native resources. Use the pinned, already-installed
+          #    @capacitor/assets (via the cap:assets script) rather than a
+          #    `pnpm dlx` fetch — that download pulled an unbuilt copy of sharp
+          #    and is a network/version flake on every build.
+          pnpm cap:assets
           # Sanity check: fail loudly if the launcher icons weren't written.
           ls android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png
 
