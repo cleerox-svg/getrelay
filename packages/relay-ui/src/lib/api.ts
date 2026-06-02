@@ -66,6 +66,14 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ subs }),
     }),
+  // Native (Capacitor) Google sign-in: exchange a Google ID token obtained
+  // by the platform plugin for a Relay session cookie. The web build uses
+  // the redirect flow (GOOGLE_SIGNIN_URL) instead.
+  googleNativeSignIn: (idToken: string) =>
+    request<{ ok: true; isNew: boolean }>('/auth/google/native', {
+      method: 'POST',
+      body: JSON.stringify({ idToken }),
+    }),
   signout: () => request<void>('/auth/signout', { method: 'POST' }),
   uploadAvatar: async (file: File): Promise<{ ok: boolean; key: string }> => {
     const form = new FormData();
