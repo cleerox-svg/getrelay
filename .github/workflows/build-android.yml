@@ -105,6 +105,10 @@ jobs:
         working-directory: packages/relay-ui
         env:
           CAPACITOR_SERVER_URL: ${{ github.event.inputs.server_url }}
+          # The web OAuth client id, baked into capacitor.config.json as the
+          # native Google Sign-In serverClientId. Must equal the worker's
+          # GOOGLE_ID (the token audience it verifies). See ANDROID-AUTH.md.
+          GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
         run: |
           set -euo pipefail
           if [ ! -d android ]; then
@@ -135,6 +139,19 @@ jobs:
             sed -i 's#</manifest>#    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />\n</manifest>#' "$MANIFEST"
           fi
           grep -E "uses-permission|uses-feature" "$MANIFEST"
+          # Native Google Sign-In (@codetrix-studio/capacitor-google-auth)
+          # reads the web OAuth client id from this Android string resource.
+          # Mirror the capacitor.config serverClientId so the plugin can
+          # request an ID token with the audience the worker verifies. Empty
+          # GOOGLE_WEB_CLIENT_ID (secret unset) skips it — native sign-in
+          # then won't work; see ANDROID-AUTH.md.
+          STRINGS=android/app/src/main/res/values/strings.xml
+          if [ -n "${GOOGLE_WEB_CLIENT_ID:-}" ] && ! grep -q "server_client_id" "$STRINGS"; then
+            sed -i "s#</resources>#    <string name=\"server_client_id\">${GOOGLE_WEB_CLIENT_ID}</string>\n</resources>#" "$STRINGS"
+            echo "Injected server_client_id into strings.xml"
+          else
+            echo "WARNING: GOOGLE_WEB_CLIENT_ID unset — native Google Sign-In will not work"
+          fi
           pnpm exec cap sync android
 
       - name: Generate native launcher icon + splash

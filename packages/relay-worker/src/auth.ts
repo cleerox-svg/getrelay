@@ -47,27 +47,62 @@ export function authRoutes() {
       return c.text('Google auth failed', 401);
     }
 
-    const userId = await findOrCreateUser(c.env, googleUser);
-    const jti = crypto.randomUUID();
-    const now = Math.floor(Date.now() / 1000);
-    const exp = now + SESSION_TTL_SECONDS;
-
-    await c.env.DB.prepare(
-      `INSERT INTO sessions (jwt_id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`,
-    ).bind(jti, userId, now * 1000, exp * 1000).run();
-
-    const token = await signJwt({ sub: userId, jti, iat: now, exp }, c.env.JWT_SECRET);
-    c.header(
-      'Set-Cookie',
-      makeSessionCookie(token, {
-        domain: c.env.AUTH_COOKIE_DOMAIN,
-        maxAgeSeconds: SESSION_TTL_SECONDS,
-      }),
-    );
+    const { cookie, isNew } = await createSession(c.env, googleUser);
+    c.header('Set-Cookie', cookie);
 
     // Redirect: new users to /onboarding, returning to /chats
-    const isNew = await isFirstLogin(c.env, userId);
     return c.redirect(`${c.env.APP_URL}${isNew ? '/onboarding' : '/chats'}`);
+  });
+
+  // ---- Native Google sign-in (Capacitor Android/iOS) ----
+  // The redirect/popup OAuth flow above can't complete inside a Capacitor
+  // WebView: Google blocks sign-in from embedded WebViews
+  // (disallowed_useragent), and even when it doesn't, the OAuth `state`
+  // cookie set on /auth/google doesn't survive the bounce through Google
+  // back into the app — so the callback throws and the user sees a bare
+  // "Internal Server Error". Instead the native app obtains a Google ID
+  // token through the platform's Google Sign-In and POSTs it here; we
+  // verify it and mint the exact same session cookie the web flow does.
+  app.post('/auth/google/native', async (c) => {
+    const body = await c.req.json<{ idToken?: string }>().catch(() => null);
+    const idToken = body?.idToken;
+    if (!idToken) return c.json({ error: 'missing_id_token' }, 400);
+
+    // Verify with Google's tokeninfo endpoint — Google validates the
+    // signature and expiry server-side; we still must check the audience
+    // and issuer ourselves so a token minted for some other app can't be
+    // replayed against us.
+    const resp = await fetch(
+      `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`,
+    );
+    if (!resp.ok) return c.json({ error: 'invalid_id_token' }, 401);
+    const info = (await resp.json()) as {
+      aud?: string;
+      iss?: string;
+      sub?: string;
+      email?: string;
+      email_verified?: string | boolean;
+      name?: string;
+      picture?: string;
+    };
+
+    // The native plugin must request the token for our *web* OAuth client
+    // (serverClientId === GOOGLE_ID), so that's the audience we expect.
+    const issOk =
+      info.iss === 'accounts.google.com' || info.iss === 'https://accounts.google.com';
+    const emailVerified = info.email_verified === true || info.email_verified === 'true';
+    if (info.aud !== c.env.GOOGLE_ID || !issOk || !info.sub || !info.email || !emailVerified) {
+      return c.json({ error: 'id_token_rejected' }, 401);
+    }
+
+    const { cookie, isNew } = await createSession(c.env, {
+      id: info.sub,
+      email: info.email,
+      name: info.name ?? info.email,
+      picture: info.picture ?? '',
+    });
+    c.header('Set-Cookie', cookie);
+    return c.json({ ok: true, isNew });
   });
 
   app.post('/auth/signout', async (c) => {
@@ -97,6 +132,32 @@ export async function readAuthedUser(env: Env, request: Request): Promise<Authed
   if (row.expires_at < Date.now()) return null;
 
   return { id: row.user_id, jti: claims.jti };
+}
+
+// Shared by both the web redirect callback and the native sign-in
+// endpoint: find/create the user, persist a session row, and build the
+// session cookie. Returns the Set-Cookie value and whether this is the
+// user's first login (drives the onboarding redirect).
+async function createSession(
+  env: Env,
+  g: { id: string; email: string; name: string; picture: string },
+): Promise<{ cookie: string; isNew: boolean }> {
+  const userId = await findOrCreateUser(env, g);
+  const jti = crypto.randomUUID();
+  const now = Math.floor(Date.now() / 1000);
+  const exp = now + SESSION_TTL_SECONDS;
+
+  await env.DB.prepare(
+    `INSERT INTO sessions (jwt_id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`,
+  ).bind(jti, userId, now * 1000, exp * 1000).run();
+
+  const token = await signJwt({ sub: userId, jti, iat: now, exp }, env.JWT_SECRET);
+  const cookie = makeSessionCookie(token, {
+    domain: env.AUTH_COOKIE_DOMAIN,
+    maxAgeSeconds: SESSION_TTL_SECONDS,
+  });
+  const isNew = await isFirstLogin(env, userId);
+  return { cookie, isNew };
 }
 
 async function findOrCreateUser(

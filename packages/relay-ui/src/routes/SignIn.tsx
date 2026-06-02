@@ -1,7 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Block, Button, Page } from 'konsta/react';
-import { GOOGLE_SIGNIN_URL } from '../lib/api';
+import { Capacitor } from '@capacitor/core';
+import { api, GOOGLE_SIGNIN_URL } from '../lib/api';
 import { useStore } from '../lib/store';
 
 export function SignIn() {
@@ -9,6 +10,8 @@ export function SignIn() {
   const loaded = useStore((s) => s.meLoaded);
   const loadMe = useStore((s) => s.loadMe);
   const nav = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!loaded) loadMe();
@@ -17,6 +20,35 @@ export function SignIn() {
   useEffect(() => {
     if (me) nav('/chats', { replace: true });
   }, [me, nav]);
+
+  // On the web the redirect OAuth flow works fine. Inside the Capacitor
+  // WebView it doesn't (Google blocks embedded WebViews and the OAuth
+  // state cookie doesn't survive the round-trip), so the native build
+  // uses the platform Google Sign-In plugin to get an ID token and
+  // exchanges it for a session via POST /auth/google/native.
+  async function handleSignIn() {
+    if (!Capacitor.isNativePlatform()) {
+      window.location.href = GOOGLE_SIGNIN_URL;
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const { GoogleAuth } = await import('@codetrix-studio/capacitor-google-auth');
+      // Picks up serverClientId/scopes from capacitor.config on native.
+      await GoogleAuth.initialize();
+      const result = await GoogleAuth.signIn();
+      const idToken = result?.authentication?.idToken;
+      if (!idToken) throw new Error('no_id_token');
+      const { isNew } = await api.googleNativeSignIn(idToken);
+      await loadMe();
+      nav(isNew ? '/onboarding' : '/chats', { replace: true });
+    } catch {
+      setError('Sign-in failed. Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <Page>
@@ -31,14 +63,14 @@ export function SignIn() {
           </div>
         </div>
         <div className="w-full flex flex-col gap-6">
-          <Button
-            large
-            onClick={() => {
-              window.location.href = GOOGLE_SIGNIN_URL;
-            }}
-          >
-            Continue with Google
+          <Button large onClick={handleSignIn} disabled={busy}>
+            {busy ? 'Signing in…' : 'Continue with Google'}
           </Button>
+          {error && (
+            <Block strong className="!my-0 text-sm" style={{ color: 'var(--accent)' }}>
+              {error}
+            </Block>
+          )}
           <div className="leading-7" style={{ color: 'var(--text-dim)' }}>
             <div>No phone number.</div>
             <div>No tracking.</div>

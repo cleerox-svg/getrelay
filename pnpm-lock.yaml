@@ -23,6 +23,9 @@ importers:
       '@capacitor/core':
         specifier: ^6.2.0
         version: 6.2.1
+      '@codetrix-studio/capacitor-google-auth':
+        specifier: 3.4.0-rc.4
+        version: 3.4.0-rc.4(@capacitor/core@6.2.1)
       '@emoji-mart/data':
         specifier: ^1.2.1
         version: 1.2.1
@@ -311,6 +314,11 @@ packages:
 
   '@cloudflare/workers-types@4.20260520.1':
     resolution: {integrity: sha512-wdmf9Fwabp06OgK9ZyCl8Q77GZ94k9J7OA9qA65FbgxZ/hd3hYRkVNiY7Bvsx4tKim+sWmKqGOblecZInAvoRg==}
+
+  '@codetrix-studio/capacitor-google-auth@3.4.0-rc.4':
+    resolution: {integrity: sha512-d548/xKrbMHHbzMYSWnlgZCLZYo2zzY7Onrh3x8ujojrb7atkNK68I6su5WgmaBt4E+R4gxBsWams4554aOFjA==}
+    peerDependencies:
+      '@capacitor/core': ^6.0.0
 
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
@@ -3775,6 +3783,10 @@ snapshots:
     optional: true
 
   '@cloudflare/workers-types@4.20260520.1': {}
+
+  '@codetrix-studio/capacitor-google-auth@3.4.0-rc.4(@capacitor/core@6.2.1)':
+    dependencies:
+      '@capacitor/core': 6.2.1
 
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
