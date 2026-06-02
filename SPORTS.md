@@ -54,6 +54,22 @@ data (rosters, standings) has long TTLs.
 | `GET /sports/teams?v=2` | Selectable teams per league (cached 24h). |
 | `GET /sports/nhl/:id?abbr=XXX` | `SportsGameDetail`. Bypasses our cache on live games. |
 | `GET /sports/mlb/:id?teamId=N` | `SportsGameDetail`. Bypasses our cache on live games. |
+| `GET /sports/news` | `{ articles: SportsNewsArticle[] }` — NHL + MLB headlines merged newest-first, proxied from ESPN's public news API (edge-cached 10min). Powers the **News** sub-page. |
+| `GET /sports/stats` | `{ standings: SportsStandingGroup[], leaders: SportsLeaderList[] }` — NHL + MLB division standings plus a few league leaders (edge-cached 10min). Powers the **Stats** sub-page. Each upstream is best-effort; a bad response degrades to an empty section. |
+
+The **Sports** tab has three sibling sub-pages behind a segmented control —
+**Scores** (default), **News**, **Stats** — all inside `/sports` so the bottom
+nav and theming are identical across them.
+
+### News + Stats upstreams
+
+| Endpoint | Used for | Edge TTL |
+|---|---|---|
+| `site.api.espn.com/apis/site/v2/sports/{hockey/nhl,baseball/mlb}/news` | News headlines (headline, blurb, image, link) | 10min |
+| `api-web.nhle.com/v1/standings/now` | NHL standings | 10min |
+| `statsapi.mlb.com/api/v1/standings?leagueId=103,104` | MLB standings | 10min |
+| `api-web.nhle.com/v1/skater-stats-leaders/current` | NHL points/goals leaders | 10min |
+| `statsapi.mlb.com/api/v1/stats/leaders` | MLB HR / batting-average leaders | 10min |
 
 ## Data shape (selected fields)
 

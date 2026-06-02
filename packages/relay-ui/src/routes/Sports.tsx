@@ -1,11 +1,69 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Block, Navbar, Page } from 'konsta/react';
 import { Avatar } from '../components/Avatar';
 import { BrandTitle } from '../components/BrandTitle';
 import { SportsCard } from '../components/SportsCard';
+import { SportsNews } from './SportsNews';
+import { SportsStats } from './SportsStats';
 import { todayYmdToronto, useStore } from '../lib/store';
 import type { SportsGame, SportsSub } from '../lib/types';
+
+type SportsTab = 'scores' | 'news' | 'stats';
+
+// Scores / News / Stats segmented control. Scores is the default sub-page;
+// News and Stats are sibling views inside the same /sports tab so the
+// bottom nav and theming stay identical across them.
+function SportsTabs({
+  tab,
+  onChange,
+}: {
+  tab: SportsTab;
+  onChange: (t: SportsTab) => void;
+}) {
+  const tabs: [SportsTab, string][] = [
+    ['scores', 'Scores'],
+    ['news', 'News'],
+    ['stats', 'Stats'],
+  ];
+  return (
+    <div style={{ padding: '4px 16px 8px' }}>
+      <div
+        style={{
+          display: 'flex',
+          background: 'var(--bubble-them, #E5E5EA)',
+          borderRadius: 10,
+          padding: 3,
+          gap: 3,
+        }}
+      >
+        {tabs.map(([key, label]) => {
+          const active = tab === key;
+          return (
+            <button
+              key={key}
+              onClick={() => onChange(key)}
+              style={{
+                flex: 1,
+                border: 'none',
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+                background: active ? 'var(--accent, #007AFF)' : 'transparent',
+                color: active ? 'white' : 'var(--text)',
+                borderRadius: 8,
+                padding: '6px 0',
+                fontSize: 13,
+                fontWeight: 700,
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 interface CardItem {
   game: SportsGame;
@@ -175,6 +233,8 @@ export function Sports() {
   const setSelectedSportsDate = useStore((s) => s.setSelectedSportsDate);
   const loadSportsForDate = useStore((s) => s.loadSportsForDate);
 
+  const [tab, setTab] = useState<SportsTab>('scores');
+
   const today = todayYmdToronto();
   // For today we read sportsSubs directly (the poller writes there).
   // For other days we read the per-day cache, falling back to an
@@ -208,6 +268,49 @@ export function Sports() {
 
       <h1 className="text-[34px] font-bold tracking-tight px-4 pt-3 pb-1">Sports</h1>
 
+      <SportsTabs tab={tab} onChange={setTab} />
+
+      {tab === 'news' ? (
+        <SportsNews />
+      ) : tab === 'stats' ? (
+        <SportsStats />
+      ) : (
+        <ScoresTab
+          selectedDate={selectedDate}
+          setSelectedSportsDate={setSelectedSportsDate}
+          items={items}
+          sportsSubs={sportsSubs}
+          loaded={loaded}
+          sportsByDate={sportsByDate}
+          today={today}
+        />
+      )}
+    </Page>
+  );
+}
+
+// The original /sports body: day picker + the sorted score cards. Pulled
+// into its own component so the Sports tab can swap Scores / News / Stats
+// without disturbing the score-feed logic.
+function ScoresTab({
+  selectedDate,
+  setSelectedSportsDate,
+  items,
+  sportsSubs,
+  loaded,
+  sportsByDate,
+  today,
+}: {
+  selectedDate: string;
+  setSelectedSportsDate: (ymd: string) => void;
+  items: CardItem[];
+  sportsSubs: SportsSub[];
+  loaded: boolean;
+  sportsByDate: Record<string, SportsSub[]>;
+  today: string;
+}) {
+  return (
+    <>
       <DayTabs selected={selectedDate} onChange={setSelectedSportsDate} />
 
       {items.length > 0 ? (
@@ -253,6 +356,6 @@ export function Sports() {
           <div className="text-sm">No games for your teams on this day.</div>
         </Block>
       ) : null}
-    </Page>
+    </>
   );
 }

@@ -134,6 +134,56 @@ export interface SportsTeamMeta {
   logo: string | null;
 }
 
+// ---- Sports News + Stats sub-pages ----
+
+export interface SportsNewsArticle {
+  id: string;
+  league: 'NHL' | 'MLB';
+  headline: string;
+  description: string;
+  published: number; // epoch ms; 0 when unknown
+  imageUrl: string | null;
+  url: string;
+}
+
+export interface SportsStandingRow {
+  teamId: string;
+  name: string;
+  abbr: string;
+  logo: string | null;
+  wins: number;
+  losses: number;
+  ot: number | null; // NHL OT losses
+  points: number | null; // NHL points
+  pct: string | null; // MLB win %
+  gb: string | null; // MLB games back
+  gp: number | null;
+}
+
+export interface SportsStandingGroup {
+  league: 'NHL' | 'MLB';
+  division: string;
+  rows: SportsStandingRow[];
+}
+
+export interface SportsLeaderRow {
+  rank: number;
+  name: string;
+  team: string;
+  value: string;
+}
+
+export interface SportsLeaderList {
+  league: 'NHL' | 'MLB';
+  category: string;
+  rows: SportsLeaderRow[];
+}
+
+export interface SportsStatsResponse {
+  standings: SportsStandingGroup[];
+  leaders: SportsLeaderList[];
+}
+
 export interface SportsTeamLists {
   nhl: SportsTeamMeta[];
   mlb: SportsTeamMeta[];
