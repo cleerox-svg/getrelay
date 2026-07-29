@@ -40,6 +40,13 @@ const config: CapacitorConfig = {
       serverClientId: googleWebClientId,
       forceCodeForRefreshToken: false,
     },
+    // Native push (FCM on Android). presentationOptions only affects iOS
+    // foreground display; Android shows FCM `notification` messages while
+    // backgrounded automatically. See ANDROID-PUSH.md for the Firebase
+    // setup the AAB needs (google-services.json) for this to register.
+    PushNotifications: {
+      presentationOptions: ['badge', 'sound', 'alert'],
+    },
   },
 };
 

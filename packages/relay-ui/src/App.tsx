@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { App as KonstaApp } from 'konsta/react';
+import { Capacitor } from '@capacitor/core';
 import { useLegacyUi } from './lib/legacy';
 import { KONSTA_THEME } from './lib/platform';
 import { wireWsToStore } from './lib/store';
@@ -64,6 +65,40 @@ function SwNavigationBridge() {
   return null;
 }
 
+// Native (Capacitor) equivalent of SwNavigationBridge: when the user taps
+// an FCM/APNs notification, route to the chat or deep-link it carries.
+function NativePushNavigationBridge() {
+  const nav = useNavigate();
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    let handle: { remove: () => void } | undefined;
+    let cancelled = false;
+    import('@capacitor/push-notifications')
+      .then(({ PushNotifications }) =>
+        PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
+          const data = (action?.notification?.data ?? {}) as { url?: string; chatId?: string };
+          const path =
+            typeof data.url === 'string' && data.url.startsWith('/')
+              ? data.url
+              : data.chatId
+                ? `/chats/${data.chatId}`
+                : null;
+          if (path) nav(path);
+        }),
+      )
+      .then((h) => {
+        if (cancelled) h.remove();
+        else handle = h;
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      handle?.remove();
+    };
+  }, [nav]);
+  return null;
+}
+
 export function App() {
   useEffect(() => {
     wireWsToStore();
@@ -75,6 +110,7 @@ export function App() {
     <KonstaApp theme={KONSTA_THEME} dark={dark} safeAreas>
       <BrowserRouter>
         <SwNavigationBridge />
+        <NativePushNavigationBridge />
         <Routes>
           <Route path="/signin" element={<SignIn />} />
           <Route path="/privacy" element={<Privacy />} />

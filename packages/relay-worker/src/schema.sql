@@ -151,6 +151,16 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 );
 CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
 
+-- Native (FCM) push tokens for Capacitor Android/iOS installs, which can't
+-- use Web Push. One row per device token; a user can have several.
+CREATE TABLE IF NOT EXISTS native_push_tokens (
+  token TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  platform TEXT NOT NULL DEFAULT 'android',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_native_push_user ON native_push_tokens(user_id);
+
 CREATE TABLE IF NOT EXISTS status_posts (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id),

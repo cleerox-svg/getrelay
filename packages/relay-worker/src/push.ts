@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Env } from './env';
 import { readAuthedUser } from './auth';
 import { sendPush, type PushSubscription, type VapidKeys, type SendResult } from './lib/web-push';
+import { fcmConfigured, pushFcmToUser, type NativePushPayload } from './lib/fcm';
 
 export function pushRoutes() {
   const app = new Hono<{ Bindings: Env }>();
@@ -116,6 +117,61 @@ export function pushRoutes() {
     return c.json({ results });
   });
 
+  // ---- Native push (FCM device tokens) ----
+  // Capacitor Android/iOS installs can't use Web Push; they register a
+  // Firebase Cloud Messaging device token here instead. Delivery of the
+  // same payloads happens in pushToUser / the sports fan-out.
+
+  // POST /me/push/native/register — body: { token, platform? }
+  app.post('/me/push/native/register', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const body = (await c.req.json().catch(() => null)) as
+      | { token?: string; platform?: string }
+      | null;
+    const token = body?.token;
+    if (!token || typeof token !== 'string') {
+      return c.json({ error: 'bad_token' }, 400);
+    }
+    const platform = body?.platform === 'ios' ? 'ios' : 'android';
+
+    // A token is unique to a device+app install, so re-registering (or a
+    // token that moved to a new account) just re-points the row.
+    await c.env.DB.prepare(
+      `INSERT INTO native_push_tokens (token, user_id, platform, created_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(token) DO UPDATE SET
+         user_id  = excluded.user_id,
+         platform = excluded.platform`,
+    )
+      .bind(token, me.id, platform, Date.now())
+      .run();
+
+    return c.json({ ok: true, configured: fcmConfigured(c.env) });
+  });
+
+  // POST /me/push/native/unregister — body: { token }
+  app.post('/me/push/native/unregister', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const body = (await c.req.json().catch(() => null)) as { token?: string } | null;
+    const token = body?.token;
+    if (token) {
+      await c.env.DB.prepare(
+        `DELETE FROM native_push_tokens WHERE token = ? AND user_id = ?`,
+      )
+        .bind(token, me.id)
+        .run();
+    } else {
+      await c.env.DB.prepare(`DELETE FROM native_push_tokens WHERE user_id = ?`)
+        .bind(me.id)
+        .run();
+    }
+    return c.json({ ok: true });
+  });
+
   // DELETE /me/push/subscribe?endpoint=... — UI calls when user disables
   // notifications or the browser revokes the subscription.
   app.delete('/me/push/subscribe', async (c) => {
@@ -140,8 +196,18 @@ export function pushRoutes() {
   return app;
 }
 
-// Helper used by UserHub when the recipient has no live socket.
+// Helper used by UserHub when the recipient has no live socket. Fans the
+// payload out to both the user's Web Push subscriptions and their native
+// (FCM) device tokens — each path is independent and no-ops when its
+// backend isn't configured.
 export async function pushToUser(env: Env, userId: string, payload: unknown): Promise<void> {
+  await Promise.all([
+    webPushToUser(env, userId, payload),
+    pushFcmToUser(env, userId, payload as NativePushPayload, { highPriority: true }),
+  ]);
+}
+
+async function webPushToUser(env: Env, userId: string, payload: unknown): Promise<void> {
   const keys = vapidKeys(env);
   if (!keys) {
     console.warn('push: VAPID not configured; skipping');

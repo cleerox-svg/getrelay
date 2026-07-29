@@ -154,6 +154,42 @@ jobs:
           fi
           pnpm exec cap sync android
 
+      - name: Wire native push (Firebase / google-services.json)
+        working-directory: packages/relay-ui
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          set -euo pipefail
+          # @capacitor/push-notifications needs Firebase on Android. The only
+          # project-specific piece is google-services.json (downloaded from
+          # the Firebase Console for the com.averrow.relay app) — Capacitor's
+          # generated android/app/build.gradle already applies the
+          # google-services Gradle plugin *conditionally on that file
+          # existing*, and android/build.gradle already carries the
+          # classpath. So we just drop the file in from a secret.
+          #
+          # When GOOGLE_SERVICES_JSON is unset we change NOTHING: the build is
+          # byte-for-byte the known-good one, the push plugin still compiles
+          # (its firebase-messaging dependency resolves from Maven), and native
+          # push simply fails to register at runtime (the app surfaces that).
+          # See ANDROID-PUSH.md.
+          if [ -z "${GOOGLE_SERVICES_JSON:-}" ]; then
+            echo "GOOGLE_SERVICES_JSON unset — native push (FCM) not wired into this build"
+            exit 0
+          fi
+          printf '%s' "$GOOGLE_SERVICES_JSON" > android/app/google-services.json
+          # Fail loudly if the secret isn't valid JSON for the right package,
+          # rather than shipping an AAB whose Firebase init crashes.
+          node -e '
+            const j = JSON.parse(require("fs").readFileSync("android/app/google-services.json","utf8"));
+            const pkgs = (j.client||[]).flatMap(c => (c.client_info?.android_client_info?.package_name)||[]);
+            if (!pkgs.includes("com.averrow.relay")) {
+              console.error("google-services.json has no com.averrow.relay client; packages="+JSON.stringify(pkgs));
+              process.exit(1);
+            }
+            console.log("google-services.json OK for", pkgs.join(","));
+          '
+
       - name: Generate native launcher icon + splash
         working-directory: packages/relay-ui
         run: |

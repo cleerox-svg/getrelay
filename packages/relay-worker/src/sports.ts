@@ -2,6 +2,13 @@ import { Hono } from 'hono';
 import type { Env } from './env';
 import { readAuthedUser } from './auth';
 import { sendPush, type VapidKeys } from './lib/web-push';
+import {
+  fcmConfigured,
+  sendFcm,
+  pruneDeadTokens,
+  type FcmSendResult,
+  type NativePushPayload,
+} from './lib/fcm';
 
 // Per-user sports feed. Each user follows zero-or-more (league, team)
 // pairs in user_sports_subs; the feed and the cron broadcast both pivot
@@ -1734,11 +1741,6 @@ async function broadcastSportsPush(
   kind: 'start' | 'score' | 'final',
   payload: SportsEvent,
 ): Promise<void> {
-  const keys = vapidKeys(env);
-  if (!keys) {
-    console.warn('sports: VAPID not configured; skipping push');
-    return;
-  }
   // The right per-event toggle gates this push. The master switch
   // (sports_notifications) still applies — turning it off silences all
   // sports pushes regardless of the per-event toggles.
@@ -1748,48 +1750,80 @@ async function broadcastSportsPush(
       : kind === 'score'
         ? 'sports_notify_score'
         : 'sports_notify_final';
-  const rows = await env.DB.prepare(
-    `SELECT ps.endpoint, ps.p256dh, ps.auth
-     FROM push_subscriptions ps
-     JOIN users u ON u.id = ps.user_id
-     JOIN user_sports_subs s ON s.user_id = u.id
-     WHERE COALESCE(u.sports_notifications, 1) = 1
-       AND COALESCE(u.${toggleCol}, 1) = 1
-       AND s.league = ?
-       AND s.team_key = ?`,
-  )
-    .bind(league, teamKey)
-    .all<{ endpoint: string; p256dh: string; auth: string }>();
-  const subs = rows.results ?? [];
-  if (subs.length === 0) return;
 
-  const dead: string[] = [];
-  await Promise.all(
-    subs.map(async (s) => {
-      try {
-        const r = await sendPush(
-          { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
-          payload,
-          keys,
-          // Live score / goal / final alerts are time-sensitive: high
-          // urgency so FCM wakes a dozing device immediately instead of
-          // batching delivery until the next wakeup (the "delayed alerts"
-          // symptom on Chrome/Android).
-          { urgency: 'high' },
-        );
-        if (r.status === 404 || r.status === 410) dead.push(s.endpoint);
-      } catch (err) {
-        console.warn('sports: push failed', err);
-      }
-    }),
-  );
-  if (dead.length > 0) {
-    const ph = dead.map(() => '?').join(',');
-    await env.DB.prepare(
-      `DELETE FROM push_subscriptions WHERE endpoint IN (${ph})`,
+  // --- Web Push fan-out ---
+  const keys = vapidKeys(env);
+  if (keys) {
+    const rows = await env.DB.prepare(
+      `SELECT ps.endpoint, ps.p256dh, ps.auth
+       FROM push_subscriptions ps
+       JOIN users u ON u.id = ps.user_id
+       JOIN user_sports_subs s ON s.user_id = u.id
+       WHERE COALESCE(u.sports_notifications, 1) = 1
+         AND COALESCE(u.${toggleCol}, 1) = 1
+         AND s.league = ?
+         AND s.team_key = ?`,
     )
-      .bind(...dead)
-      .run();
+      .bind(league, teamKey)
+      .all<{ endpoint: string; p256dh: string; auth: string }>();
+    const subs = rows.results ?? [];
+
+    const dead: string[] = [];
+    await Promise.all(
+      subs.map(async (s) => {
+        try {
+          const r = await sendPush(
+            { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
+            payload,
+            keys,
+            // Live score / goal / final alerts are time-sensitive: high
+            // urgency so FCM wakes a dozing device immediately instead of
+            // batching delivery until the next wakeup (the "delayed alerts"
+            // symptom on Chrome/Android).
+            { urgency: 'high' },
+          );
+          if (r.status === 404 || r.status === 410) dead.push(s.endpoint);
+        } catch (err) {
+          console.warn('sports: push failed', err);
+        }
+      }),
+    );
+    if (dead.length > 0) {
+      const ph = dead.map(() => '?').join(',');
+      await env.DB.prepare(`DELETE FROM push_subscriptions WHERE endpoint IN (${ph})`)
+        .bind(...dead)
+        .run();
+    }
+  } else {
+    console.warn('sports: VAPID not configured; skipping web push');
+  }
+
+  // --- Native (FCM) fan-out — same audience, delivered to device tokens ---
+  if (fcmConfigured(env)) {
+    const nrows = await env.DB.prepare(
+      `SELECT nt.token
+       FROM native_push_tokens nt
+       JOIN users u ON u.id = nt.user_id
+       JOIN user_sports_subs s ON s.user_id = u.id
+       WHERE COALESCE(u.sports_notifications, 1) = 1
+         AND COALESCE(u.${toggleCol}, 1) = 1
+         AND s.league = ?
+         AND s.team_key = ?`,
+    )
+      .bind(league, teamKey)
+      .all<{ token: string }>();
+    const tokens = (nrows.results ?? []).map((r) => r.token);
+    if (tokens.length > 0) {
+      const results = await Promise.all(
+        tokens.map((t) =>
+          sendFcm(env, t, payload as NativePushPayload, { highPriority: true }).catch(
+            (err) =>
+              ({ token: t, ok: false, status: 0, unregistered: false, body: String(err) }) as FcmSendResult,
+          ),
+        ),
+      );
+      await pruneDeadTokens(env, results);
+    }
   }
 }
 
