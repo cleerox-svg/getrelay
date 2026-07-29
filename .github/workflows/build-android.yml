@@ -179,6 +179,39 @@ jobs:
           pnpm cap:assets
           # Sanity check: fail loudly if the launcher icons weren't written.
           ls android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png
+          # 3. Fix @capacitor/assets' adaptive-icon output. On API 26+ (every
+          #    modern phone) the launcher uses mipmap-anydpi-v26/ic_launcher.xml,
+          #    and @capacitor/assets v3 writes it with a 16.7% <inset> on BOTH
+          #    the background and foreground layers. That's wrong for the
+          #    background: an adaptive icon's background must fill the whole
+          #    108dp cell because the launcher masks it to a circle/squircle —
+          #    inset, it renders as a small black square floating on transparent
+          #    corners instead of the full Relay disc, and the doubly-inset
+          #    foreground shrinks the "R" to a dot. It also leaves the scaffold's
+          #    values/ic_launcher_background.xml at #FFFFFF. Overwrite both
+          #    anydpi icons with the clean, full-bleed form (brand-black
+          #    background colour + non-inset "R" foreground — our
+          #    icon-foreground SVG already carries the safe-zone margin) so the
+          #    launcher icon matches the favicon / PWA icon. Without this the
+          #    icon still looks broken even though cap:assets "succeeded".
+          RES=android/app/src/main/res
+          cat > "$RES/values/ic_launcher_background.xml" <<'XML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="ic_launcher_background">#0A0A0A</color>
+          </resources>
+          XML
+          for f in ic_launcher.xml ic_launcher_round.xml; do
+            cat > "$RES/mipmap-anydpi-v26/$f" <<'XML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/ic_launcher_background" />
+              <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+          </adaptive-icon>
+          XML
+          done
+          echo "Rewrote adaptive-icon XML to full-bleed brand background:"
+          cat "$RES/mipmap-anydpi-v26/ic_launcher.xml"
 
       - name: Bump versionCode + versionName from git
         working-directory: packages/relay-ui/android/app

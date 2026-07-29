@@ -75,6 +75,16 @@ These PNGs are rendered from the matching SVGs in the same folder by
 `cap add android`, so every AAB ships the Relay brand mark — not the
 default Capacitor template icon.
 
+Right after `cap:assets`, the workflow also rewrites
+`mipmap-anydpi-v26/ic_launcher{,_round}.xml` and the
+`ic_launcher_background` colour. `@capacitor/assets` v3 emits an adaptive
+icon that insets *both* layers by 16.7%; on API 26+ (every modern phone)
+that leaves the black background floating as a small square with
+transparent corners and shrinks the "R", so the launcher icon looks
+broken even though the step "succeeds". The rewrite restores the clean
+full-bleed form (brand-black background + non-inset "R"), matching the
+favicon / PWA icon.
+
 When you tweak the brand mark:
 
 1. Edit one of `assets/*.svg` (or `public/icon.svg` for the canonical
@@ -83,3 +93,22 @@ When you tweak the brand mark:
 3. Run `pnpm store-assets` so `store-listing/app-icon-512.png` matches.
 4. Commit the regenerated PNGs. The next *Build Android APK / AAB* run
    will pick them up automatically.
+
+## Troubleshooting: still the default icon, or can't sign in
+
+These are build-time fixes — they only reach a phone through a **freshly
+built AAB that has been promoted to your testing track**. If the installed
+app still shows the default Capacitor icon or fails at "Continue with
+Google", the device is almost certainly running an older build. A green
+*Build Android APK / AAB* run uploads to Internal Testing as a **draft**;
+a draft is not distributed until you open Play Console and promote it (or
+roll out that release). Check the versionName (`0.1.0+<sha>`) against the
+commit you expect.
+
+Native Google Sign-In additionally needs the one-time Cloud Console setup
+in [`ANDROID-AUTH.md`](./ANDROID-AUTH.md): the `GOOGLE_WEB_CLIENT_ID`
+secret **and** an Android OAuth client registered for
+`com.averrow.relay` with both the Play app-signing **and** upload-key
+SHA-1 fingerprints. Until those exist the plugin fails with error code
+`10` (DEVELOPER_ERROR) — the sign-in screen now shows that code so you can
+tell it apart from a user simply dismissing the Google sheet.
