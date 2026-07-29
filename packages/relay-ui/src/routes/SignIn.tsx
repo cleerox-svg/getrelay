@@ -43,8 +43,31 @@ export function SignIn() {
       const { isNew } = await api.googleNativeSignIn(idToken);
       await loadMe();
       nav(isNew ? '/onboarding' : '/chats', { replace: true });
-    } catch {
-      setError('Sign-in failed. Please try again.');
+    } catch (e) {
+      // Surface the underlying reason. The native Google plugin reports a
+      // bare code when the Cloud Console side isn't set up — most commonly
+      // "10" (DEVELOPER_ERROR: no Android OAuth client for this package +
+      // signing SHA-1, or a serverClientId that isn't the Web client id).
+      // See ANDROID-AUTH.md. Showing it turns a silent "never worked" into
+      // something diagnosable; "12501"/"canceled" just means the user
+      // dismissed the sheet, so keep that quiet.
+      const err = e as { message?: string; code?: string | number } | null;
+      let reason = err?.message || (err?.code != null ? String(err.code) : '');
+      if (!reason) {
+        try {
+          reason = typeof e === 'string' ? e : JSON.stringify(e);
+        } catch {
+          /* non-serializable error object */
+        }
+      }
+      const canceled = /12501|cancel/i.test(reason);
+      setError(
+        canceled
+          ? null
+          : reason
+            ? `Sign-in failed (${reason}). If this persists, the app's Google sign-in isn't configured yet.`
+            : 'Sign-in failed. Please try again.',
+      );
     } finally {
       setBusy(false);
     }
