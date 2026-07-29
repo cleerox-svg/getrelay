@@ -309,5 +309,8 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: com.averrow.relay
           releaseFiles: packages/relay-ui/android/app/build/outputs/bundle/release/*.aab
-          track: internal
+          # `tracks` (plural) is the current input; the singular `track` still
+          # works on @v1 but prints a deprecation warning as a run annotation.
+          # Single track name, same value.
+          tracks: internal
           status: draft
