@@ -54,7 +54,7 @@ ADMIN_EMAILS = "cleerox@gmail.com"
 # the matching service-account JSON is a secret:
 #   wrangler secret put FCM_SERVICE_ACCOUNT_JSON --env production
 # Leave PROJECT_ID blank to disable native push (Web Push is unaffected).
-FCM_PROJECT_ID = ""
+FCM_PROJECT_ID = "relay-7a444"
 
 # ----- Production environment -----
 [env.production]
@@ -70,7 +70,7 @@ ADMIN_EMAILS = "cleerox@gmail.com"
 # Set to your Firebase project id to enable native Android push. The
 # service-account JSON is a production secret:
 #   wrangler secret put FCM_SERVICE_ACCOUNT_JSON --env production
-FCM_PROJECT_ID = ""
+FCM_PROJECT_ID = "relay-7a444"
 
 [[env.production.d1_databases]]
 binding = "DB"
