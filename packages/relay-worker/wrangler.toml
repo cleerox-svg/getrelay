@@ -50,6 +50,11 @@ enabled = true
 APP_URL = "http://localhost:5173"
 AUTH_COOKIE_DOMAIN = ""
 ADMIN_EMAILS = "cleerox@gmail.com"
+# Native push (FCM). PROJECT_ID is the Firebase project id (not secret);
+# the matching service-account JSON is a secret:
+#   wrangler secret put FCM_SERVICE_ACCOUNT_JSON --env production
+# Leave PROJECT_ID blank to disable native push (Web Push is unaffected).
+FCM_PROJECT_ID = ""
 
 # ----- Production environment -----
 [env.production]
@@ -62,6 +67,10 @@ routes = [
 APP_URL = "https://relay.averrow.com"
 AUTH_COOKIE_DOMAIN = ".averrow.com"
 ADMIN_EMAILS = "cleerox@gmail.com"
+# Set to your Firebase project id to enable native Android push. The
+# service-account JSON is a production secret:
+#   wrangler secret put FCM_SERVICE_ACCOUNT_JSON --env production
+FCM_PROJECT_ID = ""
 
 [[env.production.d1_databases]]
 binding = "DB"

@@ -28,6 +28,13 @@ import {
   type PushState,
   type PushTestResult,
 } from '../lib/push';
+import {
+  currentNativePushState,
+  disableNativePush,
+  enableNativePush,
+  isNativePush,
+  type NativePushState,
+} from '../lib/native-push';
 import { useStore } from '../lib/store';
 import { getTheme, setTheme, type ThemeMode } from '../lib/theme';
 
@@ -45,6 +52,10 @@ export function Profile() {
   const [pushState, setPushState] = useState<PushState>('unsubscribed');
   const [pushBusy, setPushBusy] = useState(false);
   const [pushError, setPushError] = useState<string | null>(null);
+  const native = isNativePush();
+  const [nativePush, setNativePush] = useState<NativePushState>('unsubscribed');
+  const [nativeBusy, setNativeBusy] = useState(false);
+  const [nativeError, setNativeError] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<PushTestResult[] | null>(null);
   const [testing, setTesting] = useState(false);
   const [blocked, setBlocked] = useState<
@@ -63,9 +74,13 @@ export function Profile() {
 
   useEffect(() => {
     setThemeMode(getTheme());
-    currentPushState().then(setPushState).catch(() => undefined);
+    if (native) {
+      currentNativePushState().then(setNativePush).catch(() => undefined);
+    } else {
+      currentPushState().then(setPushState).catch(() => undefined);
+    }
     api.listBlocks().then((r) => setBlocked(r.blocked)).catch(() => undefined);
-  }, []);
+  }, [native]);
 
   async function unblock(userId: string) {
     try {
@@ -101,6 +116,28 @@ export function Profile() {
       setPushError(err instanceof Error ? err.message : 'failed');
     } finally {
       setPushBusy(false);
+    }
+  }
+
+  async function toggleNativePush() {
+    setNativeBusy(true);
+    setNativeError(null);
+    try {
+      const next =
+        nativePush === 'subscribed' ? await disableNativePush() : await enableNativePush();
+      setNativePush(next);
+      if (next === 'denied') {
+        setNativeError('Notifications are turned off for Relay in your phone settings.');
+      }
+    } catch (err) {
+      // enableNativePush rejects when the build has no Firebase config
+      // (registration_error) — surface it so it's diagnosable.
+      const msg = err instanceof Error ? err.message : 'failed';
+      setNativeError(
+        `Couldn't enable notifications (${msg}). This build may not have push configured yet.`,
+      );
+    } finally {
+      setNativeBusy(false);
     }
   }
 
@@ -278,6 +315,41 @@ export function Profile() {
       <BlockTitle>Notifications</BlockTitle>
       <Block strong inset className="!py-4">
         {(() => {
+          // Native (Capacitor) build: Web Push doesn't exist in the
+          // WebView, so use the FCM/APNs plugin toggle instead of the
+          // browser-push blocker flow below.
+          if (native) {
+            return (
+              <>
+                <div
+                  className="flex items-center justify-between gap-3"
+                  style={{ minHeight: 32 }}
+                >
+                  <div>
+                    <div className="font-medium">Push notifications</div>
+                    <div className="text-xs" style={{ color: 'var(--text-dim)' }}>
+                      {nativePush === 'subscribed'
+                        ? 'Enabled on this device.'
+                        : 'Get notified about messages and score alerts when the app is closed.'}
+                    </div>
+                  </div>
+                  <PillToggle
+                    on={nativePush === 'subscribed'}
+                    disabled={nativeBusy}
+                    onChange={toggleNativePush}
+                    onLabel={nativeBusy ? '…' : 'Enabled'}
+                    offLabel={nativeBusy ? '…' : 'Enable'}
+                    destructive={nativePush === 'subscribed'}
+                  />
+                </div>
+                {nativeError ? (
+                  <div className="text-xs mt-2" style={{ color: 'var(--ping)' }}>
+                    {nativeError}
+                  </div>
+                ) : null}
+              </>
+            );
+          }
           const blocker = diagnosePush(pushState);
           if (blocker === 'ios_in_app_browser') {
             return (
