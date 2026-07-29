@@ -40,9 +40,11 @@ Every subsequent release:
 1. Actions tab → *Build Android APK / AAB* → Run workflow.
 2. `build_type=release-aab`, optionally `publish=true` if you've set up
    the service account.
-3. The workflow builds a signed AAB and (if publish=true) pushes it to
-   Internal Testing as a draft. You promote the draft to live testers
-   in Play Console.
+3. The workflow builds a signed AAB and (if publish=true) rolls it out to
+   the Internal Testing track automatically — enrolled testers get the
+   update in the Play Store with no manual promotion. (This needs the
+   app-content declarations complete; if they aren't, Play rejects the
+   rollout and the upload step fails rather than silently staging a draft.)
 
 `versionCode` auto-bumps from the workflow run number. `versionName`
 follows the pattern `0.1.0+<short sha>` so every AAB traces back to a
@@ -97,13 +99,16 @@ When you tweak the brand mark:
 ## Troubleshooting: still the default icon, or can't sign in
 
 These are build-time fixes — they only reach a phone through a **freshly
-built AAB that has been promoted to your testing track**. If the installed
-app still shows the default Capacitor icon or fails at "Continue with
-Google", the device is almost certainly running an older build. A green
-*Build Android APK / AAB* run uploads to Internal Testing as a **draft**;
-a draft is not distributed until you open Play Console and promote it (or
-roll out that release). Check the versionName (`0.1.0+<sha>`) against the
-commit you expect.
+built AAB that has actually rolled out to your testing track**. If the
+installed app still shows the default Capacitor icon or fails at "Continue
+with Google" with *"GoogleAuth plugin is not implemented on android"*, the
+device is running an older build (the "not implemented" message
+specifically means that installed AAB predates the native sign-in plugin —
+the web UI updates live from the server, but the native plugin only ships
+in a new AAB). With `status: completed` a green *Build Android APK / AAB*
+run rolls out to Internal Testing automatically; give the Play Store a few
+minutes, then pull the update on the device and confirm the versionName
+(`0.1.0+<sha>`) matches the commit you expect.
 
 Native Google Sign-In additionally needs the one-time Cloud Console setup
 in [`ANDROID-AUTH.md`](./ANDROID-AUTH.md): the `GOOGLE_WEB_CLIENT_ID`
