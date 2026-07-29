@@ -1771,6 +1771,11 @@ async function broadcastSportsPush(
           { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
           payload,
           keys,
+          // Live score / goal / final alerts are time-sensitive: high
+          // urgency so FCM wakes a dozing device immediately instead of
+          // batching delivery until the next wakeup (the "delayed alerts"
+          // symptom on Chrome/Android).
+          { urgency: 'high' },
         );
         if (r.status === 404 || r.status === 410) dead.push(s.endpoint);
       } catch (err) {

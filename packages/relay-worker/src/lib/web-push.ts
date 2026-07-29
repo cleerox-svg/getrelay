@@ -212,10 +212,21 @@ export interface SendResult {
   body?: string;
 }
 
+// RFC 8030 §5.3 urgency. Time-sensitive Relay notifications (chat
+// messages, live score alerts) want `high` so the push service wakes a
+// dozing device immediately instead of batching the delivery.
+export type PushUrgency = 'very-low' | 'low' | 'normal' | 'high';
+
+export interface SendOptions {
+  urgency?: PushUrgency;
+  ttlSeconds?: number;
+}
+
 export async function sendPush(
   subscription: PushSubscription,
   payload: unknown,
   keys: VapidKeys,
+  opts: SendOptions = {},
 ): Promise<SendResult> {
   const ua_p256dh = b64urlDecode(subscription.keys.p256dh);
   const ua_auth = b64urlDecode(subscription.keys.auth);
@@ -230,12 +241,14 @@ export async function sendPush(
   const headers = new Headers({
     'content-type': 'application/octet-stream',
     'content-encoding': 'aes128gcm',
-    // 24 h. A short TTL (e.g. 60s) is the most common reason FCM silently
+    // A short TTL (e.g. 60s) is the most common reason FCM silently
     // drops a push when the device is sleeping or offline.
-    ttl: '86400',
-    // FCM and Mozilla both honor this. `normal` lets the push wait when the
-    // device is dozing; `high` would force immediate wakeup.
-    urgency: 'normal',
+    ttl: String(opts.ttlSeconds ?? 86400),
+    // FCM and Mozilla both honor this. `normal` lets the push wait while the
+    // device is dozing (Android Doze / idle Chrome), so a normal-urgency
+    // score alert can land minutes late, batched with the next wakeup.
+    // Default to `high` so time-sensitive alerts wake the device now.
+    urgency: opts.urgency ?? 'high',
     authorization: `vapid t=${jwt}, k=${keys.publicKey}`,
   });
 
