@@ -313,4 +313,13 @@ jobs:
           # works on @v1 but prints a deprecation warning as a run annotation.
           # Single track name, same value.
           tracks: internal
-          status: draft
+          # `completed` rolls the release straight out to the Internal testing
+          # track, so enrolled testers just get the update in the Play Store —
+          # no manual "promote the draft" step in the Play Console. (`draft`
+          # only stages an edit you must publish by hand.) Internal testing
+          # has no Google review gate, so this is immediate. Requires the
+          # app-content declarations (Data safety, Content rating, etc.) to be
+          # complete — if they aren't, Play rejects the rollout and this step
+          # fails loudly (a draft would have silently succeeded); complete them
+          # once in the Console and re-run.
+          status: completed
