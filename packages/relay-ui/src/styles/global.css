@@ -532,11 +532,126 @@ html.beta .bubble-them {
 /* Konsta's Messagebar textarea has a fixed-ish height pill. Add a
    reasonable min-height + line-height-based vertical centering for the
    single-line case so the "Message" placeholder doesn't hang at the top
-   of the field. */
+   of the field. (Still used by classic mode's LegacyChat.) */
 .k-ios .k-messagebar textarea,
 .k-material .k-messagebar textarea {
   min-height: 36px;
   padding-top: 8px;
   padding-bottom: 8px;
   line-height: 20px;
+}
+
+/* Chat composer (Chat.tsx) — custom capsule bar replacing Konsta's
+   Messagebar so the layout matches mainstream messengers (iMessage /
+   WhatsApp / Telegram) and the beta gradient language carries through.
+   Fixed to the viewport bottom; the message list reserves ~96px of
+   bottom padding to clear it, and the reply/edit banners anchor 64px
+   up (see Chat.tsx), so keep the bar ~64px tall. */
+.composer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 12px 10px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  background: var(--page-bg);
+  border-top: 1px solid var(--separator);
+}
+.composer-btn {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+}
+.composer-btn:disabled {
+  opacity: 0.5;
+}
+.composer-capsule {
+  flex: 1;
+  min-width: 0;
+  min-height: 38px;
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 6px 6px 6px 14px;
+  border-radius: 20px;
+  background: var(--card-bg);
+  border: 1px solid var(--separator);
+}
+html.beta .composer-capsule {
+  background: linear-gradient(
+    180deg,
+    var(--card-bg) 0%,
+    color-mix(in srgb, var(--card-bg) 92%, black) 100%
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 1px 2px rgba(0, 0, 0, 0.35);
+}
+.composer-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--text);
+  caret-color: var(--accent);
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 20px;
+  max-height: 120px;
+  padding: 3px 0;
+}
+.composer-input::placeholder {
+  color: var(--text-dim);
+}
+.composer-inl {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+}
+.composer-inl-gif {
+  width: auto;
+  padding: 0 4px;
+  font-weight: 800;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+}
+.composer-send {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: var(--accent);
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.composer-send-ping {
+  background: var(--ping);
+}
+.composer-send:active {
+  transform: scale(0.94);
 }

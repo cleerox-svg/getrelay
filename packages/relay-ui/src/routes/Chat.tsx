@@ -4,7 +4,6 @@ import {
   Actions,
   ActionsButton,
   ActionsGroup,
-  Messagebar,
   Navbar,
   NavbarBackLink,
   Page,
@@ -79,7 +78,7 @@ export function Chat() {
   const [actionsFor, setActionsFor] = useState<UiMessage | null>(null);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sentTypingRef = useRef(false);
-  const messagebarRef = useRef<{ areaElRef: HTMLTextAreaElement | null } | null>(null);
+  const taRef = useRef<HTMLTextAreaElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -89,7 +88,7 @@ export function Chat() {
   const [stickerOpen, setStickerOpen] = useState(false);
 
   function insertEmoji(emoji: string) {
-    const ta = messagebarRef.current?.areaElRef;
+    const ta = taRef.current;
     // No textarea yet, or picker is open and we want to keep the keyboard
     // dismissed: just append at the end.
     if (!ta || emojiOpen) {
@@ -122,7 +121,7 @@ export function Chat() {
 
   // Enter (no shift) submits; Shift+Enter inserts a newline.
   useEffect(() => {
-    const textarea = messagebarRef.current?.areaElRef;
+    const textarea = taRef.current;
     if (!textarea) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
@@ -137,7 +136,7 @@ export function Chat() {
   // Auto-grow the textarea up to MAX_TEXTAREA_HEIGHT. Konsta defaults to a
   // fixed h-8, which truncates multi-line input.
   useEffect(() => {
-    const textarea = messagebarRef.current?.areaElRef;
+    const textarea = taRef.current;
     if (!textarea) return;
     textarea.style.height = 'auto';
     const next = Math.min(textarea.scrollHeight, MAX_TEXTAREA_HEIGHT);
@@ -183,7 +182,7 @@ export function Chat() {
   // fires focus before any visualViewport event.
   useEffect(() => {
     const vv = typeof window !== 'undefined' ? window.visualViewport : null;
-    const ta = messagebarRef.current?.areaElRef;
+    const ta = taRef.current;
     let raf = 0;
     const scrollSoon = () => {
       cancelAnimationFrame(raf);
@@ -783,134 +782,109 @@ export function Chat() {
         </div>
       ) : null}
 
-      <Messagebar
-        // @ts-expect-error Konsta forwardRef returns { el, areaElRef }; types lag
-        ref={messagebarRef}
-        placeholder={editing ? 'Edit message' : 'Message'}
-        value={input}
-        onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
-          onInputChange(e.target.value)
-        }
-        // Left = attach. Right = GIF, sticker, PING, Send. Five
-        // total buttons (was six — emoji was dropped, native keyboard
-        // handles emoji on both iOS and Android). Send is now icon-
-        // only (paper plane) instead of the word "Send" — saves
-        // ~30px of horizontal real estate. Combined: textarea gains
-        // about a third more width on a 360px phone.
-        left={
+      {/* Composer. Layout mirrors mainstream messengers (iMessage /
+          WhatsApp / Telegram): one rounded capsule for the text with
+          media-insert actions inline on its right, a single attach
+          button outside-left, and a single circular primary button
+          outside-right. The primary swaps by state — ⚡ PING when the
+          field is empty, Send (paper plane) once you type — so we keep
+          all five actions without crowding the bar. Fixed to the
+          bottom; the message list reserves bottom padding to clear it. */}
+      <div className="composer">
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          aria-label="Attach photo or video"
+          disabled={uploading}
+          className="composer-btn"
+        >
+          {uploading ? (
+            <span style={{ fontSize: 14 }}>…</span>
+          ) : (
+            <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+              <path
+                d="M21 12.5l-9 9a5 5 0 0 1-7-7l9-9a3 3 0 0 1 4 4l-9 9a1 1 0 0 1-2-2l8-8"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                fill="none"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          )}
+        </button>
+
+        <div className="composer-capsule">
+          <textarea
+            ref={taRef}
+            rows={1}
+            className="composer-input"
+            placeholder={editing ? 'Edit message' : 'Message'}
+            value={input}
+            onChange={(e) => onInputChange(e.target.value)}
+          />
           <button
             type="button"
-            onClick={() => fileInputRef.current?.click()}
-            aria-label="Attach photo or video"
-            disabled={uploading}
-            className="px-1 disabled:opacity-50"
-            style={{ color: 'var(--accent)' }}
+            onClick={() => {
+              taRef.current?.blur();
+              setGifOpen(true);
+            }}
+            aria-label="Send a GIF"
+            className="composer-inl composer-inl-gif"
           >
-            {uploading ? (
-              <span style={{ fontSize: 14 }}>…</span>
-            ) : (
-              <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-                <path
-                  d="M21 12.5l-9 9a5 5 0 0 1-7-7l9-9a3 3 0 0 1 4 4l-9 9a1 1 0 0 1-2-2l8-8"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  fill="none"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            )}
+            GIF
           </button>
-        }
-        right={
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => {
-                const ta = messagebarRef.current?.areaElRef;
-                if (ta) ta.blur();
-                setGifOpen(true);
-              }}
-              aria-label="Send a GIF"
-              style={{
-                color: 'var(--accent)',
-                fontWeight: 800,
-                fontSize: 11,
-                letterSpacing: 0.6,
-                border: '1.5px solid var(--accent)',
-                borderRadius: 6,
-                padding: '2px 5px',
-                lineHeight: 1,
-              }}
-            >
-              GIF
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                const ta = messagebarRef.current?.areaElRef;
-                if (ta) ta.blur();
-                setStickerOpen(true);
-              }}
-              aria-label="Send a sticker"
-              className="px-1"
-              style={{ color: 'var(--accent)' }}
-            >
-              <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-                <path
-                  d="M20 4H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h10l6-6V5a1 1 0 0 0-1-1Zm-6 16v-5a1 1 0 0 1 1-1h5"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  fill="none"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </button>
-            <button
-              type="button"
-              onClick={() => sendPing(chatId)}
-              aria-label="Send PING"
-              className="px-1 text-lg"
-              style={{ color: 'var(--ping)' }}
-            >
-              ⚡
-            </button>
-            <button
-              type="button"
-              onClick={submit}
-              aria-label="Send"
-              disabled={!input.trim()}
-              className="disabled:opacity-40"
-              style={{
-                background: input.trim() ? 'var(--accent)' : 'transparent',
-                color: input.trim() ? '#FFFFFF' : 'var(--accent)',
-                borderRadius: 999,
-                width: 32,
-                height: 32,
-                minWidth: 0,
-                minHeight: 0,
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-                {/* Paper plane, point at top-right — iOS Messages
-                    convention. Slight downward tilt feels more
-                    "launch" than a horizontal arrow. */}
-                <path
-                  d="M3 11.5 21 3l-5.5 18-3.5-8-8-1.5Z"
-                  fill="currentColor"
-                  stroke="currentColor"
-                  strokeWidth="1.2"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </button>
-          </div>
-        }
-      />
+          <button
+            type="button"
+            onClick={() => {
+              taRef.current?.blur();
+              setStickerOpen(true);
+            }}
+            aria-label="Send a sticker"
+            className="composer-inl"
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path
+                d="M20 4H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h10l6-6V5a1 1 0 0 0-1-1Zm-6 16v-5a1 1 0 0 1 1-1h5"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                fill="none"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
+
+        {input.trim() ? (
+          <button
+            type="button"
+            onClick={submit}
+            aria-label="Send"
+            className="composer-send"
+          >
+            {/* Paper plane, point at top-right — iOS Messages convention. */}
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <path
+                d="M3 11.5 21 3l-5.5 18-3.5-8-8-1.5Z"
+                fill="currentColor"
+                stroke="currentColor"
+                strokeWidth="1.2"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => sendPing(chatId)}
+            aria-label="Send PING"
+            className="composer-send composer-send-ping"
+          >
+            <span style={{ fontSize: 18, lineHeight: 1 }}>⚡</span>
+          </button>
+        )}
+      </div>
       <input
         ref={fileInputRef}
         type="file"
@@ -987,7 +961,7 @@ export function Chat() {
               if (actionsFor) setReplyingTo(actionsFor);
               setActionsFor(null);
               setTimeout(() => {
-                messagebarRef.current?.areaElRef?.focus();
+                taRef.current?.focus();
               }, 50);
             }}
           >
