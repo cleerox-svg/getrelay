@@ -1,5 +1,12 @@
-import { useEffect, useState } from 'react';
-import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from 'react-router-dom';
 import { App as KonstaApp } from 'konsta/react';
 import { Capacitor } from '@capacitor/core';
 import { useLegacyUi } from './lib/legacy';
@@ -99,6 +106,47 @@ function NativePushNavigationBridge() {
   return null;
 }
 
+// Root tab screens: pressing Android back here exits the app (standard
+// Android behavior), rather than looping around the bottom-nav history.
+const ROOT_PATHS = new Set(['/chats', '/contacts', '/sports', '/feeds', '/discover']);
+
+// Android hardware/gesture back. Without a listener, Capacitor's default is
+// to exit the app on every back press — so from a chat or any detail screen
+// "back" would drop you straight out. Wire it to the router instead: step
+// back through history when we can, fall back to the chats list when a screen
+// was opened directly (e.g. a notification tap with no history), and only
+// exit from a root tab screen.
+function AndroidBackButton() {
+  const nav = useNavigate();
+  const location = useLocation();
+  const locationRef = useRef(location);
+  locationRef.current = location;
+  useEffect(() => {
+    if (Capacitor.getPlatform() !== 'android') return;
+    let handle: { remove: () => void } | undefined;
+    let cancelled = false;
+    import('@capacitor/app')
+      .then(({ App: CapApp }) =>
+        CapApp.addListener('backButton', ({ canGoBack }) => {
+          const path = locationRef.current.pathname;
+          if (ROOT_PATHS.has(path)) CapApp.exitApp();
+          else if (canGoBack) nav(-1);
+          else nav('/chats');
+        }),
+      )
+      .then((h) => {
+        if (cancelled) h.remove();
+        else handle = h;
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      handle?.remove();
+    };
+  }, [nav]);
+  return null;
+}
+
 export function App() {
   useEffect(() => {
     wireWsToStore();
@@ -111,6 +159,7 @@ export function App() {
       <BrowserRouter>
         <SwNavigationBridge />
         <NativePushNavigationBridge />
+        <AndroidBackButton />
         <Routes>
           <Route path="/signin" element={<SignIn />} />
           <Route path="/privacy" element={<Privacy />} />
