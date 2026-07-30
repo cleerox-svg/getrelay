@@ -106,16 +106,17 @@ function NativePushNavigationBridge() {
   return null;
 }
 
-// Root tab screens: pressing Android back here exits the app (standard
-// Android behavior), rather than looping around the bottom-nav history.
-const ROOT_PATHS = new Set(['/chats', '/contacts', '/sports', '/feeds', '/discover']);
+// The Chats tab is the app's home / exit point. Pressing Android back here
+// exits (standard Android behavior at the top of the stack).
+const HOME_PATH = '/chats';
 
 // Android hardware/gesture back. Without a listener, Capacitor's default is
-// to exit the app on every back press — so from a chat or any detail screen
-// "back" would drop you straight out. Wire it to the router instead: step
-// back through history when we can, fall back to the chats list when a screen
-// was opened directly (e.g. a notification tap with no history), and only
-// exit from a root tab screen.
+// to exit the app on every back press — so from a chat, a detail screen, or
+// even a secondary tab, "back" would drop you straight out. Wire it to the
+// router instead: from the Chats home tab, exit; from anywhere else, step
+// back to the last screen you were on (a previous tab or a drilled-in view,
+// since tab switches push history), falling back to Chats when a screen was
+// opened directly with no history (e.g. a notification tap).
 function AndroidBackButton() {
   const nav = useNavigate();
   const location = useLocation();
@@ -129,9 +130,9 @@ function AndroidBackButton() {
       .then(({ App: CapApp }) =>
         CapApp.addListener('backButton', ({ canGoBack }) => {
           const path = locationRef.current.pathname;
-          if (ROOT_PATHS.has(path)) CapApp.exitApp();
+          if (path === HOME_PATH) CapApp.exitApp();
           else if (canGoBack) nav(-1);
-          else nav('/chats');
+          else nav(HOME_PATH);
         }),
       )
       .then((h) => {
