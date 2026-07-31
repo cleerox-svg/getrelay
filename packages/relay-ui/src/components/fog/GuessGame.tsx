@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { FogCanvas } from './FogCanvas';
 import type { FogCanvasHandle } from './FogCanvas';
+import { FogPausePrompt } from './FogPausePrompt';
 import { api } from '../../lib/api';
 import { buildRound } from '../../lib/fog/sources';
 import type { FogCategory, FogRound } from '../../lib/fog/sources';
@@ -19,7 +20,7 @@ export interface GameResult {
   score: number;
   bestStreak: number;
   // Completed rounds. ROUNDS for a full game; 1..ROUNDS-1 when the game
-  // was ended early (End button / back gesture); 0 when nothing was
+  // was ended early (End pill / the pause sheet's "End game"); 0 when nothing was
   // completed — callers must record/submit NOTHING for a 0-round game.
   roundsPlayed: number;
   perRound: { fogPct: number; correct: boolean }[];
@@ -28,19 +29,27 @@ export interface GameResult {
 interface Props {
   category: FogCategory;
   onFinish: (result: GameResult) => void;
-  // Bump this counter to end the game immediately from outside (back
-  // gesture / popstate). Same path as the header End button: onFinish
-  // fires with the partial result.
-  endSignal?: number;
+  // Freeze the run and show the pause sheet. Owned by the parent
+  // because the back gesture that raises it is a history event (see
+  // routes/Fog.tsx); the sheet's Resume button calls onResume, its
+  // "End game" button goes through the same finishNow funnel as the
+  // header End pill.
+  paused?: boolean;
+  onResume?: () => void;
 }
 
 type Phase = 'loading' | 'play' | 'reveal';
+
+// Reveal dwell before the next round: long enough to read the right
+// answer, longer after a wrong guess.
+const REVEAL_CORRECT_MS = 1100;
+const REVEAL_WRONG_MS = 1700;
 
 // The scored 8-round game. Each round: a fresh pane of fog over a new
 // mystery image, a shrinking wipe budget, fog creeping back in, and
 // four choices. Points scale with how much fog was still on the glass
 // when the correct guess landed.
-export function GuessGame({ category, onFinish, endSignal }: Props) {
+export function GuessGame({ category, onFinish, paused = false, onResume }: Props) {
   const canvasRef = useRef<FogCanvasHandle | null>(null);
   const usedRef = useRef(new Set<string>());
   const nextPromiseRef = useRef<Promise<FogRound> | null>(null);
@@ -50,12 +59,17 @@ export function GuessGame({ category, onFinish, endSignal }: Props) {
   // late resolution must not clobber the fallback round.
   const loadGenRef = useRef(0);
   // Single "reported" gate consulted by EVERY way a game can end —
-  // natural finish, the End button, an external endSignal (back
-  // gesture), and the unmount safety net — so a score is never
-  // recorded or submitted twice.
+  // natural finish, the header End pill, the pause sheet's "End game",
+  // and the unmount safety net — so a score is never recorded or
+  // submitted twice.
   const reportedRef = useRef(false);
   const scoreRef = useRef(0);
   const bestStreakRef = useRef(0);
+  // Banked remainders for the two running clocks, so a pause resumes
+  // them where they stopped instead of restarting them.
+  const roundLeftRef = useRef(ROUND_TIMEOUT_MS);
+  const revealMsRef = useRef(REVEAL_CORRECT_MS);
+  const revealLeftRef = useRef<number | null>(null);
 
   const [roundIdx, setRoundIdx] = useState(0); // 0-based
   const [round, setRound] = useState<FogRound | null>(null);
@@ -95,17 +109,52 @@ export function GuessGame({ category, onFinish, endSignal }: Props) {
   }, []);
 
   // 45s failsafe: no guess counts as a wrong guess so an abandoned
-  // round can't stall the game.
+  // round can't stall the game. Pause-aware: tearing down (pause, or
+  // leaving the play phase) banks the time left, re-arming uses that
+  // remainder — a pause neither gifts nor steals round time.
   useEffect(() => {
-    if (phase !== 'play') return;
-    const t = window.setTimeout(() => handleGuess(null), ROUND_TIMEOUT_MS);
-    return () => window.clearTimeout(t);
+    if (phase !== 'play') {
+      // loading/reveal aren't on the clock. The next play phase (next
+      // round, or this one again after the load failsafe) starts fresh.
+      roundLeftRef.current = ROUND_TIMEOUT_MS;
+      return;
+    }
+    if (paused) return; // frozen — keep whatever the cleanup banked
+    const ms = roundLeftRef.current;
+    const armedAt = Date.now();
+    const t = window.setTimeout(() => handleGuess(null), ms);
+    return () => {
+      window.clearTimeout(t);
+      roundLeftRef.current = Math.max(0, ms - (Date.now() - armedAt));
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, roundIdx]);
+  }, [phase, roundIdx, paused]);
+
+  // Reveal → next round. Effect-driven (not a bare setTimeout in
+  // handleGuess) for the same reason as the round clock: pausing mid
+  // reveal must freeze the dwell instead of snapping to the next round
+  // the moment the sheet closes.
+  useEffect(() => {
+    if (phase !== 'reveal') return;
+    const ms = revealLeftRef.current ?? revealMsRef.current;
+    revealLeftRef.current = ms;
+    if (paused) return;
+    const armedAt = Date.now();
+    const t = window.setTimeout(() => advanceRef.current(), ms);
+    advanceTimerRef.current = t;
+    return () => {
+      window.clearTimeout(t);
+      advanceTimerRef.current = null;
+      revealLeftRef.current = Math.max(0, ms - (Date.now() - armedAt));
+    };
+  }, [phase, roundIdx, paused]);
 
   // Loading failsafe: buildRound bounds each network step, but if a
   // build still hangs, orphan it and serve a bundled-pack round (local
   // assets — can't hang) so "Fogging up the window…" is never forever.
+  // Not pause-aware on purpose: loading is fetch progress, not game
+  // progress (an in-flight buildRound resolves while paused anyway),
+  // and the round clock only starts once the play phase begins.
   useEffect(() => {
     if (phase !== 'loading') return;
     const t = window.setTimeout(() => {
@@ -123,9 +172,9 @@ export function GuessGame({ category, onFinish, endSignal }: Props) {
   }, [phase, roundIdx]);
 
   // Ends the game right now with whatever rounds are complete. The
-  // natural finish (after the last reveal), the header End button and
-  // the parent's endSignal all funnel through here; the parent decides
-  // results-vs-menu from roundsPlayed.
+  // natural finish (after the last reveal), the header End pill and
+  // the pause sheet's "End game" all funnel through here; the parent
+  // decides results-vs-menu from roundsPlayed.
   function finishNow() {
     if (reportedRef.current) return;
     reportedRef.current = true;
@@ -139,18 +188,6 @@ export function GuessGame({ category, onFinish, endSignal }: Props) {
       perRound: perRoundRef.current.slice(),
     });
   }
-
-  // External end request (back gesture). The seen-ref makes a freshly
-  // remounted game ignore a counter bumped for a previous game.
-  const endSignalSeen = useRef(endSignal ?? 0);
-  useEffect(() => {
-    const sig = endSignal ?? 0;
-    if (sig !== endSignalSeen.current) {
-      endSignalSeen.current = sig;
-      finishNow();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [endSignal]);
 
   // Abandon safety net: unmounted mid-game (route change, tab switch,
   // navbar link) with >=1 completed round and nothing reported yet —
@@ -199,13 +236,17 @@ export function GuessGame({ category, onFinish, endSignal }: Props) {
   }
 
   function handleGuess(choice: string | null) {
-    if (phase !== 'play' || !round) return;
+    if (phase !== 'play' || !round || paused) return;
     // Freeze the fog fraction at the moment of the guess — the meter
     // keeps draining via refog otherwise.
     const pct = canvasRef.current?.getFogPct() ?? 0;
     const correct = choice != null && choice === round.answer;
     canvasRef.current?.clearFog(); // full reveal either way
     setPicked(choice);
+    // Hand the dwell to the reveal effect: full duration, nothing
+    // banked from a previous round.
+    revealMsRef.current = correct ? REVEAL_CORRECT_MS : REVEAL_WRONG_MS;
+    revealLeftRef.current = null;
     setPhase('reveal');
     perRoundRef.current.push({ fogPct: pct, correct });
     if (correct) {
@@ -218,10 +259,6 @@ export function GuessGame({ category, onFinish, endSignal }: Props) {
     } else {
       setStreak(0);
     }
-    advanceTimerRef.current = window.setTimeout(
-      () => advanceRef.current(),
-      correct ? 1100 : 1700,
-    );
   }
 
   // The reveal timeout must call the LATEST advance() — the score /
@@ -256,9 +293,11 @@ export function GuessGame({ category, onFinish, endSignal }: Props) {
         <span style={{ color: streak > 1 ? 'var(--accent)' : 'var(--text-dim)' }}>
           Streak x{streak}
         </span>
-        {/* Ends the game on the spot: results if >=1 round is done,
-            straight back to the menu otherwise (also the escape hatch
-            from a stuck loading screen). */}
+        {/* Ends the game on the spot, no confirmation — it's an
+            explicit tap, unlike the back gesture (which pauses).
+            Results if >=1 round is done, straight back to the menu
+            otherwise (also the escape hatch from a stuck loading
+            screen). */}
         <button
           type="button"
           onClick={finishNow}
@@ -283,7 +322,8 @@ export function GuessGame({ category, onFinish, endSignal }: Props) {
           brushSizePx={GUESS_BRUSH_PX}
           brushHardness="soft"
           fogDensity={1}
-          wipeEnabled={phase === 'play' && budget > 0}
+          wipeEnabled={phase === 'play' && budget > 0 && !paused}
+          paused={paused}
           onWipe={(len) => setBudget((b) => Math.max(0, b - len))}
           onFogPct={setFogPct}
         />
@@ -327,7 +367,7 @@ export function GuessGame({ category, onFinish, endSignal }: Props) {
             <button
               key={`${i}-${choice}`}
               type="button"
-              disabled={phase !== 'play' || !choice}
+              disabled={phase !== 'play' || !choice || paused}
               onClick={() => handleGuess(choice)}
               className="rounded-xl px-3 py-3 text-sm font-semibold text-center"
               style={{
@@ -347,6 +387,19 @@ export function GuessGame({ category, onFinish, endSignal }: Props) {
           );
         })}
       </div>
+
+      {/* Pause sheet. The game stays mounted and visible underneath —
+          frozen, not ended — so Resume is a true continue. "End game"
+          is the same finishNow funnel as the header End pill. */}
+      {paused ? (
+        <FogPausePrompt
+          roundNo={roundNo}
+          rounds={ROUNDS}
+          score={score}
+          onResume={() => onResume?.()}
+          onEnd={finishNow}
+        />
+      ) : null}
     </div>
   );
 }

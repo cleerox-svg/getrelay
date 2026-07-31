@@ -425,7 +425,19 @@ export type ServerMsg =
   | { t: 'read'; messageId: string; chatId: string; userId: string; ts: number }
   | { t: 'typing'; chatId: string; userId: string; on: boolean }
   | { t: 'presence'; userId: string; online: boolean; lastSeen: number | null }
-  | { t: 'ping'; chatId: string; from: string; ts: number }
+  | {
+      // Fan-out for a PING. The sender's own UserHub echoes this back to
+      // their sockets too, so a ping lands live on both sides.
+      // `id`/`sequence` identify the row ChatRoom persisted; they're
+      // optional because a client may be talking to a worker that
+      // predates them — receivers fall back to a synthetic id.
+      t: 'ping';
+      chatId: string;
+      from: string;
+      ts: number;
+      id?: string;
+      sequence?: number;
+    }
   | { t: 'recalled'; messageId: string; chatId: string; ts: number }
   | { t: 'edited'; messageId: string; chatId: string; body: string; editedAt: number }
   | {

@@ -19,9 +19,10 @@ import { useStore } from '../lib/store';
 // switching (menu / game / results / sandbox) is component state, NOT
 // subroutes — the tab bar's active check is an exact pathname match.
 // Entering guess/free DOES push a same-path history entry carrying a
-// state marker, so a back gesture ends the game (score captured)
-// instead of leaving the tab; AndroidBackButton's nav(-1) pops that
-// same entry, so hardware back flows through the identical path.
+// state marker, so a back gesture pauses the game (guess) or returns
+// to the menu (free) instead of leaving the tab; AndroidBackButton's
+// nav(-1) pops that same entry, so hardware back flows through the
+// identical path.
 
 type Screen = 'menu' | 'guess' | 'results' | 'free';
 
@@ -49,8 +50,12 @@ export function Fog() {
   const [result, setResult] = useState<GameResult | null>(null);
   const [serverBest, setServerBest] = useState<number | null>(null);
   const [lbKey, setLbKey] = useState(0);
-  const [endSignal, setEndSignal] = useState(0);
+  const [paused, setPaused] = useState(false);
   const submittedRef = useRef<GameResult | null>(null);
+  // Read inside the popstate effect, which must not re-run on a pause
+  // toggle (it reacts to history only).
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
 
   const location = useLocation();
   const nav = useNavigate();
@@ -74,17 +79,33 @@ export function Fog() {
 
   // Back-gesture / popstate handling. This effect reacts ONLY to
   // history changes (deps = the marker), never to screen changes:
-  // - back while playing → bump endSignal; GuessGame reports the
-  //   partial game through the normal onFinish path.
-  // - back in free play → menu.
+  // - back while playing → toggle the pause sheet (pause, or Resume if
+  //   it's already open) and re-arm the guard entry. Back NEVER ends a
+  //   run any more; ending is an explicit choice (sheet "End game" or
+  //   the header End pill).
+  // - back in free play → menu (unchanged).
   // - a marker with no matching screen (reload, remount after a tab
   //   switch mid-game, forward-nav) is stale — clear it in place.
   // When guess/free are left via UI buttons instead, the pushed entry
   // is consumed with nav(-1); by the time that popstate lands here the
   // screen has already moved on, so every branch below is a no-op.
+  //
+  // Why the re-push can't loop: back pops the marker (histFog
+  // 'guess' → undefined) which runs this effect; the push flips it
+  // back ('guess') which runs it exactly once more, and that run hits
+  // NO branch — screen 'guess' WITH the 'guess' marker is the steady
+  // state. History depth is unchanged too (one pop, one push), so
+  // pause/resume cycles can't grow the stack.
+  //
+  // Toggling (rather than always pausing) is deliberate: back while
+  // the sheet is open reads as Resume, so the back button is never
+  // dead and never strands the user — every press does something
+  // visible, and neither press can silently drop them out of the tab
+  // mid-game.
   useEffect(() => {
     if (screen === 'guess' && histFog !== 'guess') {
-      setEndSignal((n) => n + 1);
+      setPaused(!pausedRef.current);
+      nav(location.pathname, { state: { fog: 'guess' } });
     } else if (screen === 'free' && histFog !== 'free') {
       setScreen('menu');
     } else if (histFog && (screen === 'menu' || screen === 'results')) {
@@ -130,6 +151,7 @@ export function Fog() {
   function startGame() {
     setResult(null);
     setServerBest(null);
+    setPaused(false);
     setScreen('guess');
     // Push the back-gesture guard entry (see the popstate effect).
     nav(location.pathname, { state: { fog: 'guess' } });
@@ -166,8 +188,13 @@ export function Fog() {
         {screen === 'guess' ? (
           <GuessGame
             category={category}
-            endSignal={endSignal}
+            paused={paused}
+            // Resume only clears the flag: the guard entry was already
+            // re-pushed when the back gesture paused us, so back works
+            // again immediately without touching history here.
+            onResume={() => setPaused(false)}
             onFinish={(r) => {
+              setPaused(false);
               // 0 completed rounds → nothing to show or record.
               if (r.roundsPlayed > 0) {
                 setResult(r);

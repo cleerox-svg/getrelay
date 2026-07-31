@@ -197,11 +197,14 @@ export class ChatRoom implements DurableObject {
 
     // Fan-out. We use kind=message_preview so drainOutbound triggers the
     // delivered_at side-effect for offline recipients; for ping-type
-    // messages we use kind=ping (same side-effect on drain).
+    // messages we use kind=ping (same side-effect on drain). The ping
+    // payload carries id/sequence so that side-effect can resolve the
+    // receipt row, and so the receiving client keys the live ping to the
+    // same row it will later fetch from history.
     const fanoutKind = input.type === 'ping' ? 'ping' : 'message_preview';
     const eventPayload =
       input.type === 'ping'
-        ? { t: 'ping', chatId, from: input.senderId, ts: now }
+        ? { t: 'ping', chatId, from: input.senderId, ts: now, id, sequence: seq }
         : {
             t: 'message',
             id,

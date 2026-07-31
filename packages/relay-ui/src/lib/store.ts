@@ -773,12 +773,21 @@ export const useStore = create<AppState>((set, get) => ({
       case 'ping':
         set((s) => {
           const chat = ensureChat(s, msg.chatId);
-          const id = `ping-${msg.from}-${msg.ts}`;
+          // A ping is a real persisted message, so prefer the server's
+          // row id — that way the live chip reconciles with the same
+          // row on the next history fetch instead of duplicating, and
+          // read receipts reference an id the worker knows. Workers
+          // that predate the id/sequence fields fall back to the old
+          // synthetic id.
+          const id = msg.id ?? `ping-${msg.from}-${msg.ts}`;
+          // We echo the sender's own ping back to them, so this event
+          // is no longer always "someone pinged me".
+          const mine = msg.from === s.me?.id;
           const ui: UiMessage = {
             id,
             chatId: msg.chatId,
             from: msg.from,
-            sequence: null,
+            sequence: msg.sequence ?? null,
             type: 'ping',
             body: null,
             ts: msg.ts,
@@ -788,7 +797,25 @@ export const useStore = create<AppState>((set, get) => ({
             read: false,
           };
           chat.messages = upsertMessage(chat.messages, ui);
-          return { byChat: { ...s.byChat, [msg.chatId]: { ...chat } } };
+          const chats = s.chats.map((c) =>
+            c.id === msg.chatId
+              ? {
+                  ...c,
+                  unreadCount: mine ? c.unreadCount : c.unreadCount + 1,
+                  lastActivityAt: msg.ts,
+                  lastMessage: {
+                    id,
+                    senderId: msg.from,
+                    messageType: 'ping',
+                    body: null,
+                    createdAt: msg.ts,
+                    editedAt: null,
+                    deletedAt: null,
+                  },
+                }
+              : c,
+          );
+          return { byChat: { ...s.byChat, [msg.chatId]: { ...chat } }, chats };
         });
         break;
 
