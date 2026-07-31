@@ -34,8 +34,11 @@ interface Props {
   // routes/Fog.tsx); the sheet's Resume button calls onResume, its
   // "End game" button goes through the same finishNow funnel as the
   // header End pill.
-  paused?: boolean;
-  onResume?: () => void;
+  // Both are required and travel together on purpose: a `paused` with
+  // no way back out would hard-lock the run (Resume, the scrim and
+  // Escape would all be dead), which the type system should refuse.
+  paused: boolean;
+  onResume: () => void;
 }
 
 type Phase = 'loading' | 'play' | 'reveal';
@@ -49,7 +52,7 @@ const REVEAL_WRONG_MS = 1700;
 // mystery image, a shrinking wipe budget, fog creeping back in, and
 // four choices. Points scale with how much fog was still on the glass
 // when the correct guess landed.
-export function GuessGame({ category, onFinish, paused = false, onResume }: Props) {
+export function GuessGame({ category, onFinish, paused, onResume }: Props) {
   const canvasRef = useRef<FogCanvasHandle | null>(null);
   const usedRef = useRef(new Set<string>());
   const nextPromiseRef = useRef<Promise<FogRound> | null>(null);
@@ -190,10 +193,11 @@ export function GuessGame({ category, onFinish, paused = false, onResume }: Prop
   }
 
   // Abandon safety net: unmounted mid-game (route change, tab switch,
-  // navbar link) with >=1 completed round and nothing reported yet —
-  // record the partial score directly. No setState here: the whole
-  // route may be unmounting. The POST is fire-and-forget; local stats
-  // always update.
+  // navbar link, or the second back press while paused — which drops
+  // straight to the Fog menu) with >=1 completed round and nothing
+  // reported yet: record the partial score directly. No setState here:
+  // the whole route may be unmounting. The POST is fire-and-forget;
+  // local stats always update.
   useEffect(() => {
     return () => {
       if (reportedRef.current) return;
@@ -294,7 +298,8 @@ export function GuessGame({ category, onFinish, paused = false, onResume }: Prop
           Streak x{streak}
         </span>
         {/* Ends the game on the spot, no confirmation — it's an
-            explicit tap, unlike the back gesture (which pauses).
+            explicit tap, unlike the back gesture (which pauses first,
+            and only leaves on a second press).
             Results if >=1 round is done, straight back to the menu
             otherwise (also the escape hatch from a stuck loading
             screen). */}
@@ -396,7 +401,7 @@ export function GuessGame({ category, onFinish, paused = false, onResume }: Prop
           roundNo={roundNo}
           rounds={ROUNDS}
           score={score}
-          onResume={() => onResume?.()}
+          onResume={onResume}
           onEnd={finishNow}
         />
       ) : null}

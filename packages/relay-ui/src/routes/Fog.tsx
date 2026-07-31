@@ -22,7 +22,8 @@ import { useStore } from '../lib/store';
 // state marker, so a back gesture pauses the game (guess) or returns
 // to the menu (free) instead of leaving the tab; AndroidBackButton's
 // nav(-1) pops that same entry, so hardware back flows through the
-// identical path.
+// identical path. Back in a guess game escalates: first press pauses,
+// second press leaves the game (see the popstate effect).
 
 type Screen = 'menu' | 'guess' | 'results' | 'free';
 
@@ -51,7 +52,12 @@ export function Fog() {
   const [serverBest, setServerBest] = useState<number | null>(null);
   const [lbKey, setLbKey] = useState(0);
   const [paused, setPaused] = useState(false);
+  const [statsKey, setStatsKey] = useState(0);
   const submittedRef = useRef<GameResult | null>(null);
+  // Set when a back-out abandons a running game, so the menu re-reads
+  // local stats once GuessGame's unmount safety net has banked the
+  // partial run (see the refresh effect below).
+  const abandonedRef = useRef(false);
   // Read inside the popstate effect, which must not re-run on a pause
   // toggle (it reacts to history only).
   const pausedRef = useRef(paused);
@@ -65,7 +71,19 @@ export function Fog() {
 
   // Local stats re-read whenever we land back on menu/results — cheap
   // localStorage read, no need for state plumbing from the recorder.
-  const stats = useMemo(() => getFogStats(), [screen, result]); // eslint-disable-line react-hooks/exhaustive-deps
+  const stats = useMemo(() => getFogStats(), [screen, result, statsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The one case the deps above can't see: backing out of a running
+  // game renders the menu BEFORE GuessGame's unmount safety net writes
+  // the partial run to localStorage, so that first read misses it.
+  // React flushes child unmount cleanups before parent effects, so by
+  // the time this runs the write has landed — re-read once. Guarded by
+  // the ref so ordinary menu visits cost no extra render.
+  useEffect(() => {
+    if (screen !== 'menu' || !abandonedRef.current) return;
+    abandonedRef.current = false;
+    setStatsKey((k) => k + 1);
+  }, [screen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,11 +96,19 @@ export function Fog() {
   }, []);
 
   // Back-gesture / popstate handling. This effect reacts ONLY to
-  // history changes (deps = the marker), never to screen changes:
-  // - back while playing → toggle the pause sheet (pause, or Resume if
-  //   it's already open) and re-arm the guard entry. Back NEVER ends a
-  //   run any more; ending is an explicit choice (sheet "End game" or
-  //   the header End pill).
+  // history changes (deps = the marker), never to screen changes.
+  //
+  // Back during a guess game escalates the conventional Android way —
+  // the first press pauses, the second press leaves:
+  // - back while PLAYING → open the pause sheet and re-arm the guard
+  //   entry (one pop + one push, so history depth is unchanged). The
+  //   run is frozen, not lost.
+  // - back while PAUSED → do NOT re-arm. The pop stands, so we drop
+  //   out of the game to the Fog menu; GuessGame unmounts and its
+  //   safety net records + submits the partial run (>=1 completed
+  //   round). History is back at the plain /discover entry, so the
+  //   NEXT back leaves the tab like on any other screen — a running
+  //   game can never trap the user in the tab or block app exit.
   // - back in free play → menu (unchanged).
   // - a marker with no matching screen (reload, remount after a tab
   //   switch mid-game, forward-nav) is stale — clear it in place.
@@ -90,22 +116,34 @@ export function Fog() {
   // is consumed with nav(-1); by the time that popstate lands here the
   // screen has already moved on, so every branch below is a no-op.
   //
+  // History depth across play → back → resume → back → back, starting
+  // from the plain /discover entry [A]:
+  //   startGame pushes the guard     [A, G]  playing
+  //   back (playing) → pop + re-push [A, G]  paused, sheet up
+  //   Resume (touches no history)    [A, G]  playing, guard still armed
+  //   back (playing) → pop + re-push [A, G]  paused again
+  //   back (paused)  → pop, no push  [A]     menu, partial run recorded
+  //   back                           [...]   leaves /discover
+  // Nothing grows the stack, and every press does something visible.
+  //
   // Why the re-push can't loop: back pops the marker (histFog
   // 'guess' → undefined) which runs this effect; the push flips it
   // back ('guess') which runs it exactly once more, and that run hits
   // NO branch — screen 'guess' WITH the 'guess' marker is the steady
-  // state. History depth is unchanged too (one pop, one push), so
-  // pause/resume cycles can't grow the stack.
-  //
-  // Toggling (rather than always pausing) is deliberate: back while
-  // the sheet is open reads as Resume, so the back button is never
-  // dead and never strands the user — every press does something
-  // visible, and neither press can silently drop them out of the tab
-  // mid-game.
+  // state.
   useEffect(() => {
     if (screen === 'guess' && histFog !== 'guess') {
-      setPaused(!pausedRef.current);
-      nav(location.pathname, { state: { fog: 'guess' } });
+      // pausedRef, not `paused`: this effect must not re-run on a
+      // pause toggle, so it reads the live value instead of closing
+      // over it.
+      if (pausedRef.current) {
+        abandonedRef.current = true;
+        setPaused(false);
+        setScreen('menu');
+      } else {
+        setPaused(true);
+        nav(location.pathname, { state: { fog: 'guess' } });
+      }
     } else if (screen === 'free' && histFog !== 'free') {
       setScreen('menu');
     } else if (histFog && (screen === 'menu' || screen === 'results')) {
@@ -190,8 +228,10 @@ export function Fog() {
             category={category}
             paused={paused}
             // Resume only clears the flag: the guard entry was already
-            // re-pushed when the back gesture paused us, so back works
-            // again immediately without touching history here.
+            // re-pushed when the back gesture paused us and nothing
+            // consumed it since, so it is still armed — the next back
+            // pauses again rather than leaving. Touching history here
+            // would double-push and strand an extra entry.
             onResume={() => setPaused(false)}
             onFinish={(r) => {
               setPaused(false);

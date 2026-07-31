@@ -124,6 +124,84 @@ function upsertMessage(list: UiMessage[], msg: UiMessage): UiMessage[] {
   return [...list, msg].sort(compareMessages);
 }
 
+// ---------- receipt application ----------
+// Kept as functions (rather than inline in handleServerMsg) because the
+// same logic runs twice: once for receipts that land while the message
+// is already on screen, and once when replaying a parked receipt.
+
+function applyDelivered(m: UiMessage): UiMessage {
+  // Sender-view of a group message: bump deliveredCount, clamped to
+  // totalRecipients to keep multi-device duplicate-delivery events
+  // idempotent. For 1to1 (no counts on the message) it's just the
+  // delivered boolean.
+  if (m.totalRecipients === undefined) return { ...m, delivered: true };
+  const next = Math.min((m.deliveredCount ?? 0) + 1, m.totalRecipients);
+  return { ...m, delivered: true, deliveredCount: next };
+}
+
+function applyRead(m: UiMessage): UiMessage {
+  if (m.totalRecipients === undefined) return { ...m, delivered: true, read: true };
+  // Reading implies delivery; bump both counts. Clamp each to
+  // totalRecipients so we can't overshoot if events arrive out of order.
+  const nextRead = Math.min((m.readCount ?? 0) + 1, m.totalRecipients);
+  const nextDelivered = Math.min(
+    Math.max((m.deliveredCount ?? 0) + 1, nextRead),
+    m.totalRecipients,
+  );
+  return { ...m, delivered: true, read: true, deliveredCount: nextDelivered, readCount: nextRead };
+}
+
+// Receipts can beat their own message onto the wire. ChatRoom awaits the
+// fan-out to the recipients before it answers the sender, so the
+// recipient's UserHub can write delivered_at and notify us *before* our
+// 'ack' / 'ping' echo arrives — i.e. a `delivered` for a messageId this
+// client has never seen (a just-sent text is still keyed by its tempId
+// at that point). Rather than widening the guess on the worker side, we
+// park unmatched receipts here and replay them the moment the row shows
+// up. Bounded by count and TTL so receipts for a message we never see
+// can't accumulate.
+const PENDING_RECEIPT_TTL_MS = 30_000;
+const MAX_PENDING_RECEIPTS = 50;
+
+// messageId -> "kind:userId" entries, de-duped so a recipient with two
+// devices can't inflate the group counts on replay.
+const pendingReceipts = new Map<string, { at: number; entries: Set<string> }>();
+
+function parkReceipt(messageId: string, kind: 'delivered' | 'read', userId: string): void {
+  const now = Date.now();
+  for (const [id, parked] of pendingReceipts) {
+    if (now - parked.at > PENDING_RECEIPT_TTL_MS) pendingReceipts.delete(id);
+  }
+  const cur = pendingReceipts.get(messageId);
+  if (cur) {
+    cur.at = now;
+    cur.entries.add(`${kind}:${userId}`);
+    return;
+  }
+  // Map iteration is insertion-ordered, so the first key is the oldest.
+  if (pendingReceipts.size >= MAX_PENDING_RECEIPTS) {
+    const oldest = pendingReceipts.keys().next().value;
+    if (oldest !== undefined) pendingReceipts.delete(oldest);
+  }
+  pendingReceipts.set(messageId, { at: now, entries: new Set([`${kind}:${userId}`]) });
+}
+
+// Replays (and clears) whatever was parked for `messageId`. Returns the
+// list untouched when nothing was waiting, which is the common case.
+function flushParkedReceipts(list: UiMessage[], messageId: string): UiMessage[] {
+  const parked = pendingReceipts.get(messageId);
+  if (!parked) return list;
+  pendingReceipts.delete(messageId);
+  let next = list;
+  for (const entry of parked.entries) {
+    const kind = entry.slice(0, entry.indexOf(':'));
+    next = next.map((m) =>
+      m.id === messageId ? (kind === 'read' ? applyRead(m) : applyDelivered(m)) : m,
+    );
+  }
+  return next;
+}
+
 export const useStore = create<AppState>((set, get) => ({
   me: null,
   meLoaded: false,
@@ -649,6 +727,9 @@ export const useStore = create<AppState>((set, get) => ({
               ? { ...m, id: msg.messageId, sequence: msg.sequence, ts: msg.ts, pending: false }
               : m,
           );
+          // The row only just learned its server id, so a receipt that
+          // arrived ahead of this ack couldn't have matched anything.
+          chat.messages = flushParkedReceipts(chat.messages, msg.messageId);
           return { byChat: { ...s.byChat, [msg.chatId]: { ...chat } } };
         });
         break;
@@ -700,21 +781,15 @@ export const useStore = create<AppState>((set, get) => ({
       case 'delivered':
         set((s) => {
           const chat = ensureChat(s, msg.chatId);
+          let matched = false;
           chat.messages = chat.messages.map((m) => {
             if (m.id !== msg.messageId) return m;
-            // Sender-view of a group message: bump deliveredCount,
-            // clamped to totalRecipients to keep multi-device
-            // duplicate-delivery events idempotent. For 1to1 (no
-            // counts on the message) it's just the delivered boolean.
-            if (m.totalRecipients === undefined) {
-              return { ...m, delivered: true };
-            }
-            const next = Math.min(
-              (m.deliveredCount ?? 0) + 1,
-              m.totalRecipients,
-            );
-            return { ...m, delivered: true, deliveredCount: next };
+            matched = true;
+            return applyDelivered(m);
           });
+          // The receipt overtook its own message — park it so the tick
+          // lands when the row arrives instead of silently no-op'ing.
+          if (!matched) parkReceipt(msg.messageId, 'delivered', msg.userId);
           return { byChat: { ...s.byChat, [msg.chatId]: { ...chat } } };
         });
         break;
@@ -722,30 +797,13 @@ export const useStore = create<AppState>((set, get) => ({
       case 'read':
         set((s) => {
           const chat = ensureChat(s, msg.chatId);
+          let matched = false;
           chat.messages = chat.messages.map((m) => {
             if (m.id !== msg.messageId) return m;
-            if (m.totalRecipients === undefined) {
-              return { ...m, delivered: true, read: true };
-            }
-            // Reading implies delivery; bump both counts. Clamp each
-            // to totalRecipients so we can't overshoot if events
-            // arrive out of order.
-            const nextRead = Math.min(
-              (m.readCount ?? 0) + 1,
-              m.totalRecipients,
-            );
-            const nextDelivered = Math.min(
-              Math.max((m.deliveredCount ?? 0) + 1, nextRead),
-              m.totalRecipients,
-            );
-            return {
-              ...m,
-              delivered: true,
-              read: true,
-              deliveredCount: nextDelivered,
-              readCount: nextRead,
-            };
+            matched = true;
+            return applyRead(m);
           });
+          if (!matched) parkReceipt(msg.messageId, 'read', msg.userId);
           return { byChat: { ...s.byChat, [msg.chatId]: { ...chat } } };
         });
         break;
@@ -796,7 +854,10 @@ export const useStore = create<AppState>((set, get) => ({
             delivered: false,
             read: false,
           };
-          chat.messages = upsertMessage(chat.messages, ui);
+          // On the sender's own devices the recipient's `delivered` beats
+          // this echo (ChatRoom fans out before it answers our /ping), so
+          // replay anything parked for this row.
+          chat.messages = flushParkedReceipts(upsertMessage(chat.messages, ui), id);
           const chats = s.chats.map((c) =>
             c.id === msg.chatId
               ? {

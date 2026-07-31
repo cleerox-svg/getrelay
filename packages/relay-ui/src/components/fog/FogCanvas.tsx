@@ -183,6 +183,15 @@ export const FogCanvas = forwardRef<FogCanvasHandle, Props>(function FogCanvas(
   // Pause/resume from the prop. Runs after the mount effect has filled
   // loopCtlRef, so a canvas that mounts already paused never ticks.
   useEffect(() => {
+    if (paused) {
+      // Drop any in-flight stroke. Without this the pointer can still
+      // be down when the pause sheet appears, and the first move after
+      // resuming would wipe one giant segment from the pre-pause
+      // position — a free streak across the pane, charged to the wipe
+      // budget in one go. The next pointerdown starts a fresh stroke.
+      activePointer.current = null;
+      lastPos.current = null;
+    }
     const ctl = loopCtlRef.current;
     if (!ctl) return;
     if (paused) ctl.stop();
