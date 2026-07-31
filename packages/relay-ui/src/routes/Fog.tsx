@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Navbar, Page } from 'konsta/react';
 import { Avatar } from '../components/Avatar';
 import { BrandTitle } from '../components/BrandTitle';
@@ -11,14 +11,21 @@ import { api } from '../lib/api';
 import { availableSources } from '../lib/fog/sources';
 import type { FogCategory, SourceAvailability } from '../lib/fog/sources';
 import { getFogStats, recordFogGame } from '../lib/fog/stats';
+import { ROUNDS } from '../lib/fog/tuning';
 import { useStore } from '../lib/store';
 
 // /discover is the Fog tab: a steamed-up window with a mystery image
 // on the other side. Wipe a peephole, guess what's out there. Screen
 // switching (menu / game / results / sandbox) is component state, NOT
 // subroutes — the tab bar's active check is an exact pathname match.
+// Entering guess/free DOES push a same-path history entry carrying a
+// state marker, so a back gesture ends the game (score captured)
+// instead of leaving the tab; AndroidBackButton's nav(-1) pops that
+// same entry, so hardware back flows through the identical path.
 
 type Screen = 'menu' | 'guess' | 'results' | 'free';
+
+type FogHistoryState = { fog?: 'guess' | 'free' } | null;
 
 const CATEGORIES: { id: FogCategory; label: string }[] = [
   { id: 'mix', label: 'Mix' },
@@ -42,7 +49,14 @@ export function Fog() {
   const [result, setResult] = useState<GameResult | null>(null);
   const [serverBest, setServerBest] = useState<number | null>(null);
   const [lbKey, setLbKey] = useState(0);
+  const [endSignal, setEndSignal] = useState(0);
   const submittedRef = useRef<GameResult | null>(null);
+
+  const location = useLocation();
+  const nav = useNavigate();
+  const histFog = (location.state as FogHistoryState)?.fog;
+  const histFogRef = useRef(histFog);
+  histFogRef.current = histFog;
 
   // Local stats re-read whenever we land back on menu/results — cheap
   // localStorage read, no need for state plumbing from the recorder.
@@ -58,17 +72,52 @@ export function Fog() {
     };
   }, []);
 
+  // Back-gesture / popstate handling. This effect reacts ONLY to
+  // history changes (deps = the marker), never to screen changes:
+  // - back while playing → bump endSignal; GuessGame reports the
+  //   partial game through the normal onFinish path.
+  // - back in free play → menu.
+  // - a marker with no matching screen (reload, remount after a tab
+  //   switch mid-game, forward-nav) is stale — clear it in place.
+  // When guess/free are left via UI buttons instead, the pushed entry
+  // is consumed with nav(-1); by the time that popstate lands here the
+  // screen has already moved on, so every branch below is a no-op.
+  useEffect(() => {
+    if (screen === 'guess' && histFog !== 'guess') {
+      setEndSignal((n) => n + 1);
+    } else if (screen === 'free' && histFog !== 'free') {
+      setScreen('menu');
+    } else if (histFog && (screen === 'menu' || screen === 'results')) {
+      nav(location.pathname, { replace: true, state: null });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [histFog]);
+
+  // Consume the history entry pushed when entering guess/free — unless
+  // a back gesture already popped it (then histFog is already gone).
+  function consumeHistoryEntry(marker: 'guess' | 'free') {
+    if (histFogRef.current === marker) nav(-1);
+  }
+
   // Persist + submit a finished game exactly once. Local stats are
   // updated regardless of network; the POST is fire-and-forget — a
   // failed submit keeps the local best and just skips the "Best" pill.
+  // Partial games (roundsPlayed 1..7) are valid submissions; a
+  // 0-round game never reaches this screen and must never be POSTed.
   useEffect(() => {
-    if (screen !== 'results' || !result || submittedRef.current === result) return;
+    if (
+      screen !== 'results' ||
+      !result ||
+      result.roundsPlayed < 1 ||
+      submittedRef.current === result
+    )
+      return;
     submittedRef.current = result;
     recordFogGame(result.score, result.bestStreak);
     api
       .submitGameScore({
         score: result.score,
-        rounds: result.rounds,
+        rounds: result.roundsPlayed,
         bestStreak: result.bestStreak,
       })
       .then((r) => {
@@ -82,6 +131,8 @@ export function Fog() {
     setResult(null);
     setServerBest(null);
     setScreen('guess');
+    // Push the back-gesture guard entry (see the popstate effect).
+    nav(location.pathname, { state: { fog: 'guess' } });
   }
 
   const chip = (active: boolean, disabled: boolean): React.CSSProperties => ({
@@ -115,9 +166,16 @@ export function Fog() {
         {screen === 'guess' ? (
           <GuessGame
             category={category}
+            endSignal={endSignal}
             onFinish={(r) => {
-              setResult(r);
-              setScreen('results');
+              // 0 completed rounds → nothing to show or record.
+              if (r.roundsPlayed > 0) {
+                setResult(r);
+                setScreen('results');
+              } else {
+                setScreen('menu');
+              }
+              consumeHistoryEntry('guess');
             }}
           />
         ) : screen === 'free' ? (
@@ -127,7 +185,10 @@ export function Fog() {
                 type="button"
                 className="text-sm font-semibold"
                 style={{ color: 'var(--accent)', background: 'transparent', border: 0, padding: 0 }}
-                onClick={() => setScreen('menu')}
+                onClick={() => {
+                  setScreen('menu');
+                  consumeHistoryEntry('free');
+                }}
               >
                 ‹ Back
               </button>
@@ -154,6 +215,11 @@ export function Fog() {
                   </span>
                 ) : null}
               </div>
+              {result.roundsPlayed < ROUNDS ? (
+                <div className="text-xs pt-1" style={{ color: 'var(--text-dim)' }}>
+                  Ended early — {result.roundsPlayed}/{ROUNDS} rounds
+                </div>
+              ) : null}
               {/* Per-round chips: remaining fog % at guess time + hit/miss. */}
               <div className="flex flex-wrap justify-center gap-1.5 pt-3">
                 {result.perRound.map((r, i) => (
@@ -245,7 +311,11 @@ export function Fog() {
                 color: 'var(--text)',
                 border: '1px solid var(--separator)',
               }}
-              onClick={() => setScreen('free')}
+              onClick={() => {
+                setScreen('free');
+                // Same back-gesture guard entry as the guess game.
+                nav(location.pathname, { state: { fog: 'free' } });
+              }}
             >
               Free play
             </button>

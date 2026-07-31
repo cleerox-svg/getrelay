@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { FogCanvas } from './FogCanvas';
 import type { FogCanvasHandle } from './FogCanvas';
+import { api } from '../../lib/api';
 import { buildRound } from '../../lib/fog/sources';
 import type { FogCategory, FogRound } from '../../lib/fog/sources';
+import { recordFogGame } from '../../lib/fog/stats';
 import {
   GUESS_BRUSH_PX,
   LOAD_TIMEOUT_MS,
@@ -16,13 +18,20 @@ import {
 export interface GameResult {
   score: number;
   bestStreak: number;
-  rounds: number;
+  // Completed rounds. ROUNDS for a full game; 1..ROUNDS-1 when the game
+  // was ended early (End button / back gesture); 0 when nothing was
+  // completed — callers must record/submit NOTHING for a 0-round game.
+  roundsPlayed: number;
   perRound: { fogPct: number; correct: boolean }[];
 }
 
 interface Props {
   category: FogCategory;
   onFinish: (result: GameResult) => void;
+  // Bump this counter to end the game immediately from outside (back
+  // gesture / popstate). Same path as the header End button: onFinish
+  // fires with the partial result.
+  endSignal?: number;
 }
 
 type Phase = 'loading' | 'play' | 'reveal';
@@ -31,7 +40,7 @@ type Phase = 'loading' | 'play' | 'reveal';
 // mystery image, a shrinking wipe budget, fog creeping back in, and
 // four choices. Points scale with how much fog was still on the glass
 // when the correct guess landed.
-export function GuessGame({ category, onFinish }: Props) {
+export function GuessGame({ category, onFinish, endSignal }: Props) {
   const canvasRef = useRef<FogCanvasHandle | null>(null);
   const usedRef = useRef(new Set<string>());
   const nextPromiseRef = useRef<Promise<FogRound> | null>(null);
@@ -40,6 +49,13 @@ export function GuessGame({ category, onFinish }: Props) {
   // Bumped by the loading failsafe to orphan a stuck buildRound — its
   // late resolution must not clobber the fallback round.
   const loadGenRef = useRef(0);
+  // Single "reported" gate consulted by EVERY way a game can end —
+  // natural finish, the End button, an external endSignal (back
+  // gesture), and the unmount safety net — so a score is never
+  // recorded or submitted twice.
+  const reportedRef = useRef(false);
+  const scoreRef = useRef(0);
+  const bestStreakRef = useRef(0);
 
   const [roundIdx, setRoundIdx] = useState(0); // 0-based
   const [round, setRound] = useState<FogRound | null>(null);
@@ -53,6 +69,10 @@ export function GuessGame({ category, onFinish }: Props) {
   const [lastPoints, setLastPoints] = useState<number | null>(null);
 
   const roundNo = roundIdx + 1;
+  // Keep the latest progress readable from the unmount safety net (its
+  // cleanup closure is from the first render, so state won't do).
+  scoreRef.current = score;
+  bestStreakRef.current = bestStreak;
 
   // First round + prefetch of the second. Prefetching keeps the
   // between-round pause down to the reveal animation on decent
@@ -102,15 +122,62 @@ export function GuessGame({ category, onFinish }: Props) {
     return () => window.clearTimeout(t);
   }, [phase, roundIdx]);
 
+  // Ends the game right now with whatever rounds are complete. The
+  // natural finish (after the last reveal), the header End button and
+  // the parent's endSignal all funnel through here; the parent decides
+  // results-vs-menu from roundsPlayed.
+  function finishNow() {
+    if (reportedRef.current) return;
+    reportedRef.current = true;
+    if (advanceTimerRef.current != null) window.clearTimeout(advanceTimerRef.current);
+    loadGenRef.current++; // orphan any in-flight round build
+    nextPromiseRef.current = null;
+    onFinish({
+      score,
+      bestStreak,
+      roundsPlayed: perRoundRef.current.length,
+      perRound: perRoundRef.current.slice(),
+    });
+  }
+
+  // External end request (back gesture). The seen-ref makes a freshly
+  // remounted game ignore a counter bumped for a previous game.
+  const endSignalSeen = useRef(endSignal ?? 0);
+  useEffect(() => {
+    const sig = endSignal ?? 0;
+    if (sig !== endSignalSeen.current) {
+      endSignalSeen.current = sig;
+      finishNow();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [endSignal]);
+
+  // Abandon safety net: unmounted mid-game (route change, tab switch,
+  // navbar link) with >=1 completed round and nothing reported yet —
+  // record the partial score directly. No setState here: the whole
+  // route may be unmounting. The POST is fire-and-forget; local stats
+  // always update.
+  useEffect(() => {
+    return () => {
+      if (reportedRef.current) return;
+      const rounds = perRoundRef.current.length;
+      if (rounds < 1) return; // never record/submit a 0-round game
+      reportedRef.current = true;
+      recordFogGame(scoreRef.current, bestStreakRef.current);
+      api
+        .submitGameScore({
+          score: scoreRef.current,
+          rounds,
+          bestStreak: bestStreakRef.current,
+        })
+        .catch(() => undefined);
+    };
+  }, []);
+
   function advance() {
     const idx = roundIdx + 1;
     if (idx >= ROUNDS) {
-      onFinish({
-        score,
-        bestStreak,
-        rounds: ROUNDS,
-        perRound: perRoundRef.current.slice(),
-      });
+      finishNow();
       return;
     }
     setPhase('loading');
@@ -189,6 +256,23 @@ export function GuessGame({ category, onFinish }: Props) {
         <span style={{ color: streak > 1 ? 'var(--accent)' : 'var(--text-dim)' }}>
           Streak x{streak}
         </span>
+        {/* Ends the game on the spot: results if >=1 round is done,
+            straight back to the menu otherwise (also the escape hatch
+            from a stuck loading screen). */}
+        <button
+          type="button"
+          onClick={finishNow}
+          className="text-xs font-semibold"
+          style={{
+            color: 'var(--text-dim)',
+            background: 'transparent',
+            border: '1px solid var(--separator)',
+            borderRadius: 999,
+            padding: '2px 10px',
+          }}
+        >
+          End
+        </button>
       </div>
 
       <div className={wrongReveal ? 'ping-shake relative' : 'relative'}>
