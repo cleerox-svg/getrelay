@@ -32,6 +32,17 @@ migrations → `data-migrations` (**first**, before feature code); `wrangler.tom
 - `pnpm --filter @relay/worker build` — dry-run deploy; `pnpm --filter @relay/ui build`.
 - `pnpm dev` — run worker (:8787) and UI (:5173) locally.
 
+## Ship a mobile build with every merge
+After a PR merges to `main`, always cut a new Android build as part of the
+merge process — run the **Build Android APK / AAB** workflow against `main`
+with `build_type=release-aab` and `publish=true`, so the AAB rolls out to the
+Play **Internal testing** track. Do this even for web-only changes: the
+WebView loads from `server_url`, so the store build is not what delivers them,
+but the project wants the mobile build kept in lockstep with `main` regardless.
+Each upload starts its own Play review, so batch merges where you reasonably
+can rather than firing several builds minutes apart. `build-android.yml` uses
+`cancel-in-progress`, so a new run supersedes one still building.
+
 ## Conventions that bite
 - **D1 migrations must be idempotent and use NO explicit transactions**
   (`BEGIN`/`COMMIT`/`SAVEPOINT` are rejected). New schema goes in **both**
