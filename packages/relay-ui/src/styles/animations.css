@@ -72,3 +72,25 @@
 .fade-in {
   animation: fade-in 180ms ease-out 1;
 }
+
+/* Score pop for the Fog game: a correct guess makes the +points (and
+   the final total) briefly swell. One-shot, transform-only so it
+   composites cheaply. */
+@keyframes fog-pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  45% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.fog-pop {
+  animation: fog-pop 420ms cubic-bezier(0.22, 1, 0.36, 1) 1;
+}

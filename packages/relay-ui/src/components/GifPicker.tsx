@@ -11,6 +11,9 @@ export interface GifItem {
   gifUrl: string;
   gifWidth: number;
   gifHeight: number;
+  // Static first frame — optional until the worker deploy that adds it
+  // lands. The picker itself always shows the animated preview.
+  stillUrl?: string | null;
   analytics: { onload?: string; onclick?: string; onsent?: string };
 }
 

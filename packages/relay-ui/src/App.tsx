@@ -20,13 +20,13 @@ import { ContactProfile } from './routes/ContactProfile';
 import { Contacts } from './routes/Contacts';
 import { EditGroup } from './routes/EditGroup';
 import { Feeds } from './routes/Feeds';
+import { Fog } from './routes/Fog';
 import { GroupInfo } from './routes/GroupInfo';
 import { LegacyChat } from './routes/LegacyChat';
 import { LegacyChats } from './routes/LegacyChats';
 import { MainLayout } from './routes/MainLayout';
 import { NewGroup } from './routes/NewGroup';
 import { Onboarding } from './routes/Onboarding';
-import { Placeholder } from './routes/Placeholder';
 import { Privacy } from './routes/Privacy';
 import { Profile } from './routes/Profile';
 import { RequireAuth } from './routes/RequireAuth';
@@ -183,15 +183,9 @@ export function App() {
               <Route path="/contacts" element={<Contacts />} />
               <Route path="/sports" element={<Sports />} />
               <Route path="/feeds" element={<Feeds />} />
-              <Route
-                path="/discover"
-                element={
-                  <Placeholder
-                    title="Discover"
-                    blurb="Channels and curated content. Lands in v1."
-                  />
-                }
-              />
+              {/* The old Discover placeholder is now the Fog mini game.
+                  Same path so pinned shortcuts / muscle memory survive. */}
+              <Route path="/discover" element={<Fog />} />
             </Route>
           </Route>
           <Route path="/" element={<Navigate to="/chats" replace />} />
