@@ -30,6 +30,11 @@ interface Props {
   brushHardness: BrushHardness;
   fogDensity: number;
   wipeEnabled: boolean;
+  // Freeze the pane: stops the rAF loop (no refog, no fog sampling) and
+  // ignores wipes, keeping the current fog bitmap exactly as it is.
+  // Same pathway the document-hidden pause uses, so resuming can't
+  // apply the paused interval as one giant refog burst.
+  paused?: boolean;
   onWipe?: (lenPx: number) => void;
   onFogPct?: (pct: number) => void;
 }
@@ -52,6 +57,7 @@ export const FogCanvas = forwardRef<FogCanvasHandle, Props>(function FogCanvas(
     brushHardness,
     fogDensity,
     wipeEnabled,
+    paused = false,
     onWipe,
     onFogPct,
   },
@@ -66,6 +72,12 @@ export const FogCanvas = forwardRef<FogCanvasHandle, Props>(function FogCanvas(
   // Latest callbacks/props for the rAF loop without re-registering it.
   const onFogPctRef = useRef(onFogPct);
   onFogPctRef.current = onFogPct;
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
+  // start/stop handles onto the mount effect's rAF loop, so the
+  // `paused` prop and the visibilitychange listener drive the exact
+  // same pause pathway instead of two competing ones.
+  const loopCtlRef = useRef<{ start: () => void; stop: () => void } | null>(null);
 
   useImperativeHandle(ref, () => ({
     reset: () => engineRef.current?.refill(),
@@ -106,19 +118,27 @@ export const FogCanvas = forwardRef<FogCanvasHandle, Props>(function FogCanvas(
       }
       rafRef.current = requestAnimationFrame(loop);
     };
-    rafRef.current = requestAnimationFrame(loop);
 
-    // Pause the loop entirely while hidden — no refog, no sampling.
-    // On resume, reset lastTs so the hidden interval doesn't get
-    // applied as one giant refog burst.
+    // The one pause pathway: stop kills the loop entirely (no refog, no
+    // sampling); start resets lastTs first so a long pause doesn't get
+    // applied as one giant refog burst on the next tick.
+    const stop = () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    };
+    const start = () => {
+      if (rafRef.current != null) return;
+      lastTs = performance.now();
+      rafRef.current = requestAnimationFrame(loop);
+    };
+    loopCtlRef.current = { start, stop };
+    if (!pausedRef.current) start();
+
+    // Hidden document and the `paused` prop are independent reasons to
+    // freeze; resuming from either only restarts if the other is clear.
     const onVis = () => {
-      if (document.hidden) {
-        if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      } else if (rafRef.current == null) {
-        lastTs = performance.now();
-        rafRef.current = requestAnimationFrame(loop);
-      }
+      if (document.hidden) stop();
+      else if (!pausedRef.current) start();
     };
     document.addEventListener('visibilitychange', onVis);
 
@@ -147,8 +167,8 @@ export const FogCanvas = forwardRef<FogCanvasHandle, Props>(function FogCanvas(
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
     return () => {
-      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
+      stop();
+      loopCtlRef.current = null;
       document.removeEventListener('visibilitychange', onVis);
       mq.removeEventListener('change', onTheme);
       mo.disconnect();
@@ -159,6 +179,15 @@ export const FogCanvas = forwardRef<FogCanvasHandle, Props>(function FogCanvas(
     // Mount-only: live prop changes are pushed via the effects below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Pause/resume from the prop. Runs after the mount effect has filled
+  // loopCtlRef, so a canvas that mounts already paused never ticks.
+  useEffect(() => {
+    const ctl = loopCtlRef.current;
+    if (!ctl) return;
+    if (paused) ctl.stop();
+    else if (!document.hidden) ctl.start();
+  }, [paused]);
 
   useEffect(() => {
     engineRef.current?.setRefogRate(refogRate);
@@ -185,8 +214,12 @@ export const FogCanvas = forwardRef<FogCanvasHandle, Props>(function FogCanvas(
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }
 
+  // A paused pane is frozen glass: even if the caller left wipeEnabled
+  // on, no stroke may land while the loop is stopped.
+  const canWipe = wipeEnabled && !paused;
+
   function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (!wipeEnabled || activePointer.current != null) return;
+    if (!canWipe || activePointer.current != null) return;
     const engine = engineRef.current;
     if (!engine) return;
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -200,7 +233,7 @@ export const FogCanvas = forwardRef<FogCanvasHandle, Props>(function FogCanvas(
   }
 
   function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (e.pointerId !== activePointer.current || !wipeEnabled) return;
+    if (e.pointerId !== activePointer.current || !canWipe) return;
     const engine = engineRef.current;
     const last = lastPos.current;
     if (!engine || !last) return;
