@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 // The pause sheet shown when a back gesture interrupts a guess game.
 // Deliberately NOT a Konsta Dialog: this sits on top of a live, frozen
@@ -15,18 +15,25 @@ interface Props {
 }
 
 export function FogPausePrompt({ roundNo, rounds, score, onResume, onEnd }: Props) {
+  // Callers pass an inline arrow, so keep the latest handler in a ref
+  // (same idiom as FogCanvas) and subscribe once — otherwise the
+  // listener is torn down and re-added on every parent render, which
+  // during a paused game is every score/fog tick.
+  const onResumeRef = useRef(onResume);
+  onResumeRef.current = onResume;
+
   // Escape is the desktop twin of the back gesture — same meaning as
   // tapping outside: resume, never a silent end.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
-        onResume();
+        onResumeRef.current();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onResume]);
+  }, []);
 
   return (
     <div
