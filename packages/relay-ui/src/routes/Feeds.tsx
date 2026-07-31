@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Block, List, ListItem, Navbar, Page } from 'konsta/react';
 import { Avatar } from '../components/Avatar';
 import { BrandTitle } from '../components/BrandTitle';
 import { api } from '../lib/api';
+import { useBetaUi } from '../lib/legacy';
 import { useStore } from '../lib/store';
 import type { ContactStatus, FeedEvent, GameFeedEvent } from '../lib/types';
 
@@ -13,6 +14,8 @@ import type { ContactStatus, FeedEvent, GameFeedEvent } from '../lib/types';
 // contacts have been up to".
 export function Feeds() {
   const me = useStore((s) => s.me);
+  const beta = useBetaUi();
+  const nav = useNavigate();
   const [events, setEvents] = useState<FeedEvent[]>([]);
   const [loaded, setLoaded] = useState(false);
 
@@ -66,6 +69,50 @@ export function Feeds() {
             , or add contacts to see theirs here.
           </div>
         </Block>
+      ) : beta ? (
+        // Beta mode renders each event as a lifted card, reusing the exact
+        // .chat-card recipe from the Chats tab so the two surfaces stay
+        // visually aligned. Modern mode stays on Konsta's grouped list.
+        <div className="chat-card-list">
+          {events.map((e) => (
+            <button
+              key={e.id}
+              type="button"
+              className="chat-card"
+              onClick={() => nav(eventHref(e))}
+            >
+              <Avatar src={e.avatarUrl} name={e.displayName} size={44} />
+              <div className="chat-card-meta">
+                <span className="chat-card-title">
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {e.displayName}
+                  </span>
+                  {e.mine ? (
+                    <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text-dim)' }}>
+                      (you)
+                    </span>
+                  ) : null}
+                </span>
+                {e.kind === 'status' ? (
+                  <span className="chat-card-preview">{e.statusMessage}</span>
+                ) : (
+                  <span
+                    className="chat-card-preview"
+                    style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                  >
+                    <FogGlyph />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {gameEventText(e)}
+                    </span>
+                  </span>
+                )}
+              </div>
+              <div className="chat-card-right">
+                <span className="chat-card-time">{relativeTime(e.at)}</span>
+              </div>
+            </button>
+          ))}
+        </div>
       ) : (
         <List strong inset>
           {events.map((e) => (
