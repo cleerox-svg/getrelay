@@ -1,27 +1,38 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Block, List, ListItem, Navbar, Page } from 'konsta/react';
 import { Avatar } from '../components/Avatar';
 import { BrandTitle } from '../components/BrandTitle';
 import { api } from '../lib/api';
 import { useStore } from '../lib/store';
-import type { ContactStatus } from '../lib/types';
+import type { ContactStatus, FeedEvent, GameFeedEvent } from '../lib/types';
 
-// /feeds is the contact-status surface only — sports lives on its
-// own /sports tab now. Keeps social and scores from competing for
-// attention on the same screen.
+// /feeds is the social surface: contact statuses merged with notable Fog
+// runs, newest first. Sports lives on its own /sports tab — keeping match
+// scores out of here is what leaves room for this to read as "what my
+// contacts have been up to".
 export function Feeds() {
   const me = useStore((s) => s.me);
-  const [statuses, setStatuses] = useState<ContactStatus[]>([]);
+  const [events, setEvents] = useState<FeedEvent[]>([]);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     api
       .listFeed()
-      .then((r) => setStatuses(r.statuses))
+      .then((r) => setEvents(r.events ?? statusesToEvents(r.statuses)))
       .catch(() => undefined)
       .finally(() => setLoaded(true));
   }, []);
+
+  // Re-render the "2h ago" labels on a slow tick so a feed left open
+  // doesn't freeze its timestamps.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 60_000);
+    return () => clearInterval(t);
+  }, []);
+
+  const hasGames = useMemo(() => events.some((e) => e.kind === 'game'), [events]);
 
   return (
     <Page>
@@ -37,43 +48,143 @@ export function Feeds() {
       <h1 className="text-[34px] font-bold tracking-tight px-4 pt-3 pb-1">Updates</h1>
 
       <Block className="text-sm !mt-3 !mb-2" style={{ color: 'var(--text-dim)' }}>
-        Set your own status from{' '}
+        Statuses and Fog results from your contacts. Set your own status from{' '}
         <Link to="/profile" style={{ color: 'var(--accent)' }}>
           Profile
         </Link>
         .
       </Block>
 
-      {!loaded ? null : statuses.length === 0 ? (
+      {!loaded ? null : events.length === 0 ? (
         <Block className="text-center !mt-4" style={{ color: 'var(--text-dim)' }}>
-          <div className="text-base mb-2">No statuses yet</div>
+          <div className="text-base mb-2">Nothing here yet</div>
           <div className="text-sm">
-            Set yours in Profile, or add contacts to see theirs here.
+            Set a status in Profile, play a round of{' '}
+            <Link to="/discover" style={{ color: 'var(--accent)' }}>
+              Fog
+            </Link>
+            , or add contacts to see theirs here.
           </div>
         </Block>
       ) : (
         <List strong inset>
-          {statuses.map((s) => (
+          {events.map((e) => (
             <ListItem
-              key={s.userId}
-              media={<Avatar src={s.avatarUrl} name={s.displayName} size={44} />}
+              key={e.id}
+              media={<Avatar src={e.avatarUrl} name={e.displayName} size={44} />}
               title={
                 <span className="flex items-baseline gap-2">
-                  <strong>{s.displayName}</strong>
-                  {s.mine ? (
+                  <strong>{e.displayName}</strong>
+                  {e.mine ? (
                     <span className="text-xs" style={{ color: 'var(--text-dim)' }}>
                       (you)
                     </span>
                   ) : null}
                 </span>
               }
-              text={s.statusMessage}
-              link={s.mine ? undefined : true}
-              href={s.mine ? undefined : `/contacts/${encodeURIComponent(s.userId)}`}
+              text={
+                e.kind === 'status' ? (
+                  e.statusMessage
+                ) : (
+                  <span className="flex items-center gap-1.5">
+                    <FogGlyph />
+                    <span>{gameEventText(e)}</span>
+                  </span>
+                )
+              }
+              after={
+                <span className="text-xs whitespace-nowrap" style={{ color: 'var(--text-dim)' }}>
+                  {relativeTime(e.at)}
+                </span>
+              }
+              link
+              href={eventHref(e)}
             />
           ))}
         </List>
       )}
+
+      {loaded && hasGames ? (
+        <Block className="text-xs !mt-1" style={{ color: 'var(--text-dim)' }}>
+          Only standout runs show up here — a first game, a personal best, a
+          perfect round, or a long streak. You can stop sharing yours from{' '}
+          <Link to="/profile" style={{ color: 'var(--accent)' }}>
+            Profile
+          </Link>
+          .
+        </Block>
+      ) : null}
     </Page>
+  );
+}
+
+// Fallback for an older worker that only returns `statuses`. Produces the
+// same shape the new endpoint would, minus any game events.
+function statusesToEvents(statuses: ContactStatus[]): FeedEvent[] {
+  return statuses
+    .map(
+      (s): FeedEvent => ({
+        id: `status:${s.userId}`,
+        kind: 'status',
+        userId: s.userId,
+        displayName: s.displayName,
+        pin: s.pin,
+        avatarUrl: s.avatarUrl,
+        mine: s.mine,
+        at: s.updatedAt,
+        statusMessage: s.statusMessage,
+      }),
+    )
+    .sort((a, b) => b.at - a.at);
+}
+
+// A game event opens Fog (where the leaderboard lives); a status opens
+// the contact who set it. Tapping your own status goes to Profile, which
+// is the only place you can change it.
+function eventHref(e: FeedEvent): string {
+  if (e.kind === 'game') return '/discover';
+  return e.mine ? '/profile' : `/contacts/${encodeURIComponent(e.userId)}`;
+}
+
+function gameEventText(e: GameFeedEvent): string {
+  const score = e.score.toLocaleString();
+  switch (e.badge) {
+    case 'first':
+      return `Started playing Fog — ${score}`;
+    case 'best':
+      return `New personal best — ${score}`;
+    case 'perfect':
+      return `Perfect game, ${e.rounds}/${e.rounds} rounds — ${score}`;
+    case 'streak':
+      return `${e.bestStreak} in a row — ${score}`;
+  }
+}
+
+function relativeTime(at: number): string {
+  if (!at) return '';
+  const secs = Math.max(0, Math.round((Date.now() - at) / 1000));
+  if (secs < 60) return 'now';
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.round(hours / 24);
+  if (days < 7) return `${days}d`;
+  return new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+// Small condensation-drip mark, matching the Fog tab icon in MainLayout,
+// so a score row is distinguishable from a status at a glance.
+function FogGlyph() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <path
+        d="M4 8h16M4 12h16M4 16h10"
+        fill="none"
+        stroke="var(--accent)"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+      />
+    </svg>
   );
 }

@@ -58,6 +58,8 @@ export function Profile() {
   const [nativeError, setNativeError] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<PushTestResult[] | null>(null);
   const [testing, setTesting] = useState(false);
+  const [feedShareBusy, setFeedShareBusy] = useState(false);
+  const [feedShareError, setFeedShareError] = useState<string | null>(null);
   const [blocked, setBlocked] = useState<
     {
       id: string;
@@ -102,6 +104,21 @@ export function Profile() {
       setPushError(err instanceof Error ? err.message : 'failed');
     } finally {
       setTesting(false);
+    }
+  }
+
+  async function toggleGameFeed(next: boolean) {
+    setFeedShareBusy(true);
+    setFeedShareError(null);
+    try {
+      await api.updateMe({ gameFeedShared: next });
+    } catch (err) {
+      setFeedShareError(err instanceof Error ? err.message : 'failed');
+    } finally {
+      // Re-read either way: the switch renders off `me`, so a failed
+      // PATCH should snap it back rather than leave a lie on screen.
+      await loadMe();
+      setFeedShareBusy(false);
     }
   }
 
@@ -578,6 +595,32 @@ export function Profile() {
             Privacy policy
           </a>
         </div>
+      </Block>
+
+      <BlockTitle>Fog</BlockTitle>
+      <Block strong inset className="!py-4">
+        <div className="flex items-center justify-between gap-3" style={{ minHeight: 32 }}>
+          <div>
+            <div className="font-medium">Share results in Updates</div>
+            <div className="text-xs" style={{ color: 'var(--text-dim)' }}>
+              {(me.gameFeedShared ?? true)
+                ? 'Your contacts see your standout Fog runs — a first game, a personal best, a perfect round, or a long streak. Ordinary games are never shared.'
+                : "Your Fog runs stay private. You'll still appear on the leaderboard."}
+            </div>
+          </div>
+          <PillToggle
+            on={me.gameFeedShared ?? true}
+            disabled={feedShareBusy}
+            onChange={toggleGameFeed}
+            onLabel={feedShareBusy ? '…' : 'Sharing'}
+            offLabel={feedShareBusy ? '…' : 'Share'}
+          />
+        </div>
+        {feedShareError ? (
+          <div className="text-xs mt-2" style={{ color: 'var(--ping)' }}>
+            Couldn't save that ({feedShareError}).
+          </div>
+        ) : null}
       </Block>
 
       {blocked.length > 0 ? (
