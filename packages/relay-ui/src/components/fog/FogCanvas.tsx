@@ -207,10 +207,10 @@ export const FogCanvas = forwardRef<FogCanvasHandle, Props>(function FogCanvas(
     // Coalesced events give us the full high-frequency touch path on
     // supporting browsers instead of one sampled point per frame.
     const native = e.nativeEvent;
+    const coalesced =
+      typeof native.getCoalescedEvents === 'function' ? native.getCoalescedEvents() : null;
     const events: { clientX: number; clientY: number }[] =
-      typeof native.getCoalescedEvents === 'function' && native.getCoalescedEvents().length > 0
-        ? native.getCoalescedEvents()
-        : [native];
+      coalesced && coalesced.length > 0 ? coalesced : [native];
     let total = 0;
     let prev = last;
     for (const ev of events) {

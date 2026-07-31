@@ -5,6 +5,7 @@ import { buildRound } from '../../lib/fog/sources';
 import type { FogCategory, FogRound } from '../../lib/fog/sources';
 import {
   GUESS_BRUSH_PX,
+  LOAD_TIMEOUT_MS,
   ROUNDS,
   ROUND_TIMEOUT_MS,
   budgetPx,
@@ -36,6 +37,9 @@ export function GuessGame({ category, onFinish }: Props) {
   const nextPromiseRef = useRef<Promise<FogRound> | null>(null);
   const perRoundRef = useRef<GameResult['perRound']>([]);
   const advanceTimerRef = useRef<number | null>(null);
+  // Bumped by the loading failsafe to orphan a stuck buildRound — its
+  // late resolution must not clobber the fallback round.
+  const loadGenRef = useRef(0);
 
   const [roundIdx, setRoundIdx] = useState(0); // 0-based
   const [round, setRound] = useState<FogRound | null>(null);
@@ -55,8 +59,9 @@ export function GuessGame({ category, onFinish }: Props) {
   // networks.
   useEffect(() => {
     let cancelled = false;
+    const gen = loadGenRef.current;
     buildRound(category, usedRef.current).then((r) => {
-      if (cancelled) return;
+      if (cancelled || gen !== loadGenRef.current) return;
       setRound(r);
       setBudget(budgetPx(1));
       setPhase('play');
@@ -78,6 +83,25 @@ export function GuessGame({ category, onFinish }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, roundIdx]);
 
+  // Loading failsafe: buildRound bounds each network step, but if a
+  // build still hangs, orphan it and serve a bundled-pack round (local
+  // assets — can't hang) so "Fogging up the window…" is never forever.
+  useEffect(() => {
+    if (phase !== 'loading') return;
+    const t = window.setTimeout(() => {
+      const gen = ++loadGenRef.current;
+      nextPromiseRef.current = null;
+      buildRound('pack', usedRef.current).then((r) => {
+        if (gen !== loadGenRef.current) return;
+        setRound(r);
+        setBudget(budgetPx(roundIdx + 1));
+        setFogPct(1);
+        setPhase('play');
+      });
+    }, LOAD_TIMEOUT_MS);
+    return () => window.clearTimeout(t);
+  }, [phase, roundIdx]);
+
   function advance() {
     const idx = roundIdx + 1;
     if (idx >= ROUNDS) {
@@ -94,9 +118,11 @@ export function GuessGame({ category, onFinish }: Props) {
     setPicked(null);
     setLastPoints(null);
     setRoundIdx(idx);
+    const gen = loadGenRef.current;
     const p = nextPromiseRef.current ?? buildRound(category, usedRef.current);
     nextPromiseRef.current = null;
     p.then((r) => {
+      if (gen !== loadGenRef.current) return;
       setRound(r);
       setBudget(budgetPx(idx + 1));
       setFogPct(1);

@@ -33,6 +33,12 @@ export const GUESS_BRUSH_PX = 44;
 // an abandoned tab from holding a "perfect fog" round open forever.
 export const ROUND_TIMEOUT_MS = 45_000;
 
+// Failsafe: a round build stuck in the loading phase for this long is
+// abandoned and replaced with a bundled-pack round. buildRound bounds
+// its own network steps, but the loading screen must never be able to
+// sit on "Fogging up the window…" forever.
+export const LOAD_TIMEOUT_MS = 15_000;
+
 // Per-round score clamp — mirrors the server (score <= rounds * 2000).
 export const MAX_ROUND_POINTS = 2000;
 export const STREAK_STEP = 0.1;
