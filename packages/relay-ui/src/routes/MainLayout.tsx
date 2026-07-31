@@ -9,7 +9,7 @@ const TABS = [
   { to: '/chats',    label: 'Chats',    icon: ChatsIcon },
   { to: '/sports',   label: 'Sports',   icon: SportsIcon },
   { to: '/feeds',    label: 'Feeds',    icon: FeedsIcon },
-  { to: '/discover', label: 'Discover', icon: DiscoverIcon },
+  { to: '/discover', label: 'Fog',      icon: FogIcon },
   { to: '/contacts', label: 'Contacts', icon: ContactsIcon },
 ];
 
@@ -177,7 +177,9 @@ function FeedsIcon({ active }: { active: boolean }) {
     </svg>
   );
 }
-function DiscoverIcon({ active }: { active: boolean }) {
+function FogIcon({ active }: { active: boolean }) {
+  // Frosted window: rounded pane with a finger-wipe swoosh and a
+  // condensation drip below it — the Fog mini game's glyph.
   return (
     <svg viewBox="0 0 28 28" width="28" height="28">
       <g
@@ -185,9 +187,12 @@ function DiscoverIcon({ active }: { active: boolean }) {
         strokeWidth={active ? 2 : 1.6}
         fill={active ? 'currentColor' : 'none'}
         fillOpacity={active ? 0.12 : 0}
+        strokeLinecap="round"
+        strokeLinejoin="round"
       >
-        <circle cx="14" cy="14" r="9" />
-        <path d="m17 11-2 6-6 2 2-6 6-2Z" fill={active ? 'currentColor' : 'none'} />
+        <rect x="5" y="5" width="18" height="18" rx="4" />
+        <path d="M9 17c3-2 4-6 10-8" fill="none" />
+        <path d="M11 20h5" fill="none" />
       </g>
     </svg>
   );

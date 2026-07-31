@@ -310,6 +310,19 @@ export interface SportsGameDetail extends SportsGame {
   awayBox: SportsTeamBox;
 }
 
+// One ranked row from GET /game/leaderboard (Fog mini game). Rows
+// arrive already sorted by the worker; `mine` marks the caller's own
+// row for highlighting.
+export interface GameLeaderboardEntry {
+  userId: string;
+  displayName: string;
+  pin: string;
+  avatarUrl: string | null;
+  best: number;
+  games: number;
+  mine: boolean;
+}
+
 export interface ReplyPreview {
   id: string;
   from: string;

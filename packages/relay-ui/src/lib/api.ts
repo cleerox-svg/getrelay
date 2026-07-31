@@ -2,6 +2,7 @@ import type {
   Chat,
   Contact,
   ContactStatus,
+  GameLeaderboardEntry,
   GroupMember,
   Me,
   SportsGame,
@@ -204,11 +205,27 @@ export const api = {
         gifUrl: string;
         gifWidth: number;
         gifHeight: number;
+        // Static first frame (Giphy 480w_still). Optional until the
+        // worker deploy that adds it lands — consumers must fall back
+        // to previewUrl.
+        stillUrl?: string | null;
         analytics: { onload?: string; onclick?: string; onsent?: string };
       }[];
       next: string | null;
     }>(`/gifs/search?${usp.toString()}`);
   },
+  // Fog mini game. Server clamps rounds to 1..8 and score to
+  // rounds*2000 — the client-side tuning (lib/fog/tuning.ts) must stay
+  // within those bounds so local and server bests agree.
+  submitGameScore: (body: { score: number; rounds: number; bestStreak: number }) =>
+    request<{ ok: true; best: number }>('/game/score', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  getGameLeaderboard: (period: 'weekly' | 'all') =>
+    request<{ entries: GameLeaderboardEntry[] }>(
+      `/game/leaderboard?period=${period}`,
+    ),
   // Giphy Action Register pingback. Best-effort: failures are swallowed so
   // analytics never interferes with sending a GIF.
   registerGifAction: (url: string | undefined, randomId: string) => {

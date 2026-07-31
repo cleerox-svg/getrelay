@@ -994,6 +994,8 @@ Content: text posts up to ~400 chars with an optional title and a photo/GIF atta
 
 Discovery: (a) a hand-curated **Featured** carousel; (b) a **Discover** tab with category browsing; (c) **search** by title, description, or Channel PIN. Owners could embed a Channel PIN HTML widget / QR code on their site to pull subscribers in from the open web.
 
+> **Relay status note.** The app's Discover tab placeholder has been replaced by the **Fog** mini game (tab label "Fog", still routed at `/discover`): a steamed-up window the player wipes with a finger to reveal a mystery image and guess it, with a server-backed leaderboard (`POST /game/score`, `GET /game/leaderboard`). The Channels-era Discover material in this chapter remains historical reference for a future Channels build.
+
 Subscriber interactions: owner-broadcast with two-way comments — *not* pure one-way like Telegram/WhatsApp Channels. Subscribers could **comment** (threaded after a 2014 update), **react/like**, **repost**, and **open a direct 1:1** with the channel owner during the owner's published **chat hours** ([CrackBerry – Set chatting hours, threaded conversations](https://crackberry.com/bbm-channels-updated-set-chatting-hours-threaded-conversations-and-more)). That "broadcast + structured 1:1" combo was BBM Channels' most distinctive design move.
 
 By March 2014: **85M MAU / 113M registered users / ~500,000 channels** ([TechCrunch, 28 Mar 2014](https://techcrunch.com/2014/03/28/bbm-usage/)).
