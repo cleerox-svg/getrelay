@@ -5,7 +5,7 @@
 // never drawn into the fog canvas (cross-origin pixels would taint it
 // and break the fogPct() readback), so no CORS headers are required.
 
-import { api } from '../api';
+import { api, ApiError } from '../api';
 import { useStore } from '../store';
 import { FOG_PACK } from './pack';
 
@@ -48,6 +48,29 @@ function shuffle<T>(arr: T[]): T[] {
 // n distinct random elements (fewer if the pool is smaller).
 function sample<T>(arr: readonly T[], n: number): T[] {
   return shuffle(arr.slice()).slice(0, n);
+}
+
+// Race a promise against a timeout. Source fetches go through this in
+// buildRound so a stalled network call reads as a failed attempt and
+// falls into the retry / pack-fallback path instead of stranding the
+// loading screen forever.
+function withTimeout<T>(p: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(
+      () => reject(new Error('source_timeout')),
+      timeoutMs,
+    );
+    p.then(
+      (v) => {
+        window.clearTimeout(timer);
+        resolve(v);
+      },
+      (e: unknown) => {
+        window.clearTimeout(timer);
+        reject(e instanceof Error ? e : new Error(String(e)));
+      },
+    );
+  });
 }
 
 // ---- logos: NHL + MLB team logos ----
@@ -159,14 +182,19 @@ const gifsSource: RoundSource = {
   available: async () => {
     if (gifsAvailable !== null) return gifsAvailable;
     try {
-      // One probe search; ApiError 404 gifs_not_configured (or a 502
-      // from the upstream) means the category is off for this session.
+      // One probe search. Only the deterministic "no Giphy key on the
+      // worker" answer is cached for the session; a transient failure
+      // (momentary offline at tab open) leaves the cache unset so the
+      // next call re-probes — mirrors how loadTeams resets its promise.
       const r = await api.searchGifs('pizza');
       gifsAvailable = r.items.length > 0;
-    } catch {
-      gifsAvailable = false;
+      return gifsAvailable;
+    } catch (e: unknown) {
+      if (e instanceof ApiError && e.code === 'gifs_not_configured') {
+        gifsAvailable = false;
+      }
+      return false;
     }
-    return gifsAvailable;
   },
   next: async (used) => {
     const fresh = GIF_KEYWORDS.filter((k) => !used.has(`gifs:${k}`));
@@ -212,25 +240,39 @@ function contactName(c: { alias: string | null; displayName: string }): string {
   return c.alias?.trim() || c.displayName;
 }
 
+// Guesses compare by name string, so two contacts sharing a name would
+// render identical buttons where tapping the "wrong" twin scores as
+// correct. Everything below works on case-insensitively unique names.
+function uniqueNameCount(pool: { alias: string | null; displayName: string }[]): number {
+  return new Set(pool.map((c) => contactName(c).toLowerCase())).size;
+}
+
 const contactsSource: RoundSource = {
   id: 'contacts',
   label: 'Contacts',
-  available: async () => (await avatarContacts()).length >= 4,
+  available: async () => uniqueNameCount(await avatarContacts()) >= 4,
   next: async (used) => {
     const pool = await avatarContacts();
-    if (pool.length < 4) return null;
+    if (uniqueNameCount(pool) < 4) return null;
     const fresh = pool.filter((c) => !used.has(`contacts:${c.id}`));
     const target = pick(fresh);
     if (!target || !target.avatarUrl) return null;
     used.add(`contacts:${target.id}`);
-    const distractors = sample(
-      pool.filter((c) => c.id !== target.id).map(contactName),
-      3,
-    );
+    const answer = contactName(target);
+    // Distractor names deduped against the answer and each other.
+    const seen = new Set([answer.toLowerCase()]);
+    const names: string[] = [];
+    for (const c of pool) {
+      if (c.id === target.id) continue;
+      const name = contactName(c);
+      if (seen.has(name.toLowerCase())) continue;
+      seen.add(name.toLowerCase());
+      names.push(name);
+    }
     return {
       imageUrl: target.avatarUrl,
-      answer: contactName(target),
-      choices: shuffle([contactName(target), ...distractors]),
+      answer,
+      choices: shuffle([answer, ...sample(names, 3)]),
       category: 'contacts',
     };
   },
@@ -303,13 +345,22 @@ export async function buildRound(
   category: FogCategory,
   used: Set<string>,
 ): Promise<FogRound> {
-  const avail = category === 'mix' ? await availableSources() : null;
+  // The mix probe hits the network too — if it can't answer in time,
+  // play from the bundled pack rather than hang.
+  const avail = category === 'mix'
+    ? await withTimeout(availableSources(), 8000).catch(
+        (): SourceAvailability => ({ logos: false, pack: true, gifs: false, contacts: false }),
+      )
+    : null;
   for (let attempt = 0; attempt < 3; attempt++) {
     const src = avail ? resolveSource(category, avail) : resolveSource(category, {
       logos: true, pack: true, gifs: true, contacts: true,
     });
     try {
-      const round = await src.next(used);
+      // next() can hit the network (Giphy, sports teams, contacts) —
+      // bound it like preloadImage so one stalled fetch can't strand
+      // the round build.
+      const round = await withTimeout(src.next(used), 8000);
       if (!round) continue;
       await preloadImage(round.imageUrl);
       return round;
