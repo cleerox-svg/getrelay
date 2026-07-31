@@ -10,6 +10,23 @@ import { avatarUrlFor } from './me';
 export const MAX_ROUNDS = 8;
 export const MAX_POINTS_PER_ROUND = 2000;
 
+// ---- Feed surfacing rules -------------------------------------------------
+//
+// Only *notable* runs reach the Updates feed. Fog games are short, so
+// posting every finished run would bury contact statuses under one
+// person's session. A run shows up when it's their first ever, a new
+// personal best, a perfect game, or a long streak — see statusRoutes().
+
+// A run counts as a streak event at this many correct guesses in a row.
+export const FEED_STREAK_THRESHOLD = 6;
+// How far back the feed looks for game events.
+export const FEED_WINDOW_DAYS = 7;
+// Per-player daily cap, newest kept, so one big session can't flood the
+// feed even when every run of it is technically notable.
+export const FEED_MAX_EVENTS_PER_USER_PER_DAY = 3;
+// Overall ceiling on game events in one /feed response.
+export const FEED_MAX_GAME_EVENTS = 60;
+
 export function gamesRoutes() {
   const app = new Hono<{ Bindings: Env }>();
 

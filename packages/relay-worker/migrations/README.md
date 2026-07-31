@@ -12,6 +12,23 @@ itself lives in `../src/schema.sql` and is applied on every worker deploy.
 | `0005_native_push_tokens.sql` | Create `native_push_tokens` for FCM device tokens registered by the Capacitor Android/iOS apps (no Web Push in a WebView). Idempotent. | Same as above, with `file: 0005_native_push_tokens.sql` |
 | `0006_game_scores.sql` | Create `game_scores` for the Fog mini game (one row per completed game; contact-scoped leaderboards computed as MAX(score) per user over a time window). Idempotent. | Same as above, with `file: 0006_game_scores.sql` |
 
+## Columns are added by the deploy probe, not by a numbered file
+
+`ALTER TABLE ... ADD COLUMN` has no `IF NOT EXISTS` form in SQLite, so a
+numbered migration that adds a column is not idempotent — and
+`test:migrations` applies `schema.sql` first and then every migration in
+order, so such a file fails with `duplicate column name` on the very
+check that is supposed to guard it.
+
+New columns therefore go in **two** places: `src/schema.sql` (for fresh
+databases) and a `pragma_table_info` probe block in
+`.github/workflows/deploy-worker.yml` (for the live one). That's how
+`is_admin`, `sports_notifications`, the `sports_notify_*` trio,
+`game_feed_shared`, and `status_updated_at` all landed. Numbered
+migration files remain the right tool for everything that *can* be
+written idempotently: `CREATE TABLE IF NOT EXISTS`,
+`CREATE INDEX IF NOT EXISTS`, and data backfills.
+
 ## How the pending-user claim works
 
 `0002_seed_contacts.sql` inserts rows with `google_sub = 'pending:<email>'`.

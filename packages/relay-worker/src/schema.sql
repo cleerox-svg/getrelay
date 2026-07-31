@@ -23,7 +23,17 @@ CREATE TABLE IF NOT EXISTS users (
   -- Per-event toggles. Default ON; can be set independently.
   sports_notify_start INTEGER NOT NULL DEFAULT 1,
   sports_notify_score INTEGER NOT NULL DEFAULT 1,
-  sports_notify_final INTEGER NOT NULL DEFAULT 1
+  sports_notify_final INTEGER NOT NULL DEFAULT 1,
+  -- When 0, this user's Fog results never appear as /feed events — not
+  -- for their contacts and not for themselves. Scores are still recorded
+  -- and still rank on the leaderboard; this only governs the feed.
+  game_feed_shared INTEGER NOT NULL DEFAULT 1,
+  -- When status_message was last changed (ms epoch). last_seen_at tracks
+  -- presence, not authorship, so it can't order a chronological feed:
+  -- a months-old status on an online user would sort above a fresh one.
+  -- NULL on rows written before this column existed; readers fall back
+  -- to last_seen_at.
+  status_updated_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_users_pin ON users(pin);
 CREATE INDEX IF NOT EXISTS idx_users_google_sub ON users(google_sub);

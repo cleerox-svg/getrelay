@@ -2,6 +2,7 @@ import type {
   Chat,
   Contact,
   ContactStatus,
+  FeedEvent,
   GameLeaderboardEntry,
   GroupMember,
   Me,
@@ -61,6 +62,7 @@ export const api = {
     sportsNotifyStart?: boolean;
     sportsNotifyScore?: boolean;
     sportsNotifyFinal?: boolean;
+    gameFeedShared?: boolean;
   }) => request<{ ok: true }>('/me', { method: 'PATCH', body: JSON.stringify(body) }),
   getSportsSubs: () =>
     request<{ subs: { league: 'NHL' | 'MLB'; teamKey: string }[] }>('/me/sports/subs'),
@@ -166,7 +168,11 @@ export const api = {
     }),
   deleteChat: (chatId: string) =>
     request<{ ok: true }>(`/chats/${encodeURIComponent(chatId)}`, { method: 'DELETE' }),
-  listFeed: () => request<{ statuses: ContactStatus[] }>('/feed'),
+  // `events` is the merged status + Fog activity feed. It's optional
+  // because the worker deploys independently of the UI — against an
+  // older worker the field is simply absent and callers fall back to
+  // synthesising the feed from `statuses`.
+  listFeed: () => request<{ statuses: ContactStatus[]; events?: FeedEvent[] }>('/feed'),
   getSports: (date?: string) =>
     request<{ games: SportsGame[]; subs: SportsSub[] }>(
       date ? `/sports?date=${encodeURIComponent(date)}` : '/sports',

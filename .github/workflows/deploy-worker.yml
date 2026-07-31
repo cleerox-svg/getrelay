@@ -171,6 +171,29 @@ jobs:
             fi
           done
 
+          # Fog activity in the Updates feed: game_feed_shared is the
+          # per-user opt-out (default 1 = share), status_updated_at
+          # timestamps status edits so the feed can sort chronologically.
+          probe=$(pnpm exec wrangler d1 execute relay-db --remote --json \
+            --command "SELECT name FROM pragma_table_info('users') WHERE name='game_feed_shared';")
+          if ! echo "$probe" | jq -e '.[0].results | length > 0' > /dev/null; then
+            echo "Adding users.game_feed_shared column"
+            pnpm exec wrangler d1 execute relay-db --remote \
+              --command "ALTER TABLE users ADD COLUMN game_feed_shared INTEGER NOT NULL DEFAULT 1;"
+          else
+            echo "users.game_feed_shared column already present"
+          fi
+
+          probe=$(pnpm exec wrangler d1 execute relay-db --remote --json \
+            --command "SELECT name FROM pragma_table_info('users') WHERE name='status_updated_at';")
+          if ! echo "$probe" | jq -e '.[0].results | length > 0' > /dev/null; then
+            echo "Adding users.status_updated_at column"
+            pnpm exec wrangler d1 execute relay-db --remote \
+              --command "ALTER TABLE users ADD COLUMN status_updated_at INTEGER;"
+          else
+            echo "users.status_updated_at column already present"
+          fi
+
           # user_sports_subs (per-user team subscriptions). CREATE TABLE
           # IF NOT EXISTS is itself idempotent.
           pnpm exec wrangler d1 execute relay-db --remote --command \

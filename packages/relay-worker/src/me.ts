@@ -23,7 +23,8 @@ export function meRoutes() {
               COALESCE(sports_notifications, 1) AS sports_notifications,
               COALESCE(sports_notify_start,  1) AS sports_notify_start,
               COALESCE(sports_notify_score,  1) AS sports_notify_score,
-              COALESCE(sports_notify_final,  1) AS sports_notify_final
+              COALESCE(sports_notify_final,  1) AS sports_notify_final,
+              COALESCE(game_feed_shared,     1) AS game_feed_shared
        FROM users WHERE id = ?`,
     ).bind(me.id).first<{
       id: string;
@@ -38,6 +39,7 @@ export function meRoutes() {
       sports_notify_start: number;
       sports_notify_score: number;
       sports_notify_final: number;
+      game_feed_shared: number;
     }>();
     if (!row) return c.json({ error: 'user_not_found' }, 404);
 
@@ -54,6 +56,7 @@ export function meRoutes() {
       sportsNotifyStart: row.sports_notify_start === 1,
       sportsNotifyScore: row.sports_notify_score === 1,
       sportsNotifyFinal: row.sports_notify_final === 1,
+      gameFeedShared: row.game_feed_shared === 1,
     });
   });
 
@@ -68,6 +71,7 @@ export function meRoutes() {
       sportsNotifyStart?: boolean;
       sportsNotifyScore?: boolean;
       sportsNotifyFinal?: boolean;
+      gameFeedShared?: boolean;
     }>();
 
     const updates: string[] = [];
@@ -85,6 +89,17 @@ export function meRoutes() {
       if (sm.length > 140) return c.json({ error: 'invalid_status' }, 400);
       updates.push('status_message = ?');
       values.push(sm);
+      // Only re-stamp when the text actually changed. Profile's Save
+      // button PATCHes displayName and statusMessage together, so an
+      // unconditional stamp would re-float an untouched status to the
+      // top of the feed every time someone edits their name. SQLite
+      // evaluates every RHS against the pre-UPDATE row, so this reads
+      // the old status_message even though it sits beside its own SET.
+      updates.push(
+        `status_updated_at = CASE WHEN COALESCE(status_message, '') != ?
+                                  THEN ? ELSE status_updated_at END`,
+      );
+      values.push(sm, Date.now());
     }
     if (typeof body.sportsNotifications === 'boolean') {
       updates.push('sports_notifications = ?');
@@ -101,6 +116,10 @@ export function meRoutes() {
     if (typeof body.sportsNotifyFinal === 'boolean') {
       updates.push('sports_notify_final = ?');
       values.push(body.sportsNotifyFinal ? 1 : 0);
+    }
+    if (typeof body.gameFeedShared === 'boolean') {
+      updates.push('game_feed_shared = ?');
+      values.push(body.gameFeedShared ? 1 : 0);
     }
     if (updates.length === 0) return c.json({ ok: true });
 

@@ -14,6 +14,11 @@ export interface Me {
   sportsNotifyStart: boolean;
   sportsNotifyScore: boolean;
   sportsNotifyFinal: boolean;
+  // When false, my Fog results are kept out of the Updates feed — my
+  // contacts' and my own. Scores still count on the leaderboard.
+  // Optional because the worker deploys independently of the UI: an
+  // older worker omits it, and readers treat absent as "sharing".
+  gameFeedShared?: boolean;
 }
 
 export interface Contact {
@@ -83,6 +88,38 @@ export interface ContactStatus {
   updatedAt: number;
   mine: boolean;
 }
+
+// Why a Fog run made it into the feed. The worker only surfaces notable
+// runs, and reports the single most interesting reason that applies.
+export type GameFeedBadge = 'first' | 'best' | 'perfect' | 'streak';
+
+interface FeedEventBase {
+  // Stable across refetches: `status:<userId>` or `game:<scoreId>`.
+  id: string;
+  userId: string;
+  displayName: string;
+  pin: string;
+  avatarUrl: string | null;
+  mine: boolean;
+  // ms epoch; the feed is sorted on this, newest first.
+  at: number;
+}
+
+export interface StatusFeedEvent extends FeedEventBase {
+  kind: 'status';
+  statusMessage: string;
+}
+
+export interface GameFeedEvent extends FeedEventBase {
+  kind: 'game';
+  game: 'fog';
+  score: number;
+  rounds: number;
+  bestStreak: number;
+  badge: GameFeedBadge;
+}
+
+export type FeedEvent = StatusFeedEvent | GameFeedEvent;
 
 export interface SportsTeam {
   abbr: string;
