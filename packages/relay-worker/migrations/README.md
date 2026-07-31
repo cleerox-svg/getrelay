@@ -9,6 +9,8 @@ itself lives in `../src/schema.sql` and is applied on every worker deploy.
 | `0002_seed_contacts.sql` | Pre-create four placeholder users as contacts of `cleerox@gmail.com`. Idempotent. | `gh workflow run "Seed contacts"` or the **Seed contacts** workflow in the Actions tab |
 | `0003_rename_bradey_email.sql` | One-shot email swap for one of the seeded contacts. Idempotent. | Same as above, with `file: 0003_rename_bradey_email.sql` |
 | `0004_clean_defunct_sports_subs.sql` | DELETE `user_sports_subs` rows for teams not in the current active 32-NHL / 30-MLB set. Cleans up orphan subs left behind by the pre-PR-#81 picker bug. Idempotent. | Same as above, with `file: 0004_clean_defunct_sports_subs.sql` |
+| `0005_native_push_tokens.sql` | Create `native_push_tokens` for FCM device tokens registered by the Capacitor Android/iOS apps (no Web Push in a WebView). Idempotent. | Same as above, with `file: 0005_native_push_tokens.sql` |
+| `0006_game_scores.sql` | Create `game_scores` for the Fog mini game (one row per completed game; contact-scoped leaderboards computed as MAX(score) per user over a time window). Idempotent. | Same as above, with `file: 0006_game_scores.sql` |
 
 ## How the pending-user claim works
 

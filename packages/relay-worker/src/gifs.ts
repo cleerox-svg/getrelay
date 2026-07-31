@@ -27,6 +27,7 @@ interface GifItem {
   gifUrl: string; // full-quality, what we send through chat
   gifWidth: number;
   gifHeight: number;
+  stillUrl: string | null; // non-animated frame — used by the Fog game
   analytics: GifAnalytics;
 }
 
@@ -49,6 +50,8 @@ interface GiphyResult {
   images?: {
     fixed_width?: GiphyImage; // ~200px wide animated GIF — good preview
     original?: GiphyImage; // full-quality
+    fixed_width_still?: GiphyImage; // still frames used by the Fog game
+    original_still?: GiphyImage;
   };
   // Per-result pingback URLs for the Action Register flow.
   analytics?: {
@@ -75,6 +78,7 @@ function project(r: GiphyResult): GifItem | null {
     gifUrl: full.url,
     gifWidth: Number(full.width ?? 0),
     gifHeight: Number(full.height ?? 0),
+    stillUrl: r.images?.fixed_width_still?.url ?? r.images?.original_still?.url ?? null,
     analytics: {
       onload: r.analytics?.onload?.url,
       onclick: r.analytics?.onclick?.url,

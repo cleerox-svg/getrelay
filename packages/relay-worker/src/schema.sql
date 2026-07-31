@@ -190,3 +190,18 @@ CREATE TABLE IF NOT EXISTS user_blocks (
 );
 CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON user_blocks(blocker_id);
 CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON user_blocks(blocked_id);
+
+-- One row per completed Fog game (the foggy-window guessing game on the
+-- old Discover tab). Leaderboards are computed as MAX(score) per user
+-- over a time window, scoped to the viewer's contacts — no separate
+-- leaderboard table needed.
+CREATE TABLE IF NOT EXISTS game_scores (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  game TEXT NOT NULL DEFAULT 'fog',
+  score INTEGER NOT NULL,
+  rounds INTEGER NOT NULL,
+  best_streak INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_game_scores_user_time ON game_scores(user_id, created_at DESC);
