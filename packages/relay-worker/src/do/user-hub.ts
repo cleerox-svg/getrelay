@@ -349,10 +349,30 @@ export class UserHub implements DurableObject {
     att: Attachment,
     cmd: Extract<ClientMsg, { t: 'ping' }>,
   ): Promise<void> {
-    await this.callChatRoom(cmd.chatId, '/ping', {
+    const res = await this.callChatRoom(cmd.chatId, '/ping', {
       chatId: cmd.chatId,
       senderId: att.userId,
     });
+    // ChatRoom only fans out to the recipients, so without this echo the
+    // sender's own devices wouldn't show the PING until they refetched
+    // history. Write straight to this hub's sockets instead of going
+    // through deliverOrQueue — that path would also fire a Web Push and
+    // a delivered receipt back at the sender.
+    const ack = (await res.json()) as {
+      messageId: string;
+      sequence: number;
+      ts: number;
+      chatId: string;
+    };
+    const echo: ServerMsg = {
+      t: 'ping',
+      chatId: ack.chatId,
+      from: att.userId,
+      ts: ack.ts,
+      id: ack.messageId,
+      sequence: ack.sequence,
+    };
+    for (const s of this.openSocketsFor(att.userId)) this.safeSend(s, echo);
   }
 
   private async handleRecall(
