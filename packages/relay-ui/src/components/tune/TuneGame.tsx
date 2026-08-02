@@ -3,7 +3,7 @@ import { FogPausePrompt } from '../fog/FogPausePrompt';
 import { useTuneClip } from './TuneClip';
 import { TuneVisualizer } from './TuneVisualizer';
 import { api } from '../../lib/api';
-import { buildTuneRound } from '../../lib/tune/sources';
+import { buildTuneRound, createTunePool } from '../../lib/tune/sources';
 import type { TuneGenreId, TuneMode, TuneRound } from '../../lib/tune/sources';
 import { recordTuneGame } from '../../lib/tune/stats';
 import { skinVars } from '../../lib/tune/skins';
@@ -65,12 +65,30 @@ const REVEAL_SWIPE_PX = 60;
 // through to the normal no-round handling.
 const MAX_REPLACE_ATTEMPTS = 2;
 
+// When an advance's round build resolves null mid-game, retry this many
+// more times before ending the run. With the shared track pool a retry
+// almost always resolves instantly; these extra tries only matter for a
+// genuine transient network/throttle miss. The loading-phase LOAD_TIMEOUT_MS
+// failsafe is what ultimately bounds the wait — these delays just space the
+// retries out; each retry's build is itself network-bound.
+const ADVANCE_RETRIES = 2;
+const ADVANCE_RETRY_DELAY_MS = 600;
+
 // The scored 8-round audio game. Each round: a shrinking-length song
 // preview and four title choices. Points scale with how much of the clip
 // was still UNHEARD when the correct guess landed — the audio analogue of
 // Fog's "how much fog was left". Structural sibling of GuessGame.
 export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins, onSkinChange }: Props) {
   const usedRef = useRef(new Set<string>());
+  // Game-scoped pool of already-fetched tracks, shared by EVERY build path
+  // (initial load, prefetch, advance-retry, dead-preview replace) so a whole
+  // game reuses its fetches instead of hitting Deezer once per round. Resets
+  // naturally: the component remounts per game, so this ref is fresh each run.
+  const poolRef = useRef(createTunePool());
+  // Tracks the advance-retry setTimeout so a bare unmount (route change that
+  // doesn't go through finishNow) can cancel it — otherwise it could fire a
+  // stray build after unmount.
+  const retryTimerRef = useRef<number | null>(null);
   // Genre/mode are fixed for the run, but capture them in a ref so the
   // build closures (initial effect, prefetch, advance) always read the
   // same values without needing them in dependency arrays.
@@ -161,7 +179,7 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
     setRound(null);
     setPicked(null);
     setHeardAtGuess(null);
-    buildTuneRound(usedRef.current, optsRef.current).then((r) => {
+    buildTuneRound(usedRef.current, optsRef.current, poolRef.current).then((r) => {
       if (gen !== loadGenRef.current) return;
       if (!r) {
         handleNoRound();
@@ -171,7 +189,7 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
       setPhase('play');
       // Re-warm the next-round prefetch we cleared above.
       if (roundIdx + 1 < ROUNDS) {
-        nextPromiseRef.current = buildTuneRound(usedRef.current, optsRef.current);
+        nextPromiseRef.current = buildTuneRound(usedRef.current, optsRef.current, poolRef.current);
       }
     });
   }
@@ -180,7 +198,7 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
   useEffect(() => {
     let cancelled = false;
     const gen = loadGenRef.current;
-    buildTuneRound(usedRef.current, optsRef.current).then((r) => {
+    buildTuneRound(usedRef.current, optsRef.current, poolRef.current).then((r) => {
       if (cancelled || gen !== loadGenRef.current) return;
       if (!r) {
         handleNoRound();
@@ -188,11 +206,13 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
       }
       setRound(r);
       setPhase('play');
-      if (ROUNDS > 1) nextPromiseRef.current = buildTuneRound(usedRef.current, optsRef.current);
+      if (ROUNDS > 1)
+        nextPromiseRef.current = buildTuneRound(usedRef.current, optsRef.current, poolRef.current);
     });
     return () => {
       cancelled = true;
       if (advanceTimerRef.current != null) window.clearTimeout(advanceTimerRef.current);
+      if (retryTimerRef.current != null) window.clearTimeout(retryTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -354,18 +374,53 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
     setRoundIdx(idx);
     replaceAttemptsRef.current = 0; // fresh budget for the new round
     const gen = loadGenRef.current;
-    const p = nextPromiseRef.current ?? buildTuneRound(usedRef.current, optsRef.current);
+    // First try the prefetched round — with the pool this is usually already
+    // resolved from tracks we hold, so the transition is instant.
+    const first =
+      nextPromiseRef.current ?? buildTuneRound(usedRef.current, optsRef.current, poolRef.current);
     nextPromiseRef.current = null;
+    attemptRoundLoad(first, gen, idx, ADVANCE_RETRIES);
+  }
+
+  // Resolve a round build for the advance path, retrying on a null result
+  // before ending the game. A null build mid-game used to end the game on
+  // the spot, so a single throttled Deezer fetch after round 1 killed the
+  // run. With the shared pool a retry usually resolves instantly from tracks
+  // we already hold; a genuine transient network/throttle miss gets a couple
+  // more tries (small delay between them) before we fall back to finishNow().
+  // Every step is gated on `gen === loadGenRef.current`, so the loading
+  // failsafe, an End tap or a dead-preview replace (all bump loadGenRef) can
+  // orphan the whole chain and a newer round can never be clobbered.
+  function attemptRoundLoad(
+    p: Promise<TuneRound | null>,
+    gen: number,
+    idx: number,
+    retriesLeft: number,
+  ) {
     p.then((r) => {
       if (gen !== loadGenRef.current) return;
-      if (!r) {
+      if (r) {
+        setRound(r);
+        setPhase('play');
+        if (idx + 1 < ROUNDS)
+          nextPromiseRef.current = buildTuneRound(usedRef.current, optsRef.current, poolRef.current);
+        return;
+      }
+      if (retriesLeft <= 0) {
         // Mid-game: >=1 round is banked, so end with a results screen.
         finishNow();
         return;
       }
-      setRound(r);
-      setPhase('play');
-      if (idx + 1 < ROUNDS) nextPromiseRef.current = buildTuneRound(usedRef.current, optsRef.current);
+      retryTimerRef.current = window.setTimeout(() => {
+        retryTimerRef.current = null;
+        if (gen !== loadGenRef.current) return; // a newer round superseded us
+        attemptRoundLoad(
+          buildTuneRound(usedRef.current, optsRef.current, poolRef.current),
+          gen,
+          idx,
+          retriesLeft - 1,
+        );
+      }, ADVANCE_RETRY_DELAY_MS);
     });
   }
 
