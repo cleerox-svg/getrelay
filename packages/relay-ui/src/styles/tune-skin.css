@@ -101,6 +101,12 @@
 .tune-viz.is-active .tune-viz-bar {
   animation: tuneEq 0.6s ease-in-out infinite alternate;
 }
+/* Reactive mode: the bar heights are driven imperatively by the analyser
+   rAF (inline scaleY), so no CSS keyframe animation runs here. */
+.tune-viz.is-reactive .tune-viz-bar {
+  animation: none;
+  transition: transform 60ms linear;
+}
 
 @keyframes tuneEq {
   0% {
@@ -108,6 +114,55 @@
   }
   100% {
     transform: scaleY(1);
+  }
+}
+
+/* Correct-guess flare: a brief, tasteful burst — bars flare up and the
+   strip pops with an accent glow. Works over BOTH the decorative and the
+   reactive strip (playback is paused at reveal, so no inline transform is
+   being written then). */
+.tune-viz.is-correct {
+  animation: tuneVizPop 620ms ease-out 1;
+}
+.tune-viz.is-correct .tune-viz-bar {
+  animation: tuneVizFlare 620ms ease-out 1;
+}
+
+@keyframes tuneVizPop {
+  0% {
+    box-shadow:
+      inset 2px 2px 0 var(--tune-bevel-dark),
+      inset -2px -2px 0 var(--tune-bevel-light);
+  }
+  35% {
+    box-shadow:
+      inset 2px 2px 0 var(--tune-bevel-dark),
+      inset -2px -2px 0 var(--tune-bevel-light),
+      0 0 0 2px var(--tune-accent),
+      0 0 16px 2px var(--tune-accent);
+  }
+  100% {
+    box-shadow:
+      inset 2px 2px 0 var(--tune-bevel-dark),
+      inset -2px -2px 0 var(--tune-bevel-light);
+  }
+}
+
+@keyframes tuneVizFlare {
+  0% {
+    transform: scaleY(0.2);
+    filter: brightness(1);
+  }
+  30% {
+    transform: scaleY(1);
+    filter: brightness(1.6);
+  }
+  60% {
+    transform: scaleY(0.65);
+  }
+  100% {
+    transform: scaleY(0.3);
+    filter: brightness(1);
   }
 }
 
@@ -138,5 +193,17 @@
   .tune-viz.is-active .tune-viz-bar {
     animation: none;
     transform: scaleY(0.5);
+  }
+  /* Reactive bars are held steady by the hook under reduced motion; drop
+     the smoothing transition so nothing pulses. */
+  .tune-viz.is-reactive .tune-viz-bar {
+    transition: none;
+  }
+  /* Keep the correct-guess cue as a quick, still glow — no bar flare. */
+  .tune-viz.is-correct {
+    animation: tuneVizPop 500ms ease-out 1;
+  }
+  .tune-viz.is-correct .tune-viz-bar {
+    animation: none;
   }
 }

@@ -543,9 +543,14 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
           )}
         </div>
 
-        {/* Decorative spectrum analyzer — animates only while a clip is
-            actually playing, idles otherwise. Not a real FFT. */}
-        <TuneVisualizer active={phase === 'play' && clip.playing} />
+        {/* Spectrum analyzer — real Web Audio bars when the capability
+            probe confirmed CORS (clip.levels), otherwise the always-safe
+            decorative CSS animation. Flares on a correct guess. */}
+        <TuneVisualizer
+          active={phase === 'play' && clip.playing}
+          levels={phase === 'play' && clip.playing ? clip.levels ?? undefined : undefined}
+          flash={phase === 'reveal' && picked !== null && picked === round?.answer}
+        />
       </div>
 
       {/* Points-if-you-guess-now meter + seconds-heard HUD. Decays as the
