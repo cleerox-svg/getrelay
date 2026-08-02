@@ -4,7 +4,7 @@ import { useTuneClip } from './TuneClip';
 import { TuneVisualizer } from './TuneVisualizer';
 import { api } from '../../lib/api';
 import { buildTuneRound } from '../../lib/tune/sources';
-import type { TuneRound } from '../../lib/tune/sources';
+import type { TuneGenreId, TuneMode, TuneRound } from '../../lib/tune/sources';
 import { recordTuneGame } from '../../lib/tune/stats';
 import { skinVars } from '../../lib/tune/skins';
 import type { TuneSkin } from '../../lib/tune/skins';
@@ -30,6 +30,10 @@ export interface TuneGameResult {
 
 interface Props {
   onFinish: (result: TuneGameResult) => void;
+  // Which seed pool rounds are drawn from and what the player guesses.
+  // Chosen on the menu; fixed for the run (the menu freezes the choice).
+  genre: TuneGenreId;
+  mode: TuneMode;
   // Freeze the run and show the pause sheet. Owned by the parent because
   // the back gesture that raises it is a history event (see routes/
   // Fog.tsx); identical contract to GuessGame.
@@ -58,8 +62,13 @@ const REVEAL_WRONG_MS = 2200;
 // preview and four title choices. Points scale with how much of the clip
 // was still UNHEARD when the correct guess landed — the audio analogue of
 // Fog's "how much fog was left". Structural sibling of GuessGame.
-export function TuneGame({ onFinish, paused, onResume, skin, skins, onSkinChange }: Props) {
+export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins, onSkinChange }: Props) {
   const usedRef = useRef(new Set<string>());
+  // Genre/mode are fixed for the run, but capture them in a ref so the
+  // build closures (initial effect, prefetch, advance) always read the
+  // same values without needing them in dependency arrays.
+  const optsRef = useRef({ genre, mode });
+  optsRef.current = { genre, mode };
   const nextPromiseRef = useRef<Promise<TuneRound | null> | null>(null);
   const perRoundRef = useRef<TuneGameResult['perRound']>([]);
   const advanceTimerRef = useRef<number | null>(null);
@@ -108,7 +117,7 @@ export function TuneGame({ onFinish, paused, onResume, skin, skins, onSkinChange
   useEffect(() => {
     let cancelled = false;
     const gen = loadGenRef.current;
-    buildTuneRound(usedRef.current).then((r) => {
+    buildTuneRound(usedRef.current, optsRef.current).then((r) => {
       if (cancelled || gen !== loadGenRef.current) return;
       if (!r) {
         handleNoRound();
@@ -116,7 +125,7 @@ export function TuneGame({ onFinish, paused, onResume, skin, skins, onSkinChange
       }
       setRound(r);
       setPhase('play');
-      if (ROUNDS > 1) nextPromiseRef.current = buildTuneRound(usedRef.current);
+      if (ROUNDS > 1) nextPromiseRef.current = buildTuneRound(usedRef.current, optsRef.current);
     });
     return () => {
       cancelled = true;
@@ -243,7 +252,7 @@ export function TuneGame({ onFinish, paused, onResume, skin, skins, onSkinChange
     setHeardAtGuess(null);
     setRoundIdx(idx);
     const gen = loadGenRef.current;
-    const p = nextPromiseRef.current ?? buildTuneRound(usedRef.current);
+    const p = nextPromiseRef.current ?? buildTuneRound(usedRef.current, optsRef.current);
     nextPromiseRef.current = null;
     p.then((r) => {
       if (gen !== loadGenRef.current) return;
@@ -254,7 +263,7 @@ export function TuneGame({ onFinish, paused, onResume, skin, skins, onSkinChange
       }
       setRound(r);
       setPhase('play');
-      if (idx + 1 < ROUNDS) nextPromiseRef.current = buildTuneRound(usedRef.current);
+      if (idx + 1 < ROUNDS) nextPromiseRef.current = buildTuneRound(usedRef.current, optsRef.current);
     });
   }
 
@@ -308,7 +317,7 @@ export function TuneGame({ onFinish, paused, onResume, skin, skins, onSkinChange
         ? 'Listening…'
         : clip.started
           ? 'Paused — tap to resume'
-          : 'Play the clip, then guess the title';
+          : `Play the clip, then guess the ${mode === 'artist' ? 'artist' : 'title'}`;
 
   if (phase === 'unavailable') {
     return (
@@ -416,11 +425,54 @@ export function TuneGame({ onFinish, paused, onResume, skin, skins, onSkinChange
                 height={84}
                 style={{ width: 84, height: 84, borderRadius: 6, objectFit: 'cover' }}
               />
+              {/* Reveal shows BOTH title and artist regardless of the
+                  guessed field. */}
               <div className="tune-readout" style={{ width: '100%' }}>
-                <div style={{ fontWeight: 700, fontSize: 15 }}>{round.answer}</div>
+                <div style={{ fontWeight: 700, fontSize: 15 }}>{round.title}</div>
                 <div className="tune-readout-dim" style={{ fontSize: 13 }}>
                   {round.artist}
                 </div>
+              </div>
+              {/* "Listen to the full song" deep-links. Kept in the APP
+                  palette (not skin tokens) so they stay legible on every
+                  skin. Text-only labels — no trademarked logos. */}
+              <div style={{ display: 'flex', gap: 8, width: '100%', justifyContent: 'center' }}>
+                {round.trackViewUrl ? (
+                  <a
+                    href={round.trackViewUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs font-bold"
+                    style={{
+                      background: 'var(--card-bg)',
+                      color: 'var(--text)',
+                      border: '1px solid var(--separator)',
+                      borderRadius: 999,
+                      padding: '6px 12px',
+                      textDecoration: 'none',
+                    }}
+                  >
+                    ▶ Apple Music
+                  </a>
+                ) : null}
+                <a
+                  href={`https://open.spotify.com/search/${encodeURIComponent(
+                    `${round.title} ${round.artist}`,
+                  )}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs font-bold"
+                  style={{
+                    background: 'var(--card-bg)',
+                    color: 'var(--text)',
+                    border: '1px solid var(--separator)',
+                    borderRadius: 999,
+                    padding: '6px 12px',
+                    textDecoration: 'none',
+                  }}
+                >
+                  ▶ Spotify
+                </a>
               </div>
             </>
           ) : (
