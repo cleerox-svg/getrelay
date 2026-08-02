@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from './env';
 import { readAuthedUser } from './auth';
+import { fetchDeezerJson } from './lib/deezer';
 
 // Thin proxy in front of the iTunes Search API, mirroring gifs.ts.
 // Unlike Giphy this upstream needs no key, so the proxy exists for two
@@ -135,18 +136,12 @@ function projectDeezer(r: DeezerRawAlbum): ItunesItem | null {
 async function callDeezer(term: string, limit: number): Promise<ItunesSearchResult | null> {
   const params = new URLSearchParams({ q: term, limit: String(limit) });
   const url = `https://api.deezer.com/search/album?${params.toString()}`;
-  let data: DeezerAlbumResponse;
-  try {
-    // No cf.cacheTtl here: Deezer answers rate-limit/quota with HTTP 200 +
-    // { error }, and edge-caching that for an hour would extend an outage
-    // (every term would fall through to the 403ing iTunes fallback → 502).
-    // Successful { items } results are still cached hard at the route level.
-    const r = await fetch(url, { headers: { accept: 'application/json' } });
-    if (!r.ok) return null;
-    data = (await r.json()) as DeezerAlbumResponse;
-  } catch {
-    return null;
-  }
+  // No cf.cacheTtl here: Deezer answers rate-limit/quota with HTTP 200 +
+  // { error } (or 429), and edge-caching that for an hour would extend an
+  // outage. fetchDeezerJson retries a transient throttle with jittered
+  // backoff before giving up; successful { items } results are still cached
+  // hard at the route level.
+  const data = await fetchDeezerJson<DeezerAlbumResponse>(url);
   // Deezer signals failure with { error: {...} } instead of a data array.
   if (!data || data.error || !Array.isArray(data.data)) return null;
   const seen = new Set<string>();
