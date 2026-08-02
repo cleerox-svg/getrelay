@@ -59,6 +59,12 @@ type Phase = 'loading' | 'play' | 'reveal' | 'unavailable';
 // working. (See the reveal pointer handlers.)
 const REVEAL_SWIPE_PX = 60;
 
+// A preview URL that errors on load (dead / expired / geo-blocked) is
+// swapped for a fresh track in place. Cap the swaps per round so a streak
+// of bad URLs can't loop forever — after this many failures we fall
+// through to the normal no-round handling.
+const MAX_REPLACE_ATTEMPTS = 2;
+
 // The scored 8-round audio game. Each round: a shrinking-length song
 // preview and four title choices. Points scale with how much of the clip
 // was still UNHEARD when the correct guess landed — the audio analogue of
@@ -76,6 +82,10 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
   // Bumped by the loading failsafe to orphan a stuck build — its late
   // resolution must not clobber the game.
   const loadGenRef = useRef(0);
+  // How many times the CURRENT round's preview has failed to load and been
+  // swapped for a fresh track. Reset when a new round begins (advance /
+  // initial load); capped by MAX_REPLACE_ATTEMPTS.
+  const replaceAttemptsRef = useRef(0);
   // Single "reported" gate consulted by EVERY way a game can end.
   const reportedRef = useRef(false);
   const scoreRef = useRef(0);
@@ -128,6 +138,42 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
   function handleNoRound() {
     if (perRoundRef.current.length >= 1) finishNowRef.current();
     else setPhase('unavailable');
+  }
+
+  // A dead / expired / geo-blocked preview URL errored on load during the
+  // play phase, before the player guessed. Transparently swap in a FRESH
+  // track at the SAME roundIdx — no score penalty, no wasted round, no
+  // entry pushed to perRoundRef. Capped by MAX_REPLACE_ATTEMPTS so a run of
+  // bad URLs can't loop forever; once exhausted, fall through to the normal
+  // no-round handling (end-with-results or "unavailable"). Routing through
+  // the 'loading' phase fully tears down the errored element (clip src goes
+  // null) and re-arms the loading failsafe, so a hung replacement build is
+  // still caught.
+  function replaceFailedRound() {
+    if (replaceAttemptsRef.current >= MAX_REPLACE_ATTEMPTS) {
+      handleNoRound();
+      return;
+    }
+    replaceAttemptsRef.current += 1;
+    const gen = ++loadGenRef.current; // orphan any in-flight build
+    nextPromiseRef.current = null;
+    setPhase('loading');
+    setRound(null);
+    setPicked(null);
+    setHeardAtGuess(null);
+    buildTuneRound(usedRef.current, optsRef.current).then((r) => {
+      if (gen !== loadGenRef.current) return;
+      if (!r) {
+        handleNoRound();
+        return;
+      }
+      setRound(r);
+      setPhase('play');
+      // Re-warm the next-round prefetch we cleared above.
+      if (roundIdx + 1 < ROUNDS) {
+        nextPromiseRef.current = buildTuneRound(usedRef.current, optsRef.current);
+      }
+    });
   }
 
   // First round + prefetch of the second.
@@ -221,6 +267,16 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, paused]);
 
+  // Recover from a preview that fails to load: if the current clip errored
+  // during the play phase and the player hasn't guessed, swap in a fresh
+  // track (see replaceFailedRound). Never fires during reveal/loading; the
+  // attempt cap lives in replaceFailedRound so it can't loop forever.
+  useEffect(() => {
+    if (phase !== 'play' || !clip.loadFailed || picked !== null) return;
+    replaceFailedRound();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, clip.loadFailed, picked]);
+
   // Loading failsafe: buildTuneRound bounds each network step, but if a
   // build still hangs, orphan it. With no offline pack the only sane
   // outcomes are "end with what we have" or "unavailable".
@@ -296,6 +352,7 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
     setLastPoints(null);
     setHeardAtGuess(null);
     setRoundIdx(idx);
+    replaceAttemptsRef.current = 0; // fresh budget for the new round
     const gen = loadGenRef.current;
     const p = nextPromiseRef.current ?? buildTuneRound(usedRef.current, optsRef.current);
     nextPromiseRef.current = null;
@@ -431,7 +488,7 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
 
   return (
     <div
-      className="tune-skin px-4"
+      className="tune-skin tune-game px-4"
       style={skinVars(skin)}
       onPointerDown={phase === 'reveal' ? onRevealPointerDown : undefined}
       onPointerUp={phase === 'reveal' ? onRevealPointerUp : undefined}
@@ -570,41 +627,22 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
               </div>
             </>
           ) : (
-            <>
-              <div
-                className="tune-readout"
-                style={{ width: '100%', fontSize: 13, minHeight: 20 }}
-              >
-                {statusText}
-              </div>
-              {/* Play / retry button — the ONLY place audio starts, always
-                  inside this tap so mobile autoplay allows it. */}
-              <button
-                type="button"
-                onClick={() => clip.play()}
-                disabled={paused || clip.ended}
-                className="tune-btn font-bold"
-                style={{
-                  width: 84,
-                  height: 84,
-                  fontSize: 30,
-                  borderRadius: 'var(--tune-play-radius)',
-                  opacity: paused ? 0.6 : 1,
-                }}
-                aria-label={clip.playing ? 'Playing' : 'Play clip'}
-              >
-                {clip.playing ? '❚❚' : '▶'}
-              </button>
-            </>
+            // Passive status readout only — the Play control now lives in
+            // the bottom cluster (thumb zone), see below.
+            <div
+              className="tune-readout"
+              style={{ width: '100%', fontSize: 13, minHeight: 20 }}
+            >
+              {statusText}
+            </div>
           )}
         </div>
 
-        {/* Spectrum analyzer — real Web Audio bars when the capability
-            probe confirmed CORS (clip.levels), otherwise the always-safe
-            decorative CSS animation. Flares on a correct guess. */}
+        {/* Spectrum analyzer — a purely decorative CSS animation that runs
+            whenever a clip is playing (no Web Audio, no CORS). Flares on a
+            correct guess. */}
         <TuneVisualizer
           active={phase === 'play' && clip.playing}
-          levels={phase === 'play' && clip.playing ? clip.levels ?? undefined : undefined}
           flash={phase === 'reveal' && picked !== null && picked === round?.answer}
         />
       </div>
@@ -631,65 +669,94 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
         </span>
       </div>
 
-      {/* Choices */}
-      <div className="grid grid-cols-2 gap-2 pt-1">
-        {(round?.choices ?? ['', '', '', '']).map((choice, i) => {
-          const isAnswer = phase === 'reveal' && round != null && choice === round.answer;
-          const isWrongPick = phase === 'reveal' && choice === picked && !isAnswer;
-          return (
-            <button
-              key={`${i}-${choice}`}
-              type="button"
-              disabled={phase !== 'play' || !choice || paused}
-              onClick={() => handleGuess(choice)}
-              className="tune-choice px-3 py-3 text-sm font-semibold text-center"
-              style={{
-                background: isAnswer
-                  ? 'var(--tune-choice-answer-bg)'
-                  : isWrongPick
-                    ? 'var(--tune-choice-wrong-bg)'
-                    : undefined,
-                color: isAnswer
-                  ? 'var(--tune-choice-answer-text)'
-                  : isWrongPick
-                    ? 'var(--tune-choice-wrong-text)'
-                    : undefined,
-                opacity: phase === 'loading' ? 0.4 : 1,
-                minHeight: 48,
-              }}
-            >
-              {choice || '…'}
-            </button>
-          );
-        })}
-      </div>
+      {/* Bottom control cluster — pushed into the thumb zone by
+          .tune-game-controls (margin-top:auto) so the primary actions sit
+          low on the screen for one-thumb play, while the readout / artwork
+          / EQ take the space above. */}
+      <div className="tune-game-controls">
+        {/* Play / retry — the ONLY place audio starts, always inside this
+            tap so mobile autoplay allows it. Relocated from the chrome
+            centre to a full-width thumb-friendly transport bar. */}
+        {phase === 'play' ? (
+          <button
+            type="button"
+            onClick={() => clip.play()}
+            disabled={paused || clip.ended}
+            className="tune-btn font-bold"
+            style={{
+              width: '100%',
+              height: 56,
+              fontSize: 22,
+              borderRadius: 'var(--tune-play-radius)',
+              opacity: paused ? 0.6 : 1,
+              marginBottom: 10,
+            }}
+            aria-label={clip.playing ? 'Playing' : 'Play clip'}
+          >
+            {clip.playing ? '❚❚' : '▶'}
+          </button>
+        ) : null}
 
-      {/* Manual advance. The player controls the reveal — a large,
-          full-width tap target sitting clearly BELOW the answer + Listen
-          links so it never crowds them. Kept in the APP palette (accent /
-          white) rather than skin tokens so it stays a legible primary
-          action on every skin, like the "Back to menu" button. Inert
-          while paused; a right swipe anywhere on the reveal does the same
-          thing. On the final round it ends the game (advance() →
-          finishNow), so it reads "See results". */}
-      {phase === 'reveal' ? (
-        <button
-          type="button"
-          onClick={requestAdvance}
-          disabled={paused}
-          className="mt-3 w-full rounded-xl font-bold"
-          style={{
-            background: 'var(--accent)',
-            color: '#FFFFFF',
-            border: 0,
-            padding: '14px 16px',
-            fontSize: 16,
-            opacity: paused ? 0.6 : 1,
-          }}
-        >
-          {roundIdx === ROUNDS - 1 ? 'See results' : 'Next'}
-        </button>
-      ) : null}
+        {/* Choices */}
+        <div className="grid grid-cols-2 gap-2">
+          {(round?.choices ?? ['', '', '', '']).map((choice, i) => {
+            const isAnswer = phase === 'reveal' && round != null && choice === round.answer;
+            const isWrongPick = phase === 'reveal' && choice === picked && !isAnswer;
+            return (
+              <button
+                key={`${i}-${choice}`}
+                type="button"
+                disabled={phase !== 'play' || !choice || paused}
+                onClick={() => handleGuess(choice)}
+                className="tune-choice px-3 py-3 text-sm font-semibold text-center"
+                style={{
+                  background: isAnswer
+                    ? 'var(--tune-choice-answer-bg)'
+                    : isWrongPick
+                      ? 'var(--tune-choice-wrong-bg)'
+                      : undefined,
+                  color: isAnswer
+                    ? 'var(--tune-choice-answer-text)'
+                    : isWrongPick
+                      ? 'var(--tune-choice-wrong-text)'
+                      : undefined,
+                  opacity: phase === 'loading' ? 0.4 : 1,
+                  minHeight: 52,
+                }}
+              >
+                {choice || '…'}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Manual advance. The player controls the reveal — a large,
+            full-width tap target sitting clearly BELOW the answer choices
+            so it never crowds them. Kept in the APP palette (accent /
+            white) rather than skin tokens so it stays a legible primary
+            action on every skin, like the "Back to menu" button. Inert
+            while paused; a right swipe anywhere on the reveal does the same
+            thing. On the final round it ends the game (advance() →
+            finishNow), so it reads "See results". */}
+        {phase === 'reveal' ? (
+          <button
+            type="button"
+            onClick={requestAdvance}
+            disabled={paused}
+            className="mt-3 w-full rounded-xl font-bold"
+            style={{
+              background: 'var(--accent)',
+              color: '#FFFFFF',
+              border: 0,
+              padding: '14px 16px',
+              fontSize: 16,
+              opacity: paused ? 0.6 : 1,
+            }}
+          >
+            {roundIdx === ROUNDS - 1 ? 'See results' : 'Next'}
+          </button>
+        ) : null}
+      </div>
 
       {/* Pause sheet: the game stays mounted and frozen underneath. */}
       {paused ? (

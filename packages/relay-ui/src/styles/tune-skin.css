@@ -4,6 +4,24 @@
    are original, late-'90s-media-player-inspired recreations — no
    trademarked skin assets or product branding. */
 
+/* Game screen layout: a full-height flex column so the passive info
+   (header, player chrome, EQ, meter) sits up top and the interactive
+   controls (Play, answer choices, Next) drop into the bottom "thumb zone".
+   The 100dvh offset leaves room for the app navbar + "Games" heading above;
+   the enclosing Fog wrapper already pads for the tabbar + safe-area at the
+   bottom, so the control cluster lands just above the tab bar on mobile.
+   On short screens the natural content height wins and it simply scrolls. */
+.tune-game {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100dvh - 148px);
+}
+/* Push the control cluster to the bottom of the column. */
+.tune-game-controls {
+  margin-top: auto;
+  padding-top: 12px;
+}
+
 .tune-chrome {
   background: var(--tune-chrome-bg);
   border: 1px solid var(--tune-chrome-border);
@@ -101,12 +119,6 @@
 .tune-viz.is-active .tune-viz-bar {
   animation: tuneEq 0.6s ease-in-out infinite alternate;
 }
-/* Reactive mode: the bar heights are driven imperatively by the analyser
-   rAF (inline scaleY), so no CSS keyframe animation runs here. */
-.tune-viz.is-reactive .tune-viz-bar {
-  animation: none;
-  transition: transform 60ms linear;
-}
 
 @keyframes tuneEq {
   0% {
@@ -118,9 +130,8 @@
 }
 
 /* Correct-guess flare: a brief, tasteful burst — bars flare up and the
-   strip pops with an accent glow. Works over BOTH the decorative and the
-   reactive strip (playback is paused at reveal, so no inline transform is
-   being written then). */
+   strip pops with an accent glow. Independent of playback state, so it
+   fires cleanly at reveal when the clip is paused. */
 .tune-viz.is-correct {
   animation: tuneVizPop 620ms ease-out 1;
 }
@@ -193,11 +204,6 @@
   .tune-viz.is-active .tune-viz-bar {
     animation: none;
     transform: scaleY(0.5);
-  }
-  /* Reactive bars are held steady by the hook under reduced motion; drop
-     the smoothing transition so nothing pulses. */
-  .tune-viz.is-reactive .tune-viz-bar {
-    transition: none;
   }
   /* Keep the correct-guess cue as a quick, still glow — no bar flare. */
   .tune-viz.is-correct {
