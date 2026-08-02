@@ -198,16 +198,24 @@ export type TuneItem = {
   genre: string;
   artworkUrl: string;
   trackViewUrl?: string;
+  // Wall-clock time (ms) the track was folded into a pool. Deezer preview
+  // URLs are short-lived signed links (they expire in ~tens of minutes), so
+  // a track older than POOL_FRESH_MS is treated as STALE — its previewUrl may
+  // be dead — and pruned before it can ever seed a round. Stamped on append,
+  // never trusted from the network payload.
+  fetchedAt?: number;
 };
 
-// A game-scoped, accumulating pool of already-fetched tracks. The caller
-// (TuneGame) owns ONE of these per game (held in a ref that resets on the
-// per-game remount) and threads it through every buildTuneRound call so a
-// whole game shares the tracks it fetched instead of hitting Deezer once
-// per round. `servedSinceFetch` drives an artist-variety cadence: a single
-// seed's batch is mostly ONE artist, so we force a fresh seed roughly every
-// FETCH_EVERY rounds even when the pool could still yield, keeping a game
-// from becoming eight songs by the same artist.
+// An accumulating pool of already-fetched tracks, shared across EVERY game in
+// the session (see getSessionPool): a new game reuses tracks fetched in
+// earlier games and rarely needs a live Deezer call for round 1. The `used`
+// dedup that prevents in-game repeats stays PER-GAME (TuneGame's usedRef), so
+// on a new game every still-fresh pooled track counts as unused again and a
+// whole game can be drawn from memory with no network. `servedSinceFetch`
+// drives an artist-variety cadence: a single seed's batch is mostly ONE
+// artist, so we force a fresh seed roughly every FETCH_EVERY rounds even when
+// the pool could still yield, keeping a game from becoming eight songs by the
+// same artist.
 export interface TunePool {
   items: TuneItem[];
   servedSinceFetch: number;
@@ -216,21 +224,64 @@ export interface TunePool {
   topping?: boolean;
 }
 
+// Freshness window: a pooled track older than this is pruned and never seeds
+// a round, because its Deezer preview URL may have expired. Kept safely under
+// Deezer's preview-signature lifetime (~tens of minutes) so anything we serve
+// is still playable, while still letting a session start many games from
+// memory before its tracks age out.
+const POOL_FRESH_MS = 7 * 60 * 1000;
+
+// Hard cap on pooled tracks so a long multi-game session can't grow the pool
+// without bound. Oldest (and any stale) tracks are dropped first.
+const POOL_MAX = 150;
+
 export function createTunePool(): TunePool {
   return { items: [], servedSinceFetch: 0, topping: false };
 }
 
+// The single session-scoped pool. Module-level so it survives TuneGame
+// mounts/unmounts: each new game gets a fresh usedRef but reuses THIS pool, so
+// round 1 of game N usually resolves from tracks fetched in games 1..N-1 with
+// no Deezer call. Lives for the page session; never persisted to storage
+// (preview URLs would be dead on reload anyway).
+let sessionPool: TunePool | null = null;
+
+export function getSessionPool(): TunePool {
+  if (!sessionPool) sessionPool = createTunePool();
+  return sessionPool;
+}
+
+// Drop stale tracks (expired-preview risk) and cap the pool to the newest
+// POOL_MAX. Called before every draw so a round is never built from a track
+// whose preview may have died, and so background top-ups can't grow the pool
+// unbounded.
+function prunePool(pool: TunePool): void {
+  const now = Date.now();
+  let items = pool.items.filter((i) => i.fetchedAt != null && now - i.fetchedAt < POOL_FRESH_MS);
+  if (items.length > POOL_MAX) {
+    items = items
+      .slice()
+      .sort((a, b) => (b.fetchedAt ?? 0) - (a.fetchedAt ?? 0))
+      .slice(0, POOL_MAX);
+  }
+  pool.items = items;
+}
+
 // Append a fetched batch to the pool, skipping tracks already held (a seed
-// can be re-searched once its pool names are exhausted). Keeps the pool a
-// clean union so roundFromBatch's `used` dedup is the only gate on reuse.
+// can be re-searched once its pool names are exhausted). Each appended track
+// is freshness-stamped NOW so the age clock starts at fetch time. Keeps the
+// pool a clean union so roundFromBatch's `used` dedup is the only gate on
+// reuse, and caps size on the way in.
 function appendToPool(pool: TunePool, items: TuneItem[]): void {
+  const now = Date.now();
   const have = new Set(pool.items.map((i) => i.trackId));
   for (const it of items) {
     if (it.trackId && !have.has(it.trackId)) {
       have.add(it.trackId);
-      pool.items.push(it);
+      pool.items.push({ ...it, fetchedAt: now });
     }
   }
+  if (pool.items.length > POOL_MAX) prunePool(pool);
 }
 
 // Fire-and-forget variety top-up: fold ONE fresh seed's batch into the pool
@@ -370,14 +421,16 @@ export interface BuildTuneOpts {
   mode?: TuneMode;
 }
 
-// Build one playable round, drawing from a game-scoped POOL of already
-// fetched tracks and only touching the network when the pool can't yield a
-// fresh valid round (or when the variety cadence forces a fresh seed). A
-// typical 8-round title game makes ~3 Deezer searches this way instead of
-// one per round; artist mode fetches more (each round needs a distinct
-// artist, and a seed's batch is mostly one). Returns null only when the
-// network is exhausted AND the pool still can't yield — there is no offline
-// pack, so the caller treats null as "music service unavailable".
+// Build one playable round, drawing from the (by default session-scoped) POOL
+// of already fetched tracks and only touching the network when the pool can't
+// yield a FRESH valid round (or when the variety cadence forces a fresh seed).
+// Because the pool persists across games, a warm session serves most rounds —
+// including round 1 of each new game — straight from memory, so a multi-game
+// session makes only a handful of Deezer searches total (bounded by
+// preview-freshness refetches) instead of ~3-4 per game. Stale tracks (whose
+// preview URLs may have expired) are pruned up front, so a null result means
+// the network is exhausted AND the fresh pool still can't yield — there is no
+// offline pack, so the caller treats null as "music service unavailable".
 export async function buildTuneRound(
   used: Set<string>,
   opts: BuildTuneOpts = {},
@@ -387,10 +440,17 @@ export async function buildTuneRound(
   const mode = opts.mode ?? 'title';
   const seedPool = seedsForGenre(genre);
 
+  // 0) Drop stale tracks first so nothing built below can carry an expired
+  //    (dead) Deezer preview URL, and so a session's pool can't grow without
+  //    bound. After this, everything in pool.items is fresh enough to play.
+  prunePool(pool);
+
   // 1) Serve straight from the current pool with NO network call whenever
-  //    possible. Rounds after the first never block on the network this way,
-  //    so a slow/throttled fetch can't trip the loading failsafe and end the
-  //    game. When the variety cadence is due, fold a fresh artist in via a
+  //    possible. In a warm session this covers round 1 of a NEW game too: the
+  //    per-game `used` set is empty, so still-fresh tracks from earlier games
+  //    are drawable again. Rounds never block on the network this way, so a
+  //    slow/throttled fetch can't trip the loading failsafe and end the game.
+  //    When the variety cadence is due, fold a fresh artist in via a
   //    BACKGROUND top-up that THIS round never waits on.
   const pooled = roundFromBatch(pool.items, used, mode, seedPool);
   if (pooled) {
@@ -410,6 +470,9 @@ export async function buildTuneRound(
     try {
       const r = await withTimeout(api.searchTunes(seed), 8000);
       appendToPool(pool, r.items);
+      // Re-prune: the fetch loop can take seconds, so a track that was fresh
+      // at step 0 may have just crossed the window — never build from it.
+      prunePool(pool);
       const round = roundFromBatch(pool.items, used, mode, seedPool);
       if (round) {
         pool.servedSinceFetch = 0; // reset the cadence: we just fetched
@@ -423,6 +486,8 @@ export async function buildTuneRound(
   // 3) Fetches exhausted. Last resort: try the pool once more (covers the
   //    variety-forced path where the network failed but the pool still holds
   //    a valid round), so a transient throttle doesn't needlessly end a game.
+  //    Re-prune first — the fetch loop above may have aged tracks out.
+  prunePool(pool);
   const fallback = roundFromBatch(pool.items, used, mode, seedPool);
   if (fallback) {
     pool.servedSinceFetch += 1;

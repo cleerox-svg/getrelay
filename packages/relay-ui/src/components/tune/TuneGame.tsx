@@ -3,7 +3,7 @@ import { FogPausePrompt } from '../fog/FogPausePrompt';
 import { useTuneClip } from './TuneClip';
 import { TuneVisualizer } from './TuneVisualizer';
 import { api } from '../../lib/api';
-import { buildTuneRound, createTunePool } from '../../lib/tune/sources';
+import { buildTuneRound, getSessionPool } from '../../lib/tune/sources';
 import type { TuneGenreId, TuneMode, TuneRound } from '../../lib/tune/sources';
 import { recordTuneGame } from '../../lib/tune/stats';
 import { skinVars } from '../../lib/tune/skins';
@@ -80,11 +80,15 @@ const ADVANCE_RETRY_DELAY_MS = 600;
 // Fog's "how much fog was left". Structural sibling of GuessGame.
 export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins, onSkinChange }: Props) {
   const usedRef = useRef(new Set<string>());
-  // Game-scoped pool of already-fetched tracks, shared by EVERY build path
-  // (initial load, prefetch, advance-retry, dead-preview replace) so a whole
-  // game reuses its fetches instead of hitting Deezer once per round. Resets
-  // naturally: the component remounts per game, so this ref is fresh each run.
-  const poolRef = useRef(createTunePool());
+  // The SESSION-scoped pool of already-fetched tracks, shared by EVERY build
+  // path (initial load, prefetch, advance-retry, dead-preview replace) AND by
+  // every other game this session. Because it persists across mounts, round 1
+  // of a new game usually resolves from tracks earlier games fetched, with no
+  // Deezer call. The in-game "no repeats" guarantee lives in usedRef, which IS
+  // fresh per game — so a new game may re-draw a still-fresh pooled track that
+  // an earlier game used. Stale (expired-preview) tracks are pruned inside
+  // buildTuneRound before any draw.
+  const poolRef = useRef(getSessionPool());
   // Tracks the advance-retry setTimeout so a bare unmount (route change that
   // doesn't go through finishNow) can cancel it — otherwise it could fire a
   // stray build after unmount.
@@ -194,21 +198,43 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
     });
   }
 
-  // First round + prefetch of the second.
+  // First round + prefetch of the second. With the persisted session pool this
+  // usually resolves instantly from memory; on a genuine cold start during a
+  // Deezer throttle the build can come back null, so — like the advance path —
+  // we retry a couple times (small delay, same ADVANCE_RETRIES/DELAY constants)
+  // before surfacing "unavailable". Every step is gated on cancelled AND
+  // loadGenRef so the LOAD_TIMEOUT_MS failsafe (which bumps loadGenRef) can
+  // still orphan the whole chain; the retry timer is cleared on unmount. The
+  // single attempt chain means we never double-load.
   useEffect(() => {
     let cancelled = false;
     const gen = loadGenRef.current;
-    buildTuneRound(usedRef.current, optsRef.current, poolRef.current).then((r) => {
-      if (cancelled || gen !== loadGenRef.current) return;
-      if (!r) {
-        handleNoRound();
-        return;
-      }
-      setRound(r);
-      setPhase('play');
-      if (ROUNDS > 1)
-        nextPromiseRef.current = buildTuneRound(usedRef.current, optsRef.current, poolRef.current);
-    });
+    const attemptInitial = (retriesLeft: number) => {
+      buildTuneRound(usedRef.current, optsRef.current, poolRef.current).then((r) => {
+        if (cancelled || gen !== loadGenRef.current) return;
+        if (r) {
+          setRound(r);
+          setPhase('play');
+          if (ROUNDS > 1)
+            nextPromiseRef.current = buildTuneRound(
+              usedRef.current,
+              optsRef.current,
+              poolRef.current,
+            );
+          return;
+        }
+        if (retriesLeft <= 0) {
+          handleNoRound();
+          return;
+        }
+        retryTimerRef.current = window.setTimeout(() => {
+          retryTimerRef.current = null;
+          if (cancelled || gen !== loadGenRef.current) return;
+          attemptInitial(retriesLeft - 1);
+        }, ADVANCE_RETRY_DELAY_MS);
+      });
+    };
+    attemptInitial(ADVANCE_RETRIES);
     return () => {
       cancelled = true;
       if (advanceTimerRef.current != null) window.clearTimeout(advanceTimerRef.current);
