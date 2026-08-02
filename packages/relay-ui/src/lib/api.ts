@@ -220,17 +220,61 @@ export const api = {
       next: string | null;
     }>(`/gifs/search?${usp.toString()}`);
   },
-  // Fog mini game. Server clamps rounds to 1..8 and score to
-  // rounds*2000 — the client-side tuning (lib/fog/tuning.ts) must stay
-  // within those bounds so local and server bests agree.
-  submitGameScore: (body: { score: number; rounds: number; bestStreak: number }) =>
+  // Album-art search for the Fog game, proxied through the worker's
+  // iTunes Search proxy (no key, but the proxy caches + trims the
+  // payload). `term` is a genre/style seed; the caller picks one album
+  // as the answer (artist) and others as same-genre distractors.
+  searchMusic: (term: string) => {
+    const usp = new URLSearchParams();
+    usp.set('term', term);
+    return request<{
+      items: {
+        id: string;
+        artistName: string;
+        collectionName: string;
+        artworkUrl: string;
+        genre: string;
+      }[];
+    }>(`/itunes/search?${usp.toString()}`);
+  },
+  // Song-preview search for the "Guess the Tune" game, proxied through
+  // the worker's iTunes Search proxy (no key). The worker pre-filters to
+  // tracks that actually carry a preview clip and returns hi-res
+  // artwork. `term` is an artist/genre seed; the caller picks one track
+  // as the answer (title) and others as same-genre distractors. iTunes
+  // Search has no offset/pagination, so variety comes from the seed pool.
+  searchTunes: (term: string) => {
+    const usp = new URLSearchParams();
+    usp.set('term', term);
+    return request<{
+      items: {
+        trackId: string;
+        previewUrl: string;
+        title: string;
+        artist: string;
+        genre: string;
+        artworkUrl: string;
+      }[];
+    }>(`/tunes/search?${usp.toString()}`);
+  },
+  // Shared score submit for the mini games. Server clamps rounds to
+  // 1..8 and score to rounds*2000 — the client-side tuning
+  // (lib/fog/tuning.ts, lib/tune/tuning.ts) must stay within those
+  // bounds so local and server bests agree. `game` selects the board;
+  // it defaults to 'fog' so existing Fog callers stay unchanged.
+  submitGameScore: (body: {
+    score: number;
+    rounds: number;
+    bestStreak: number;
+    game?: 'fog' | 'tune';
+  }) =>
     request<{ ok: true; best: number }>('/game/score', {
       method: 'POST',
-      body: JSON.stringify(body),
+      body: JSON.stringify({ game: 'fog', ...body }),
     }),
-  getGameLeaderboard: (period: 'weekly' | 'all') =>
+  getGameLeaderboard: (period: 'weekly' | 'all', game: 'fog' | 'tune' = 'fog') =>
     request<{ entries: GameLeaderboardEntry[] }>(
-      `/game/leaderboard?period=${period}`,
+      `/game/leaderboard?period=${period}&game=${game}`,
     ),
   // Giphy Action Register pingback. Best-effort: failures are swallowed so
   // analytics never interferes with sending a GIF.
