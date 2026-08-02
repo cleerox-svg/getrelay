@@ -10,6 +10,7 @@ import { skinVars } from '../../lib/tune/skins';
 import type { TuneSkin } from '../../lib/tune/skins';
 import {
   LOAD_TIMEOUT_MS,
+  REVEAL_IDLE_MS,
   ROUNDS,
   ROUND_TIMEOUT_MS,
   clipLenMs,
@@ -52,11 +53,11 @@ interface Props {
 
 type Phase = 'loading' | 'play' | 'reveal' | 'unavailable';
 
-// Reveal dwell before the next round: long enough to read the answer,
-// longer after a wrong guess (there's a title + artist + artwork to take
-// in).
-const REVEAL_CORRECT_MS = 1400;
-const REVEAL_WRONG_MS = 2200;
+// A right swipe on the reveal must travel this far (px) AND be more
+// horizontal than vertical to advance. A tap barely moves, so it stays
+// well under the threshold and never advances — link/button taps keep
+// working. (See the reveal pointer handlers.)
+const REVEAL_SWIPE_PX = 60;
 
 // The scored 8-round audio game. Each round: a shrinking-length song
 // preview and four title choices. Points scale with how much of the clip
@@ -81,8 +82,15 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
   const bestStreakRef = useRef(0);
   // Banked remainders so a pause resumes the clocks in place.
   const roundLeftRef = useRef(ROUND_TIMEOUT_MS);
-  const revealMsRef = useRef(REVEAL_CORRECT_MS);
+  // Banked remaining idle-failsafe time for the current reveal (null =
+  // not yet armed / re-arm from full on the next reveal).
   const revealLeftRef = useRef<number | null>(null);
+  // Single-advance guard: set the instant an advance is requested (Next,
+  // swipe or the idle failsafe), reset when a new reveal opens. Stops any
+  // two of those from firing back-to-back and skipping a round.
+  const revealAdvancedRef = useRef(false);
+  // Pointer-down origin for the reveal swipe-to-advance gesture.
+  const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
 
   const [roundIdx, setRoundIdx] = useState(0); // 0-based
   const [round, setRound] = useState<TuneRound | null>(null);
@@ -161,15 +169,20 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, roundIdx, paused]);
 
-  // Reveal → next round. Effect-driven so pausing mid-reveal freezes the
-  // dwell instead of snapping ahead when the sheet closes.
+  // Reveal → next round IDLE failsafe. The player normally advances by
+  // hand (Next button / swipe); this only fires if the reveal is left
+  // untouched for REVEAL_IDLE_MS. Effect-driven and pause-aware exactly
+  // like the play-phase failsafe: pausing mid-reveal banks the remaining
+  // time and resumes it in place instead of snapping ahead when the sheet
+  // closes. Routed through requestAdvance so it shares the single-advance
+  // guard with the Next button and the swipe.
   useEffect(() => {
     if (phase !== 'reveal') return;
-    const ms = revealLeftRef.current ?? revealMsRef.current;
+    const ms = revealLeftRef.current ?? REVEAL_IDLE_MS;
     revealLeftRef.current = ms;
     if (paused) return;
     const armedAt = Date.now();
-    const t = window.setTimeout(() => advanceRef.current(), ms);
+    const t = window.setTimeout(() => requestAdvanceRef.current(), ms);
     advanceTimerRef.current = t;
     return () => {
       window.clearTimeout(t);
@@ -308,8 +321,9 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
     const frac = maxSeconds > 0 ? Math.max(0, Math.min(1, 1 - heard / maxSeconds)) : 1;
     const correct = choice != null && choice === round.answer;
     setPicked(choice);
-    revealMsRef.current = correct ? REVEAL_CORRECT_MS : REVEAL_WRONG_MS;
+    // Arm a fresh reveal: full idle failsafe, advance guard cleared.
     revealLeftRef.current = null;
+    revealAdvancedRef.current = false;
     setPhase('reveal');
     perRoundRef.current.push({ secondsHeard: heard, correct });
     if (correct) {
@@ -324,10 +338,44 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
     }
   }
 
-  // The reveal timeout must call the LATEST advance() — score/streak set
-  // above land after handleGuess returns.
-  const advanceRef = useRef(advance);
-  advanceRef.current = advance;
+  // The single entry point every advance goes through: the Next button,
+  // the swipe gesture and the idle failsafe all call this. Inert unless a
+  // reveal is live and un-paused, and the guard ref makes sure only ONE
+  // advance lands per reveal so two triggers can't skip a round.
+  function requestAdvance() {
+    if (phase !== 'reveal' || paused || revealAdvancedRef.current) return;
+    revealAdvancedRef.current = true;
+    advance();
+  }
+  // The idle failsafe fires from a stale effect closure, so it must reach
+  // the LATEST requestAdvance — the latest roundIdx/score (advance() reads
+  // roundIdx; finishNow(), on the last round, reads score/streak).
+  const requestAdvanceRef = useRef(requestAdvance);
+  requestAdvanceRef.current = requestAdvance;
+
+  // Swipe-to-advance on the reveal. Record where the pointer went down…
+  function onRevealPointerDown(e: React.PointerEvent) {
+    // …but not when the drag starts on an interactive element (the Listen /
+    // Spotify links or the Next button): a rightward drag begun on a link
+    // could otherwise both advance the round AND follow the link.
+    if ((e.target as Element).closest?.('a,button')) {
+      swipeStartRef.current = null;
+      return;
+    }
+    swipeStartRef.current = { x: e.clientX, y: e.clientY };
+  }
+  // …and on release, advance only for a decisive, mostly-horizontal
+  // rightward drag. A tap moves a few px (< REVEAL_SWIPE_PX) so it never
+  // advances, and we never preventDefault, so Next / Listen / Spotify taps
+  // still work. requestAdvance's own guards handle phase/pause/dedupe.
+  function onRevealPointerUp(e: React.PointerEvent) {
+    const start = swipeStartRef.current;
+    swipeStartRef.current = null;
+    if (!start) return;
+    const dx = e.clientX - start.x;
+    const dy = e.clientY - start.y;
+    if (dx > REVEAL_SWIPE_PX && Math.abs(dx) > Math.abs(dy)) requestAdvance();
+  }
 
   const potentialPts = roundPoints(unheardFrac, streak);
   const wrongReveal = phase === 'reveal' && picked !== null && picked !== round?.answer;
@@ -382,7 +430,15 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
   }
 
   return (
-    <div className="tune-skin px-4" style={skinVars(skin)}>
+    <div
+      className="tune-skin px-4"
+      style={skinVars(skin)}
+      onPointerDown={phase === 'reveal' ? onRevealPointerDown : undefined}
+      onPointerUp={phase === 'reveal' ? onRevealPointerUp : undefined}
+      onPointerCancel={() => {
+        swipeStartRef.current = null;
+      }}
+    >
       {/* Round / score / streak header — kept in the app palette (uses
           theme tokens, not tune-* vars) so it reads consistently across
           skins. */}
@@ -607,6 +663,33 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
           );
         })}
       </div>
+
+      {/* Manual advance. The player controls the reveal — a large,
+          full-width tap target sitting clearly BELOW the answer + Listen
+          links so it never crowds them. Kept in the APP palette (accent /
+          white) rather than skin tokens so it stays a legible primary
+          action on every skin, like the "Back to menu" button. Inert
+          while paused; a right swipe anywhere on the reveal does the same
+          thing. On the final round it ends the game (advance() →
+          finishNow), so it reads "See results". */}
+      {phase === 'reveal' ? (
+        <button
+          type="button"
+          onClick={requestAdvance}
+          disabled={paused}
+          className="mt-3 w-full rounded-xl font-bold"
+          style={{
+            background: 'var(--accent)',
+            color: '#FFFFFF',
+            border: 0,
+            padding: '14px 16px',
+            fontSize: 16,
+            opacity: paused ? 0.6 : 1,
+          }}
+        >
+          {roundIdx === ROUNDS - 1 ? 'See results' : 'Next'}
+        </button>
+      ) : null}
 
       {/* Pause sheet: the game stays mounted and frozen underneath. */}
       {paused ? (
