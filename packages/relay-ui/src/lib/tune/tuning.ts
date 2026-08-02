@@ -21,6 +21,14 @@ export function clipLenMs(round: number): number {
 // abandoned tab from holding a round open forever.
 export const ROUND_TIMEOUT_MS = 45_000;
 
+// The reveal screen is advanced MANUALLY (a Next button or a right
+// swipe) so the player has time to read the answer and tap the Listen /
+// Spotify links. This is a long IDLE failsafe, not a fast auto-advance:
+// if the reveal is abandoned and nothing is tapped for this long, the
+// game advances on its own so a walked-away run still ends. Pause-aware
+// (banked while the pause sheet is up), exactly like ROUND_TIMEOUT_MS.
+export const REVEAL_IDLE_MS = 30_000;
+
 // Failsafe: a round build stuck in the loading phase for this long is
 // abandoned. buildTuneRound bounds its own network steps, but the
 // loading screen must never sit on "Finding a tune…" forever. Unlike
