@@ -72,11 +72,23 @@ function mockItunes(body: object) {
     .reply(200, body, { headers: { 'content-type': 'application/json' } });
 }
 
+// Single-use Deezer reply. Called multiple times in registration order to
+// script a burst: the first Deezer call consumes the first interceptor, the
+// retry consumes the next.
 function mockDeezer(body: object, status = 200) {
   fetchMock
     .get('https://api.deezer.com')
     .intercept({ path: (p) => p.startsWith('/search') })
     .reply(status, body, { headers: { 'content-type': 'application/json' } });
+}
+
+// Persistent Deezer reply — every attempt (initial + retries) gets it.
+function mockDeezerPersist(body: object, status = 200) {
+  fetchMock
+    .get('https://api.deezer.com')
+    .intercept({ path: (p) => p.startsWith('/search') })
+    .reply(status, body, { headers: { 'content-type': 'application/json' } })
+    .persist();
 }
 
 async function request(path: string, init?: RequestInit): Promise<Response> {
@@ -269,6 +281,94 @@ describe('GET /tunes/search', () => {
     ]);
   });
 
+  it('caches a successful result for 10 minutes (previews expire, so no 24h TTL)', async () => {
+    mockDeezer({
+      data: [
+        {
+          id: 401,
+          title: 'Hey Jude',
+          preview: 'https://audio.deezer/401.mp3?hdnea=exp=9999999999~hmac=x',
+          artist: { name: 'The Beatles' },
+          album: { cover_xl: 'https://cdn.deezer/401-xl.jpg' },
+          link: 'https://www.deezer.com/track/401',
+        },
+      ],
+    });
+    const res = await request('/tunes/search?term=beatles-cache-ttl', {
+      headers: { Cookie: cookie },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=600');
+  });
+
+  it('retries an HTTP 429 throttle and recovers with the next attempt', async () => {
+    // First Deezer call is rate-limited (HTTP 429); the retry succeeds.
+    mockDeezer({ error: { code: 4, message: 'Quota limit exceeded' } }, 429);
+    mockDeezer({
+      data: [
+        {
+          id: 301,
+          title: 'Yesterday',
+          preview: 'https://audio.deezer/301.mp3',
+          artist: { name: 'The Beatles' },
+          album: { cover_xl: 'https://cdn.deezer/301-xl.jpg' },
+          link: 'https://www.deezer.com/track/301',
+        },
+      ],
+    });
+
+    const res = await request('/tunes/search?term=beatles-retry-429', {
+      headers: { Cookie: cookie },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as TuneBody;
+    expect(body.items).toEqual([
+      {
+        trackId: '301',
+        previewUrl: 'https://audio.deezer/301.mp3',
+        title: 'Yesterday',
+        artist: 'The Beatles',
+        genre: '',
+        artworkUrl: 'https://cdn.deezer/301-xl.jpg',
+        trackViewUrl: 'https://www.deezer.com/track/301',
+      },
+    ]);
+  });
+
+  it('retries a 200 quota-error envelope (code 4) and recovers with the next attempt', async () => {
+    // Deezer signals its quota throttle with HTTP 200 + { error: { code: 4 } }.
+    mockDeezer({ error: { code: 4, message: 'Quota limit exceeded' } });
+    mockDeezer({
+      data: [
+        {
+          id: 302,
+          title: 'Help!',
+          preview: 'https://audio.deezer/302.mp3',
+          artist: { name: 'The Beatles' },
+          album: { cover_xl: 'https://cdn.deezer/302-xl.jpg' },
+          link: 'https://www.deezer.com/track/302',
+        },
+      ],
+    });
+
+    const res = await request('/tunes/search?term=beatles-retry-code4', {
+      headers: { Cookie: cookie },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as TuneBody;
+    expect(body.items).toEqual([
+      {
+        trackId: '302',
+        previewUrl: 'https://audio.deezer/302.mp3',
+        title: 'Help!',
+        artist: 'The Beatles',
+        genre: '',
+        artworkUrl: 'https://cdn.deezer/302-xl.jpg',
+        trackViewUrl: 'https://www.deezer.com/track/302',
+      },
+    ]);
+  });
+
   it('returns 502 when both Deezer and iTunes fail', async () => {
     mockDeezer({ error: { message: 'down' } });
     fetchMock
@@ -280,5 +380,44 @@ describe('GET /tunes/search', () => {
     });
     expect(res.status).toBe(502);
     expect(await res.json()).toEqual({ error: 'upstream_failed' });
+  });
+
+  // Registers a PERSISTENT Deezer interceptor, so keep it last in the file
+  // to avoid its generic /search matcher bleeding into other cases.
+  it('falls back to iTunes when Deezer throttles through every retry', async () => {
+    // Persistent quota throttle: initial attempt + both retries all 429.
+    mockDeezerPersist({ error: { code: 4, message: 'Quota limit exceeded' } }, 429);
+    mockItunes({
+      resultCount: 1,
+      results: [
+        {
+          wrapperType: 'track',
+          trackId: 303,
+          trackName: 'Michelle',
+          artistName: 'The Beatles',
+          previewUrl: 'https://audio.example/303.m4a',
+          artworkUrl100: 'https://is1.example/m/100x100bb.jpg',
+          primaryGenreName: 'Rock',
+          trackViewUrl: 'https://music.apple.com/us/album/michelle/303',
+        },
+      ],
+    });
+
+    const res = await request('/tunes/search?term=beatles-retry-exhausted', {
+      headers: { Cookie: cookie },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as TuneBody;
+    expect(body.items).toEqual([
+      {
+        trackId: '303',
+        previewUrl: 'https://audio.example/303.m4a',
+        title: 'Michelle',
+        artist: 'The Beatles',
+        genre: 'Rock',
+        artworkUrl: 'https://is1.example/m/600x600bb.jpg',
+        trackViewUrl: 'https://music.apple.com/us/album/michelle/303',
+      },
+    ]);
   });
 });

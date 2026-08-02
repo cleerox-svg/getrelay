@@ -72,11 +72,23 @@ function mockItunes(body: object) {
     .reply(200, body, { headers: { 'content-type': 'application/json' } });
 }
 
+// Single-use Deezer reply. Called multiple times in registration order to
+// script a burst: the first Deezer call consumes the first interceptor, the
+// retry consumes the next.
 function mockDeezer(body: object, status = 200) {
   fetchMock
     .get('https://api.deezer.com')
     .intercept({ path: (p) => p.startsWith('/search') })
     .reply(status, body, { headers: { 'content-type': 'application/json' } });
+}
+
+// Persistent Deezer reply — every attempt (initial + retries) gets it.
+function mockDeezerPersist(body: object, status = 200) {
+  fetchMock
+    .get('https://api.deezer.com')
+    .intercept({ path: (p) => p.startsWith('/search') })
+    .reply(status, body, { headers: { 'content-type': 'application/json' } })
+    .persist();
 }
 
 async function request(path: string, init?: RequestInit): Promise<Response> {
@@ -230,6 +242,37 @@ describe('GET /itunes/search', () => {
     ]);
   });
 
+  it('retries a Deezer throttle (code 700) and recovers with the next attempt', async () => {
+    // First album search is throttled (200 + { error: { code: 700 } }); retry wins.
+    mockDeezer({ error: { code: 700, message: 'Service busy' } });
+    mockDeezer({
+      data: [
+        {
+          id: 20,
+          title: 'Giant Steps',
+          artist: { name: 'John Coltrane' },
+          cover_xl: 'https://cdn.deezer/20-xl.jpg',
+          link: 'https://www.deezer.com/album/20',
+        },
+      ],
+    });
+
+    const res = await request('/itunes/search?term=jazz-retry-700', {
+      headers: { Cookie: cookie },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as ItunesBody;
+    expect(body.items).toEqual([
+      {
+        id: '20',
+        artistName: 'John Coltrane',
+        collectionName: 'Giant Steps',
+        artworkUrl: 'https://cdn.deezer/20-xl.jpg',
+        genre: '',
+      },
+    ]);
+  });
+
   it('returns 502 when both Deezer and iTunes fail', async () => {
     mockDeezer({ error: { message: 'down' } });
     fetchMock
@@ -241,5 +284,39 @@ describe('GET /itunes/search', () => {
     });
     expect(res.status).toBe(502);
     expect(await res.json()).toEqual({ error: 'upstream_failed' });
+  });
+
+  // Registers a PERSISTENT Deezer interceptor, so keep it last in the file
+  // to avoid its generic /search matcher bleeding into other cases.
+  it('falls back to iTunes when Deezer throttles through every retry', async () => {
+    mockDeezerPersist({ error: { code: 4, message: 'Quota limit exceeded' } }, 429);
+    mockItunes({
+      resultCount: 1,
+      results: [
+        {
+          wrapperType: 'collection',
+          collectionId: 21,
+          artistName: 'Charles Mingus',
+          collectionName: 'Mingus Ah Um',
+          artworkUrl100: 'https://is1.example/i/100x100bb.jpg',
+          primaryGenreName: 'Jazz',
+        },
+      ],
+    });
+
+    const res = await request('/itunes/search?term=jazz-retry-exhausted', {
+      headers: { Cookie: cookie },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as ItunesBody;
+    expect(body.items).toEqual([
+      {
+        id: '21',
+        artistName: 'Charles Mingus',
+        collectionName: 'Mingus Ah Um',
+        artworkUrl: 'https://is1.example/i/600x600bb.jpg',
+        genre: 'Jazz',
+      },
+    ]);
   });
 });
