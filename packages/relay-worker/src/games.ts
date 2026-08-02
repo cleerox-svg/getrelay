@@ -10,6 +10,18 @@ import { avatarUrlFor } from './me';
 export const MAX_ROUNDS = 8;
 export const MAX_POINTS_PER_ROUND = 2000;
 
+// Games that share the game_scores table (and its leaderboard). The
+// column defaults to 'fog', so an omitted/unknown value maps back to fog
+// and every existing client keeps working.
+export const GAME_IDS = ['fog', 'tune'] as const;
+export type GameId = (typeof GAME_IDS)[number];
+
+function normalizeGame(v: unknown): GameId {
+  return typeof v === 'string' && (GAME_IDS as readonly string[]).includes(v)
+    ? (v as GameId)
+    : 'fog';
+}
+
 // ---- Feed surfacing rules -------------------------------------------------
 //
 // Only *notable* runs reach the Updates feed. Fog games are short, so
@@ -39,11 +51,12 @@ export function gamesRoutes() {
     if (!me) return c.json({ error: 'unauthorized' }, 401);
 
     const body = await c.req
-      .json<{ score?: unknown; rounds?: unknown; bestStreak?: unknown }>()
+      .json<{ score?: unknown; rounds?: unknown; bestStreak?: unknown; game?: unknown }>()
       .catch(() => null);
     const score = body?.score;
     const rounds = body?.rounds;
     const bestStreak = body?.bestStreak;
+    const game = normalizeGame(body?.game);
 
     // Clamps: rounds 1..MAX_ROUNDS, score 0..rounds*MAX_POINTS_PER_ROUND,
     // bestStreak 0..rounds (you can't streak more rounds than you played).
@@ -61,15 +74,15 @@ export function gamesRoutes() {
 
     await c.env.DB.prepare(
       `INSERT INTO game_scores (id, user_id, game, score, rounds, best_streak, created_at)
-       VALUES (?, ?, 'fog', ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
-      .bind(crypto.randomUUID(), me.id, score, rounds, bestStreak, Date.now())
+      .bind(crypto.randomUUID(), me.id, game, score, rounds, bestStreak, Date.now())
       .run();
 
     const row = await c.env.DB.prepare(
-      `SELECT MAX(score) AS best FROM game_scores WHERE user_id = ? AND game = 'fog'`,
+      `SELECT MAX(score) AS best FROM game_scores WHERE user_id = ? AND game = ?`,
     )
-      .bind(me.id)
+      .bind(me.id, game)
       .first<{ best: number | null }>();
 
     return c.json({ ok: true, best: row?.best ?? score });
@@ -86,12 +99,13 @@ export function gamesRoutes() {
     // Anything other than the exact string 'all' means weekly.
     const period = c.req.query('period') === 'all' ? 'all' : 'weekly';
     const since = period === 'all' ? 0 : Date.now() - 7 * 24 * 3600 * 1000;
+    const game = normalizeGame(c.req.query('game'));
 
     const rows = await c.env.DB.prepare(
       `SELECT u.id, u.display_name, u.pin, u.avatar_url, u.avatar_r2_key,
               MAX(s.score) AS best, COUNT(*) AS games, MAX(s.created_at) AS last_played
        FROM game_scores s JOIN users u ON u.id = s.user_id
-       WHERE s.game = 'fog'
+       WHERE s.game = ?
          AND (s.user_id = ? OR s.user_id IN (SELECT contact_id FROM contacts WHERE owner_id = ?))
          AND s.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = ?)
          AND s.created_at >= ?
@@ -99,7 +113,7 @@ export function gamesRoutes() {
        ORDER BY best DESC, last_played ASC
        LIMIT 25`,
     )
-      .bind(me.id, me.id, me.id, since)
+      .bind(game, me.id, me.id, me.id, since)
       .all<{
         id: string;
         display_name: string;

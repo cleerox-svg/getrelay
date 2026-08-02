@@ -129,12 +129,25 @@ function getLeaderboard(cookie: string, period?: string): Promise<Response> {
 }
 
 async function insertScore(userId: string, score: number, createdAt: number): Promise<void> {
+  await insertScoreGame(userId, 'fog', score, createdAt);
+}
+
+async function insertScoreGame(
+  userId: string,
+  game: string,
+  score: number,
+  createdAt: number,
+): Promise<void> {
   await testEnv.DB.prepare(
     `INSERT INTO game_scores (id, user_id, game, score, rounds, best_streak, created_at)
-     VALUES (?, ?, 'fog', ?, 5, 2, ?)`,
+     VALUES (?, ?, ?, ?, 5, 2, ?)`,
   )
-    .bind(crypto.randomUUID(), userId, score, createdAt)
+    .bind(crypto.randomUUID(), userId, game, score, createdAt)
     .run();
+}
+
+function getLeaderboardGame(cookie: string, game: string): Promise<Response> {
+  return request(`/game/leaderboard?game=${game}`, { headers: { Cookie: cookie } });
 }
 
 beforeAll(seed);
@@ -183,6 +196,46 @@ describe('POST /game/score', () => {
     });
     expect(ok.status).toBe(200);
   });
+
+  it('records a score under the requested game and reports that game\'s best', async () => {
+    // A tune submission lands with game='tune'...
+    const res = await postScore(cookies.A, {
+      score: 500,
+      rounds: 4,
+      bestStreak: 2,
+      game: 'tune',
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, best: 500 });
+
+    const row = await testEnv.DB.prepare(
+      `SELECT score, game FROM game_scores WHERE user_id = ? AND game = 'tune'`,
+    )
+      .bind(USERS.A.id)
+      .first<{ score: number; game: string }>();
+    expect(row).toEqual({ score: 500, game: 'tune' });
+
+    // ...and its "best" is scoped to that game, ignoring a higher fog run.
+    await insertScore(USERS.A.id, 1800, Date.now());
+    const res2 = await postScore(cookies.A, {
+      score: 700,
+      rounds: 4,
+      bestStreak: 2,
+      game: 'tune',
+    });
+    expect(await res2.json()).toEqual({ ok: true, best: 700 });
+  });
+
+  it('defaults an omitted game to fog', async () => {
+    const res = await postScore(cookies.A, { score: 300, rounds: 3, bestStreak: 1 });
+    expect(res.status).toBe(200);
+    const row = await testEnv.DB.prepare(
+      `SELECT game FROM game_scores WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`,
+    )
+      .bind(USERS.A.id)
+      .first<{ game: string }>();
+    expect(row?.game).toBe('fog');
+  });
 });
 
 describe('GET /game/leaderboard', () => {
@@ -229,5 +282,26 @@ describe('GET /game/leaderboard', () => {
     const allBody = (await all.json()) as { entries: { userId: string; best: number }[] };
     expect(allBody.entries).toHaveLength(1);
     expect(allBody.entries[0]).toMatchObject({ userId: USERS.A.id, best: 700 });
+  });
+
+  it('scopes the board to the requested game — fog and tune do not cross', async () => {
+    const now = Date.now();
+    await insertScoreGame(USERS.A.id, 'fog', 800, now);
+    await insertScoreGame(USERS.A.id, 'tune', 1200, now);
+    await insertScoreGame(USERS.B.id, 'tune', 300, now);
+
+    // Default (no ?game) is fog: only the fog run shows, tune is hidden.
+    const fog = await getLeaderboard(cookies.A);
+    const fogBody = (await fog.json()) as { entries: { userId: string; best: number }[] };
+    expect(fogBody.entries).toHaveLength(1);
+    expect(fogBody.entries[0]).toMatchObject({ userId: USERS.A.id, best: 800 });
+
+    // ?game=tune surfaces the tune scores (A + contact B), not the fog one.
+    const tune = await getLeaderboardGame(cookies.A, 'tune');
+    const tuneBody = (await tune.json()) as { entries: { userId: string; best: number }[] };
+    expect(tuneBody.entries.map((e) => [e.userId, e.best])).toEqual([
+      [USERS.A.id, 1200],
+      [USERS.B.id, 300],
+    ]);
   });
 });

@@ -7,11 +7,25 @@ import { FogLeaderboard } from '../components/fog/FogLeaderboard';
 import { FreePlay } from '../components/fog/FreePlay';
 import { GuessGame } from '../components/fog/GuessGame';
 import type { GameResult } from '../components/fog/GuessGame';
+import { TuneGame } from '../components/tune/TuneGame';
+import type { TuneGameResult } from '../components/tune/TuneGame';
+import { TuneLeaderboard } from '../components/tune/TuneLeaderboard';
+import { TuneVisualizer } from '../components/tune/TuneVisualizer';
+import {
+  TUNE_SKINS,
+  getTuneSkinId,
+  resolveSkin,
+  setTuneSkinId,
+  skinVars,
+} from '../lib/tune/skins';
 import { api } from '../lib/api';
 import { availableSources } from '../lib/fog/sources';
 import type { FogCategory, SourceAvailability } from '../lib/fog/sources';
 import { getFogStats, recordFogGame } from '../lib/fog/stats';
 import { ROUNDS } from '../lib/fog/tuning';
+import { tuneAvailable } from '../lib/tune/sources';
+import { getTuneStats, recordTuneGame } from '../lib/tune/stats';
+import { ROUNDS as TUNE_ROUNDS } from '../lib/tune/tuning';
 import { useStore } from '../lib/store';
 
 // /discover is the Fog tab: a steamed-up window with a mystery image
@@ -25,35 +39,72 @@ import { useStore } from '../lib/store';
 // identical path. Back in a guess game escalates: first press pauses,
 // second press leaves the game (see the popstate effect).
 
-type Screen = 'menu' | 'guess' | 'results' | 'free';
+// 'hub' is the Games landing: a grid of game chiclets. Picking one
+// routes into that game's sub-flow (menu → guess → results), which is
+// pure component state (as before) — the tab bar's active check is an
+// exact pathname match, so game switching never touches the URL path.
+// The in-game guess/free screens DO push a same-path history marker so a
+// back gesture pauses/leaves the game exactly as it always has; hub↔menu
+// is plain state with a "‹ Games" affordance.
+type Screen = 'hub' | 'menu' | 'guess' | 'results' | 'free';
 
 type FogHistoryState = { fog?: 'guess' | 'free' } | null;
+
+// The chiclet grid, as data so adding a game is one more entry. `id`
+// drives which sub-flow renders; `icon` is a flat SVG under /public/games.
+const GAMES: { id: 'fog' | 'tune'; title: string; subtitle: string; icon: string }[] = [
+  {
+    id: 'fog',
+    title: 'Fog',
+    subtitle: 'Wipe the steamed-up window and guess what’s behind it.',
+    icon: '/games/fog.svg',
+  },
+  {
+    id: 'tune',
+    title: 'Guess the Tune',
+    subtitle: 'Hear a short clip and name the song title.',
+    icon: '/games/tune.svg',
+  },
+];
 
 const CATEGORIES: { id: FogCategory; label: string }[] = [
   { id: 'mix', label: 'Mix' },
   { id: 'logos', label: 'Team logos' },
   { id: 'pack', label: 'Objects' },
   { id: 'gifs', label: 'GIFs' },
+  { id: 'music', label: 'Album art' },
   { id: 'contacts', label: 'Contacts' },
 ];
 
 const UNAVAILABLE_REASON: Partial<Record<FogCategory, string>> = {
   logos: 'Teams unavailable',
   gifs: 'GIFs unavailable',
+  music: 'Music search unavailable',
   contacts: 'Need 4 contacts with avatars',
 };
 
 export function Fog() {
   const me = useStore((s) => s.me);
-  const [screen, setScreen] = useState<Screen>('menu');
+  // Which mini game the Games hub is showing. Only switchable from the
+  // menu; a running game freezes the choice. The Screen state machine
+  // below and the whole back-gesture/pause choreography are game-
+  // agnostic and shared between the two flows.
+  const [game, setGame] = useState<'fog' | 'tune'>('fog');
+  const [screen, setScreen] = useState<Screen>('hub');
   const [category, setCategory] = useState<FogCategory>('mix');
   const [avail, setAvail] = useState<SourceAvailability | null>(null);
+  const [tuneAvail, setTuneAvail] = useState<boolean | null>(null);
+  // Persisted Tune player skin (localStorage). Selecting one updates the
+  // live player + preview immediately.
+  const [tuneSkinId, setTuneSkinIdState] = useState<string>(() => getTuneSkinId());
   const [result, setResult] = useState<GameResult | null>(null);
+  const [tuneResult, setTuneResult] = useState<TuneGameResult | null>(null);
   const [serverBest, setServerBest] = useState<number | null>(null);
   const [lbKey, setLbKey] = useState(0);
   const [paused, setPaused] = useState(false);
   const [statsKey, setStatsKey] = useState(0);
   const submittedRef = useRef<GameResult | null>(null);
+  const submittedTuneRef = useRef<TuneGameResult | null>(null);
   // Set when a back-out abandons a running game, so the menu re-reads
   // local stats once GuessGame's unmount safety net has banked the
   // partial run (see the refresh effect below).
@@ -71,7 +122,11 @@ export function Fog() {
 
   // Local stats re-read whenever we land back on menu/results — cheap
   // localStorage read, no need for state plumbing from the recorder.
-  const stats = useMemo(() => getFogStats(), [screen, result, statsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Keyed by `game` so each flow shows its own personal best.
+  const stats = useMemo(
+    () => (game === 'tune' ? getTuneStats() : getFogStats()),
+    [game, screen, result, tuneResult, statsKey], // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
   // The one case the deps above can't see: backing out of a running
   // game renders the menu BEFORE GuessGame's unmount safety net writes
@@ -94,6 +149,23 @@ export function Fog() {
       cancelled = true;
     };
   }, []);
+
+  // Probe the music service the first time the Tune flow is shown — one
+  // search, cached in state. Fog-only users never pay for it.
+  useEffect(() => {
+    if (game !== 'tune' || tuneAvail !== null) return;
+    let cancelled = false;
+    tuneAvailable()
+      .then((a) => {
+        if (!cancelled) setTuneAvail(a);
+      })
+      .catch(() => {
+        if (!cancelled) setTuneAvail(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [game, tuneAvail]);
 
   // Back-gesture / popstate handling. This effect reacts ONLY to
   // history changes (deps = the marker), never to screen changes.
@@ -146,7 +218,7 @@ export function Fog() {
       }
     } else if (screen === 'free' && histFog !== 'free') {
       setScreen('menu');
-    } else if (histFog && (screen === 'menu' || screen === 'results')) {
+    } else if (histFog && (screen === 'hub' || screen === 'menu' || screen === 'results')) {
       nav(location.pathname, { replace: true, state: null });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -165,6 +237,7 @@ export function Fog() {
   // 0-round game never reaches this screen and must never be POSTed.
   useEffect(() => {
     if (
+      game !== 'fog' ||
       screen !== 'results' ||
       !result ||
       result.roundsPlayed < 1 ||
@@ -184,15 +257,51 @@ export function Fog() {
         setLbKey((k) => k + 1);
       })
       .catch(() => undefined);
-  }, [screen, result]);
+  }, [game, screen, result]);
+
+  // Tune twin of the submit effect above. Records to tune stats and
+  // submits with game:'tune'. Same exactly-once guard, same partial-run
+  // rules (roundsPlayed 1..7 are valid; a 0-round game never lands here).
+  useEffect(() => {
+    if (
+      game !== 'tune' ||
+      screen !== 'results' ||
+      !tuneResult ||
+      tuneResult.roundsPlayed < 1 ||
+      submittedTuneRef.current === tuneResult
+    )
+      return;
+    submittedTuneRef.current = tuneResult;
+    recordTuneGame(tuneResult.score, tuneResult.bestStreak);
+    api
+      .submitGameScore({
+        score: tuneResult.score,
+        rounds: tuneResult.roundsPlayed,
+        bestStreak: tuneResult.bestStreak,
+        game: 'tune',
+      })
+      .then((r) => {
+        setServerBest(r.best);
+        setLbKey((k) => k + 1);
+      })
+      .catch(() => undefined);
+  }, [game, screen, tuneResult]);
 
   function startGame() {
     setResult(null);
+    setTuneResult(null);
     setServerBest(null);
     setPaused(false);
     setScreen('guess');
-    // Push the back-gesture guard entry (see the popstate effect).
+    // Push the back-gesture guard entry (see the popstate effect). The
+    // marker is game-agnostic — the guess screen renders GuessGame or
+    // TuneGame from `game`, and the pause/back choreography is identical.
     nav(location.pathname, { state: { fog: 'guess' } });
+  }
+
+  function changeSkin(id: string) {
+    setTuneSkinIdState(id);
+    setTuneSkinId(id);
   }
 
   const chip = (active: boolean, disabled: boolean): React.CSSProperties => ({
@@ -218,12 +327,56 @@ export function Fog() {
         }
       />
 
-      <h1 className="text-[34px] font-bold tracking-tight px-4 pt-3 pb-1">Fog</h1>
+      <h1 className="text-[34px] font-bold tracking-tight px-4 pt-3 pb-1">Games</h1>
 
       {/* Bottom padding clears both the fixed Konsta Tabbar and the
           classic-mode .legacy-tabbar (same treatment as /sports). */}
       <div style={{ paddingBottom: 'calc(96px + env(safe-area-inset-bottom, 0px))' }}>
-        {screen === 'guess' ? (
+        {screen === 'hub' ? (
+          <div className="px-4">
+            <div className="text-sm pb-3" style={{ color: 'var(--text-dim)' }}>
+              Pick a game.
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              {GAMES.map((g) => (
+                <button
+                  key={g.id}
+                  type="button"
+                  onClick={() => {
+                    setGame(g.id);
+                    setScreen('menu');
+                  }}
+                  className="flex flex-col overflow-hidden text-left"
+                  style={{
+                    background: 'var(--card-bg)',
+                    border: '1px solid var(--separator)',
+                    borderRadius: 18,
+                    padding: 0,
+                  }}
+                >
+                  <div
+                    className="flex items-center justify-center"
+                    style={{ aspectRatio: '1 / 1', background: 'var(--bubble-them)' }}
+                  >
+                    <img
+                      src={g.icon}
+                      alt=""
+                      style={{ width: '68%', height: '68%', objectFit: 'contain' }}
+                    />
+                  </div>
+                  <div className="px-3 py-2.5">
+                    <div className="text-[15px] font-bold" style={{ color: 'var(--text)' }}>
+                      {g.title}
+                    </div>
+                    <div className="text-[12px] leading-snug pt-0.5" style={{ color: 'var(--text-dim)' }}>
+                      {g.subtitle}
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : screen === 'guess' && game === 'fog' ? (
           <GuessGame
             category={category}
             paused={paused}
@@ -238,6 +391,25 @@ export function Fog() {
               // 0 completed rounds → nothing to show or record.
               if (r.roundsPlayed > 0) {
                 setResult(r);
+                setScreen('results');
+              } else {
+                setScreen('menu');
+              }
+              consumeHistoryEntry('guess');
+            }}
+          />
+        ) : screen === 'guess' && game === 'tune' ? (
+          <TuneGame
+            paused={paused}
+            skin={resolveSkin(tuneSkinId)}
+            skins={TUNE_SKINS}
+            onSkinChange={changeSkin}
+            // Same guard-entry contract as GuessGame above.
+            onResume={() => setPaused(false)}
+            onFinish={(r) => {
+              setPaused(false);
+              if (r.roundsPlayed > 0) {
+                setTuneResult(r);
                 setScreen('results');
               } else {
                 setScreen('menu');
@@ -262,7 +434,7 @@ export function Fog() {
             </div>
             <FreePlay />
           </>
-        ) : screen === 'results' && result ? (
+        ) : screen === 'results' && game === 'fog' && result ? (
           <div className="px-4 flex flex-col gap-4">
             <div
               className="rounded-2xl p-5 text-center"
@@ -331,8 +503,170 @@ export function Fog() {
 
             <FogLeaderboard refreshKey={lbKey} />
           </div>
+        ) : screen === 'results' && game === 'tune' && tuneResult ? (
+          <div className="px-4 flex flex-col gap-4">
+            <div
+              className="rounded-2xl p-5 text-center"
+              style={{ background: 'var(--card-bg)', border: '1px solid var(--separator)' }}
+            >
+              <div className="text-xs font-bold tracking-wider" style={{ color: 'var(--text-dim)' }}>
+                FINAL SCORE
+              </div>
+              <div className="text-[40px] font-bold tabular-nums fog-pop" style={{ color: 'var(--text)' }}>
+                {tuneResult.score.toLocaleString()}
+              </div>
+              <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
+                Best streak x{tuneResult.bestStreak}
+                {serverBest != null ? (
+                  <span className="ml-2 font-semibold" style={{ color: 'var(--accent)' }}>
+                    Best: {serverBest.toLocaleString()}
+                  </span>
+                ) : null}
+              </div>
+              {tuneResult.roundsPlayed < TUNE_ROUNDS ? (
+                <div className="text-xs pt-1" style={{ color: 'var(--text-dim)' }}>
+                  Ended early — {tuneResult.roundsPlayed}/{TUNE_ROUNDS} rounds
+                </div>
+              ) : null}
+              {/* Per-round chips: seconds of the clip heard at guess time + hit/miss. */}
+              <div className="flex flex-wrap justify-center gap-1.5 pt-3">
+                {tuneResult.perRound.map((r, i) => (
+                  <span
+                    key={i}
+                    className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-bold tabular-nums"
+                    style={{
+                      background: r.correct
+                        ? 'color-mix(in srgb, var(--online) 18%, transparent)'
+                        : 'color-mix(in srgb, var(--ping) 15%, transparent)',
+                      color: r.correct ? 'var(--online)' : 'var(--ping)',
+                    }}
+                  >
+                    {r.correct ? '✓' : '✗'} {r.secondsHeard.toFixed(1)}s
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="flex-1 rounded-xl py-3 text-[15px] font-bold"
+                style={{ background: 'var(--accent)', color: '#FFFFFF', border: 0 }}
+                onClick={startGame}
+              >
+                Play again
+              </button>
+              <button
+                type="button"
+                className="flex-1 rounded-xl py-3 text-[15px] font-bold"
+                style={{
+                  background: 'var(--card-bg)',
+                  color: 'var(--text)',
+                  border: '1px solid var(--separator)',
+                }}
+                onClick={() => setScreen('menu')}
+              >
+                Menu
+              </button>
+            </div>
+
+            <TuneLeaderboard refreshKey={lbKey} />
+          </div>
         ) : (
           <div className="px-4 flex flex-col gap-4">
+            {/* Back to the chiclet grid. Pure state — hub↔menu doesn't
+                touch history; the in-game back gesture is handled by the
+                marker choreography above. */}
+            <button
+              type="button"
+              className="self-start text-sm font-semibold"
+              style={{ color: 'var(--accent)', background: 'transparent', border: 0, padding: 0 }}
+              onClick={() => setScreen('hub')}
+            >
+              ‹ Games
+            </button>
+
+            {game === 'tune' ? (
+              <>
+                <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
+                  Hear a short clip of a song and name the title — four choices,
+                  the less you listen, the more you score.
+                </div>
+
+                {/* Player skin picker + live preview. Original,
+                    retro-media-player-inspired looks (no trademarked
+                    art/branding); choice persists in localStorage. */}
+                <div>
+                  <div
+                    className="text-xs font-bold tracking-wider pb-2"
+                    style={{ color: 'var(--text-dim)' }}
+                  >
+                    PLAYER SKIN
+                  </div>
+                  <div
+                    className="tune-skin"
+                    style={{ ...skinVars(resolveSkin(tuneSkinId)), marginBottom: 10 }}
+                  >
+                    <div
+                      className="tune-chrome"
+                      style={{ padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}
+                    >
+                      <div className="tune-titlebar">
+                        <span>Relay Tunes</span>
+                        <span style={{ fontWeight: 700 }}>{resolveSkin(tuneSkinId).name}</span>
+                      </div>
+                      <div className="tune-readout" style={{ fontSize: 12 }}>
+                        ♪ Now playing — guess the title
+                      </div>
+                      <TuneVisualizer active bars={18} />
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {TUNE_SKINS.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        style={chip(tuneSkinId === s.id, false)}
+                        onClick={() => changeSkin(s.id)}
+                      >
+                        {s.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={tuneAvail === false}
+                  className="rounded-2xl py-4 text-[17px] font-bold"
+                  style={{
+                    background: 'var(--accent)',
+                    color: '#FFFFFF',
+                    border: 0,
+                    opacity: tuneAvail === false ? 0.55 : 1,
+                  }}
+                  onClick={startGame}
+                >
+                  Play
+                </button>
+
+                {tuneAvail === false ? (
+                  <div className="text-xs text-center" style={{ color: 'var(--text-dim)' }}>
+                    Music service unavailable — check your connection.
+                  </div>
+                ) : null}
+
+                {stats.gamesPlayed > 0 ? (
+                  <div className="text-xs text-center" style={{ color: 'var(--text-dim)' }}>
+                    Personal best {stats.bestScore.toLocaleString()} · streak x{stats.bestStreak} ·{' '}
+                    {stats.gamesPlayed} game{stats.gamesPlayed === 1 ? '' : 's'}
+                  </div>
+                ) : null}
+
+                <TuneLeaderboard refreshKey={lbKey} />
+              </>
+            ) : (
+            <>
             <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
               Something’s outside the steamed-up window. Wipe just enough to
               guess it — the less you wipe, the more you score.
@@ -395,6 +729,8 @@ export function Fog() {
             ) : null}
 
             <FogLeaderboard refreshKey={lbKey} />
+            </>
+            )}
           </div>
         )}
       </div>

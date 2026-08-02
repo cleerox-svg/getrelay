@@ -1,0 +1,142 @@
+/* Skin system for the "Guess the Tune" player. Every colour, bevel and
+   font is driven by --tune-* custom properties set on the .tune-skin
+   wrapper from the active skin's tokens (see lib/tune/skins.ts). These
+   are original, late-'90s-media-player-inspired recreations — no
+   trademarked skin assets or product branding. */
+
+.tune-chrome {
+  background: var(--tune-chrome-bg);
+  border: 1px solid var(--tune-chrome-border);
+  border-radius: var(--tune-radius);
+  box-shadow:
+    inset 2px 2px 0 var(--tune-bevel-light),
+    inset -2px -2px 0 var(--tune-bevel-dark);
+}
+
+.tune-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: var(--tune-titlebar-bg);
+  color: var(--tune-titlebar-text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 4px 8px;
+  border-radius: 3px;
+}
+
+.tune-skin-cycle {
+  background: transparent;
+  color: inherit;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  cursor: pointer;
+  text-transform: none;
+}
+
+.tune-readout {
+  background: var(--tune-readout-bg);
+  color: var(--tune-readout-text);
+  font-family: var(--tune-font);
+  border-radius: var(--tune-readout-radius);
+  box-shadow:
+    inset 2px 2px 0 var(--tune-bevel-dark),
+    inset -2px -2px 0 var(--tune-bevel-light);
+  padding: 8px 10px;
+}
+.tune-readout-dim {
+  color: var(--tune-readout-dim);
+}
+
+.tune-btn {
+  background: var(--tune-btn-bg);
+  color: var(--tune-btn-text);
+  border: 1px solid var(--tune-btn-border);
+  box-shadow:
+    inset 2px 2px 0 var(--tune-bevel-light),
+    inset -2px -2px 0 var(--tune-bevel-dark);
+  cursor: pointer;
+}
+.tune-btn:active:not(:disabled) {
+  box-shadow:
+    inset -2px -2px 0 var(--tune-bevel-light),
+    inset 2px 2px 0 var(--tune-bevel-dark);
+}
+.tune-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* Spectrum-analyzer strip. PURELY decorative: a CSS bar animation keyed
+   off play/pause state (the .is-active class), NOT a real FFT — the
+   design deliberately avoids the Web Audio API for CORS/mobile reasons. */
+.tune-viz {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 34px;
+  padding: 4px 6px;
+  background: var(--tune-viz-bg);
+  border-radius: var(--tune-readout-radius);
+  box-shadow:
+    inset 2px 2px 0 var(--tune-bevel-dark),
+    inset -2px -2px 0 var(--tune-bevel-light);
+  overflow: hidden;
+}
+.tune-viz-bar {
+  flex: 1 1 0;
+  min-width: 3px;
+  background: var(--tune-viz-bar);
+  transform-origin: bottom;
+  transform: scaleY(0.18);
+  border-radius: 1px;
+}
+.tune-viz.is-active .tune-viz-bar {
+  animation: tuneEq 0.6s ease-in-out infinite alternate;
+}
+
+@keyframes tuneEq {
+  0% {
+    transform: scaleY(0.15);
+  }
+  100% {
+    transform: scaleY(1);
+  }
+}
+
+.tune-choice {
+  background: var(--tune-choice-bg);
+  color: var(--tune-choice-text);
+  border: 1px solid var(--tune-choice-border);
+  border-radius: var(--tune-choice-radius);
+  font-family: var(--tune-font);
+  box-shadow:
+    inset 1px 1px 0 var(--tune-bevel-light),
+    inset -1px -1px 0 var(--tune-bevel-dark);
+  cursor: pointer;
+}
+.tune-choice:disabled {
+  cursor: default;
+}
+
+.tune-meter-track {
+  background: var(--tune-viz-bg);
+  border-radius: 4px;
+  box-shadow:
+    inset 1px 1px 0 var(--tune-bevel-dark),
+    inset -1px -1px 0 var(--tune-bevel-light);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tune-viz.is-active .tune-viz-bar {
+    animation: none;
+    transform: scaleY(0.5);
+  }
+}

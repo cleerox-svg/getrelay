@@ -9,7 +9,7 @@ import { api, ApiError } from '../api';
 import { useStore } from '../store';
 import { FOG_PACK } from './pack';
 
-export type FogCategory = 'logos' | 'pack' | 'gifs' | 'contacts' | 'mix';
+export type FogCategory = 'logos' | 'pack' | 'gifs' | 'contacts' | 'music' | 'mix';
 
 export interface FogRound {
   imageUrl: string;
@@ -221,6 +221,107 @@ const gifsSource: RoundSource = {
   },
 };
 
+// ---- music: guess the artist from an album cover ----
+
+// Genre / style seed terms. Each iTunes search returns a batch of
+// albums that share a broad genre, so one becomes the answer and its
+// batch-mates supply plausible same-genre distractors. A wide rotating
+// pool (like GIF_KEYWORDS) plus a random pick within each batch keeps
+// the same cover from recurring across games. iTunes Search has no
+// offset param, so this pool — not pagination — is what drives variety.
+const MUSIC_SEEDS: readonly string[] = [
+  'jazz', 'reggae', 'hip hop', 'classical', 'blues', 'country', 'heavy metal',
+  'soul', 'funk', 'disco', 'techno', 'house music', 'punk rock', 'grunge',
+  'indie rock', 'k-pop', 'afrobeat', 'salsa', 'bossa nova', 'flamenco',
+  'gospel', 'bluegrass', 'ska', 'ambient', 'dubstep', 'rhythm and blues',
+  'motown', 'new wave', 'synthpop', 'folk', 'opera', 'swing', 'bebop',
+  'trap music', 'lo-fi', 'celtic', 'latin jazz', 'psychedelic rock',
+  'electro swing', 'americana',
+];
+
+let musicAvailable: boolean | null = null;
+
+// The answer is the ARTIST (not the album or track): it stays constant
+// across an album's art, is far more recognizable than a title, and
+// gives a clean same-genre distractor pool. Album/track names are often
+// unguessable from cover art alone and frequently collide across
+// releases.
+const musicSource: RoundSource = {
+  id: 'music',
+  label: 'Album art',
+  available: async () => {
+    if (musicAvailable !== null) return musicAvailable;
+    try {
+      // iTunes Search needs no key, so a successful probe with enough
+      // distinct results IS the availability signal. Only the positive
+      // result is cached (musicAvailable stays null otherwise): an empty
+      // or failed probe — a momentary offline at tab open — is treated as
+      // transient and left unset so the next call re-probes. (gifsSource
+      // does the inverse: it caches the *negative* "no Giphy key" answer,
+      // because that one is deterministic for the session; here there is
+      // no such permanent-failure signal to cache.)
+      const r = await api.searchMusic('jazz');
+      if (r.items.length >= 4) {
+        musicAvailable = true;
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  },
+  next: async (used) => {
+    const fresh = MUSIC_SEEDS.filter((s) => !used.has(`music:${s}`));
+    const seed = pick(fresh);
+    if (!seed) return null;
+    used.add(`music:${seed}`);
+    const r = await api.searchMusic(seed);
+    const withArt = r.items.filter((i) => i.artworkUrl && i.artistName);
+    // The answer is the artist and the image is a specific album, so the
+    // subject is that (artist, album) pair — not the seed. Seeds overlap
+    // in genre (jazz/bebop, hip hop/trap), so without this filter the
+    // same artist or cover could recur within one game. Exclude any item
+    // whose artist or album was already the target of an earlier round.
+    const eligible = withArt.filter(
+      (i) =>
+        !used.has(`music:artist:${i.artistName.toLowerCase()}`) &&
+        !used.has(`music:album:${i.id}`),
+    );
+    const target = pick(eligible);
+    if (!target) return null;
+    const answer = target.artistName;
+    // Distractor artists, deduped case-insensitively against the answer
+    // and each other. Same-genre names are preferred so the choices
+    // aren't a giveaway; any other artist backfills if the batch is
+    // genre-thin.
+    const seen = new Set([answer.toLowerCase()]);
+    const sameGenre: string[] = [];
+    const anyGenre: string[] = [];
+    for (const i of withArt) {
+      const name = i.artistName;
+      if (seen.has(name.toLowerCase())) continue;
+      seen.add(name.toLowerCase());
+      (i.genre && i.genre === target.genre ? sameGenre : anyGenre).push(name);
+    }
+    const distractors = sample(sameGenre, 3);
+    if (distractors.length < 3) {
+      distractors.push(...sample(anyGenre, 3 - distractors.length));
+    }
+    if (distractors.length < 3) return null;
+    // Record the subject (both artist and album) only once the round is
+    // fully formed, so a null return above doesn't burn an artist that
+    // was never actually shown.
+    used.add(`music:artist:${answer.toLowerCase()}`);
+    used.add(`music:album:${target.id}`);
+    return {
+      imageUrl: target.artworkUrl,
+      answer,
+      choices: shuffle([answer, ...distractors]),
+      category: 'music',
+    };
+  },
+};
+
 // ---- contacts: guess whose avatar is behind the glass ----
 
 async function avatarContacts() {
@@ -283,6 +384,7 @@ export const ROUND_SOURCES: readonly RoundSource[] = [
   packSource,
   gifsSource,
   contactsSource,
+  musicSource,
 ];
 
 export type SourceAvailability = Record<Exclude<FogCategory, 'mix'>, boolean>;
@@ -296,6 +398,7 @@ export async function availableSources(): Promise<SourceAvailability> {
     pack: flags[1] ?? true,
     gifs: flags[2] ?? false,
     contacts: flags[3] ?? false,
+    music: flags[4] ?? false,
   };
 }
 
@@ -349,12 +452,12 @@ export async function buildRound(
   // play from the bundled pack rather than hang.
   const avail = category === 'mix'
     ? await withTimeout(availableSources(), 8000).catch(
-        (): SourceAvailability => ({ logos: false, pack: true, gifs: false, contacts: false }),
+        (): SourceAvailability => ({ logos: false, pack: true, gifs: false, contacts: false, music: false }),
       )
     : null;
   for (let attempt = 0; attempt < 3; attempt++) {
     const src = avail ? resolveSource(category, avail) : resolveSource(category, {
-      logos: true, pack: true, gifs: true, contacts: true,
+      logos: true, pack: true, gifs: true, contacts: true, music: true,
     });
     try {
       // next() can hit the network (Giphy, sports teams, contacts) —
