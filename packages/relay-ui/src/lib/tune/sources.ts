@@ -190,7 +190,7 @@ function seedsForGenre(genre: TuneGenreId): readonly string[] {
   return g && g.seeds.length ? g.seeds : ALL_SEEDS;
 }
 
-type TuneItem = {
+export type TuneItem = {
   trackId: string;
   previewUrl: string;
   title: string;
@@ -199,6 +199,69 @@ type TuneItem = {
   artworkUrl: string;
   trackViewUrl?: string;
 };
+
+// A game-scoped, accumulating pool of already-fetched tracks. The caller
+// (TuneGame) owns ONE of these per game (held in a ref that resets on the
+// per-game remount) and threads it through every buildTuneRound call so a
+// whole game shares the tracks it fetched instead of hitting Deezer once
+// per round. `servedSinceFetch` drives an artist-variety cadence: a single
+// seed's batch is mostly ONE artist, so we force a fresh seed roughly every
+// FETCH_EVERY rounds even when the pool could still yield, keeping a game
+// from becoming eight songs by the same artist.
+export interface TunePool {
+  items: TuneItem[];
+  servedSinceFetch: number;
+  // Guards against stacking background variety top-ups (see topUpPool): a
+  // round and its prefetch can both be due for variety at once.
+  topping?: boolean;
+}
+
+export function createTunePool(): TunePool {
+  return { items: [], servedSinceFetch: 0, topping: false };
+}
+
+// Append a fetched batch to the pool, skipping tracks already held (a seed
+// can be re-searched once its pool names are exhausted). Keeps the pool a
+// clean union so roundFromBatch's `used` dedup is the only gate on reuse.
+function appendToPool(pool: TunePool, items: TuneItem[]): void {
+  const have = new Set(pool.items.map((i) => i.trackId));
+  for (const it of items) {
+    if (it.trackId && !have.has(it.trackId)) {
+      have.add(it.trackId);
+      pool.items.push(it);
+    }
+  }
+}
+
+// Fire-and-forget variety top-up: fold ONE fresh seed's batch into the pool
+// for upcoming rounds WITHOUT blocking the current round on the network.
+// This is what keeps later rounds instant — they always serve from the pool,
+// so a slow fetch can never trip the loading failsafe and end the game. The
+// `topping` guard stops a round and its prefetch from stacking top-ups, and
+// the variety cadence only resets once a fetch actually lands.
+function topUpPool(pool: TunePool, used: Set<string>, seedPool: readonly string[]): void {
+  if (pool.topping) return;
+  const fresh = seedPool.filter((s) => !used.has(`tune:seed:${s}`));
+  const seed = pick(fresh.length ? fresh : seedPool);
+  if (!seed) return;
+  pool.topping = true;
+  used.add(`tune:seed:${seed}`);
+  withTimeout(api.searchTunes(seed), 8000)
+    .then((r) => {
+      appendToPool(pool, r.items);
+      pool.servedSinceFetch = 0;
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      pool.topping = false;
+    });
+}
+
+// Force a network top-up with a fresh seed after this many pool-served
+// rounds, so a title-mode game spans several artists instead of draining
+// eight rounds from one seed's (single-artist) batch. Combined with the
+// fetch round itself this caps consecutive same-seed rounds at ~3.
+const FETCH_EVERY = 2;
 
 // Case- AND accent-insensitive fold for deduping display names. iTunes
 // returns accented forms ("Beyoncé", "ROSALÍA") while the ASCII seed
@@ -307,30 +370,63 @@ export interface BuildTuneOpts {
   mode?: TuneMode;
 }
 
-// Build one playable round: pick an unused seed from the chosen genre's
-// pool, fetch its batch, turn it into a round. Retries with a different
-// seed up to a few times, bounding each network call. Returns null when
-// every attempt fails — there is no offline pack, so the caller treats
-// null as "music service unavailable".
+// Build one playable round, drawing from a game-scoped POOL of already
+// fetched tracks and only touching the network when the pool can't yield a
+// fresh valid round (or when the variety cadence forces a fresh seed). A
+// typical 8-round title game makes ~3 Deezer searches this way instead of
+// one per round; artist mode fetches more (each round needs a distinct
+// artist, and a seed's batch is mostly one). Returns null only when the
+// network is exhausted AND the pool still can't yield — there is no offline
+// pack, so the caller treats null as "music service unavailable".
 export async function buildTuneRound(
   used: Set<string>,
   opts: BuildTuneOpts = {},
+  pool: TunePool = createTunePool(),
 ): Promise<TuneRound | null> {
   const genre = opts.genre ?? 'any';
   const mode = opts.mode ?? 'title';
-  const pool = seedsForGenre(genre);
+  const seedPool = seedsForGenre(genre);
+
+  // 1) Serve straight from the current pool with NO network call whenever
+  //    possible. Rounds after the first never block on the network this way,
+  //    so a slow/throttled fetch can't trip the loading failsafe and end the
+  //    game. When the variety cadence is due, fold a fresh artist in via a
+  //    BACKGROUND top-up that THIS round never waits on.
+  const pooled = roundFromBatch(pool.items, used, mode, seedPool);
+  if (pooled) {
+    pool.servedSinceFetch += 1;
+    if (pool.servedSinceFetch >= FETCH_EVERY) topUpPool(pool, used, seedPool);
+    return pooled;
+  }
+
+  // 2) Pool can't yield (first round, or every held track already used) —
+  //    fetch fresh seeds, append each batch to the shared pool, and retry
+  //    against the enlarged pool.
   for (let attempt = 0; attempt < 4; attempt++) {
-    const fresh = pool.filter((s) => !used.has(`tune:seed:${s}`));
-    const seed = pick(fresh.length ? fresh : pool);
-    if (!seed) return null;
+    const fresh = seedPool.filter((s) => !used.has(`tune:seed:${s}`));
+    const seed = pick(fresh.length ? fresh : seedPool);
+    if (!seed) break;
     used.add(`tune:seed:${seed}`);
     try {
       const r = await withTimeout(api.searchTunes(seed), 8000);
-      const round = roundFromBatch(r.items, used, mode, pool);
-      if (round) return round;
+      appendToPool(pool, r.items);
+      const round = roundFromBatch(pool.items, used, mode, seedPool);
+      if (round) {
+        pool.servedSinceFetch = 0; // reset the cadence: we just fetched
+        return round;
+      }
     } catch {
       /* stalled or failed seed — try another */
     }
+  }
+
+  // 3) Fetches exhausted. Last resort: try the pool once more (covers the
+  //    variety-forced path where the network failed but the pool still holds
+  //    a valid round), so a transient throttle doesn't needlessly end a game.
+  const fallback = roundFromBatch(pool.items, used, mode, seedPool);
+  if (fallback) {
+    pool.servedSinceFetch += 1;
+    return fallback;
   }
   return null;
 }
