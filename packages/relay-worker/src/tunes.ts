@@ -22,6 +22,7 @@ interface TuneItem {
   artist: string; // artistName
   genre: string;
   artworkUrl: string; // 600x600 hi-res
+  trackViewUrl: string; // canonical Apple Music / iTunes Store URL
 }
 
 interface TuneSearchResult {
@@ -36,6 +37,7 @@ interface ItunesRawTrack {
   previewUrl?: string;
   artworkUrl100?: string;
   primaryGenreName?: string;
+  trackViewUrl?: string;
 }
 interface ItunesRawResponse {
   resultCount?: number;
@@ -59,6 +61,7 @@ function project(r: ItunesRawTrack): TuneItem | null {
     artist: r.artistName,
     genre: r.primaryGenreName ?? '',
     artworkUrl: r.artworkUrl100 ? hiRes(r.artworkUrl100) : '',
+    trackViewUrl: r.trackViewUrl ?? '',
   };
 }
 

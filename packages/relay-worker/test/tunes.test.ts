@@ -100,7 +100,7 @@ describe('GET /tunes/search', () => {
 
   it('projects to the minimal shape and filters preview-less/nameless rows', async () => {
     mockItunes({
-      resultCount: 4,
+      resultCount: 5,
       results: [
         {
           wrapperType: 'track',
@@ -110,6 +110,7 @@ describe('GET /tunes/search', () => {
           previewUrl: 'https://audio.example/101.m4a',
           artworkUrl100: 'https://is1.example/a/100x100bb.jpg',
           primaryGenreName: 'Rock',
+          trackViewUrl: 'https://music.apple.com/us/album/here-comes-the-sun/101',
         },
         // No previewUrl — must be skipped.
         {
@@ -119,6 +120,7 @@ describe('GET /tunes/search', () => {
           artistName: 'The Beatles',
           artworkUrl100: 'https://is1.example/b/100x100bb.jpg',
           primaryGenreName: 'Rock',
+          trackViewUrl: 'https://music.apple.com/us/album/something/102',
         },
         // Missing trackName — must be skipped.
         {
@@ -127,6 +129,16 @@ describe('GET /tunes/search', () => {
           artistName: 'The Beatles',
           previewUrl: 'https://audio.example/103.m4a',
           artworkUrl100: 'https://is1.example/c/100x100bb.jpg',
+          primaryGenreName: 'Rock',
+        },
+        // Has a preview but no trackViewUrl — kept, projected trackViewUrl is ''.
+        {
+          wrapperType: 'track',
+          trackId: 104,
+          trackName: 'Come Together',
+          artistName: 'The Beatles',
+          previewUrl: 'https://audio.example/104.m4a',
+          artworkUrl100: 'https://is1.example/d/100x100bb.jpg',
           primaryGenreName: 'Rock',
         },
         // Duplicate trackId — must be dropped.
@@ -138,6 +150,7 @@ describe('GET /tunes/search', () => {
           previewUrl: 'https://audio.example/101.m4a',
           artworkUrl100: 'https://is1.example/a/100x100bb.jpg',
           primaryGenreName: 'Rock',
+          trackViewUrl: 'https://music.apple.com/us/album/here-comes-the-sun/101',
         },
       ],
     });
@@ -154,6 +167,7 @@ describe('GET /tunes/search', () => {
         artist: string;
         genre: string;
         artworkUrl: string;
+        trackViewUrl: string;
       }[];
     };
     expect(body.items).toEqual([
@@ -164,6 +178,17 @@ describe('GET /tunes/search', () => {
         artist: 'The Beatles',
         genre: 'Rock',
         artworkUrl: 'https://is1.example/a/600x600bb.jpg',
+        trackViewUrl: 'https://music.apple.com/us/album/here-comes-the-sun/101',
+      },
+      // Kept despite lacking trackViewUrl — it still has a playable preview.
+      {
+        trackId: '104',
+        previewUrl: 'https://audio.example/104.m4a',
+        title: 'Come Together',
+        artist: 'The Beatles',
+        genre: 'Rock',
+        artworkUrl: 'https://is1.example/d/600x600bb.jpg',
+        trackViewUrl: '',
       },
     ]);
   });

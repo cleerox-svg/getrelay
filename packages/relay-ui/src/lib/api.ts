@@ -254,6 +254,10 @@ export const api = {
         artist: string;
         genre: string;
         artworkUrl: string;
+        // Apple Music / iTunes track page URL for the reveal-screen
+        // "listen to the full song" deep-link. Optional/possibly '' —
+        // older workers omit it, so consumers must tolerate its absence.
+        trackViewUrl?: string;
       }[];
     }>(`/tunes/search?${usp.toString()}`);
   },

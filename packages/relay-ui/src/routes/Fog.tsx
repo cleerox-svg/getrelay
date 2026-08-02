@@ -23,7 +23,8 @@ import { availableSources } from '../lib/fog/sources';
 import type { FogCategory, SourceAvailability } from '../lib/fog/sources';
 import { getFogStats, recordFogGame } from '../lib/fog/stats';
 import { ROUNDS } from '../lib/fog/tuning';
-import { tuneAvailable } from '../lib/tune/sources';
+import { TUNE_GENRES, tuneAvailable } from '../lib/tune/sources';
+import type { TuneGenreId, TuneMode } from '../lib/tune/sources';
 import { getTuneStats, recordTuneGame } from '../lib/tune/stats';
 import { ROUNDS as TUNE_ROUNDS } from '../lib/tune/tuning';
 import { useStore } from '../lib/store';
@@ -97,6 +98,10 @@ export function Fog() {
   // Persisted Tune player skin (localStorage). Selecting one updates the
   // live player + preview immediately.
   const [tuneSkinId, setTuneSkinIdState] = useState<string>(() => getTuneSkinId());
+  // Tune round options, chosen on the menu and passed into TuneGame. Both
+  // default to the shipped behavior (all genres pooled, guess the title).
+  const [tuneGenre, setTuneGenre] = useState<TuneGenreId>('any');
+  const [tuneMode, setTuneMode] = useState<TuneMode>('title');
   const [result, setResult] = useState<GameResult | null>(null);
   const [tuneResult, setTuneResult] = useState<TuneGameResult | null>(null);
   const [serverBest, setServerBest] = useState<number | null>(null);
@@ -400,6 +405,8 @@ export function Fog() {
           />
         ) : screen === 'guess' && game === 'tune' ? (
           <TuneGame
+            genre={tuneGenre}
+            mode={tuneMode}
             paused={paused}
             skin={resolveSkin(tuneSkinId)}
             skins={TUNE_SKINS}
@@ -630,6 +637,57 @@ export function Fog() {
                         onClick={() => changeSkin(s.id)}
                       >
                         {s.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Guess-what toggle: title or artist. Two-chip
+                    segmented control, same chip styling as the genres. */}
+                <div>
+                  <div
+                    className="text-xs font-bold tracking-wider pb-2"
+                    style={{ color: 'var(--text-dim)' }}
+                  >
+                    GUESS THE
+                  </div>
+                  <div className="flex gap-2">
+                    {(
+                      [
+                        { id: 'title', label: 'Title' },
+                        { id: 'artist', label: 'Artist' },
+                      ] as { id: TuneMode; label: string }[]
+                    ).map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        style={chip(tuneMode === m.id, false)}
+                        onClick={() => setTuneMode(m.id)}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Genre picker — mirrors Fog's category chips. "Any"
+                    pools every genre's seeds. */}
+                <div>
+                  <div
+                    className="text-xs font-bold tracking-wider pb-2"
+                    style={{ color: 'var(--text-dim)' }}
+                  >
+                    GENRE
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {TUNE_GENRES.map((g) => (
+                      <button
+                        key={g.id}
+                        type="button"
+                        style={chip(tuneGenre === g.id, false)}
+                        onClick={() => setTuneGenre(g.id)}
+                      >
+                        {g.label}
                       </button>
                     ))}
                   </div>
