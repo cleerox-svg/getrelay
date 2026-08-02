@@ -290,3 +290,9 @@ jobs:
           # `wrangler secret put GIPHY_API_KEY --env production` from a
           # machine with wrangler logged in. The /gifs endpoint returns
           # 404 ("gifs_not_configured") until it's set.
+          # Exact Spotify track links (Guess the Tune reveal): set
+          # SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET via
+          # `wrangler secret put SPOTIFY_CLIENT_ID --env production` and
+          # `wrangler secret put SPOTIFY_CLIENT_SECRET --env production`.
+          # Until both are set, /tunes/spotify returns { url: null } and the
+          # client falls back to a Spotify search link.

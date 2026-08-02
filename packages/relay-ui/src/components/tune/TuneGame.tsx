@@ -94,6 +94,15 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
   const [lastPoints, setLastPoints] = useState<number | null>(null);
   // Frozen at guess time so the reveal meter doesn't keep decaying.
   const [heardAtGuess, setHeardAtGuess] = useState<number | null>(null);
+  // Best-effort EXACT Spotify track link, resolved by the worker during
+  // the reveal. Keyed to the round it belongs to so a late resolution can
+  // never upgrade a LATER round's link (see the resolve effect below). Null
+  // until/unless it resolves — the anchor always falls back to the
+  // client-built search URL, so the link is live the instant reveal renders.
+  const [spotifyExact, setSpotifyExact] = useState<{ idx: number; url: string } | null>(null);
+  // Which round index already kicked off a Spotify resolve — fire at most
+  // once per reveal.
+  const spotifyFetchedRef = useRef(-1);
 
   const roundNo = roundIdx + 1;
   scoreRef.current = score;
@@ -168,6 +177,29 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
       revealLeftRef.current = Math.max(0, ms - (Date.now() - armedAt));
     };
   }, [phase, roundIdx, paused]);
+
+  // Best-effort href upgrade: when a round enters the reveal, ask the
+  // worker for the EXACT Spotify track link. Fires at most once per reveal
+  // (guarded by spotifyFetchedRef). resolveSpotify never rejects, so this
+  // is pure enhancement — the anchor renders the search URL immediately and
+  // only swaps to the exact link if one comes back for THIS round. The
+  // resolution is stamped with `idx`, so a slow reply that lands after we've
+  // advanced is ignored by the render (idx !== roundIdx), and the cleanup
+  // flag drops it on unmount. It never blocks the reveal→next-round timer.
+  useEffect(() => {
+    if (phase !== 'reveal' || !round) return;
+    if (spotifyFetchedRef.current === roundIdx) return;
+    spotifyFetchedRef.current = roundIdx;
+    const idx = roundIdx;
+    let cancelled = false;
+    api.resolveSpotify(round.title, round.artist).then((res) => {
+      if (cancelled || res.url == null) return;
+      setSpotifyExact({ idx, url: res.url });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [phase, roundIdx, round]);
 
   // Freeze the clip whenever we leave the play phase or the game is
   // paused. secondsHeard is preserved so the meter and scoring hold.
@@ -299,6 +331,9 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
 
   const potentialPts = roundPoints(unheardFrac, streak);
   const wrongReveal = phase === 'reveal' && picked !== null && picked !== round?.answer;
+  // The exact Spotify link only counts for the round it was resolved for —
+  // a stale resolution stamped with a different index is ignored here.
+  const spotifyExactUrl = spotifyExact && spotifyExact.idx === roundIdx ? spotifyExact.url : null;
 
   // In-player skin switcher — cycles to the next registered skin. Only
   // wired when the parent passes the list + handler.
@@ -456,9 +491,12 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
                   </a>
                 ) : null}
                 <a
-                  href={`https://open.spotify.com/search/${encodeURIComponent(
-                    `${round.title} ${round.artist}`,
-                  )}`}
+                  href={
+                    spotifyExactUrl ??
+                    `https://open.spotify.com/search/${encodeURIComponent(
+                      `${round.title} ${round.artist}`,
+                    )}`
+                  }
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-xs font-bold"

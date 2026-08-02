@@ -24,6 +24,14 @@ export interface Env {
   // /gifs returns 404 ("gifs_not_configured") when this isn't set.
   GIPHY_API_KEY?: string;
 
+  // Spotify Web API client-credentials app (id + secret), registered at
+  // developer.spotify.com. Used only to resolve an exact
+  // open.spotify.com/track/... URL for the "Guess the Tune" reveal screen.
+  // Both are OPTIONAL: when EITHER is unset, /tunes/spotify returns
+  // { url: null } and the client falls back to a Spotify search link.
+  SPOTIFY_CLIENT_ID?: string;
+  SPOTIFY_CLIENT_SECRET?: string;
+
   // Firebase Cloud Messaging (native Android/iOS push). PROJECT_ID is the
   // Firebase project id (a plain var); SERVICE_ACCOUNT_JSON is the full
   // service-account JSON (client_email + private_key with the Firebase

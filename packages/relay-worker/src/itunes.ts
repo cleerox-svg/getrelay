@@ -58,6 +58,13 @@ function project(r: ItunesRawResult): ItunesItem | null {
   };
 }
 
+// Apple's Search API 403s requests from Cloudflare Workers unless they
+// carry a browser-like User-Agent (the default Workers UA reads as a bot),
+// so send one on every iTunes call. Without it the whole proxy returns 502
+// and iTunes-backed features go "unavailable".
+const ITUNES_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+
 async function callItunes(term: string, limit: number): Promise<ItunesSearchResult | null> {
   // entity=album gives one artwork per record with artistName +
   // primaryGenreName and no per-track duplication.
@@ -70,7 +77,10 @@ async function callItunes(term: string, limit: number): Promise<ItunesSearchResu
   const url = `https://itunes.apple.com/search?${params.toString()}`;
   // iTunes has no offset param, so variety comes from a wide seed pool
   // plus a random pick within each batch on the client.
-  const r = await fetch(url, { cf: { cacheTtl: 3600 } } as RequestInit);
+  const r = await fetch(url, {
+    headers: { 'user-agent': ITUNES_UA, accept: 'application/json' },
+    cf: { cacheTtl: 3600 },
+  } as RequestInit);
   if (!r.ok) return null;
   // iTunes answers with text/javascript; .json() parses the body fine.
   const data = (await r.json()) as ItunesRawResponse;

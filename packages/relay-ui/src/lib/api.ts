@@ -261,6 +261,20 @@ export const api = {
       }[];
     }>(`/tunes/search?${usp.toString()}`);
   },
+  // Resolve the EXACT Spotify track link for the "Guess the Tune" reveal
+  // screen. The worker looks the track up on Spotify and returns its
+  // canonical `open.spotify.com/track/...` URL, or `{ url: null }` when
+  // Spotify isn't configured, nothing matched, or the upstream errored.
+  // Best-effort only: any thrown error resolves to `{ url: null }` so the
+  // reveal always keeps its search-URL fallback — this never rejects.
+  resolveSpotify: (title: string, artist: string): Promise<{ url: string | null }> => {
+    const usp = new URLSearchParams();
+    usp.set('title', title);
+    usp.set('artist', artist);
+    return request<{ url: string | null }>(`/tunes/spotify?${usp.toString()}`).catch(() => ({
+      url: null,
+    }));
+  },
   // Shared score submit for the mini games. Server clamps rounds to
   // 1..8 and score to rounds*2000 — the client-side tuning
   // (lib/fog/tuning.ts, lib/tune/tuning.ts) must stay within those
