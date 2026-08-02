@@ -487,7 +487,7 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
                       textDecoration: 'none',
                     }}
                   >
-                    ▶ Apple Music
+                    ▶ Listen
                   </a>
                 ) : null}
                 <a

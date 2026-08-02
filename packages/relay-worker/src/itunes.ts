@@ -96,6 +96,78 @@ async function callItunes(term: string, limit: number): Promise<ItunesSearchResu
   return { items };
 }
 
+// --- Deezer (primary source) ---
+//
+// Apple's iTunes Search API 403s Cloudflare Workers' datacenter egress IPs
+// (a browser User-Agent did not fix it), so Deezer is the primary album-art
+// source: free, keyless, JSON, and reliably reachable from Workers. iTunes
+// stays as a fallback below. Deezer's album rows carry cover art + artist,
+// so we project them into the exact ItunesItem shape the Fog game reads.
+
+interface DeezerRawAlbum {
+  id?: number;
+  title?: string;
+  link?: string;
+  cover_big?: string;
+  cover_xl?: string;
+  artist?: { name?: string };
+}
+interface DeezerAlbumResponse {
+  data?: DeezerRawAlbum[];
+  error?: unknown;
+}
+
+function projectDeezer(r: DeezerRawAlbum): ItunesItem | null {
+  const artworkUrl = r.cover_xl || r.cover_big || '';
+  const artistName = r.artist?.name ?? '';
+  // Same usability filter as the iTunes projection: art + artist required.
+  if (!artworkUrl || !artistName) return null;
+  return {
+    id: String(r.id ?? ''),
+    artistName,
+    collectionName: r.title ?? '',
+    artworkUrl,
+    // Deezer album rows expose no genre name here; empty is fine.
+    genre: '',
+  };
+}
+
+async function callDeezer(term: string, limit: number): Promise<ItunesSearchResult | null> {
+  const params = new URLSearchParams({ q: term, limit: String(limit) });
+  const url = `https://api.deezer.com/search/album?${params.toString()}`;
+  let data: DeezerAlbumResponse;
+  try {
+    // No cf.cacheTtl here: Deezer answers rate-limit/quota with HTTP 200 +
+    // { error }, and edge-caching that for an hour would extend an outage
+    // (every term would fall through to the 403ing iTunes fallback → 502).
+    // Successful { items } results are still cached hard at the route level.
+    const r = await fetch(url, { headers: { accept: 'application/json' } });
+    if (!r.ok) return null;
+    data = (await r.json()) as DeezerAlbumResponse;
+  } catch {
+    return null;
+  }
+  // Deezer signals failure with { error: {...} } instead of a data array.
+  if (!data || data.error || !Array.isArray(data.data)) return null;
+  const seen = new Set<string>();
+  const items: ItunesItem[] = [];
+  for (const row of data.data) {
+    const p = projectDeezer(row);
+    if (!p) continue;
+    if (p.id && seen.has(p.id)) continue;
+    if (p.id) seen.add(p.id);
+    items.push(p);
+  }
+  // Zero usable rows counts as a Deezer miss so we fall back to iTunes.
+  return items.length ? { items } : null;
+}
+
+// Deezer first, iTunes as fallback. Returns null only when BOTH sources
+// yield nothing usable, which the route surfaces as 502.
+async function searchAlbums(term: string, limit: number): Promise<ItunesSearchResult | null> {
+  return (await callDeezer(term, limit)) ?? (await callItunes(term, limit));
+}
+
 export function itunesRoutes() {
   const app = new Hono<{ Bindings: Env }>();
 
@@ -116,7 +188,7 @@ export function itunesRoutes() {
     const cached = await cache.match(cacheKey);
     if (cached) return cached;
 
-    const result = await callItunes(term, limit);
+    const result = await searchAlbums(term, limit);
     if (!result) return c.json({ error: 'upstream_failed' }, 502);
 
     const resp = new Response(JSON.stringify(result), {

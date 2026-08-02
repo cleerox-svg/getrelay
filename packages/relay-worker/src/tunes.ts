@@ -102,6 +102,83 @@ async function callItunes(term: string): Promise<TuneSearchResult | null> {
   return { items };
 }
 
+// --- Deezer (primary source) ---
+//
+// Apple's iTunes Search API 403s Cloudflare Workers' datacenter egress IPs
+// (a browser User-Agent did not fix it), so Deezer is the primary music
+// source: free, keyless, JSON, and reliably reachable from Workers. iTunes
+// stays as a fallback below. Deezer's track rows carry the same facts the
+// Tune game needs — a preview clip, title/artist, album art, and a link —
+// so we project them into the exact TuneItem shape the client already reads.
+
+interface DeezerRawTrack {
+  id?: number;
+  title?: string;
+  preview?: string;
+  link?: string;
+  artist?: { name?: string };
+  album?: { title?: string; cover_big?: string; cover_xl?: string };
+}
+interface DeezerTrackResponse {
+  data?: DeezerRawTrack[];
+  error?: unknown;
+}
+
+function projectDeezer(r: DeezerRawTrack): TuneItem | null {
+  // Same usability filter as the iTunes projection: playable + named.
+  const previewUrl = r.preview ?? '';
+  const title = r.title ?? '';
+  const artist = r.artist?.name ?? '';
+  if (!previewUrl || !title || !artist) return null;
+  return {
+    trackId: String(r.id ?? ''),
+    previewUrl,
+    title,
+    artist,
+    // Deezer track rows expose no genre name; the client backfills
+    // distractors, so an empty genre is fine.
+    genre: '',
+    artworkUrl: r.album?.cover_xl || r.album?.cover_big || '',
+    trackViewUrl: r.link ?? '',
+  };
+}
+
+async function callDeezer(term: string): Promise<TuneSearchResult | null> {
+  const params = new URLSearchParams({ q: term, limit: '25' });
+  const url = `https://api.deezer.com/search?${params.toString()}`;
+  let data: DeezerTrackResponse;
+  try {
+    // No cf.cacheTtl here: Deezer answers rate-limit/quota with HTTP 200 +
+    // { error }, and edge-caching that for an hour would extend an outage
+    // (every term would fall through to the 403ing iTunes fallback → 502).
+    // Successful { items } results are still cached hard at the route level.
+    const r = await fetch(url, { headers: { accept: 'application/json' } });
+    if (!r.ok) return null;
+    data = (await r.json()) as DeezerTrackResponse;
+  } catch {
+    return null;
+  }
+  // Deezer signals failure with { error: {...} } instead of a data array.
+  if (!data || data.error || !Array.isArray(data.data)) return null;
+  const seen = new Set<string>();
+  const items: TuneItem[] = [];
+  for (const row of data.data) {
+    const p = projectDeezer(row);
+    if (!p) continue;
+    if (p.trackId && seen.has(p.trackId)) continue;
+    if (p.trackId) seen.add(p.trackId);
+    items.push(p);
+  }
+  // Zero usable rows counts as a Deezer miss so we fall back to iTunes.
+  return items.length ? { items } : null;
+}
+
+// Deezer first, iTunes as fallback. Returns null only when BOTH sources
+// yield nothing usable, which the route surfaces as 502.
+async function searchTunes(term: string): Promise<TuneSearchResult | null> {
+  return (await callDeezer(term)) ?? (await callItunes(term));
+}
+
 // --- Exact Spotify track-link resolution (Guess the Tune reveal screen) ---
 //
 // The reveal screen wants a canonical open.spotify.com/track/... link. We
@@ -271,7 +348,7 @@ export function tunesRoutes() {
     const cached = await cache.match(cacheKey);
     if (cached) return cached;
 
-    const result = await callItunes(term);
+    const result = await searchTunes(term);
     if (!result) return c.json({ error: 'upstream_failed' }, 502);
 
     const resp = new Response(JSON.stringify(result), {

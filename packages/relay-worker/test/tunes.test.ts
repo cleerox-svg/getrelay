@@ -72,6 +72,13 @@ function mockItunes(body: object) {
     .reply(200, body, { headers: { 'content-type': 'application/json' } });
 }
 
+function mockDeezer(body: object, status = 200) {
+  fetchMock
+    .get('https://api.deezer.com')
+    .intercept({ path: (p) => p.startsWith('/search') })
+    .reply(status, body, { headers: { 'content-type': 'application/json' } });
+}
+
 async function request(path: string, init?: RequestInit): Promise<Response> {
   const ctx = createExecutionContext();
   const res = await worker.fetch(new Request(`https://example.com${path}`, init), testEnv, ctx);
@@ -98,59 +105,67 @@ describe('GET /tunes/search', () => {
     expect(await res.json()).toEqual({ error: 'bad_request' });
   });
 
-  it('projects to the minimal shape and filters preview-less/nameless rows', async () => {
-    mockItunes({
-      resultCount: 5,
-      results: [
+  type TuneBody = {
+    items: {
+      trackId: string;
+      previewUrl: string;
+      title: string;
+      artist: string;
+      genre: string;
+      artworkUrl: string;
+      trackViewUrl: string;
+    }[];
+  };
+
+  it('sources from Deezer, projecting to the minimal shape and filtering unusable rows', async () => {
+    mockDeezer({
+      data: [
         {
-          wrapperType: 'track',
-          trackId: 101,
-          trackName: 'Here Comes the Sun',
-          artistName: 'The Beatles',
-          previewUrl: 'https://audio.example/101.m4a',
-          artworkUrl100: 'https://is1.example/a/100x100bb.jpg',
-          primaryGenreName: 'Rock',
-          trackViewUrl: 'https://music.apple.com/us/album/here-comes-the-sun/101',
+          id: 101,
+          title: 'Here Comes the Sun',
+          preview: 'https://audio.deezer/101.mp3',
+          artist: { name: 'The Beatles' },
+          album: {
+            title: 'Abbey Road',
+            cover_big: 'https://cdn.deezer/101-big.jpg',
+            cover_xl: 'https://cdn.deezer/101-xl.jpg',
+          },
+          link: 'https://www.deezer.com/track/101',
         },
-        // No previewUrl — must be skipped.
+        // No preview — must be skipped.
         {
-          wrapperType: 'track',
-          trackId: 102,
-          trackName: 'Something',
-          artistName: 'The Beatles',
-          artworkUrl100: 'https://is1.example/b/100x100bb.jpg',
-          primaryGenreName: 'Rock',
-          trackViewUrl: 'https://music.apple.com/us/album/something/102',
+          id: 102,
+          title: 'Something',
+          preview: '',
+          artist: { name: 'The Beatles' },
+          album: { cover_xl: 'https://cdn.deezer/102-xl.jpg' },
+          link: 'https://www.deezer.com/track/102',
         },
-        // Missing trackName — must be skipped.
+        // Missing title — must be skipped.
         {
-          wrapperType: 'track',
-          trackId: 103,
-          artistName: 'The Beatles',
-          previewUrl: 'https://audio.example/103.m4a',
-          artworkUrl100: 'https://is1.example/c/100x100bb.jpg',
-          primaryGenreName: 'Rock',
+          id: 103,
+          preview: 'https://audio.deezer/103.mp3',
+          artist: { name: 'The Beatles' },
+          album: { cover_xl: 'https://cdn.deezer/103-xl.jpg' },
+          link: 'https://www.deezer.com/track/103',
         },
-        // Has a preview but no trackViewUrl — kept, projected trackViewUrl is ''.
+        // No cover_xl — falls back to cover_big.
         {
-          wrapperType: 'track',
-          trackId: 104,
-          trackName: 'Come Together',
-          artistName: 'The Beatles',
-          previewUrl: 'https://audio.example/104.m4a',
-          artworkUrl100: 'https://is1.example/d/100x100bb.jpg',
-          primaryGenreName: 'Rock',
+          id: 104,
+          title: 'Come Together',
+          preview: 'https://audio.deezer/104.mp3',
+          artist: { name: 'The Beatles' },
+          album: { cover_big: 'https://cdn.deezer/104-big.jpg' },
+          link: 'https://www.deezer.com/track/104',
         },
-        // Duplicate trackId — must be dropped.
+        // Duplicate id — must be dropped.
         {
-          wrapperType: 'track',
-          trackId: 101,
-          trackName: 'Here Comes the Sun',
-          artistName: 'The Beatles',
-          previewUrl: 'https://audio.example/101.m4a',
-          artworkUrl100: 'https://is1.example/a/100x100bb.jpg',
-          primaryGenreName: 'Rock',
-          trackViewUrl: 'https://music.apple.com/us/album/here-comes-the-sun/101',
+          id: 101,
+          title: 'Here Comes the Sun',
+          preview: 'https://audio.deezer/101.mp3',
+          artist: { name: 'The Beatles' },
+          album: { cover_xl: 'https://cdn.deezer/101-xl.jpg' },
+          link: 'https://www.deezer.com/track/101',
         },
       ],
     });
@@ -159,41 +174,103 @@ describe('GET /tunes/search', () => {
       headers: { Cookie: cookie },
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as {
-      items: {
-        trackId: string;
-        previewUrl: string;
-        title: string;
-        artist: string;
-        genre: string;
-        artworkUrl: string;
-        trackViewUrl: string;
-      }[];
-    };
+    const body = (await res.json()) as TuneBody;
     expect(body.items).toEqual([
       {
         trackId: '101',
-        previewUrl: 'https://audio.example/101.m4a',
+        previewUrl: 'https://audio.deezer/101.mp3',
         title: 'Here Comes the Sun',
         artist: 'The Beatles',
-        genre: 'Rock',
-        artworkUrl: 'https://is1.example/a/600x600bb.jpg',
-        trackViewUrl: 'https://music.apple.com/us/album/here-comes-the-sun/101',
+        genre: '',
+        artworkUrl: 'https://cdn.deezer/101-xl.jpg',
+        trackViewUrl: 'https://www.deezer.com/track/101',
       },
-      // Kept despite lacking trackViewUrl — it still has a playable preview.
       {
         trackId: '104',
-        previewUrl: 'https://audio.example/104.m4a',
+        previewUrl: 'https://audio.deezer/104.mp3',
         title: 'Come Together',
         artist: 'The Beatles',
-        genre: 'Rock',
-        artworkUrl: 'https://is1.example/d/600x600bb.jpg',
-        trackViewUrl: '',
+        genre: '',
+        artworkUrl: 'https://cdn.deezer/104-big.jpg',
+        trackViewUrl: 'https://www.deezer.com/track/104',
       },
     ]);
   });
 
-  it('returns 502 when the upstream fails', async () => {
+  it('falls back to iTunes when Deezer returns an error payload', async () => {
+    mockDeezer({ error: { type: 'Exception', message: 'nope', code: 500 } });
+    mockItunes({
+      resultCount: 1,
+      results: [
+        {
+          wrapperType: 'track',
+          trackId: 201,
+          trackName: 'Blackbird',
+          artistName: 'The Beatles',
+          previewUrl: 'https://audio.example/201.m4a',
+          artworkUrl100: 'https://is1.example/e/100x100bb.jpg',
+          primaryGenreName: 'Rock',
+          trackViewUrl: 'https://music.apple.com/us/album/blackbird/201',
+        },
+      ],
+    });
+
+    const res = await request('/tunes/search?term=beatles-unique-err', {
+      headers: { Cookie: cookie },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as TuneBody;
+    expect(body.items).toEqual([
+      {
+        trackId: '201',
+        previewUrl: 'https://audio.example/201.m4a',
+        title: 'Blackbird',
+        artist: 'The Beatles',
+        genre: 'Rock',
+        artworkUrl: 'https://is1.example/e/600x600bb.jpg',
+        trackViewUrl: 'https://music.apple.com/us/album/blackbird/201',
+      },
+    ]);
+  });
+
+  it('falls back to iTunes when Deezer yields zero usable rows', async () => {
+    mockDeezer({ data: [] });
+    mockItunes({
+      resultCount: 1,
+      results: [
+        {
+          wrapperType: 'track',
+          trackId: 202,
+          trackName: 'Let It Be',
+          artistName: 'The Beatles',
+          previewUrl: 'https://audio.example/202.m4a',
+          artworkUrl100: 'https://is1.example/f/100x100bb.jpg',
+          primaryGenreName: 'Rock',
+          trackViewUrl: 'https://music.apple.com/us/album/let-it-be/202',
+        },
+      ],
+    });
+
+    const res = await request('/tunes/search?term=beatles-unique-empty', {
+      headers: { Cookie: cookie },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as TuneBody;
+    expect(body.items).toEqual([
+      {
+        trackId: '202',
+        previewUrl: 'https://audio.example/202.m4a',
+        title: 'Let It Be',
+        artist: 'The Beatles',
+        genre: 'Rock',
+        artworkUrl: 'https://is1.example/f/600x600bb.jpg',
+        trackViewUrl: 'https://music.apple.com/us/album/let-it-be/202',
+      },
+    ]);
+  });
+
+  it('returns 502 when both Deezer and iTunes fail', async () => {
+    mockDeezer({ error: { message: 'down' } });
     fetchMock
       .get('https://itunes.apple.com')
       .intercept({ path: (p) => p.startsWith('/search') })
