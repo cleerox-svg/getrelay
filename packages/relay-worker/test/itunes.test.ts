@@ -72,6 +72,13 @@ function mockItunes(body: object) {
     .reply(200, body, { headers: { 'content-type': 'application/json' } });
 }
 
+function mockDeezer(body: object, status = 200) {
+  fetchMock
+    .get('https://api.deezer.com')
+    .intercept({ path: (p) => p.startsWith('/search') })
+    .reply(status, body, { headers: { 'content-type': 'application/json' } });
+}
+
 async function request(path: string, init?: RequestInit): Promise<Response> {
   const ctx = createExecutionContext();
   const res = await worker.fetch(new Request(`https://example.com${path}`, init), testEnv, ctx);
@@ -98,34 +105,40 @@ describe('GET /itunes/search', () => {
     expect(await res.json()).toEqual({ error: 'bad_request' });
   });
 
-  it('projects to the minimal shape: hi-res artwork, artist, genre, deduped', async () => {
-    mockItunes({
-      resultCount: 3,
-      results: [
+  type ItunesBody = {
+    items: { id: string; artistName: string; collectionName: string; artworkUrl: string; genre: string }[];
+  };
+
+  it('sources album art from Deezer, projecting to the minimal shape and deduping', async () => {
+    mockDeezer({
+      data: [
         {
-          wrapperType: 'collection',
-          collectionId: 1,
-          artistName: 'Miles Davis',
-          collectionName: 'Kind of Blue',
-          artworkUrl100: 'https://is1.example/a/100x100bb.jpg',
-          primaryGenreName: 'Jazz',
+          id: 1,
+          title: 'Kind of Blue',
+          artist: { name: 'Miles Davis' },
+          cover_big: 'https://cdn.deezer/1-big.jpg',
+          cover_xl: 'https://cdn.deezer/1-xl.jpg',
+          link: 'https://www.deezer.com/album/1',
         },
-        // Duplicate collectionId — must be dropped.
+        // Duplicate id — must be dropped.
         {
-          wrapperType: 'collection',
-          collectionId: 1,
-          artistName: 'Miles Davis',
-          collectionName: 'Kind of Blue',
-          artworkUrl100: 'https://is1.example/a/100x100bb.jpg',
-          primaryGenreName: 'Jazz',
+          id: 1,
+          title: 'Kind of Blue',
+          artist: { name: 'Miles Davis' },
+          cover_xl: 'https://cdn.deezer/1-xl.jpg',
         },
         // No artwork — must be skipped.
         {
-          wrapperType: 'collection',
-          collectionId: 2,
-          artistName: 'John Coltrane',
-          collectionName: 'Blue Train',
-          primaryGenreName: 'Jazz',
+          id: 2,
+          title: 'Blue Train',
+          artist: { name: 'John Coltrane' },
+        },
+        // No cover_xl — falls back to cover_big.
+        {
+          id: 3,
+          title: 'A Love Supreme',
+          artist: { name: 'John Coltrane' },
+          cover_big: 'https://cdn.deezer/3-big.jpg',
         },
       ],
     });
@@ -134,21 +147,91 @@ describe('GET /itunes/search', () => {
       headers: { Cookie: cookie },
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as {
-      items: { id: string; artistName: string; artworkUrl: string; genre: string }[];
-    };
+    const body = (await res.json()) as ItunesBody;
     expect(body.items).toEqual([
       {
         id: '1',
         artistName: 'Miles Davis',
         collectionName: 'Kind of Blue',
-        artworkUrl: 'https://is1.example/a/600x600bb.jpg',
+        artworkUrl: 'https://cdn.deezer/1-xl.jpg',
+        genre: '',
+      },
+      {
+        id: '3',
+        artistName: 'John Coltrane',
+        collectionName: 'A Love Supreme',
+        artworkUrl: 'https://cdn.deezer/3-big.jpg',
+        genre: '',
+      },
+    ]);
+  });
+
+  it('falls back to iTunes when Deezer returns an error payload', async () => {
+    mockDeezer({ error: { type: 'Exception', message: 'nope', code: 500 } });
+    mockItunes({
+      resultCount: 1,
+      results: [
+        {
+          wrapperType: 'collection',
+          collectionId: 10,
+          artistName: 'Bill Evans',
+          collectionName: 'Sunday at the Village Vanguard',
+          artworkUrl100: 'https://is1.example/g/100x100bb.jpg',
+          primaryGenreName: 'Jazz',
+        },
+      ],
+    });
+
+    const res = await request('/itunes/search?term=jazz-unique-err', {
+      headers: { Cookie: cookie },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as ItunesBody;
+    expect(body.items).toEqual([
+      {
+        id: '10',
+        artistName: 'Bill Evans',
+        collectionName: 'Sunday at the Village Vanguard',
+        artworkUrl: 'https://is1.example/g/600x600bb.jpg',
         genre: 'Jazz',
       },
     ]);
   });
 
-  it('returns 502 when the upstream fails', async () => {
+  it('falls back to iTunes when Deezer yields zero usable rows', async () => {
+    mockDeezer({ data: [] });
+    mockItunes({
+      resultCount: 1,
+      results: [
+        {
+          wrapperType: 'collection',
+          collectionId: 11,
+          artistName: 'Thelonious Monk',
+          collectionName: 'Monk’s Dream',
+          artworkUrl100: 'https://is1.example/h/100x100bb.jpg',
+          primaryGenreName: 'Jazz',
+        },
+      ],
+    });
+
+    const res = await request('/itunes/search?term=jazz-unique-empty', {
+      headers: { Cookie: cookie },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as ItunesBody;
+    expect(body.items).toEqual([
+      {
+        id: '11',
+        artistName: 'Thelonious Monk',
+        collectionName: 'Monk’s Dream',
+        artworkUrl: 'https://is1.example/h/600x600bb.jpg',
+        genre: 'Jazz',
+      },
+    ]);
+  });
+
+  it('returns 502 when both Deezer and iTunes fail', async () => {
+    mockDeezer({ error: { message: 'down' } });
     fetchMock
       .get('https://itunes.apple.com')
       .intercept({ path: (p) => p.startsWith('/search') })
