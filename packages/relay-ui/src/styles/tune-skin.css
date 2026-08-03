@@ -18,8 +18,15 @@
 }
 /* Push the control cluster to the bottom of the column. */
 .tune-game-controls {
-  margin-top: auto;
   padding-top: 12px;
+}
+/* Media-player layout: the player CARD grows to fill the space between the
+   header and the bottom controls, so a tall phone shows a tall player up top
+   with the transport/choices in the thumb zone — instead of a short card and
+   a dead gray band in the middle. Scoped to the game (NOT the menu skin
+   preview, which reuses .tune-chrome at a fixed size). */
+.tune-game > .tune-chrome {
+  flex: 1 1 auto;
 }
 
 .tune-chrome {
@@ -111,6 +118,11 @@
 .tune-viz-bar {
   flex: 1 1 0;
   min-width: 3px;
+  /* Fill the strip's full height so scaleY() has something to scale — with
+     only flex (main-axis) set, each bar collapsed to 0px tall and the
+     animation ran on an invisible element. */
+  height: 100%;
+  align-self: stretch;
   background: var(--tune-viz-bar);
   transform-origin: bottom;
   transform: scaleY(0.18);
