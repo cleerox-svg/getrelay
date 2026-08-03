@@ -6,7 +6,15 @@
 // These are ORIGINAL, late-'90s-media-player-INSPIRED recreations built
 // from our own CSS/SVG. No trademarked skin bitmaps, no "base" skin art,
 // and no product name/logo is used anywhere — the retro skins are
-// labelled generically ("Retro '98", "Classic", "Matrix").
+// labelled generically ("Retro '98", "Classic", "Matrix", "Dolphin").
+//
+// A skin may also opt into an animated LCD "screen" via the optional
+// `screen` field (see the "Dolphin" skin). The token bag stays pure data;
+// `screen` just names a self-contained animation the player renders behind
+// the status readout (components/tune/TuneDolphin.tsx). The "Dolphin" look
+// is an original, from-scratch homage to the leaping-dolphin idle screens
+// on late-'90s/early-'00s car head units — our own SVG silhouette and CSS
+// keyframes, no product name, logo or captured bitmap.
 
 import type { CSSProperties } from 'react';
 
@@ -52,6 +60,10 @@ export interface TuneSkin {
   id: string;
   name: string;
   tokens: TuneSkinTokens;
+  // Optional animated LCD screen the player renders behind the status
+  // readout. Only 'dolphin' today (the leaping-dolphin idle screen). Skins
+  // without it show the plain readout, exactly as before.
+  screen?: 'dolphin';
 }
 
 // Token key → CSS custom property name. The player only ever references
@@ -259,7 +271,55 @@ const matrix: TuneSkin = {
   },
 };
 
-export const TUNE_SKINS: readonly TuneSkin[] = [modern, retro98, classic, matrix];
+// Homage to the leaping-dolphin idle screens on late-'90s/early-'00s car
+// head units: a glossy black faceplate, a deep blue-black LCD glowing
+// cyan, amber-backlit transport glyphs — and a dolphin arcing over a
+// shimmering waterline on the screen (see TuneDolphin). Original SVG + CSS;
+// no product name, logo or captured art.
+const dolphin: TuneSkin = {
+  id: 'dolphin',
+  name: 'Dolphin',
+  screen: 'dolphin',
+  tokens: {
+    // Glossy black head-unit faceplate with a faint top-lit sheen.
+    chromeBg: 'linear-gradient(180deg, #1b1e25 0%, #101319 55%, #05070a 100%)',
+    chromeBorder: '#000000',
+    bevelLight: '#343842',
+    bevelDark: '#000000',
+    radius: '7px',
+    // Dark faceplate strip with a cyan display-font label.
+    titlebarBg: 'linear-gradient(180deg, #14171d 0%, #0a0c11 100%)',
+    titlebarText: '#3fe6ff',
+    // Deep blue-black LCD, bright cyan segment glow.
+    readoutBg: '#00131c',
+    readoutText: '#41e8ff',
+    readoutDim: '#1f7f96',
+    readoutRadius: '5px',
+    font: MONO,
+    // Cyan display + warm amber warning (the classic head-unit two-tone).
+    accent: '#41e8ff',
+    warn: '#ffb020',
+    // Beveled black transport button with an amber-backlit glyph.
+    btnBg: 'linear-gradient(180deg, #23272f 0%, #12151b 100%)',
+    btnText: '#ffb020',
+    btnBorder: '#000000',
+    playRadius: '7px',
+    // Cyan spectrum on the same blue-black glass as the LCD.
+    vizBg: '#00131c',
+    vizBar: '#41e8ff',
+    // Answer choices: dark faceplate panels, soft cyan labels.
+    choiceBg: 'linear-gradient(180deg, #1a1d24 0%, #0e1116 100%)',
+    choiceText: '#9fecff',
+    choiceBorder: '#000000',
+    choiceRadius: '6px',
+    choiceAnswerBg: '#0f7d4a',
+    choiceAnswerText: '#eafff4',
+    choiceWrongBg: '#8f2f2f',
+    choiceWrongText: '#ffffff',
+  },
+};
+
+export const TUNE_SKINS: readonly TuneSkin[] = [modern, retro98, classic, matrix, dolphin];
 
 export const DEFAULT_TUNE_SKIN_ID = 'modern';
 

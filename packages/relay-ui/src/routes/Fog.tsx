@@ -9,6 +9,7 @@ import { GuessGame } from '../components/fog/GuessGame';
 import type { GameResult } from '../components/fog/GuessGame';
 import { TuneGame } from '../components/tune/TuneGame';
 import type { TuneGameResult } from '../components/tune/TuneGame';
+import { TuneDolphin } from '../components/tune/TuneDolphin';
 import { TuneLeaderboard } from '../components/tune/TuneLeaderboard';
 import { TuneVisualizer } from '../components/tune/TuneVisualizer';
 import {
@@ -622,9 +623,19 @@ export function Fog() {
                         <span>Relay Tunes</span>
                         <span style={{ fontWeight: 700 }}>{resolveSkin(tuneSkinId).name}</span>
                       </div>
-                      <div className="tune-readout" style={{ fontSize: 12 }}>
-                        ♪ Now playing — guess the title
-                      </div>
+                      {resolveSkin(tuneSkinId).screen === 'dolphin' ? (
+                        <div
+                          className="tune-dolphin-screen"
+                          style={{ position: 'relative', inset: 'auto', height: 76 }}
+                        >
+                          <TuneDolphin />
+                          <div className="tune-dolphin-caption">♪ Guess the title</div>
+                        </div>
+                      ) : (
+                        <div className="tune-readout" style={{ fontSize: 12 }}>
+                          ♪ Now playing — guess the title
+                        </div>
+                      )}
                       <TuneVisualizer active bars={18} />
                     </div>
                   </div>

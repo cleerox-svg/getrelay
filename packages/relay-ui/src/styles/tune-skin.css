@@ -212,6 +212,146 @@
     inset -1px -1px 0 var(--tune-bevel-light);
 }
 
+/* ── Dolphin skin: animated LCD screen ─────────────────────────────────
+   The leaping-dolphin idle screen (see components/tune/TuneDolphin.tsx).
+   Colours are pulled from the active skin's tokens so the screen matches
+   the chrome; the whole thing is decorative CSS/SVG. */
+.tune-dolphin-screen {
+  position: absolute;
+  inset: 0;
+  background: var(--tune-readout-bg);
+  border-radius: var(--tune-readout-radius);
+  overflow: hidden;
+  box-shadow:
+    inset 2px 2px 0 var(--tune-bevel-dark),
+    inset -2px -2px 0 var(--tune-bevel-light);
+}
+/* Faint LCD scanlines + vignette to sell the glass. */
+.tune-dolphin-screen::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgba(0, 0, 0, 0.14) 0,
+      rgba(0, 0, 0, 0.14) 1px,
+      transparent 1px,
+      transparent 3px
+    ),
+    radial-gradient(120% 80% at 50% 40%, transparent 55%, rgba(0, 0, 0, 0.45) 100%);
+}
+
+.tune-dolphin {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.tune-dolphin-body path {
+  fill: var(--tune-readout-text);
+}
+.tune-dolphin-eye {
+  fill: var(--tune-readout-bg);
+}
+.tune-dolphin-sun {
+  fill: var(--tune-warn);
+  opacity: 0.85;
+}
+.tune-dolphin-star {
+  fill: var(--tune-readout-text);
+  animation: tuneStarTwinkle 3.2s ease-in-out infinite;
+}
+.tune-dolphin-water {
+  fill: var(--tune-readout-text);
+  opacity: 0.55;
+  animation: tuneWaterDrift 7s linear infinite;
+}
+.tune-dolphin-water-dim {
+  fill: var(--tune-readout-dim);
+  opacity: 0.5;
+  animation: tuneWaterDrift 11s linear infinite reverse;
+}
+
+/* The leap: the dolphin's CENTRE traces a parabola while it rotates to
+   follow the arc — nose up out of the water, level at the apex, nose down
+   on the dive — then loops. Origin at the dolphin's own centre so the
+   rotation pivots on the body, not the viewBox. */
+.tune-dolphin-leap {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: tuneDolphinLeap 6s ease-in-out infinite;
+}
+
+@keyframes tuneDolphinLeap {
+  0% {
+    transform: translate(24px, 122px) rotate(-42deg) scale(0.64);
+    opacity: 0;
+  }
+  6% {
+    opacity: 1;
+  }
+  25% {
+    transform: translate(92px, 58px) rotate(-24deg) scale(0.72);
+  }
+  50% {
+    transform: translate(160px, 32px) rotate(0deg) scale(0.78);
+  }
+  75% {
+    transform: translate(228px, 58px) rotate(28deg) scale(0.72);
+  }
+  94% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(296px, 122px) rotate(48deg) scale(0.64);
+    opacity: 0;
+  }
+}
+
+@keyframes tuneWaterDrift {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-100px);
+  }
+}
+
+@keyframes tuneStarTwinkle {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/* Small status caption laid over the screen (replaces the plain readout
+   box on the Dolphin skin). A bottom scrim keeps it legible over the
+   waterline. */
+.tune-dolphin-caption {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 14px 10px 8px;
+  text-align: center;
+  font-family: var(--tune-font);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--tune-readout-text);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  background: linear-gradient(0deg, rgba(0, 0, 0, 0.55) 0%, transparent 100%);
+  pointer-events: none;
+  /* Sit above the scanline/vignette ::after so the status stays crisp. */
+  z-index: 2;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .tune-viz.is-active .tune-viz-bar {
     animation: none;
@@ -222,6 +362,16 @@
     animation: tuneVizPop 500ms ease-out 1;
   }
   .tune-viz.is-correct .tune-viz-bar {
+    animation: none;
+  }
+  /* Park the dolphin mid-leap and still the water/stars. */
+  .tune-dolphin-leap {
+    animation: none;
+    transform: translate(160px, 32px) rotate(0deg) scale(0.78);
+  }
+  .tune-dolphin-water,
+  .tune-dolphin-water-dim,
+  .tune-dolphin-star {
     animation: none;
   }
 }
