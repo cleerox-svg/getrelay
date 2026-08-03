@@ -632,6 +632,7 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
 
         <div
           style={{
+            flex: '1 1 auto',
             minHeight: 128,
             display: 'flex',
             flexDirection: 'column',
