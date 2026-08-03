@@ -143,31 +143,43 @@ const retro98: TuneSkin = {
   id: 'retro98',
   name: "Retro '98",
   tokens: {
-    chromeBg: '#c3c7cb',
-    chromeBorder: '#0a0a0a',
-    bevelLight: '#ffffff',
-    bevelDark: '#5b5f66',
+    // Desaturated blue-gray beveled metal body (Winamp "base" family), NOT
+    // light Win95 gray. A top-lit vertical sheen sells the pressed metal;
+    // lighter silver highlight top-left + near-black shadow bottom-right give
+    // the 3D edge. Gradient lives in the token string so no shared CSS change
+    // is needed and the other skins are untouched.
+    chromeBg: 'linear-gradient(180deg, #44444f 0%, #3a3a47 55%, #313139 100%)',
+    chromeBorder: '#0b0b10',
+    bevelLight: '#6f6f80',
+    bevelDark: '#131319',
     radius: '3px',
-    titlebarBg: '#20347e',
-    titlebarText: '#eaf0ff',
-    readoutBg: '#04120a',
-    readoutText: '#31ff86',
-    readoutDim: '#1f9a55',
+    // Dark charcoal blue-gray titlebar with light silver text (not bright blue),
+    // a subtle metal sheen top-to-bottom.
+    titlebarBg: 'linear-gradient(180deg, #34343f 0%, #272730 50%, #1d1d25 100%)',
+    titlebarText: '#c8ccd9',
+    // Sunken green-on-black LCD readout with bright green mono text.
+    readoutBg: '#02140a',
+    readoutText: '#22ee5a',
+    readoutDim: '#178f42',
     readoutRadius: '3px',
     font: MONO,
-    accent: '#31ff86',
-    warn: '#ffd23f',
-    btnBg: '#c3c7cb',
-    btnText: '#0a0a0a',
-    btnBorder: '#0a0a0a',
+    // Green meter + gold/amber accent (the classic EQ-slider gold).
+    accent: '#22ee5a',
+    warn: '#ffcf3f',
+    // Beveled metal transport button — same metal family as the chrome, dark glyph.
+    btnBg: 'linear-gradient(180deg, #4a4a58 0%, #3d3d4a 100%)',
+    btnText: '#0c0c11',
+    btnBorder: '#0b0b10',
     playRadius: '4px',
-    vizBg: '#04120a',
-    vizBar: '#31ff86',
-    choiceBg: '#c3c7cb',
-    choiceText: '#0a0a0a',
-    choiceBorder: '#0a0a0a',
+    // Dark inset spectrum strip with bright green bars.
+    vizBg: '#02140a',
+    vizBar: '#22ee5a',
+    // Answer choices: dark metal panels, light silver text, beveled — part of the unit.
+    choiceBg: 'linear-gradient(180deg, #4a4a58 0%, #3d3d4a 100%)',
+    choiceText: '#d2d5e0',
+    choiceBorder: '#0b0b10',
     choiceRadius: '3px',
-    choiceAnswerBg: '#0a8a3c',
+    choiceAnswerBg: '#178f3c',
     choiceAnswerText: '#ffffff',
     choiceWrongBg: '#b21f2a',
     choiceWrongText: '#ffffff',
