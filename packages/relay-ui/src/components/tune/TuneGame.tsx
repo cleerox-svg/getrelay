@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { FogPausePrompt } from '../fog/FogPausePrompt';
 import { useTuneClip } from './TuneClip';
+import { TuneDolphin } from './TuneDolphin';
 import { TuneVisualizer } from './TuneVisualizer';
 import { api } from '../../lib/api';
 import { buildTuneRound, getSessionPool } from '../../lib/tune/sources';
@@ -632,6 +633,7 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
 
         <div
           style={{
+            position: 'relative',
             flex: '1 1 auto',
             minHeight: 128,
             display: 'flex',
@@ -642,7 +644,18 @@ export function TuneGame({ onFinish, genre, mode, paused, onResume, skin, skins,
             textAlign: 'center',
           }}
         >
-          {phase === 'loading' ? (
+          {phase !== 'reveal' && skin.screen === 'dolphin' ? (
+            // Animated LCD screen: the dolphin leaps over the waterline while
+            // the round loads / plays, with the live status as an overlay
+            // caption. The reveal (artwork + title) still takes over the
+            // screen below, on every skin.
+            <div className="tune-dolphin-screen">
+              <TuneDolphin />
+              <div className="tune-dolphin-caption">
+                {phase === 'loading' ? 'LOADING…' : statusText}
+              </div>
+            </div>
+          ) : phase === 'loading' ? (
             <div className="tune-readout" style={{ width: '100%', letterSpacing: '0.1em' }}>
               LOADING…
             </div>
