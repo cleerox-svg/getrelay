@@ -259,7 +259,62 @@ const matrix: TuneSkin = {
   },
 };
 
-export const TUNE_SKINS: readonly TuneSkin[] = [modern, retro98, classic, matrix];
+// Silver-face '70s quadraphonic receiver: brushed-aluminum faceplate,
+// sunken black dial-glass with a warm amber tuner readout, teal stereo /
+// tuning-meter glow, black knurled transport knobs with silver bevels, and
+// a walnut-cabinet titlebar. Original recreation in the spirit of the
+// mid-'70s four-channel silver-face hi-fi era — no product name, model
+// number or trademarked art; the label is generic like the other retro
+// skins.
+const quad74: TuneSkin = {
+  id: 'quad74',
+  name: "Quad '74",
+  tokens: {
+    // Satin brushed-aluminum body with a horizontal sheen band mid-face.
+    chromeBg: 'linear-gradient(180deg, #d9dbdf 0%, #c3c6cc 45%, #b4b7be 55%, #cdd0d5 100%)',
+    chromeBorder: '#2b2c30',
+    // Bright silver highlight top-left, mid-gray aluminum shadow bottom-right —
+    // reads as machined metal edge (deep enough to sink the dial glass, light
+    // enough to keep the raised knobs looking like brushed metal).
+    bevelLight: '#f3f4f6',
+    bevelDark: '#63666d',
+    radius: '4px',
+    // Walnut wood-cabinet strip with warm cream lettering.
+    titlebarBg: 'linear-gradient(180deg, #5b3a22 0%, #4a2f1b 100%)',
+    titlebarText: '#e8c9a0',
+    // Black dial glass, warm amber tuner numerals (dimmer amber for the
+    // secondary line).
+    readoutBg: '#0a0705',
+    readoutText: '#ffb44d',
+    readoutDim: '#b3762a',
+    readoutRadius: '3px',
+    font: MONO,
+    // Teal stereo/tuning-lamp glow drives the meter + correct-guess flare;
+    // warm orange warning.
+    accent: '#37d0bf',
+    warn: '#ff6a3d',
+    // Black knurled transport knob with a silver glyph and machined bevel.
+    btnBg: 'linear-gradient(180deg, #3a3b3f 0%, #26272b 100%)',
+    btnText: '#eef0f3',
+    btnBorder: '#141518',
+    playRadius: '6px',
+    // Spectrum strip lives in the dial glass with amber bars (the tuner scale).
+    vizBg: '#0a0705',
+    vizBar: '#ffb44d',
+    // Answer choices are brushed-silver panels with dark lettering — part of
+    // the faceplate. Green/red for right/wrong.
+    choiceBg: 'linear-gradient(180deg, #cfd2d7 0%, #bdc0c6 100%)',
+    choiceText: '#1c1d21',
+    choiceBorder: '#7f828a',
+    choiceRadius: '3px',
+    choiceAnswerBg: '#2f9e6f',
+    choiceAnswerText: '#ffffff',
+    choiceWrongBg: '#b23a2a',
+    choiceWrongText: '#ffffff',
+  },
+};
+
+export const TUNE_SKINS: readonly TuneSkin[] = [modern, retro98, classic, matrix, quad74];
 
 export const DEFAULT_TUNE_SKIN_ID = 'modern';
 
