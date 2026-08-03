@@ -307,7 +307,9 @@ const quad74: TuneSkin = {
     choiceText: '#1c1d21',
     choiceBorder: '#7f828a',
     choiceRadius: '3px',
-    choiceAnswerBg: '#2f9e6f',
+    // Darkened past the sibling skins' greens so white choice text clears
+    // WCAG AA (~5:1 on the 14px labels).
+    choiceAnswerBg: '#257e57',
     choiceAnswerText: '#ffffff',
     choiceWrongBg: '#b23a2a',
     choiceWrongText: '#ffffff',
