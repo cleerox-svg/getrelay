@@ -1,9 +1,10 @@
 // The hand-authored mini-golf course: 6 holes in the 100x125 virtual
-// coordinate space (see lib/golf/engine.ts). Pure data — every hole is a
-// border loop plus a few obstacle walls, a tee (bottom-ish) and a cup
-// (top-ish), with a par of 2–4. Greens are cosmetic fairway fills.
+// coordinate space (X right, Y down; the 3D renderer lays it flat onto the
+// ground plane). Pure data — every hole is a border loop plus a few
+// obstacle walls, a tee (bottom-ish) and a cup (top-ish), with a par of
+// 2–4. Greens are the mown putting-surface fills.
 
-import type { Green, Hole, Wall } from './putting';
+import type { Green, Hole, Wall } from './puttSim';
 import { CUP_R } from './tuning';
 
 // Perimeter of an axis-aligned rectangle as four wall segments. Used for

@@ -307,8 +307,15 @@ export function RangeGame({
     <div
       style={{
         position: 'fixed',
-        inset: 0,
-        zIndex: 15,
+        top: 0,
+        left: 0,
+        // Full dynamic viewport so the scene truly fills the screen on mobile
+        // (dvh accounts for the collapsing browser/URL bar). zIndex sits ABOVE
+        // the app's bottom tab bar (z-20) and top navbar — while immersive
+        // those are hidden too, but this guarantees full coverage regardless.
+        width: '100vw',
+        height: '100dvh',
+        zIndex: 30,
         overflow: 'hidden',
         background: '#bfe0f2',
         touchAction: 'none',
@@ -325,102 +332,108 @@ export function RangeGame({
         />
       </Suspense>
 
-      {/* Top HUD: wind (left) + challenge/practice status (right). Offset to
-          clear a possible top navbar. */}
+      {/* Top HUD stack: wind + status row, a compact readout strip, and the
+          hint/result line — all clustered at the top so the whole centre and
+          lower-centre of the screen stays an open drag channel over the ball.
+          The container is pointer-transparent; only the End/Done/Exit button
+          opts back into pointer events. Offset only for the status bar now
+          that the app navbar is hidden while immersive. */}
       <div
         style={{
           position: 'absolute',
-          top: 'calc(env(safe-area-inset-top, 0px) + 56px)',
+          top: 'calc(env(safe-area-inset-top, 0px) + 10px)',
           left: 12,
           right: 12,
           display: 'flex',
-          alignItems: 'flex-start',
-          justifyContent: 'space-between',
+          flexDirection: 'column',
           gap: 8,
           pointerEvents: 'none',
         }}
       >
-        <div style={{ pointerEvents: 'auto' }}>
-          <WindChip along={st?.windAlong ?? wind.along} cross={st?.windCross ?? wind.cross} />
-        </div>
-
         <div
           style={{
             display: 'flex',
-            alignItems: 'center',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
             gap: 8,
-            pointerEvents: 'auto',
-            background: 'var(--card-bg)',
-            border: '1px solid var(--separator)',
-            borderRadius: 999,
-            padding: '5px 6px 5px 12px',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
           }}
         >
-          {isChallenge ? (
-            <>
-              <span className="text-[13px] font-bold" style={{ color: 'var(--text)' }}>
-                Ball {Math.min(ballNo, RANGE_BALLS)}/{RANGE_BALLS}
-              </span>
-              <span className="text-[13px] tabular-nums" style={{ color: 'var(--text-dim)' }}>
-                {target ? `${target.d}yd` : '—'}
-              </span>
-              <span className="text-[13px] font-bold tabular-nums" style={{ color: 'var(--accent)' }}>
-                {totalScore.toLocaleString()}
-              </span>
-              <button
-                type="button"
-                onClick={finishNow}
-                className="text-[12px] font-semibold"
-                style={{
-                  color: 'var(--text)',
-                  background: 'transparent',
-                  border: '1px solid var(--separator)',
-                  borderRadius: 999,
-                  padding: '2px 10px',
-                }}
-              >
-                End
-              </button>
-            </>
-          ) : (
-            <>
-              <span className="text-[13px] tabular-nums" style={{ color: 'var(--text-dim)' }}>
-                Longest {st?.longestDrive ?? 0}yd
-              </span>
-              <button
-                type="button"
-                onClick={onExit}
-                className="text-[12px] font-semibold"
-                style={{
-                  color: 'var(--text)',
-                  background: 'transparent',
-                  border: '1px solid var(--separator)',
-                  borderRadius: 999,
-                  padding: '2px 10px',
-                }}
-              >
-                Done
-              </button>
-            </>
-          )}
-        </div>
-      </div>
+          <WindChip along={st?.windAlong ?? wind.along} cross={st?.windCross ?? wind.cross} />
 
-      {/* Bottom HUD: hint / result line, readouts, club picker. Offset to
-          clear the bottom tab bar. */}
-      <div
-        style={{
-          position: 'absolute',
-          left: 12,
-          right: 12,
-          bottom: 'calc(env(safe-area-inset-bottom, 0px) + 62px)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 8,
-        }}
-      >
-        {/* Hint / nearest-pin / result line. */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              background: 'var(--card-bg)',
+              border: '1px solid var(--separator)',
+              borderRadius: 999,
+              padding: '5px 6px 5px 12px',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+            }}
+          >
+            {isChallenge ? (
+              <>
+                <span className="text-[13px] font-bold" style={{ color: 'var(--text)' }}>
+                  Ball {Math.min(ballNo, RANGE_BALLS)}/{RANGE_BALLS}
+                </span>
+                <span className="text-[13px] tabular-nums" style={{ color: 'var(--text-dim)' }}>
+                  {target ? `${target.d}yd` : '—'}
+                </span>
+                <span className="text-[13px] font-bold tabular-nums" style={{ color: 'var(--accent)' }}>
+                  {totalScore.toLocaleString()}
+                </span>
+                <button
+                  type="button"
+                  onClick={finishNow}
+                  className="text-[12px] font-semibold"
+                  style={{
+                    pointerEvents: 'auto',
+                    color: 'var(--text)',
+                    background: 'transparent',
+                    border: '1px solid var(--separator)',
+                    borderRadius: 999,
+                    padding: '2px 10px',
+                  }}
+                >
+                  End
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="text-[13px] tabular-nums" style={{ color: 'var(--text-dim)' }}>
+                  Longest {st?.longestDrive ?? 0}yd
+                </span>
+                <button
+                  type="button"
+                  onClick={onExit}
+                  className="text-[12px] font-semibold"
+                  style={{
+                    pointerEvents: 'auto',
+                    color: 'var(--text)',
+                    background: 'transparent',
+                    border: '1px solid var(--separator)',
+                    borderRadius: 999,
+                    padding: '2px 10px',
+                  }}
+                >
+                  Done
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Compact, display-only readout strip. */}
+        <div className="grid grid-cols-4 gap-1.5">
+          {stat('CARRY', `${st?.carry ?? 0}`)}
+          {stat('TOTAL', `${st?.total ?? 0}`)}
+          {stat('APEX', `${st?.apex ?? 0}`)}
+          {stat('BALL', `${st?.ballSpeed ?? 0}`)}
+        </div>
+
+        {/* Hint / nearest-pin / result line — top-centred so it never sits on
+            the ball. Display-only. */}
         <div
           className="text-[12px] font-semibold text-center"
           style={{
@@ -441,47 +454,53 @@ export function RangeGame({
                 : `${st.nearestPin}yd to pin`
             : 'Drag back from the tee to swing'}
         </div>
+      </div>
 
-        {/* Readouts. */}
-        <div className="grid grid-cols-4 gap-1.5">
-          {stat('CARRY', `${st?.carry ?? 0}`)}
-          {stat('TOTAL', `${st?.total ?? 0}`)}
-          {stat('APEX', `${st?.apex ?? 0}`)}
-          {stat('BALL', `${st?.ballSpeed ?? 0}`)}
-        </div>
-
-        {/* Club picker. */}
-        <div
-          className="flex gap-1.5"
-          style={{ overflowX: 'auto', paddingBottom: 2, scrollbarWidth: 'none' }}
-        >
-          {CLUBS.map((c) => {
-            const active = c.id === clubId;
-            const disabled = !!st?.inFlight;
-            return (
-              <button
-                key={c.id}
-                type="button"
-                disabled={disabled}
-                onClick={() => selectClub(c.id)}
-                style={{
-                  flex: '0 0 auto',
-                  border: `1px solid ${active ? 'var(--accent)' : 'var(--separator)'}`,
-                  background: active ? 'var(--accent)' : 'var(--card-bg)',
-                  color: active ? '#FFFFFF' : 'var(--text)',
-                  opacity: disabled && !active ? 0.5 : 1,
-                  borderRadius: 12,
-                  padding: '6px 12px',
-                  fontSize: 12,
-                  fontWeight: 700,
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.14)',
-                }}
-              >
-                {c.name}
-              </button>
-            );
-          })}
-        </div>
+      {/* Bottom HUD: just the slim club picker, pinned to the very bottom and
+          safe-area padded. It's the only bottom-interactive element and stays
+          thin so the ball's drag zone above it is clear. The scroll container
+          is pointer-transparent; each chip opts back in. */}
+      <div
+        style={{
+          position: 'absolute',
+          left: 12,
+          right: 12,
+          bottom: 'calc(env(safe-area-inset-bottom, 0px) + 10px)',
+          display: 'flex',
+          gap: 6,
+          overflowX: 'auto',
+          paddingBottom: 2,
+          scrollbarWidth: 'none',
+          pointerEvents: 'none',
+        }}
+      >
+        {CLUBS.map((c) => {
+          const active = c.id === clubId;
+          const disabled = !!st?.inFlight;
+          return (
+            <button
+              key={c.id}
+              type="button"
+              disabled={disabled}
+              onClick={() => selectClub(c.id)}
+              style={{
+                pointerEvents: 'auto',
+                flex: '0 0 auto',
+                border: `1px solid ${active ? 'var(--accent)' : 'var(--separator)'}`,
+                background: active ? 'var(--accent)' : 'var(--card-bg)',
+                color: active ? '#FFFFFF' : 'var(--text)',
+                opacity: disabled && !active ? 0.5 : 1,
+                borderRadius: 12,
+                padding: '6px 12px',
+                fontSize: 12,
+                fontWeight: 700,
+                boxShadow: '0 2px 8px rgba(0,0,0,0.14)',
+              }}
+            >
+              {c.name}
+            </button>
+          );
+        })}
       </div>
 
       {/* Pause sheet (challenge only), mirroring GolfGame. */}

@@ -272,8 +272,13 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
     scene.fog = new THREE.Fog(0xcfe6f2, 140, 560);
 
     const camera = new THREE.PerspectiveCamera(56, w / h, 0.5, 1400);
-    const teeCamPos = new THREE.Vector3(0, 9, 17);
-    const teeLookAt = new THREE.Vector3(0, 2.5, -70);
+    // Sit a touch lower and aim a touch higher than dead-level so the teed
+    // ball (near the camera, low to the ground) frames in the lower-MIDDLE of
+    // the now full-screen viewport with open turf below it for the drag-back
+    // gesture — rather than sinking to the very bottom edge. Camera-follow on
+    // the shot lerps away from these and back, unchanged.
+    const teeCamPos = new THREE.Vector3(0, 8.4, 18);
+    const teeLookAt = new THREE.Vector3(0, 4, -68);
     camera.position.copy(teeCamPos);
     const lookAt = teeLookAt.clone();
     camera.lookAt(lookAt);
@@ -758,7 +763,7 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Start/stop from the paused prop (mirrors GolfCanvas).
+  // Start/stop from the paused prop.
   useEffect(() => {
     const ctl = ctlRef.current;
     if (!ctl) return;

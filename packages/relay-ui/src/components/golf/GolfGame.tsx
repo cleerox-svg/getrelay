@@ -1,11 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
-import { GolfCanvas } from './GolfCanvas';
-import type { GolfCanvasHandle } from './GolfCanvas';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/api';
 import { COURSE } from '../../lib/golf/course';
-import { PuttingMode } from '../../lib/golf/putting';
+import { PuttSim } from '../../lib/golf/puttSim';
 import { recordGolfGame } from '../../lib/golf/stats';
 import { HOLES, holePoints } from '../../lib/golf/tuning';
+
+// Lazy-load the whole Three.js scene so it lands in its own chunk (shared
+// with the range's vendor chunk) and never bloats the main entry — the
+// HUD/orchestration below is plain React.
+const PuttGL = lazy(() => import('./PuttGL'));
 
 export interface GolfGameResult {
   score: number;
@@ -29,6 +32,10 @@ interface Props {
 
 type PerHole = GolfGameResult['perHole'];
 
+// Short beat between sinking a hole and teeing the next, so the ball's
+// drop-into-cup animation reads before the scene swaps.
+const TRANSITION_MS = 750;
+
 // Sum of per-hole points.
 function totalScore(perHole: PerHole): number {
   return perHole.reduce((s, h) => s + holePoints(h.strokes, h.par), 0);
@@ -49,11 +56,34 @@ function longestStreak(perHole: PerHole): number {
   return best;
 }
 
-// The scored 6-hole round. Each hole: putt around the walls, sink the
-// cup, advance. Points scale with strokes under/over par (see
-// lib/golf/tuning.ts). Ending early banks the holes already completed.
+function Spinner() {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        inset: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: '#ffffff',
+        fontSize: 14,
+        fontWeight: 600,
+        textShadow: '0 1px 3px rgba(0,0,0,0.4)',
+      }}
+    >
+      Loading course…
+    </div>
+  );
+}
+
+// The scored 6-hole round in real 3D. Each hole: drag back from the ball to
+// aim in any direction, release to putt around the walls, sink the cup,
+// advance. Points scale with strokes under/over par (see lib/golf/tuning.ts).
+// Ending early banks the holes already completed. Full-bleed immersive shell,
+// mirroring RangeGame: the scene owns the viewport; the HUD is a display-only
+// top strip with only the End button interactive, so the whole centre stays a
+// clear drag zone over the ball.
 export function GolfGame({ onFinish, paused, onResume }: Props) {
-  const canvasRef = useRef<GolfCanvasHandle | null>(null);
   const perHoleRef = useRef<PerHole>([]);
   const strokesRef = useRef(0);
   const holeIdxRef = useRef(0);
@@ -61,16 +91,31 @@ export function GolfGame({ onFinish, paused, onResume }: Props) {
   // natural finish, the End pill, the pause sheet's "End game" and the
   // unmount safety net — so a score is never recorded or submitted twice.
   const reportedRef = useRef(false);
+  const advanceTimerRef = useRef<number | null>(null);
 
   const [holeIdx, setHoleIdx] = useState(0);
   const [strokes, setStrokes] = useState(0);
   const [score, setScore] = useState(0);
+  // True during the post-sink beat: an input-blocking veil covers the
+  // scene while the ball drops and the next hole is prepared.
+  const [transitioning, setTransitioning] = useState(false);
 
   const hole = COURSE.holes[holeIdx];
   const holeNo = holeIdx + 1;
 
+  // A fresh sim per hole; PuttGL remounts by the same key so its GPU scene
+  // is rebuilt for the new hole's walls/cup.
+  const sim = useMemo(() => (hole ? new PuttSim(hole) : null), [holeIdx, hole]);
+
   const onResumeRef = useRef(onResume);
   onResumeRef.current = onResume;
+
+  // If the pause sheet opens during the post-sink beat, defer the hole
+  // advance (index of the next hole) until resume, so we never remount the
+  // scene to the next tee behind the sheet.
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
+  const pendingAdvanceRef = useRef<number | null>(null);
 
   // Ends the round now with whatever holes are complete. The natural
   // finish (after the last sink), the End pill and the pause sheet's
@@ -97,6 +142,7 @@ export function GolfGame({ onFinish, paused, onResume }: Props) {
   // POST is fire-and-forget; local stats always update.
   useEffect(() => {
     return () => {
+      if (advanceTimerRef.current != null) window.clearTimeout(advanceTimerRef.current);
       if (reportedRef.current) return;
       const perHole = perHoleRef.current;
       if (perHole.length < 1) return; // never record/submit a 0-hole game
@@ -130,7 +176,24 @@ export function GolfGame({ onFinish, paused, onResume }: Props) {
       sunk: true,
     });
     setScore(totalScore(perHoleRef.current));
+    // Hold on the sunk hole briefly so the ball visibly drops, then either
+    // finish the round or tee the next hole (a fresh sim + remounted scene).
+    setTransitioning(true);
     const next = idx + 1;
+    advanceTimerRef.current = window.setTimeout(() => {
+      advanceTimerRef.current = null;
+      // Paused mid-beat: hold the advance until resume (see the effect below).
+      if (pausedRef.current) {
+        pendingAdvanceRef.current = next;
+        return;
+      }
+      doAdvance(next);
+    }, TRANSITION_MS);
+  }
+
+  // Commit the hole transition: finish the round on the last hole, else tee
+  // the next one (a fresh sim + remounted scene).
+  function doAdvance(next: number) {
     if (next >= HOLES) {
       finishRef.current();
       return;
@@ -139,62 +202,147 @@ export function GolfGame({ onFinish, paused, onResume }: Props) {
     strokesRef.current = 0;
     setStrokes(0);
     setHoleIdx(next);
+    setTransitioning(false);
   }
 
-  return (
-    <div className="px-4">
-      {/* Hole / par / strokes header */}
-      <div
-        className="flex items-baseline justify-between pb-2 text-sm font-semibold"
-        style={{ color: 'var(--text)' }}
-      >
-        <span>
-          Hole {holeNo}/{HOLES}
-        </span>
-        <span className="tabular-nums" style={{ color: 'var(--text-dim)' }}>
-          Par {hole?.par ?? '—'}
-        </span>
-        <span className="tabular-nums">
-          {strokes} stroke{strokes === 1 ? '' : 's'}
-        </span>
-        <span className="tabular-nums" style={{ color: 'var(--text-dim)' }}>
-          {score.toLocaleString()} pts
-        </span>
-        {/* Ends the round on the spot, no confirmation — an explicit tap,
-            unlike the back gesture (which pauses first). Results if >=1
-            hole is done, straight back to the menu otherwise. */}
-        <button
-          type="button"
-          onClick={finishNow}
-          className="text-xs font-semibold"
-          style={{
-            color: 'var(--text-dim)',
-            background: 'transparent',
-            border: '1px solid var(--separator)',
-            borderRadius: 999,
-            padding: '2px 10px',
-          }}
-        >
-          End
-        </button>
-      </div>
+  // Flush a deferred advance once the pause sheet closes.
+  useEffect(() => {
+    if (paused) return;
+    if (pendingAdvanceRef.current == null) return;
+    const next = pendingAdvanceRef.current;
+    pendingAdvanceRef.current = null;
+    doAdvance(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paused]);
 
-      {hole ? (
-        <GolfCanvas
-          ref={canvasRef}
-          makeMode={(ctx) => new PuttingMode(ctx, hole)}
-          modeKey={hole.id}
-          paused={paused}
-          onEvent={(e) => {
-            if (e.type === 'stroke') handleStroke();
-            else if (e.type === 'sink') handleSink();
-          }}
-        />
+  const readout = (label: string, val: string) => (
+    <div style={{ textAlign: 'center' }}>
+      <div className="text-[9px] font-bold tracking-wider" style={{ color: 'var(--text-dim)' }}>
+        {label}
+      </div>
+      <div className="text-[14px] font-bold tabular-nums" style={{ color: 'var(--text)' }}>
+        {val}
+      </div>
+    </div>
+  );
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        // Full dynamic viewport so the scene truly fills the screen on mobile
+        // (dvh accounts for the collapsing browser/URL bar). zIndex sits ABOVE
+        // the app's bottom tab bar (z-20) and top navbar — while immersive
+        // those are hidden too, but this guarantees full coverage regardless.
+        width: '100vw',
+        height: '100dvh',
+        zIndex: 30,
+        overflow: 'hidden',
+        background: '#bfe0f2',
+        touchAction: 'none',
+      }}
+    >
+      {/* 3D scene, lazy-loaded into its own chunk. Remounts per hole. */}
+      {hole && sim ? (
+        <Suspense fallback={<Spinner />}>
+          <PuttGL
+            key={holeIdx}
+            sim={sim}
+            hole={hole}
+            paused={paused}
+            onEvent={(e) => {
+              if (e.type === 'stroke') handleStroke();
+              else if (e.type === 'sink') handleSink();
+            }}
+          />
+        </Suspense>
       ) : null}
 
-      <div className="text-xs text-center pt-3" style={{ color: 'var(--text-dim)' }}>
-        Drag back from the ball to aim, release to putt.
+      {/* Top HUD: a single display-only readout pill + the End button,
+          clustered at the top so the whole centre/lower screen stays an open
+          drag channel over the ball. The container is pointer-transparent;
+          only the End button opts back into pointer events. */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 'calc(env(safe-area-inset-top, 0px) + 10px)',
+          left: 12,
+          right: 12,
+          display: 'flex',
+          justifyContent: 'center',
+          pointerEvents: 'none',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 14,
+            background: 'var(--card-bg)',
+            border: '1px solid var(--separator)',
+            borderRadius: 999,
+            padding: '6px 8px 6px 16px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+          }}
+        >
+          {readout('HOLE', `${holeNo}/${HOLES}`)}
+          {readout('PAR', `${hole?.par ?? '—'}`)}
+          {readout('STROKES', `${strokes}`)}
+          {readout('PTS', score.toLocaleString())}
+          {/* Ends the round on the spot, no confirmation — an explicit tap,
+              unlike the back gesture (which pauses first). Results if >=1
+              hole is done, straight back to the menu otherwise. */}
+          <button
+            type="button"
+            onClick={finishNow}
+            className="text-[12px] font-semibold"
+            style={{
+              pointerEvents: 'auto',
+              color: 'var(--text)',
+              background: 'transparent',
+              border: '1px solid var(--separator)',
+              borderRadius: 999,
+              padding: '4px 12px',
+            }}
+          >
+            End
+          </button>
+        </div>
       </div>
+
+      {/* Bottom hint — display-only, pinned low and centred so it never sits
+          on the ball. */}
+      <div
+        style={{
+          position: 'absolute',
+          left: 12,
+          right: 12,
+          bottom: 'calc(env(safe-area-inset-bottom, 0px) + 12px)',
+          display: 'flex',
+          justifyContent: 'center',
+          pointerEvents: 'none',
+        }}
+      >
+        <div
+          className="text-[12px] font-semibold text-center"
+          style={{
+            color: 'var(--text)',
+            background: 'var(--card-bg)',
+            border: '1px solid var(--separator)',
+            borderRadius: 999,
+            padding: '5px 14px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.16)',
+          }}
+        >
+          Drag back from the ball to aim, release to putt.
+        </div>
+      </div>
+
+      {/* Post-sink veil: swallows taps while the ball drops + the next hole
+          is prepared, so a stray tap can't re-aim the sunk ball. */}
+      {transitioning ? <div style={{ position: 'absolute', inset: 0, zIndex: 40 }} /> : null}
 
       {/* Pause sheet. The round stays mounted and frozen underneath, so
           Resume is a true continue; "End game" is the same finishNow

@@ -54,6 +54,13 @@ interface AppState {
   sportsByDate: Record<string, SportsSub[]>;
   selectedSportsDate: string; // YYYY-MM-DD (Toronto)
 
+  // Immersive full-screen flag. When true the app chrome (bottom tab bar,
+  // top navbar) yields so a full-bleed experience — e.g. the 3D golf games —
+  // can own the whole viewport. General-purpose: any screen can raise it and
+  // MUST lower it again on exit/unmount so chrome is always restored.
+  immersive: boolean;
+  setImmersive: (v: boolean) => void;
+
   loadMe: () => Promise<void>;
   loadSports: () => Promise<void>;
   loadSportsForDate: (ymd: string) => Promise<void>;
@@ -213,6 +220,9 @@ export const useStore = create<AppState>((set, get) => ({
   sportsLoaded: false,
   sportsByDate: {},
   selectedSportsDate: todayYmdToronto(),
+  immersive: false,
+
+  setImmersive: (v: boolean) => set({ immersive: v }),
 
   loadMe: async () => {
     try {
