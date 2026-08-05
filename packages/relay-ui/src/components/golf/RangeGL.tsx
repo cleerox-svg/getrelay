@@ -3,7 +3,13 @@ import * as THREE from 'three';
 import { RangeSim } from '../../lib/golf/rangeSim';
 import type { RangeEvent } from '../../lib/golf/rangeSim';
 import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
-import { GRASS_END, RANGE_YD, WATER_END } from '../../lib/golf/rangeTargets';
+import {
+  GRASS_END,
+  ISLAND_SURFACE_SCALE,
+  RANGE_YD,
+  WATER_END,
+  surfaceAt,
+} from '../../lib/golf/rangeTargets';
 import type { Pin } from '../../lib/golf/rangeTargets';
 import { FIXED_MS } from '../../lib/golf/tuning';
 
@@ -26,6 +32,10 @@ const FIXED_S = FIXED_MS / 1000;
 const MAX_SUBSTEPS = 5;
 const BALL_R = 0.62;
 const TEE_LIFT = 0.5;
+// The true rolling rate (speed/radius) is ~200 rad/s at ball speed and would
+// just strobe the dimples. Scale it to a legible spin that still reads fast on
+// a bomb and slow on a trickle; the per-frame angle is also clamped in-loop.
+const SPIN_VIS = 0.13;
 // Longest full-path tracer we retain (world samples) — bounds the buffer.
 const TRACER_MAX = 900;
 
@@ -111,24 +121,118 @@ function makeSkyTexture(): THREE.Texture {
 }
 
 function makeTurfTexture(): THREE.Texture {
+  const S = 512;
   const c = document.createElement('canvas');
-  c.width = 256;
-  c.height = 256;
+  c.width = S;
+  c.height = S;
   const g = c.getContext('2d')!;
-  // Alternating light/dark mowing stripes down the width (become downrange
-  // bands once the plane is laid flat and the texture is repeated).
+  // Mowing stripes down the width (become downrange bands once the plane is
+  // laid flat). Softened: a small light/dark delta on a common base green with
+  // a faint within-stripe gradient so the bands read as mown grass, not blocks.
   const stripes = 8;
+  const sw = S / stripes;
   for (let i = 0; i < stripes; i++) {
-    g.fillStyle = i % 2 === 0 ? '#4e9f43' : '#438c39';
-    g.fillRect((i * c.width) / stripes, 0, c.width / stripes, c.height);
+    const up = i % 2 === 0;
+    const grad = g.createLinearGradient(i * sw, 0, (i + 1) * sw, 0);
+    if (up) {
+      grad.addColorStop(0, '#54a247');
+      grad.addColorStop(0.5, '#5aa94c');
+      grad.addColorStop(1, '#54a247');
+    } else {
+      grad.addColorStop(0, '#478f3c');
+      grad.addColorStop(0.5, '#4c9741');
+      grad.addColorStop(1, '#478f3c');
+    }
+    g.fillStyle = grad;
+    g.fillRect(i * sw, 0, sw, S);
   }
-  // Faint grain so the turf isn't flat.
-  for (let i = 0; i < 2200; i++) {
-    g.fillStyle = `rgba(255,255,255,${Math.random() * 0.04})`;
-    g.fillRect(Math.random() * c.width, Math.random() * c.height, 1, 1);
+  // Directional blade streaks: short, near-vertical strokes in varied green
+  // luminance so light catches individual "blades". Two passes (dark + light).
+  const blade = (n: number, alpha: number, light: boolean) => {
+    for (let i = 0; i < n; i++) {
+      const x = Math.random() * S;
+      const y = Math.random() * S;
+      const len = 3 + Math.random() * 7;
+      const lean = (Math.random() - 0.5) * 2.2;
+      const hue = 95 + Math.random() * 30;
+      const lum = light ? 46 + Math.random() * 20 : 22 + Math.random() * 12;
+      g.strokeStyle = `hsla(${hue},46%,${lum}%,${alpha})`;
+      g.lineWidth = Math.random() < 0.25 ? 1.5 : 1;
+      g.beginPath();
+      g.moveTo(x, y);
+      g.lineTo(x + lean, y - len);
+      g.stroke();
+    }
+  };
+  blade(5200, 0.16, false);
+  blade(4200, 0.16, true);
+  // Broad, low-frequency hue/luminance mottling (sun/shade patches).
+  for (let i = 0; i < 120; i++) {
+    const x = Math.random() * S;
+    const y = Math.random() * S;
+    const r = 20 + Math.random() * 70;
+    const rg = g.createRadialGradient(x, y, 0, x, y, r);
+    const dark = Math.random() < 0.5;
+    rg.addColorStop(0, dark ? 'rgba(30,60,25,0.06)' : 'rgba(150,200,120,0.06)');
+    rg.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = rg;
+    g.beginPath();
+    g.arc(x, y, r, 0, Math.PI * 2);
+    g.fill();
   }
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+// Cheap value-noise grass normal map: fine, near-vertical blade ridges so the
+// single sun catches a soft directional sheen across the fairway. Tileable.
+function makeTurfNormalMap(): THREE.Texture {
+  const S = 256;
+  const c = document.createElement('canvas');
+  c.width = S;
+  c.height = S;
+  const g = c.getContext('2d')!;
+  const img = g.createImageData(S, S);
+  const data = img.data;
+  const hash = (x: number, y: number) => {
+    const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+    return s - Math.floor(s);
+  };
+  // Height field: blades run in Y, so vary fast in X, slow in Y — plus a coarse
+  // undulation. Sampled with toroidal wrap for a seamless tile.
+  const height = (x: number, y: number) => {
+    const xi = ((x % S) + S) % S;
+    const yi = ((y % S) + S) % S;
+    const blade = hash(Math.floor(xi * 0.9), Math.floor(yi * 0.18));
+    const fine = hash(Math.floor(xi), Math.floor(yi * 0.5));
+    const coarse =
+      Math.sin(xi * 0.05) * 0.5 + Math.sin(yi * 0.017 + xi * 0.01) * 0.5;
+    return blade * 0.7 + fine * 0.2 + coarse * 0.25;
+  };
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const hx = height(x + 1, y) - height(x - 1, y);
+      const hy = height(x, y + 1) - height(x, y - 1);
+      let nx = -hx * 1.6;
+      let ny = -hy * 1.6;
+      let nz = 1;
+      const inv = 1 / Math.hypot(nx, ny, nz);
+      nx *= inv;
+      ny *= inv;
+      nz *= inv;
+      const idx = (y * S + x) * 4;
+      data[idx] = (nx * 0.5 + 0.5) * 255;
+      data[idx + 1] = (ny * 0.5 + 0.5) * 255;
+      data[idx + 2] = (nz * 0.5 + 0.5) * 255;
+      data[idx + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.NoColorSpace;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   return tex;
 }
@@ -139,25 +243,77 @@ function makeWaterTexture(): THREE.Texture {
   c.height = 256;
   const g = c.getContext('2d')!;
   const grad = g.createLinearGradient(0, 0, 0, c.height);
-  grad.addColorStop(0, '#1f7fc0');
-  grad.addColorStop(1, '#155e94');
+  grad.addColorStop(0, '#2183c2');
+  grad.addColorStop(1, '#14608f');
   g.fillStyle = grad;
   g.fillRect(0, 0, c.width, c.height);
-  g.strokeStyle = 'rgba(255,255,255,0.14)';
-  g.lineWidth = 2;
-  for (let y = 0; y < c.height; y += 16) {
+  // Soft mottled light patches instead of hard sine lines — the ripple movement
+  // now comes from the animated normal map, so the colour map stays gentle.
+  for (let i = 0; i < 90; i++) {
+    const x = Math.random() * c.width;
+    const y = Math.random() * c.height;
+    const r = 8 + Math.random() * 26;
+    const rg = g.createRadialGradient(x, y, 0, x, y, r);
+    const light = Math.random() < 0.6;
+    rg.addColorStop(0, light ? 'rgba(180,220,240,0.10)' : 'rgba(10,40,70,0.10)');
+    rg.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = rg;
     g.beginPath();
-    for (let x = 0; x <= c.width; x += 8) {
-      const yy = y + Math.sin((x / c.width) * Math.PI * 4 + y) * 2.5;
-      if (x === 0) g.moveTo(x, yy);
-      else g.lineTo(x, yy);
-    }
-    g.stroke();
+    g.arc(x, y, r, 0, Math.PI * 2);
+    g.fill();
   }
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.repeat.set(6, 26);
+  return tex;
+}
+
+// Tileable ripple normal map: two crossing wave trains baked into a normal
+// field. Scrolling its offset each frame makes the water visibly move, and the
+// low roughness on the material turns the moving normals into a shifting sun
+// glint. Frequencies are integer cycles across the tile so it wraps seamlessly.
+function makeWaterNormalMap(): THREE.Texture {
+  const S = 256;
+  const c = document.createElement('canvas');
+  c.width = S;
+  c.height = S;
+  const g = c.getContext('2d')!;
+  const img = g.createImageData(S, S);
+  const data = img.data;
+  const TAU = Math.PI * 2;
+  const wave = (x: number, y: number) => {
+    const u = (x / S) * TAU;
+    const v = (y / S) * TAU;
+    return (
+      Math.sin(u * 3 + v * 1) * 0.5 +
+      Math.sin(u * 1 - v * 4) * 0.35 +
+      Math.sin((u + v) * 5) * 0.2
+    );
+  };
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const hx = wave(x + 1, y) - wave(x - 1, y);
+      const hy = wave(x, y + 1) - wave(x, y - 1);
+      let nx = -hx * 2.2;
+      let ny = -hy * 2.2;
+      let nz = 1;
+      const inv = 1 / Math.hypot(nx, ny, nz);
+      nx *= inv;
+      ny *= inv;
+      nz *= inv;
+      const idx = (y * S + x) * 4;
+      data[idx] = (nx * 0.5 + 0.5) * 255;
+      data[idx + 1] = (ny * 0.5 + 0.5) * 255;
+      data[idx + 2] = (nz * 0.5 + 0.5) * 255;
+      data[idx + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(5, 12);
   return tex;
 }
 
@@ -313,8 +469,17 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
     // --- Ground (mowing stripes) ---------------------------------------
     const turfTex = track(makeTurfTexture());
     turfTex.repeat.set(10, 60);
+    const turfNorm = track(makeTurfNormalMap());
+    turfNorm.repeat.set(64, 180);
     const groundGeo = track(new THREE.PlaneGeometry(320, 820));
-    const groundMat = track(new THREE.MeshStandardMaterial({ map: turfTex, roughness: 1 }));
+    const groundMat = track(
+      new THREE.MeshStandardMaterial({
+        map: turfTex,
+        roughness: 0.92,
+        normalMap: turfNorm,
+        normalScale: new THREE.Vector2(0.35, 0.35),
+      }),
+    );
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
     // Centre so it spans from a little behind the tee out past the fence.
@@ -332,21 +497,27 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
     scene.add(teeMat);
 
     // --- Water hazard ---------------------------------------------------
+    const WATER_Y = 0.06;
     const waterTex = track(makeWaterTexture());
+    const waterNorm = track(makeWaterNormalMap());
     const waterGeo = track(new THREE.PlaneGeometry(150, WATER_END - GRASS_END));
     const waterMat = track(
       new THREE.MeshStandardMaterial({
         map: waterTex,
         color: 0x2a86c4,
-        roughness: 0.28,
-        metalness: 0.15,
+        // Low roughness + a little metalness so the moving normal map produces a
+        // shifting specular sun glint and a faint reflective sheen.
+        roughness: 0.14,
+        metalness: 0.2,
+        normalMap: waterNorm,
+        normalScale: new THREE.Vector2(0.55, 0.55),
         transparent: true,
-        opacity: 0.92,
+        opacity: 0.9,
       }),
     );
     const water = new THREE.Mesh(waterGeo, waterMat);
     water.rotation.x = -Math.PI / 2;
-    water.position.set(0, 0.06, -(GRASS_END + WATER_END) / 2);
+    water.position.set(0, WATER_Y, -(GRASS_END + WATER_END) / 2);
     scene.add(water);
 
     // --- Islands + flags + yardage labels ------------------------------
@@ -364,13 +535,17 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
       if (pin.kind !== 'grass') {
         // Island poking out of the water: a green disc on a dirt base.
         topY = ISLAND_TOP;
-        const baseGeo = track(new THREE.CylinderGeometry(pin.r * 1.25, pin.r * 1.4, 1.1, 20));
+        // Green top radius == the physics surface radius (single source of
+        // truth in rangeTargets) so a ball resting on the visible green is
+        // classified 'island', never 'water', at the rim.
+        const greenR = pin.r * ISLAND_SURFACE_SCALE;
+        const baseGeo = track(new THREE.CylinderGeometry(greenR * 1.04, greenR * 1.16, 1.1, 20));
         const base = new THREE.Mesh(baseGeo, dirtMat);
         base.position.set(pin.x, 0.2, z);
         base.receiveShadow = true;
         base.castShadow = true;
         scene.add(base);
-        const capGeo = track(new THREE.CylinderGeometry(pin.r * 1.2, pin.r * 1.25, 0.5, 20));
+        const capGeo = track(new THREE.CylinderGeometry(greenR, greenR * 1.04, 0.5, 20));
         const cap = new THREE.Mesh(capGeo, greenMat);
         cap.position.set(pin.x, topY, z);
         cap.receiveShadow = true;
@@ -499,6 +674,14 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
     const ball = new THREE.Mesh(ballGeo, ballMat);
     ball.castShadow = true;
     scene.add(ball);
+    // Preallocated temporaries for per-frame ball-spin rotation (no allocs in
+    // the render loop). spinAxis holds the world-space angular-velocity vector;
+    // spinQuat the incremental rotation applied to ball.quaternion each frame.
+    const spinAxis = new THREE.Vector3();
+    const spinQuat = new THREE.Quaternion();
+    // Ball-sink state (water): drop below the surface and fade out.
+    let sinking = false;
+    let sinkStart = 0;
 
     // --- Persistent aim guide (at the tee, before & during a drag) ------
     // A flat tapering arrow lying on the turf from the ball down-range in the
@@ -587,17 +770,24 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
     scene.add(tracer);
     let tracerCount = 0;
 
-    // --- Particle burst (splash / green) -------------------------------
+    // --- Impact FX: surface-appropriate particles + decals -------------
+    // One point cloud drives both the turf-divot flecks and the water droplets,
+    // tinted per-particle via a vertex-colour attribute (green/brown for turf,
+    // white for splash). Gravity is applied in the loop; particles land and hide.
     const PMAX = 60;
     const dotTex = track(makeSoftDotTexture());
     const partPos = new Float32Array(PMAX * 3);
+    const partCol = new Float32Array(PMAX * 3);
     const partGeo = track(new THREE.BufferGeometry());
     const partAttr = new THREE.BufferAttribute(partPos, 3);
+    const partColAttr = new THREE.BufferAttribute(partCol, 3);
     partGeo.setAttribute('position', partAttr);
+    partGeo.setAttribute('color', partColAttr);
     const partMat = track(
       new THREE.PointsMaterial({
-        size: 2.4,
+        size: 1.8,
         map: dotTex,
+        vertexColors: true,
         transparent: true,
         depthWrite: false,
         sizeAttenuation: true,
@@ -609,24 +799,121 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
     scene.add(particles);
     const pVel = new Float32Array(PMAX * 3);
     let pLife = 0;
+    let pLifeMax = 0.6;
     let pActive = 0;
+    let pGround = 0; // y particles fall to (turf/water surface)
 
-    const spawnBurst = (x: number, y: number, z: number, color: number, n: number) => {
-      partMat.color.setHex(color);
-      pActive = Math.min(PMAX, n);
+    // A quick dark divot mark on the ground that fades after a turf landing.
+    const divotGeo = track(new THREE.CircleGeometry(1.5, 20));
+    const divotMat = track(
+      new THREE.MeshBasicMaterial({
+        color: 0x2f2416,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      }),
+    );
+    const divotDecal = new THREE.Mesh(divotGeo, divotMat);
+    divotDecal.rotation.x = -Math.PI / 2;
+    divotDecal.visible = false;
+    scene.add(divotDecal);
+    let divotStart = -1;
+
+    // Expanding concentric ripple rings on the water surface for a splash.
+    const RIPPLES = 2;
+    const rippleGeo = track(new THREE.RingGeometry(0.7, 1.0, 32));
+    const rippleMeshes: THREE.Mesh[] = [];
+    const rippleMats: THREE.MeshBasicMaterial[] = [];
+    for (let i = 0; i < RIPPLES; i++) {
+      const m = track(
+        new THREE.MeshBasicMaterial({
+          color: 0xeaf7ff,
+          transparent: true,
+          opacity: 0,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        }),
+      );
+      const mesh = new THREE.Mesh(rippleGeo, m);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.visible = false;
+      scene.add(mesh);
+      rippleMeshes.push(mesh);
+      rippleMats.push(m);
+    }
+    let splashStart = -1;
+
+    // Kick a low turf divot: a few short green/brown flecks + a fading mark.
+    const spawnDivot = (x: number, z: number, island: boolean) => {
+      const y = island ? ISLAND_TOP + 0.05 : 0.05;
+      pActive = 14;
+      pGround = y;
+      pLifeMax = 0.55;
+      partMat.size = 1.7;
       for (let i = 0; i < pActive; i++) {
-        partPos[i * 3] = x;
-        partPos[i * 3 + 1] = y;
-        partPos[i * 3 + 2] = z;
+        const j = i * 3;
+        partPos[j] = x;
+        partPos[j + 1] = y + 0.05;
+        partPos[j + 2] = z;
         const ang = Math.random() * Math.PI * 2;
-        const sp = 4 + Math.random() * 10;
-        pVel[i * 3] = Math.cos(ang) * sp * 0.5;
-        pVel[i * 3 + 1] = 6 + Math.random() * 12;
-        pVel[i * 3 + 2] = Math.sin(ang) * sp * 0.5;
+        const sp = 2.5 + Math.random() * 5;
+        pVel[j] = Math.cos(ang) * sp;
+        pVel[j + 1] = 3 + Math.random() * 6;
+        pVel[j + 2] = Math.sin(ang) * sp;
+        // Mix of grass-green flecks and darker soil-brown clumps.
+        if (Math.random() < 0.55) {
+          partCol[j] = 0.32 + Math.random() * 0.2;
+          partCol[j + 1] = 0.55 + Math.random() * 0.2;
+          partCol[j + 2] = 0.22;
+        } else {
+          partCol[j] = 0.36;
+          partCol[j + 1] = 0.26;
+          partCol[j + 2] = 0.15;
+        }
       }
-      pLife = 0.7;
+      pLife = pLifeMax;
       particles.visible = true;
       partAttr.needsUpdate = true;
+      partColAttr.needsUpdate = true;
+      // Divot mark on the ground.
+      divotDecal.position.set(x, y + 0.01, z);
+      divotDecal.scale.setScalar(0.8);
+      divotDecal.visible = true;
+      divotMat.opacity = 0.5;
+      divotStart = performance.now();
+    };
+
+    // Kick a water splash: a white crown of droplets + expanding ripple rings.
+    const spawnSplash = (x: number, z: number) => {
+      pActive = 22;
+      pGround = WATER_Y;
+      pLifeMax = 0.7;
+      partMat.size = 2.3;
+      for (let i = 0; i < pActive; i++) {
+        const j = i * 3;
+        partPos[j] = x;
+        partPos[j + 1] = WATER_Y + 0.2;
+        partPos[j + 2] = z;
+        const ang = Math.random() * Math.PI * 2;
+        const sp = 2 + Math.random() * 5;
+        pVel[j] = Math.cos(ang) * sp;
+        pVel[j + 1] = 9 + Math.random() * 11;
+        pVel[j + 2] = Math.sin(ang) * sp;
+        const w = 0.85 + Math.random() * 0.15;
+        partCol[j] = w;
+        partCol[j + 1] = w;
+        partCol[j + 2] = 1;
+      }
+      pLife = pLifeMax;
+      particles.visible = true;
+      partAttr.needsUpdate = true;
+      partColAttr.needsUpdate = true;
+      // Ripple rings.
+      splashStart = performance.now();
+      for (const m of rippleMeshes) {
+        m.position.set(x, WATER_Y + 0.03, z);
+        m.visible = true;
+      }
     };
 
     // --- Pointer input (drag back to swing) ----------------------------
@@ -636,7 +923,10 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
       return { x: e.clientX - rect.left, y: e.clientY - rect.top };
     };
     const onDown = (e: PointerEvent) => {
-      if (pausedRef.current || activePointer != null || sim.ball.inFlight) return;
+      // Ignore new drags while a shot is locked (accuracy phase) or in flight —
+      // Step 2 is a tap on the DOM accuracy bar, not a canvas drag.
+      if (pausedRef.current || activePointer != null || sim.ball.inFlight || sim.armed)
+        return;
       activePointer = e.pointerId;
       canvas.setPointerCapture(e.pointerId);
       sim.onPointerDown(local(e));
@@ -649,9 +939,11 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
       if (e.pointerId !== activePointer) return;
       activePointer = null;
       // A drag started before a back-gesture pause still routes its pointerup
-      // here (capture bypasses the pause sheet); don't queue a swing while paused.
+      // here (capture bypasses the pause sheet); don't lock a shot while paused.
       if (pausedRef.current) return;
-      sim.onPointerUp(local(e));
+      // Release LOCKS aim+power and enters the accuracy phase (does not launch);
+      // a sub-min pull cancels back to the tee. RangeGame fires the armed shot.
+      sim.arm(local(e));
     };
     canvas.addEventListener('pointerdown', onDown);
     canvas.addEventListener('pointermove', onMove);
@@ -697,11 +989,28 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
           tracer.visible = true;
           following = true;
           revertAt = 0;
+          // A fresh shot un-sinks / restores the ball.
+          sinking = false;
+          ball.visible = true;
+          ballMat.opacity = 1;
+          ballMat.transparent = false;
+        } else if (ev.type === 'land') {
+          // First ground contact: a subtle turf divot on grass/island only
+          // (water landings are handled by the splash below).
+          if (ev.d != null && ev.x != null) {
+            const surf = surfaceAt(ev.d, ev.x);
+            if (surf !== 'water' && surf !== 'fence') {
+              spawnDivot(ev.x, -ev.d, surf === 'island');
+            }
+          }
         } else if (ev.type === 'splash') {
-          if (ev.d != null && ev.x != null) spawnBurst(ev.x, 0.4, -ev.d, 0xdff2ff, 46);
-          revertAt = now + 1300;
+          if (ev.d != null && ev.x != null) {
+            spawnSplash(ev.x, -ev.d);
+            sinking = true;
+            sinkStart = now;
+          }
+          revertAt = now + 1600;
         } else if (ev.type === 'rest') {
-          if (ev.d != null && ev.x != null) spawnBurst(ev.x, 0.4, -ev.d, 0x7ee08a, 26);
           revertAt = now + 1300;
         } else if (ev.type === 'fence') {
           revertAt = now + 1100;
@@ -714,6 +1023,60 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
       const teed = !b.inFlight && b.d < 1;
       ball.position.set(b.x, b.h + BALL_R + (teed ? TEE_LIFT : 0), -b.d);
       peg.visible = teed;
+
+      // Re-teeing (new drag) restores a sunk ball.
+      if (teed && sinking) {
+        sinking = false;
+        ballMat.opacity = 1;
+        ballMat.transparent = false;
+      }
+      if (teed) ball.visible = true;
+
+      // Ball spin: rotate the mesh to reflect motion. The rolling rate is
+      // speed/radius; SPIN_VIS scales it down to a legible (non-strobing) rate.
+      // Axis is (up × velocity) — the topspin/rolling sense. In flight the
+      // player's back/top spin sets the SENSE (backspin → top toward the
+      // player), on the ground it rolls forward with travel. Side spin adds a
+      // small vertical-axis tilt. All via preallocated temporaries.
+      if (b.inFlight || b.grounded) {
+        const vx = b.vx;
+        const vz = -b.vd; // scene z-velocity (Z = -d)
+        const horiz = Math.hypot(vx, vz);
+        if (horiz > 1e-3) {
+          const speed = b.grounded ? horiz : Math.hypot(vx, b.vh, b.vd);
+          const rate = (speed / BALL_R) * SPIN_VIS;
+          // up × V = (vz, 0, -vx), normalized → pitch axis.
+          const ax = vz / horiz;
+          const az = -vx / horiz;
+          // Sense: on the ground roll forward (topspin look); in flight a slight
+          // default backspin plus the applied spinBack (back → top backward).
+          const sense = b.grounded ? 1 : -(0.4 + sim.spinBack);
+          const pitch = rate * sense;
+          // Use the launch (net) side-spin so a hook/slice from an accuracy miss
+          // is reflected in the ball's visible yaw, not just the player's puck.
+          const yaw = b.grounded ? 0 : sim.launchSpinSide * rate * 0.35;
+          spinAxis.set(ax * pitch, yaw, az * pitch);
+          const angVel = spinAxis.length();
+          if (angVel > 1e-4) {
+            const ang = Math.min(angVel * dt, 0.5); // clamp per-frame to avoid strobing
+            spinAxis.multiplyScalar(1 / angVel);
+            spinQuat.setFromAxisAngle(spinAxis, ang);
+            ball.quaternion.premultiply(spinQuat);
+          }
+        }
+      }
+
+      // Water sink: drop the ball below the surface and fade it out.
+      if (sinking) {
+        const st = (now - sinkStart) / 1400;
+        if (st >= 1) {
+          ball.visible = false;
+        } else {
+          ballMat.transparent = true;
+          ball.position.y = WATER_Y - st * 2.4 * BALL_R;
+          ballMat.opacity = Math.max(0, 1 - st * 1.3);
+        }
+      }
 
       // Aim guide: visible only at the tee. Steer with aimRad, grow with power,
       // ramp toward red near max, and pulse gently when idle to invite a drag.
@@ -742,7 +1105,7 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
       }
       if (teed) tracer.visible = false;
 
-      // Particle integration.
+      // Particle integration (divot flecks / splash droplets).
       if (particles.visible) {
         pLife -= dt;
         if (pLife <= 0) {
@@ -753,12 +1116,44 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
             const vy = (pVel[j + 1] ?? 0) - 22 * dt;
             pVel[j + 1] = vy;
             partPos[j] = (partPos[j] ?? 0) + (pVel[j] ?? 0) * dt;
-            partPos[j + 1] = Math.max(0, (partPos[j + 1] ?? 0) + vy * dt);
+            partPos[j + 1] = Math.max(pGround, (partPos[j + 1] ?? 0) + vy * dt);
             partPos[j + 2] = (partPos[j + 2] ?? 0) + (pVel[j + 2] ?? 0) * dt;
           }
-          partMat.opacity = Math.max(0, pLife / 0.7);
+          partMat.opacity = Math.max(0, pLife / pLifeMax);
           partAttr.needsUpdate = true;
         }
+      }
+
+      // Divot mark fade.
+      if (divotStart >= 0) {
+        const e = (now - divotStart) / 800;
+        if (e >= 1) {
+          divotDecal.visible = false;
+          divotStart = -1;
+        } else {
+          divotMat.opacity = 0.5 * (1 - e);
+          divotDecal.scale.setScalar(0.8 + e * 0.5);
+        }
+      }
+
+      // Splash ripple rings: staggered expand + fade on the water surface.
+      if (splashStart >= 0) {
+        const elapsed = (now - splashStart) / 1000;
+        let anyLive = false;
+        for (let i = 0; i < rippleMeshes.length; i++) {
+          const p = (elapsed - i * 0.22) / 1.0;
+          const m = rippleMeshes[i]!;
+          if (p < 0 || p >= 1) {
+            m.visible = false;
+            if (p < 1) anyLive = true;
+            continue;
+          }
+          anyLive = true;
+          m.visible = true;
+          m.scale.setScalar(1 + p * 7);
+          rippleMats[i]!.opacity = (1 - p) * 0.6;
+        }
+        if (!anyLive) splashStart = -1;
       }
 
       // Gentle flag sway.
@@ -768,8 +1163,11 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
         f.mesh.rotation.z = Math.sin(t * 2 + i) * 0.12;
         f.mesh.position.x = f.base + Math.sin(t * 3 + i) * 0.12;
       }
-      // Water shimmer.
+      // Water: scroll the colour map and the ripple normal map in different
+      // directions so the surface visibly moves and the sun glint shimmers.
       waterTex.offset.y = (t * 0.03) % 1;
+      waterNorm.offset.x = (t * 0.035) % 1;
+      waterNorm.offset.y = (t * 0.06) % 1;
 
       // Camera: chase the ball down-range in flight, then ease back to the tee.
       if (following && revertAt !== 0 && now >= revertAt) following = false;

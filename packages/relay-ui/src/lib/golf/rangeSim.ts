@@ -14,7 +14,7 @@
 
 import { CLUBS, DEFAULT_CLUB_ID, clubById } from './clubs';
 import type { Club } from './clubs';
-import { RANGE_YD, surfaceAt } from './rangeTargets';
+import { RANGE_YD, islandAt, islandSurfaceR, surfaceAt } from './rangeTargets';
 import type { Pin } from './rangeTargets';
 import { MIN_PULL } from './tuning';
 
@@ -58,6 +58,39 @@ const SPIN_LIFT_ACC = 2.2;
 const SPIN_BITE = 0.18;
 // Topspin roll boost: extra fraction of forward speed kept through the bounce.
 const SPIN_ROLL = 0.5;
+// First-bounce spin "check": at full backspin the ball loses this fraction of
+// its landing ground speed plus a fixed reverse kick (so a spinny wedge zips
+// BACK a little); at full topspin it keeps an extra fraction forward. Only the
+// player's spin drives this, so neutral-spin carries/ladders are untouched.
+const CHECK_BACK_FRAC = 0.7;
+const CHECK_BACK_KICK = 6;
+const CHECK_TOP_FRAC = 0.4;
+// --- Accuracy (Golf-Clash-style tap-timing) → hook/slice --------------------
+// After aim+power are locked (armed), the player taps to stop a sweeping marker.
+// The stop error e ∈ [-1..1] (0 = dead center = pure shot) is turned into ADDED
+// SIDE-SPIN so the ball curves in flight and the tracer visibly bends.
+// Convention: stopping the marker RIGHT of center (e>0) adds fade/slice spin
+// (curves right, +x); LEFT (e<0) adds draw/hook spin (curves left) — the
+// intuitive "you pushed it that way" read. The added spin scales with |e| AND
+// with power, so a full-power drive punishes a mishit far more than a soft
+// wedge. At a full miss (|e|=1) at full power it adds ACCURACY_CURVE of side
+// spin on top of the player's intentional spin; the net is clamped to
+// ±ACCURACY_SPIN_MAX so a total whiff is a strong-but-legible banana and a
+// dead-center stop stays pristine (leaving the tuned club ladder untouched).
+const ACCURACY_CURVE = 0.9;
+const ACCURACY_SPIN_MAX = 1.4;
+// Power weighting of the miss: at zero power a mishit still curves this fraction
+// of ACCURACY_CURVE; at full power the whole of it applies.
+const ACCURACY_POWER_FLOOR = 0.45;
+// A mishit also starts a hair offline (a small straight push), radians at a full
+// miss at full power. Kept tiny — the curve is the main effect.
+const ACCURACY_AIM = 0.05;
+// Island containment: a soft rim. Beyond this fraction of the green radius the
+// outward roll is damped; at the rim the outward component is reflected so a
+// ball that landed on the green settles on it instead of trickling into water.
+const RIM_SOFT = 0.72;
+const RIM_DAMP = 0.82;
+const RIM_BOUNCE = 0.35;
 // Recent-positions tracer length (world-space samples).
 const TRAIL_MAX = 48;
 // Default drag distance (CSS px) for full power; RangeGL overrides this with a
@@ -66,7 +99,7 @@ const DEFAULT_MAX_PULL = 220;
 
 export type ShotResult = 'grass' | 'island' | 'water' | 'fence';
 
-export type RangeEventType = 'launch' | 'land' | 'splash' | 'fence' | 'rest';
+export type RangeEventType = 'launch' | 'land' | 'splash' | 'fence' | 'rest' | 'arm';
 export interface RangeEvent {
   type: RangeEventType;
   // World-space location of the event (landing/splash/rest point), for the
@@ -111,6 +144,7 @@ export interface RangeState {
   inFlight: boolean;
   resting: boolean;
   aiming: boolean;
+  armed: boolean;
   power: number;
   aimDeg: number;
   carry: number;
@@ -150,6 +184,19 @@ export class RangeSim {
   power = 0;
   aimRad = 0;
 
+  // Two-step (slingshot + release-timing) fire state. After a drag is released
+  // (arm()), aim + power are LOCKED and `armed` flips true — the shot does NOT
+  // launch yet; the HUD runs the accuracy bar and calls fireArmed() to launch.
+  armed = false;
+  // Net side-spin actually used in flight = clamp(player spinSide + accuracy
+  // miss). Public so the renderer's ball-yaw visual reflects the real curve.
+  // Set at launch; 0 at the tee.
+  launchSpinSide = 0;
+  // Accuracy miss for the pending shot, consumed (and cleared) by swing():
+  // pendingCurve = added side-spin, pendingAim = added straight push (rad).
+  private pendingCurve = 0;
+  private pendingAim = 0;
+
   // Player spin, set from the HUD spin puck before a swing and PERSISTED across
   // shots (teeUp does not clear it). spinBack>0 = backspin, <0 = topspin;
   // spinSide>0 = fade (curves right), <0 = draw (curves left). Each in [-1..1].
@@ -165,6 +212,9 @@ export class RangeSim {
   private lastResult: ShotResult | null = null;
   private firstLanding = true;
   private rollDecay = ROLL_FRICTION;
+  // When the ball settles into a roll ON an island green, the pin whose green
+  // it must be kept on (soft rim containment). Null on grass/lip.
+  private containPin: Pin | null = null;
 
   // Drag input (CSS pixels).
   private dragStart: Vec2 = { x: 0, y: 0 };
@@ -249,8 +299,13 @@ export class RangeSim {
     b.grounded = false;
     this.trail.length = 0;
     this.aiming = false;
+    this.armed = false;
     this.power = 0;
     this.aimRad = 0;
+    this.launchSpinSide = 0;
+    this.pendingCurve = 0;
+    this.pendingAim = 0;
+    this.containPin = null;
   }
 
   getState(): RangeState {
@@ -263,6 +318,7 @@ export class RangeSim {
       inFlight: this.ball.inFlight,
       resting: this.ball.resting,
       aiming: this.aiming,
+      armed: this.armed,
       power: this.power,
       aimDeg: (this.aimRad * 180) / Math.PI,
       carry: Math.round(this.carry),
@@ -303,6 +359,8 @@ export class RangeSim {
       b.vx *= decay;
       b.d += b.vd * dt;
       b.x += b.vx * dt;
+      // Island containment: keep a ball that settled on a green ON the green.
+      if (this.containPin) this.containOnIsland();
       this.total = b.d;
       const surf = surfaceAt(b.d, b.x);
       if (surf === 'water') return this.stop('water');
@@ -318,7 +376,8 @@ export class RangeSim {
     // shape the trajectory rather than dominate it.
     b.vh -= GRAVITY * dt;
     b.vh += this.spinBack * SPIN_LIFT_ACC * dt;
-    b.vx += this.spinSide * SPIN_SIDE_ACC * dt;
+    // launchSpinSide = player's intentional side-spin + the accuracy miss curve.
+    b.vx += this.launchSpinSide * SPIN_SIDE_ACC * dt;
     const drag = Math.pow(AIR_DRAG, dt * 60);
     b.vd *= drag;
     b.vx *= drag;
@@ -331,6 +390,7 @@ export class RangeSim {
 
     if (b.h <= 0 && b.vh < 0) {
       b.h = 0;
+      const wasFirst = this.firstLanding;
       if (this.firstLanding) {
         this.carry = b.d;
         this.firstLanding = false;
@@ -339,12 +399,25 @@ export class RangeSim {
       const surf = surfaceAt(b.d, b.x);
       if (surf === 'fence' || b.d >= RANGE_YD) return this.stop('fence');
       if (surf === 'water') return this.stop('water');
+      // First ground contact: the player's spin "checks" the ball. Strong
+      // backspin scrubs forward speed and adds a reverse kick (zips back);
+      // strong topspin releases forward. Neutral spin leaves vd untouched, so
+      // the tuned carry ladder is preserved.
+      if (wasFirst) {
+        const hs = Math.abs(b.vd);
+        const back = Math.max(0, this.spinBack);
+        const top = Math.max(0, -this.spinBack);
+        b.vd -= back * (CHECK_BACK_FRAC * hs + CHECK_BACK_KICK);
+        b.vd += top * CHECK_TOP_FRAC * hs;
+      }
       // Grass / island: bounce, or settle into a roll if the hop is spent.
       const club = this.club();
       const up = -b.vh * BOUNCE_RESTITUTION;
       if (up < BOUNCE_MIN) {
         b.grounded = true;
         b.vh = 0;
+        // If it settled onto an island green, remember it for rim containment.
+        this.containPin = surf === 'island' ? islandAt(b.d, b.x) : null;
         // Topspin runs out more (keeps more forward speed); backspin bites and
         // adds roll friction so wedge-y spin checks up near the pitch mark.
         const top = Math.max(0, -this.spinBack);
@@ -358,6 +431,36 @@ export class RangeSim {
         const keep = 0.55 + 0.4 * club.rollFactor;
         b.vd *= keep;
         b.vx *= keep;
+      }
+    }
+  }
+
+  // Soft rim: keep a green-bound ball on its island. Near the edge the outward
+  // roll is damped; past the rim the ball is clamped back and its outward speed
+  // is reflected (a gentle "bounces off the bank" feel) so it stays on the green.
+  private containOnIsland(): void {
+    const p = this.containPin;
+    if (!p) return;
+    const b = this.ball;
+    const dd = b.d - p.d;
+    const dx = b.x - p.x;
+    const dist = Math.hypot(dd, dx);
+    const rim = islandSurfaceR(p);
+    if (dist < rim * RIM_SOFT || dist < 1e-4) return;
+    const rd = dd / dist;
+    const rx = dx / dist;
+    // Extra friction on the outer band of the green.
+    b.vd *= RIM_DAMP;
+    b.vx *= RIM_DAMP;
+    if (dist > rim) {
+      // Clamp back onto the edge and reflect the outward velocity component.
+      b.d = p.d + rd * rim;
+      b.x = p.x + rx * rim;
+      const vOut = b.vd * rd + b.vx * rx;
+      if (vOut > 0) {
+        const j = (1 + RIM_BOUNCE) * vOut;
+        b.vd -= j * rd;
+        b.vx -= j * rx;
       }
     }
   }
@@ -434,19 +537,46 @@ export class RangeSim {
     this.aimRad = this.aimAngleFrom(rawX);
   }
 
-  onPointerUp(p: Vec2): void {
+  // Step 1 → Step 2 (release): LOCK the aimed power + direction and enter the
+  // accuracy phase. Does NOT launch — the HUD now runs the accuracy bar and
+  // calls fireArmed() to release. A sub-min pull cancels back to the tee.
+  arm(p: Vec2): void {
     if (!this.aiming) return;
     this.aiming = false;
     const pullX = this.dragStart.x - p.x;
     const pullY = this.dragStart.y - p.y;
     const len = Math.hypot(pullX, pullY);
     if (len < MIN_PULL) {
-      this.power = 0;
-      this.aimRad = 0;
+      this.cancelArm();
       return;
     }
     this.power = Math.min(len, this.maxPull) / this.maxPull;
     this.aimRad = this.aimAngleFrom(pullX);
+    this.armed = true;
+    // Signal the HUD to raise the accuracy bar immediately, rather than on the
+    // next ~100ms poll tick (a timing mechanic can't afford a dead window).
+    this.events.push({ type: 'arm' });
+  }
+
+  // Abandon a locked (armed) shot and return to the tee. Safe when not armed;
+  // guarantees the armed flag can never strand (used by sub-min pulls and any
+  // HUD-side bail-out).
+  cancelArm(): void {
+    this.teeUp();
+  }
+
+  // Step 2 → fire: the player tapped to stop the accuracy marker. `accuracyError`
+  // ∈ [-1..1] (0 = dead center = pure shot). Turns the miss into a small straight
+  // push + (mainly) a side-spin curve, then launches with the locked aim/power
+  // via the shared swing() internals.
+  fireArmed(accuracyError: number): void {
+    if (!this.armed) return;
+    this.armed = false;
+    const e = Math.max(-1, Math.min(1, accuracyError));
+    // Power weight: a mishit hurts more the harder you swung.
+    const powerW = ACCURACY_POWER_FLOOR + (1 - ACCURACY_POWER_FLOOR) * this.power;
+    this.pendingCurve = e * ACCURACY_CURVE * powerW;
+    this.pendingAim = e * ACCURACY_AIM * powerW;
     this.swing();
   }
 
@@ -458,7 +588,15 @@ export class RangeSim {
     const sPow = POWER_FLOOR + (1 - POWER_FLOOR) * this.power;
     const s = club.baseSpeed * Math.sqrt(sPow);
     const loft = (club.loft * Math.PI) / 180;
-    const aim = this.aimRad;
+    // Fold in the accuracy miss (0 for a dead-center stop / practice): a small
+    // straight push on the initial line, plus (mainly) added side-spin that
+    // curves the flight. Net side-spin = clamp(player spinSide + miss curve);
+    // neutral inputs leave it at spinSide, preserving the tuned club ladder.
+    const aim = this.aimRad + this.pendingAim;
+    this.launchSpinSide = Math.max(
+      -ACCURACY_SPIN_MAX,
+      Math.min(ACCURACY_SPIN_MAX, this.spinSide + this.pendingCurve),
+    );
     const sH = s * Math.cos(loft);
     b.d = 0;
     b.x = 0;
@@ -476,8 +614,12 @@ export class RangeSim {
     this.apex = 0;
     this.firstLanding = true;
     this.lastResult = null;
+    this.containPin = null;
     this.trail.length = 0;
     this.power = 0;
+    // The accuracy miss has been consumed into launchSpinSide/aim above.
+    this.pendingCurve = 0;
+    this.pendingAim = 0;
     this.events.push({ type: 'launch' });
   }
 }
