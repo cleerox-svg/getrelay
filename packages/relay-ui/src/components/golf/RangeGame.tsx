@@ -1,14 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { GolfCanvas } from './GolfCanvas';
-import type { GolfCanvasHandle } from './GolfCanvas';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/api';
-import { RangeMode } from '../../lib/golf/range';
-import type { RangeState, ShotResult } from '../../lib/golf/range';
+import { RangeSim } from '../../lib/golf/rangeSim';
+import type { RangeState, ShotResult } from '../../lib/golf/rangeSim';
 import { CLUBS, DEFAULT_CLUB_ID } from '../../lib/golf/clubs';
 import { PINS, spawnTarget } from '../../lib/golf/rangeTargets';
 import type { Pin } from '../../lib/golf/rangeTargets';
 import { recordRangeGame } from '../../lib/golf/stats';
 import { MAX_HOLE_POINTS, RANGE_BALLS } from '../../lib/golf/tuning';
+
+// Lazy-load the whole Three.js scene so it lands in its own chunk and never
+// bloats the main entry — the HUD/orchestration below is plain React.
+const RangeGL = lazy(() => import('./RangeGL'));
 
 // A single Target-Challenge shot, banked when the ball comes to rest / splashes.
 export interface RangeShot {
@@ -38,6 +40,8 @@ interface Props {
   onResume?: () => void;
   onFinish?: (result: RangeGameResult) => void;
   initialClubId?: string;
+  // Practice only: leave the full-bleed range back to the golf menu.
+  onExit?: () => void;
 }
 
 // Scoring: full points landing on the pin, fading to 0 by SCORE_RADIUS yards
@@ -80,15 +84,88 @@ function makeWind(): { along: number; cross: number } {
   return { along: Math.sin(ang) * mag * 0.6, cross: Math.cos(ang) * mag };
 }
 
-export function RangeGame({ mode, paused = false, onResume, onFinish, initialClubId }: Props) {
+function Spinner() {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        inset: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: '#ffffff',
+        fontSize: 14,
+        fontWeight: 600,
+        textShadow: '0 1px 3px rgba(0,0,0,0.4)',
+      }}
+    >
+      Loading range…
+    </div>
+  );
+}
+
+// Compass wind chip: an arrow pointing the way the wind pushes the ball, plus
+// a mph readout. Up = downrange; +cross pushes right.
+function WindChip({ along, cross }: { along: number; cross: number }) {
+  const mph = Math.round(Math.hypot(along, cross) * 2.5);
+  const deg = (Math.atan2(cross, Math.max(0.0001, along)) * 180) / Math.PI;
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        background: 'var(--card-bg)',
+        border: '1px solid var(--separator)',
+        borderRadius: 999,
+        padding: '5px 10px 5px 6px',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+      }}
+    >
+      <svg width={26} height={26} viewBox="0 0 26 26" style={{ transform: `rotate(${deg}deg)` }}>
+        <circle cx={13} cy={13} r={12} fill="none" stroke="var(--separator)" strokeWidth={1.5} />
+        <path d="M13 4 L17 15 L13 12 L9 15 Z" fill="var(--accent)" />
+      </svg>
+      <div style={{ lineHeight: 1 }}>
+        <div className="tabular-nums" style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>
+          {mph}
+        </div>
+        <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1, color: 'var(--text-dim)' }}>
+          MPH
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function RangeGame({
+  mode,
+  paused = false,
+  onResume,
+  onFinish,
+  initialClubId,
+  onExit,
+}: Props) {
   const isChallenge = mode === 'challenge';
-  const canvasRef = useRef<GolfCanvasHandle | null>(null);
 
   const wind = useMemo(makeWind, []);
   const seedRef = useRef(Math.floor(Math.random() * 1e6) + 1);
   // First challenge target (also drives the initial flag highlight).
   const firstTargetRef = useRef<Pin>(spawnTarget(0, seedRef.current));
   const [target, setTarget] = useState<Pin | null>(isChallenge ? firstTargetRef.current : null);
+
+  // The headless sim: created once, owned here, driven by RangeGL each frame.
+  const simRef = useRef<RangeSim | null>(null);
+  if (!simRef.current) {
+    simRef.current = new RangeSim({
+      pins: PINS,
+      target: isChallenge ? firstTargetRef.current : null,
+      initialClubId: initialClubId ?? DEFAULT_CLUB_ID,
+      windAlong: wind.along,
+      windCross: wind.cross,
+    });
+  }
+  const sim = simRef.current;
 
   const [readout, setReadout] = useState<RangeState | null>(null);
   const [ballNo, setBallNo] = useState(1);
@@ -100,39 +177,28 @@ export function RangeGame({ mode, paused = false, onResume, onFinish, initialClu
 
   const onFinishRef = useRef(onFinish);
   onFinishRef.current = onFinish;
-  const onResumeRef = useRef(onResume);
-  onResumeRef.current = onResume;
 
-  const getMode = (): RangeMode | null => {
-    const m = canvasRef.current?.getMode();
-    return m instanceof RangeMode ? m : null;
-  };
-
-  // Live HUD: poll the mode a few times a second (cheap; avoids a React
-  // render every animation frame). Paused freezes the poll too. Only commit
-  // a new readout when it actually changed, so a ball at rest doesn't trigger
-  // a steady stream of no-op re-renders.
+  // Live HUD: poll the sim a few times a second (cheap; avoids a React render
+  // every animation frame). Paused freezes the poll too. Only commit a new
+  // readout when it actually changed.
   const lastReadoutRef = useRef('');
   useEffect(() => {
     if (paused) return;
     const id = window.setInterval(() => {
-      const m = getMode();
-      if (!m) return;
-      const next = m.getState();
+      const next = sim.getState();
       const sig = JSON.stringify(next);
       if (sig === lastReadoutRef.current) return;
       lastReadoutRef.current = sig;
       setReadout(next);
     }, 100);
     return () => window.clearInterval(id);
-  }, [paused]);
+  }, [paused, sim]);
 
   function score(): number {
     return perShotRef.current.reduce((s, x) => s + x.points, 0);
   }
 
-  // End the challenge now with whatever balls are hit. Natural finish (8th
-  // ball) and the pause sheet's "End game" both funnel here.
+  // End the challenge now with whatever balls are hit.
   function finishNow() {
     if (reportedRef.current) return;
     reportedRef.current = true;
@@ -148,8 +214,7 @@ export function RangeGame({ mode, paused = false, onResume, onFinish, initialClu
   finishRef.current = finishNow;
 
   // Abandon safety net: unmounted mid-round with >=1 ball hit and nothing
-  // reported yet → bank the partial run directly (fire-and-forget POST,
-  // local stats always update). Mirrors GolfGame.
+  // reported yet → bank the partial run directly. Mirrors GolfGame.
   useEffect(() => {
     if (!isChallenge) return;
     return () => {
@@ -174,13 +239,11 @@ export function RangeGame({ mode, paused = false, onResume, onFinish, initialClu
 
   // A shot came to rest / splashed / went out.
   function handleTerminal() {
-    const m = getMode();
-    if (!m) return;
-    const st = m.getState();
+    const st = sim.getState();
     if (!isChallenge || reportedRef.current) return;
 
     const landed = st.lastResult === 'grass' || st.lastResult === 'island';
-    const dist = st.total; // distance reached this shot
+    const dist = st.total;
     const isLongest = landed && dist > longestRef.current;
     if (landed) longestRef.current = Math.max(longestRef.current, dist);
     const pts = shotPoints(st, isLongest);
@@ -201,10 +264,8 @@ export function RangeGame({ mode, paused = false, onResume, onFinish, initialClu
       finishRef.current();
       return;
     }
-    // Next target — highlight the new flag; the ball stays put until the
-    // player starts the next drag (which re-tees it).
     const chosen = spawnTarget(perShotRef.current.length, seedRef.current, target?.id);
-    m.setTarget(chosen);
+    sim.setTarget(chosen);
     setTarget(chosen);
     setBallNo(perShotRef.current.length + 1);
   }
@@ -214,7 +275,7 @@ export function RangeGame({ mode, paused = false, onResume, onFinish, initialClu
   }
 
   function selectClub(id: string) {
-    getMode()?.selectClub(id);
+    sim.selectClub(id);
     setReadout((r) => (r ? { ...r, clubId: id } : r));
   }
 
@@ -222,109 +283,178 @@ export function RangeGame({ mode, paused = false, onResume, onFinish, initialClu
   const st = readout;
   const totalScore = isChallenge ? score() : 0;
 
+  const stat = (label: string, val: string) => (
+    <div
+      key={label}
+      className="rounded-lg text-center"
+      style={{
+        background: 'var(--card-bg)',
+        border: '1px solid var(--separator)',
+        padding: '4px 2px',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.14)',
+      }}
+    >
+      <div className="text-[9px] font-bold tracking-wider" style={{ color: 'var(--text-dim)' }}>
+        {label}
+      </div>
+      <div className="text-[14px] font-bold tabular-nums" style={{ color: 'var(--text)' }}>
+        {val}
+      </div>
+    </div>
+  );
+
   return (
-    <div className="px-4">
-      {/* Header: challenge shows ball count + score; practice shows a title. */}
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 15,
+        overflow: 'hidden',
+        background: '#bfe0f2',
+        touchAction: 'none',
+      }}
+    >
+      {/* 3D scene, lazy-loaded into its own chunk. */}
+      <Suspense fallback={<Spinner />}>
+        <RangeGL
+          sim={sim}
+          pins={PINS}
+          targetId={isChallenge ? (target?.id ?? null) : null}
+          paused={paused}
+          onEvent={(e) => onEvent(e.type)}
+        />
+      </Suspense>
+
+      {/* Top HUD: wind (left) + challenge/practice status (right). Offset to
+          clear a possible top navbar. */}
       <div
-        className="flex items-baseline justify-between pb-2 text-sm font-semibold"
-        style={{ color: 'var(--text)' }}
+        style={{
+          position: 'absolute',
+          top: 'calc(env(safe-area-inset-top, 0px) + 56px)',
+          left: 12,
+          right: 12,
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'space-between',
+          gap: 8,
+          pointerEvents: 'none',
+        }}
       >
-        {isChallenge ? (
-          <>
-            <span>
-              Ball {Math.min(ballNo, RANGE_BALLS)}/{RANGE_BALLS}
-            </span>
-            <span className="tabular-nums" style={{ color: 'var(--text-dim)' }}>
-              {target ? `${target.d}yd target` : '—'}
-            </span>
-            <span className="tabular-nums">{totalScore.toLocaleString()} pts</span>
-            <button
-              type="button"
-              onClick={finishNow}
-              className="text-xs font-semibold"
-              style={{
-                color: 'var(--text-dim)',
-                background: 'transparent',
-                border: '1px solid var(--separator)',
-                borderRadius: 999,
-                padding: '2px 10px',
-              }}
-            >
-              End
-            </button>
-          </>
-        ) : (
-          <>
-            <span>Driving range</span>
-            <span className="tabular-nums" style={{ color: 'var(--text-dim)' }}>
-              Longest {st?.longestDrive ?? 0}yd
-            </span>
-          </>
-        )}
-      </div>
-
-      <GolfCanvas
-        ref={canvasRef}
-        makeMode={(ctx) =>
-          new RangeMode(ctx, {
-            pins: PINS,
-            target: isChallenge ? firstTargetRef.current : null,
-            initialClubId: initialClubId ?? DEFAULT_CLUB_ID,
-            windAlong: wind.along,
-            windCross: wind.cross,
-          })
-        }
-        paused={paused}
-        onEvent={(e) => onEvent(e.type)}
-      />
-
-      {/* Live readouts */}
-      <div
-        className="grid grid-cols-4 gap-2 pt-3 text-center"
-        style={{ color: 'var(--text)' }}
-      >
-        {(
-          [
-            ['Carry', `${st?.carry ?? 0}`],
-            ['Total', `${st?.total ?? 0}`],
-            ['Apex', `${st?.apex ?? 0}`],
-            ['Ball', `${st?.ballSpeed ?? 0}`],
-          ] as [string, string][]
-        ).map(([label, val]) => (
-          <div
-            key={label}
-            className="rounded-xl py-1.5"
-            style={{ background: 'var(--card-bg)', border: '1px solid var(--separator)' }}
-          >
-            <div className="text-[10px] font-bold tracking-wider" style={{ color: 'var(--text-dim)' }}>
-              {label.toUpperCase()}
-            </div>
-            <div className="text-[15px] font-bold tabular-nums">{val}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Wind + nearest-pin line */}
-      <div className="flex items-center justify-between pt-2 text-xs" style={{ color: 'var(--text-dim)' }}>
-        <span>
-          Wind {Math.abs(Math.round((st?.windCross ?? wind.cross) * 2))}{' '}
-          {(st?.windCross ?? wind.cross) >= 0 ? '→' : '←'}
-        </span>
-        {st?.nearestPin != null ? (
-          <span className="tabular-nums">
-            {st.lastResult === 'water' ? 'Splash' : st.lastResult === 'fence' ? 'Out of bounds' : `${st.nearestPin}yd to pin`}
-          </span>
-        ) : (
-          <span>Drag back from the tee to swing</span>
-        )}
-      </div>
-
-      {/* Club selector */}
-      <div className="pt-3">
-        <div className="text-[10px] font-bold tracking-wider pb-1.5" style={{ color: 'var(--text-dim)' }}>
-          CLUB
+        <div style={{ pointerEvents: 'auto' }}>
+          <WindChip along={st?.windAlong ?? wind.along} cross={st?.windCross ?? wind.cross} />
         </div>
-        <div className="flex flex-wrap gap-1.5">
+
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            pointerEvents: 'auto',
+            background: 'var(--card-bg)',
+            border: '1px solid var(--separator)',
+            borderRadius: 999,
+            padding: '5px 6px 5px 12px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+          }}
+        >
+          {isChallenge ? (
+            <>
+              <span className="text-[13px] font-bold" style={{ color: 'var(--text)' }}>
+                Ball {Math.min(ballNo, RANGE_BALLS)}/{RANGE_BALLS}
+              </span>
+              <span className="text-[13px] tabular-nums" style={{ color: 'var(--text-dim)' }}>
+                {target ? `${target.d}yd` : '—'}
+              </span>
+              <span className="text-[13px] font-bold tabular-nums" style={{ color: 'var(--accent)' }}>
+                {totalScore.toLocaleString()}
+              </span>
+              <button
+                type="button"
+                onClick={finishNow}
+                className="text-[12px] font-semibold"
+                style={{
+                  color: 'var(--text)',
+                  background: 'transparent',
+                  border: '1px solid var(--separator)',
+                  borderRadius: 999,
+                  padding: '2px 10px',
+                }}
+              >
+                End
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="text-[13px] tabular-nums" style={{ color: 'var(--text-dim)' }}>
+                Longest {st?.longestDrive ?? 0}yd
+              </span>
+              <button
+                type="button"
+                onClick={onExit}
+                className="text-[12px] font-semibold"
+                style={{
+                  color: 'var(--text)',
+                  background: 'transparent',
+                  border: '1px solid var(--separator)',
+                  borderRadius: 999,
+                  padding: '2px 10px',
+                }}
+              >
+                Done
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Bottom HUD: hint / result line, readouts, club picker. Offset to
+          clear the bottom tab bar. */}
+      <div
+        style={{
+          position: 'absolute',
+          left: 12,
+          right: 12,
+          bottom: 'calc(env(safe-area-inset-bottom, 0px) + 62px)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+        }}
+      >
+        {/* Hint / nearest-pin / result line. */}
+        <div
+          className="text-[12px] font-semibold text-center"
+          style={{
+            color: 'var(--text)',
+            background: 'var(--card-bg)',
+            border: '1px solid var(--separator)',
+            borderRadius: 999,
+            padding: '4px 12px',
+            alignSelf: 'center',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.16)',
+          }}
+        >
+          {st?.nearestPin != null
+            ? st.lastResult === 'water'
+              ? 'Splash!'
+              : st.lastResult === 'fence'
+                ? 'Out of bounds'
+                : `${st.nearestPin}yd to pin`
+            : 'Drag back from the tee to swing'}
+        </div>
+
+        {/* Readouts. */}
+        <div className="grid grid-cols-4 gap-1.5">
+          {stat('CARRY', `${st?.carry ?? 0}`)}
+          {stat('TOTAL', `${st?.total ?? 0}`)}
+          {stat('APEX', `${st?.apex ?? 0}`)}
+          {stat('BALL', `${st?.ballSpeed ?? 0}`)}
+        </div>
+
+        {/* Club picker. */}
+        <div
+          className="flex gap-1.5"
+          style={{ overflowX: 'auto', paddingBottom: 2, scrollbarWidth: 'none' }}
+        >
           {CLUBS.map((c) => {
             const active = c.id === clubId;
             const disabled = !!st?.inFlight;
@@ -335,14 +465,16 @@ export function RangeGame({ mode, paused = false, onResume, onFinish, initialClu
                 disabled={disabled}
                 onClick={() => selectClub(c.id)}
                 style={{
-                  border: '1px solid var(--separator)',
+                  flex: '0 0 auto',
+                  border: `1px solid ${active ? 'var(--accent)' : 'var(--separator)'}`,
                   background: active ? 'var(--accent)' : 'var(--card-bg)',
                   color: active ? '#FFFFFF' : 'var(--text)',
                   opacity: disabled && !active ? 0.5 : 1,
-                  borderRadius: 999,
-                  padding: '5px 10px',
+                  borderRadius: 12,
+                  padding: '6px 12px',
                   fontSize: 12,
-                  fontWeight: 600,
+                  fontWeight: 700,
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.14)',
                 }}
               >
                 {c.name}

@@ -69,7 +69,7 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
         })}
         {card({
           title: 'Driving Range',
-          subtitle: 'Down-range 2.5D. Pick a club, carry the water, land on the island targets.',
+          subtitle: 'Real 3D. Pick a club, carry the water, land on the island targets.',
           onClick: () => setExpanded((e) => !e),
           active: expanded,
         })}

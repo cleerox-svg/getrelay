@@ -559,22 +559,35 @@ export function Fog() {
             }}
           />
         ) : screen === 'free' ? (
-          <>
-            <div className="px-4 pb-2">
-              <button
-                type="button"
-                className="text-sm font-semibold"
-                style={{ color: 'var(--accent)', background: 'transparent', border: 0, padding: 0 }}
-                onClick={() => {
-                  setScreen('menu');
-                  consumeHistoryEntry('free');
-                }}
-              >
-                ‹ Back
-              </button>
-            </div>
-            {game === 'golf' ? <RangeGame mode="practice" initialClubId={golfClub} /> : <FreePlay />}
-          </>
+          game === 'golf' ? (
+            // The 3D range renders full-bleed (its own fixed overlay), so its
+            // in-HUD "Done" button takes the place of the boxed back link.
+            <RangeGame
+              mode="practice"
+              initialClubId={golfClub}
+              onExit={() => {
+                setScreen('menu');
+                consumeHistoryEntry('free');
+              }}
+            />
+          ) : (
+            <>
+              <div className="px-4 pb-2">
+                <button
+                  type="button"
+                  className="text-sm font-semibold"
+                  style={{ color: 'var(--accent)', background: 'transparent', border: 0, padding: 0 }}
+                  onClick={() => {
+                    setScreen('menu');
+                    consumeHistoryEntry('free');
+                  }}
+                >
+                  ‹ Back
+                </button>
+              </div>
+              <FreePlay />
+            </>
+          )
         ) : screen === 'results' && game === 'fog' && result ? (
           <div className="px-4 flex flex-col gap-4">
             <div
