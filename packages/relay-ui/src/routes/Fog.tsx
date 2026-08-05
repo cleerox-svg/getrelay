@@ -145,6 +145,21 @@ export function Fog() {
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
 
+  const setImmersive = useStore((s) => s.setImmersive);
+  // Full-bleed 3D golf runs immersive: the range (challenge on `guess`,
+  // practice on `free`) AND the mini-golf putting round (challenge on
+  // `guess`, golfMode 'putt') hide the app chrome so the scene owns the
+  // whole viewport. Cleared on exit AND on unmount so leaving the tab by
+  // any path restores the chrome.
+  const immersive =
+    game === 'golf' &&
+    ((screen === 'guess' && (golfMode === 'range-challenge' || golfMode === 'putt')) ||
+      screen === 'free');
+  useEffect(() => {
+    setImmersive(immersive);
+    return () => setImmersive(false);
+  }, [immersive, setImmersive]);
+
   const location = useLocation();
   const nav = useNavigate();
   const histFog = (location.state as FogHistoryState)?.fog;

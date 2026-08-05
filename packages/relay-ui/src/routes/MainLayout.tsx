@@ -18,6 +18,10 @@ export function MainLayout() {
   const loc = useLocation();
   const legacy = useLegacyUi();
   const unread = useStore((s) => s.chats.reduce((n, c) => n + (c.unreadCount ?? 0), 0));
+  // Immersive screens (e.g. the full-bleed 3D golf games) hide the bottom
+  // nav so they own the whole viewport. The flag is set/cleared by the
+  // screen itself (see Fog.tsx) and reliably reset on exit/unmount.
+  const immersive = useStore((s) => s.immersive);
   // True when any followed team has a live game right now. Drives a
   // small red dot on the Sports tab so the user notices without
   // having to switch tabs to check. Selector is a `.some()` over a
@@ -35,6 +39,7 @@ export function MainLayout() {
         <Outlet />
         <InstallPrompt />
         <PushPrompt />
+        {immersive ? null : (
         <nav
           className="legacy-tabbar"
           role="tablist"
@@ -71,6 +76,7 @@ export function MainLayout() {
             );
           })}
         </nav>
+        )}
       </>
     );
   }
@@ -80,6 +86,7 @@ export function MainLayout() {
       <Outlet />
       <InstallPrompt />
       <PushPrompt />
+      {immersive ? null : (
       <Tabbar labels icons className="left-0 bottom-0 fixed">
         {TABS.map((t) => {
           const Icon = t.icon;
@@ -118,6 +125,7 @@ export function MainLayout() {
           );
         })}
       </Tabbar>
+      )}
     </>
   );
 }
