@@ -44,6 +44,20 @@ const BITE_K = 0.16;
 const ROLL_REST = 2.5;
 // Max lateral aim swing from the drag idiom (radians ~= 19deg each way).
 const MAX_AIM_RAD = 0.33;
+
+// --- Spin (player-controlled, bounded & forgiving) ---
+// Side spin → a steady lateral acceleration while airborne (yd/s²) at full
+// draw/fade; over a full flight this curves a drive a believable ~15-30yd, and
+// only bananas when maxed. Comparable in scale to the round's cross-wind.
+const SPIN_SIDE_ACC = 1.9;
+// Back/top spin → a vertical acceleration while airborne (yd/s²) at full spin:
+// backspin (+) lifts, raising apex and adding a touch of carry; topspin (−)
+// presses the flight down for a lower, shorter shot. Kept well under GRAVITY.
+const SPIN_LIFT_ACC = 2.2;
+// Backspin bite added to the roll-friction term at the settle (checks up).
+const SPIN_BITE = 0.18;
+// Topspin roll boost: extra fraction of forward speed kept through the bounce.
+const SPIN_ROLL = 0.5;
 // Recent-positions tracer length (world-space samples).
 const TRAIL_MAX = 48;
 // Default drag distance (CSS px) for full power; RangeGL overrides this with a
@@ -108,6 +122,8 @@ export interface RangeState {
   nearestPin: number | null;
   onTarget: boolean;
   hasTarget: boolean;
+  spinBack: number;
+  spinSide: number;
 }
 
 export interface RangeSimOptions {
@@ -133,6 +149,12 @@ export class RangeSim {
   aiming = false;
   power = 0;
   aimRad = 0;
+
+  // Player spin, set from the HUD spin puck before a swing and PERSISTED across
+  // shots (teeUp does not clear it). spinBack>0 = backspin, <0 = topspin;
+  // spinSide>0 = fade (curves right), <0 = draw (curves left). Each in [-1..1].
+  spinBack = 0;
+  spinSide = 0;
 
   // Per-shot readouts.
   private carry = 0;
@@ -203,6 +225,13 @@ export class RangeSim {
     this.target = pin;
   }
 
+  // Set the player's spin for the next shot. Persists until changed. Each axis
+  // is clamped to [-1..1]; center (0,0) = no spin.
+  setSpin(back: number, side: number): void {
+    this.spinBack = Math.max(-1, Math.min(1, back));
+    this.spinSide = Math.max(-1, Math.min(1, side));
+  }
+
   // Full-power drag distance in CSS pixels. RangeGL sets this from the canvas
   // height so a natural drag reaches 100% power on any screen.
   setMaxPull(px: number): void {
@@ -245,6 +274,8 @@ export class RangeSim {
       nearestPin: this.nearestPinDist(),
       onTarget: this.isOnTarget(),
       hasTarget: this.target != null,
+      spinBack: this.spinBack,
+      spinSide: this.spinSide,
     };
   }
 
@@ -281,8 +312,13 @@ export class RangeSim {
       return;
     }
 
-    // Airborne: gravity + drag, then integrate.
+    // Airborne: gravity + spin (Magnus-ish) + drag, then integrate. Side spin
+    // adds a steady lateral push that curves the flight (draw one way, fade the
+    // other); back/top spin lifts or presses the ball. Both are bounded so they
+    // shape the trajectory rather than dominate it.
     b.vh -= GRAVITY * dt;
+    b.vh += this.spinBack * SPIN_LIFT_ACC * dt;
+    b.vx += this.spinSide * SPIN_SIDE_ACC * dt;
     const drag = Math.pow(AIR_DRAG, dt * 60);
     b.vd *= drag;
     b.vx *= drag;
@@ -309,9 +345,14 @@ export class RangeSim {
       if (up < BOUNCE_MIN) {
         b.grounded = true;
         b.vh = 0;
-        b.vd *= club.rollFactor;
-        b.vx *= club.rollFactor;
-        this.rollDecay = Math.max(0.6, ROLL_FRICTION - club.backspin * BITE_K);
+        // Topspin runs out more (keeps more forward speed); backspin bites and
+        // adds roll friction so wedge-y spin checks up near the pitch mark.
+        const top = Math.max(0, -this.spinBack);
+        const rollF = Math.min(0.95, club.rollFactor * (1 + top * SPIN_ROLL));
+        b.vd *= rollF;
+        b.vx *= rollF;
+        const biteExtra = Math.max(0, this.spinBack) * SPIN_BITE;
+        this.rollDecay = Math.max(0.6, ROLL_FRICTION - club.backspin * BITE_K - biteExtra);
       } else {
         b.vh = up;
         const keep = 0.55 + 0.4 * club.rollFactor;
