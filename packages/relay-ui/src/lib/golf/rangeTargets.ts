@@ -7,7 +7,10 @@
 // grass pin. Coordinates are world-space (d = downrange yards, x = lateral
 // yards, +right). Radius is the grass patch / catch radius in yards.
 
-import { RANGE_YD } from './projection';
+// Total range depth in yards: grass 0..100, water 100..390, back lip+fence
+// 390..400. The 3D scene (RangeGL) and the headless sim (rangeSim) both read
+// this as the downrange extent.
+export const RANGE_YD = 400;
 
 export type PinKind = 'grass' | 'island' | 'lip';
 
