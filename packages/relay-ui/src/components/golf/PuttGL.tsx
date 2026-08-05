@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { PuttSim } from '../../lib/golf/puttSim';
 import type { Hole, PuttEvent } from '../../lib/golf/puttSim';
+import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
 import { FIXED_MS } from '../../lib/golf/tuning';
 
 // Real-time 3D mini-golf (Three.js). Owns the WebGL renderer, scene and
@@ -301,10 +302,9 @@ export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
     scene.add(flag);
 
     // --- Ball -----------------------------------------------------------
-    const ballGeo = track(new THREE.SphereGeometry(BALL_R, 24, 18));
-    const ballMat = track(
-      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.25, metalness: 0.02 }),
-    );
+    const ballGeo = track(new THREE.SphereGeometry(BALL_R, 32, 24));
+    const dimpleTex = track(makeDimpleNormalMap());
+    const ballMat = track(makeBallMaterial(dimpleTex));
     const ball = new THREE.Mesh(ballGeo, ballMat);
     ball.castShadow = true;
     scene.add(ball);

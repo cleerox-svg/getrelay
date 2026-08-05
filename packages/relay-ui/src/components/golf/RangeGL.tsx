@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { RangeSim } from '../../lib/golf/rangeSim';
 import type { RangeEvent } from '../../lib/golf/rangeSim';
+import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
 import { GRASS_END, RANGE_YD, WATER_END } from '../../lib/golf/rangeTargets';
 import type { Pin } from '../../lib/golf/rangeTargets';
 import { FIXED_MS } from '../../lib/golf/tuning';
@@ -492,13 +493,85 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
     peg.position.set(0, TEE_LIFT / 2, 0);
     scene.add(peg);
 
-    const ballGeo = track(new THREE.SphereGeometry(BALL_R, 24, 18));
-    const ballMat = track(
-      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.28, metalness: 0.02 }),
-    );
+    const ballGeo = track(new THREE.SphereGeometry(BALL_R, 32, 24));
+    const dimpleTex = track(makeDimpleNormalMap());
+    const ballMat = track(makeBallMaterial(dimpleTex));
     const ball = new THREE.Mesh(ballGeo, ballMat);
     ball.castShadow = true;
     scene.add(ball);
+
+    // --- Persistent aim guide (at the tee, before & during a drag) ------
+    // A flat tapering arrow lying on the turf from the ball down-range in the
+    // current aim direction, tipped with a reticle and flanked by subtle L/R
+    // chevrons, so it's obvious which way the shot goes and that the drag steers
+    // it. Built pointing straight down-range (−Z); a Y-rotation applies aimRad,
+    // a Z-scale grows it with power, and the colour ramps toward red near max.
+    const AIM_LEN = 42; // yards to the reticle at rest
+    const aimGuide = new THREE.Group();
+    aimGuide.position.set(0, 0.16, 0);
+    const aimColLow = new THREE.Color(0xffd54a);
+    const aimColHigh = new THREE.Color(0xff5a3c);
+    // Tapering arrow (shaft + head) as one flat, horizontal buffer geometry.
+    const ws = 0.42; // shaft half-width
+    const wh = 1.7; // head half-width
+    const hl = 6; // head length
+    const z0 = -2.4; // start just ahead of the ball
+    const zHead = -(AIM_LEN - hl);
+    const zTip = -AIM_LEN;
+    const arrowVerts = new Float32Array([
+      -ws, 0, z0, ws, 0, z0, ws, 0, zHead, // shaft tri 1
+      -ws, 0, z0, ws, 0, zHead, -ws, 0, zHead, // shaft tri 2
+      -wh, 0, zHead, wh, 0, zHead, 0, 0, zTip, // head
+    ]);
+    const arrowGeo = track(new THREE.BufferGeometry());
+    arrowGeo.setAttribute('position', new THREE.BufferAttribute(arrowVerts, 3));
+    const aimMat = track(
+      new THREE.MeshBasicMaterial({
+        color: aimColLow.clone(),
+        transparent: true,
+        opacity: 0.6,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
+    const arrow = new THREE.Mesh(arrowGeo, aimMat);
+    aimGuide.add(arrow);
+    // Reticle ring at the tip.
+    const reticleGeo = track(new THREE.RingGeometry(1.7, 2.3, 24));
+    const reticle = new THREE.Mesh(reticleGeo, aimMat);
+    reticle.rotation.x = -Math.PI / 2;
+    reticle.position.set(0, 0, zTip);
+    aimGuide.add(reticle);
+    // Subtle L/R steer chevrons flanking the shaft.
+    const chevGeo = track(new THREE.BufferGeometry());
+    const cs = 1.1;
+    chevGeo.setAttribute(
+      'position',
+      new THREE.BufferAttribute(
+        new Float32Array([0, 0, cs, cs * 1.4, 0, 0, 0, 0, -cs]),
+        3,
+      ),
+    );
+    const chevMat = track(
+      new THREE.MeshBasicMaterial({
+        color: aimColLow.clone(),
+        transparent: true,
+        opacity: 0.42,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
+    const chevL = new THREE.Mesh(chevGeo, chevMat);
+    chevL.position.set(-4.4, 0, -15);
+    chevL.rotation.y = Math.PI; // point left (−X)
+    aimGuide.add(chevL);
+    const chevR = new THREE.Mesh(chevGeo, chevMat);
+    chevR.position.set(4.4, 0, -15); // point right (+X)
+    aimGuide.add(chevR);
+    scene.add(aimGuide);
+    const aimCol = new THREE.Color();
 
     // --- Toptracer full-path line --------------------------------------
     const tracerPos = new Float32Array(TRACER_MAX * 3);
@@ -641,6 +714,20 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
       const teed = !b.inFlight && b.d < 1;
       ball.position.set(b.x, b.h + BALL_R + (teed ? TEE_LIFT : 0), -b.d);
       peg.visible = teed;
+
+      // Aim guide: visible only at the tee. Steer with aimRad, grow with power,
+      // ramp toward red near max, and pulse gently when idle to invite a drag.
+      aimGuide.visible = teed;
+      if (teed) {
+        aimGuide.rotation.y = -sim.aimRad;
+        aimGuide.scale.z = 1 + sim.power * 0.5;
+        aimCol.copy(aimColLow).lerp(aimColHigh, sim.power);
+        aimMat.color.copy(aimCol);
+        chevMat.color.copy(aimCol);
+        const pulse = sim.aiming ? 1 : 0.82 + 0.18 * Math.sin(now / 320);
+        aimMat.opacity = (0.42 + sim.power * 0.45) * pulse;
+        chevMat.opacity = 0.42 * pulse;
+      }
 
       // Tracer: append current ball position while in flight.
       if (b.inFlight && tracerCount < TRACER_MAX) {
