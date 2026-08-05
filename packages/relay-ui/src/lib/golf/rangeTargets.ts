@@ -28,6 +28,31 @@ export interface Pin {
 export const GRASS_END = 100;
 export const WATER_END = 390;
 
+// The rendered island green is drawn at pin.r * ISLAND_SURFACE_SCALE (the green
+// cap radius in RangeGL). Physics classification and the renderer share this
+// constant so a ball resting on the visible green counts as 'island', not
+// 'water' — the edge no longer swallows shots that clearly landed on the green.
+// Slightly generous vs. pin.r (the scoring catch radius) on purpose.
+export const ISLAND_SURFACE_SCALE = 1.2;
+
+// The solid green radius of an island (yards) — the collision/containment edge.
+export function islandSurfaceR(p: Pin): number {
+  return p.r * ISLAND_SURFACE_SCALE;
+}
+
+// Return the island pin whose green a world point sits on, else null.
+export function islandAt(d: number, x: number): Pin | null {
+  if (d < GRASS_END || d > WATER_END) return null;
+  for (const p of PINS) {
+    if (p.kind !== 'island') continue;
+    const dd = d - p.d;
+    const dx = x - p.x;
+    const r = islandSurfaceR(p);
+    if (dd * dd + dx * dx <= r * r) return p;
+  }
+  return null;
+}
+
 // Hand-placed layout, staggered in depth and side so the challenge never
 // spawns two pins on top of each other and the perspective reads cleanly.
 export const PINS: Pin[] = [
@@ -53,13 +78,7 @@ export function surfaceAt(d: number, x: number): 'grass' | 'island' | 'water' | 
   if (d >= RANGE_YD) return 'fence';
   if (d < GRASS_END) return 'grass';
   if (d > WATER_END) return 'grass'; // back lip is grass
-  for (const p of PINS) {
-    if (p.kind !== 'island') continue;
-    const dd = d - p.d;
-    const dx = x - p.x;
-    if (dd * dd + dx * dx <= p.r * p.r) return 'island';
-  }
-  return 'water';
+  return islandAt(d, x) ? 'island' : 'water';
 }
 
 // Small deterministic PRNG (mulberry32) so a given (seed, shotIndex) always
