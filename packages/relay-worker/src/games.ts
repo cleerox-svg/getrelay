@@ -13,7 +13,7 @@ export const MAX_POINTS_PER_ROUND = 2000;
 // Games that share the game_scores table (and its leaderboard). The
 // column defaults to 'fog', so an omitted/unknown value maps back to fog
 // and every existing client keeps working.
-export const GAME_IDS = ['fog', 'tune'] as const;
+export const GAME_IDS = ['fog', 'tune', 'golf', 'golfrange'] as const;
 export type GameId = (typeof GAME_IDS)[number];
 
 function normalizeGame(v: unknown): GameId {

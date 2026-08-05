@@ -284,13 +284,16 @@ export const api = {
     score: number;
     rounds: number;
     bestStreak: number;
-    game?: 'fog' | 'tune';
+    game?: 'fog' | 'tune' | 'golf' | 'golfrange';
   }) =>
     request<{ ok: true; best: number }>('/game/score', {
       method: 'POST',
       body: JSON.stringify({ game: 'fog', ...body }),
     }),
-  getGameLeaderboard: (period: 'weekly' | 'all', game: 'fog' | 'tune' = 'fog') =>
+  getGameLeaderboard: (
+    period: 'weekly' | 'all',
+    game: 'fog' | 'tune' | 'golf' | 'golfrange' = 'fog',
+  ) =>
     request<{ entries: GameLeaderboardEntry[] }>(
       `/game/leaderboard?period=${period}&game=${game}`,
     ),

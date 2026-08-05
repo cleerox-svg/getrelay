@@ -24,6 +24,15 @@ import { availableSources } from '../lib/fog/sources';
 import type { FogCategory, SourceAvailability } from '../lib/fog/sources';
 import { getFogStats, recordFogGame } from '../lib/fog/stats';
 import { ROUNDS } from '../lib/fog/tuning';
+import { GolfGame } from '../components/golf/GolfGame';
+import type { GolfGameResult } from '../components/golf/GolfGame';
+import { GolfLeaderboard } from '../components/golf/GolfLeaderboard';
+import { GolfMenu } from '../components/golf/GolfMenu';
+import type { GolfSubMode } from '../components/golf/GolfMenu';
+import { RangeGame } from '../components/golf/RangeGame';
+import type { RangeGameResult } from '../components/golf/RangeGame';
+import { getGolfStats, recordGolfGame, recordRangeGame } from '../lib/golf/stats';
+import { HOLES as GOLF_HOLES, RANGE_BALLS } from '../lib/golf/tuning';
 import { TUNE_GENRES, tuneAvailable } from '../lib/tune/sources';
 import type { TuneGenreId, TuneMode } from '../lib/tune/sources';
 import { getTuneStats, recordTuneGame } from '../lib/tune/stats';
@@ -54,7 +63,7 @@ type FogHistoryState = { fog?: 'guess' | 'free' } | null;
 
 // The chiclet grid, as data so adding a game is one more entry. `id`
 // drives which sub-flow renders; `icon` is a flat SVG under /public/games.
-const GAMES: { id: 'fog' | 'tune'; title: string; subtitle: string; icon: string }[] = [
+const GAMES: { id: 'fog' | 'tune' | 'golf'; title: string; subtitle: string; icon: string }[] = [
   {
     id: 'fog',
     title: 'Fog',
@@ -66,6 +75,12 @@ const GAMES: { id: 'fog' | 'tune'; title: string; subtitle: string; icon: string
     title: 'Guess the Tune',
     subtitle: 'Hear a short clip and name the song title.',
     icon: '/games/tune.svg',
+  },
+  {
+    id: 'golf',
+    title: 'Golf',
+    subtitle: 'Putt the mini-golf course or bomb it down the driving range.',
+    icon: '/games/golf.svg',
   },
 ];
 
@@ -91,7 +106,7 @@ export function Fog() {
   // menu; a running game freezes the choice. The Screen state machine
   // below and the whole back-gesture/pause choreography are game-
   // agnostic and shared between the two flows.
-  const [game, setGame] = useState<'fog' | 'tune'>('fog');
+  const [game, setGame] = useState<'fog' | 'tune' | 'golf'>('fog');
   const [screen, setScreen] = useState<Screen>('hub');
   const [category, setCategory] = useState<FogCategory>('mix');
   const [avail, setAvail] = useState<SourceAvailability | null>(null);
@@ -103,14 +118,24 @@ export function Fog() {
   // default to the shipped behavior (all genres pooled, guess the title).
   const [tuneGenre, setTuneGenre] = useState<TuneGenreId>('any');
   const [tuneMode, setTuneMode] = useState<TuneMode>('title');
+  // Golf has two flows behind one chiclet: Phase-1 putting and the Phase-2
+  // driving range (open practice + scored Target Challenge). golfMode picks
+  // which the shared guess/free/results choreography renders; it's only
+  // changed from the golf menu, frozen once a game is running.
+  const [golfMode, setGolfMode] = useState<GolfSubMode>('putt');
+  const [golfClub, setGolfClub] = useState<string | undefined>(undefined);
   const [result, setResult] = useState<GameResult | null>(null);
   const [tuneResult, setTuneResult] = useState<TuneGameResult | null>(null);
+  const [golfResult, setGolfResult] = useState<GolfGameResult | null>(null);
+  const [golfRangeResult, setGolfRangeResult] = useState<RangeGameResult | null>(null);
   const [serverBest, setServerBest] = useState<number | null>(null);
   const [lbKey, setLbKey] = useState(0);
   const [paused, setPaused] = useState(false);
   const [statsKey, setStatsKey] = useState(0);
   const submittedRef = useRef<GameResult | null>(null);
   const submittedTuneRef = useRef<TuneGameResult | null>(null);
+  const submittedGolfRef = useRef<GolfGameResult | null>(null);
+  const submittedGolfRangeRef = useRef<RangeGameResult | null>(null);
   // Set when a back-out abandons a running game, so the menu re-reads
   // local stats once GuessGame's unmount safety net has banked the
   // partial run (see the refresh effect below).
@@ -130,8 +155,8 @@ export function Fog() {
   // localStorage read, no need for state plumbing from the recorder.
   // Keyed by `game` so each flow shows its own personal best.
   const stats = useMemo(
-    () => (game === 'tune' ? getTuneStats() : getFogStats()),
-    [game, screen, result, tuneResult, statsKey], // eslint-disable-line react-hooks/exhaustive-deps
+    () => (game === 'tune' ? getTuneStats() : game === 'golf' ? getGolfStats() : getFogStats()),
+    [game, screen, result, tuneResult, golfResult, statsKey], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   // The one case the deps above can't see: backing out of a running
@@ -293,16 +318,90 @@ export function Fog() {
       .catch(() => undefined);
   }, [game, screen, tuneResult]);
 
+  // Golf twin of the submit effect above. Records to golf stats and
+  // submits with game:'golf'. Same exactly-once guard, same partial-run
+  // rules (roundsPlayed 1..HOLES are valid; a 0-hole game never lands here).
+  useEffect(() => {
+    if (
+      game !== 'golf' ||
+      screen !== 'results' ||
+      !golfResult ||
+      golfResult.roundsPlayed < 1 ||
+      submittedGolfRef.current === golfResult
+    )
+      return;
+    submittedGolfRef.current = golfResult;
+    recordGolfGame(golfResult.score, golfResult.bestStreak);
+    api
+      .submitGameScore({
+        score: golfResult.score,
+        rounds: golfResult.roundsPlayed,
+        bestStreak: golfResult.bestStreak,
+        game: 'golf',
+      })
+      .then((r) => {
+        setServerBest(r.best);
+        setLbKey((k) => k + 1);
+      })
+      .catch(() => undefined);
+  }, [game, screen, golfResult]);
+
+  // Driving-range Target Challenge twin. Records to the SEPARATE range
+  // stats and submits on the 'golfrange' board; same exactly-once guard and
+  // partial-run rules (roundsPlayed = balls hit, 1..RANGE_BALLS).
+  useEffect(() => {
+    if (
+      game !== 'golf' ||
+      golfMode !== 'range-challenge' ||
+      screen !== 'results' ||
+      !golfRangeResult ||
+      golfRangeResult.roundsPlayed < 1 ||
+      submittedGolfRangeRef.current === golfRangeResult
+    )
+      return;
+    submittedGolfRangeRef.current = golfRangeResult;
+    recordRangeGame(golfRangeResult.score, golfRangeResult.bestStreak);
+    api
+      .submitGameScore({
+        score: golfRangeResult.score,
+        rounds: golfRangeResult.roundsPlayed,
+        bestStreak: golfRangeResult.bestStreak,
+        game: 'golfrange',
+      })
+      .then((r) => {
+        setServerBest(r.best);
+        setLbKey((k) => k + 1);
+      })
+      .catch(() => undefined);
+  }, [game, screen, golfMode, golfRangeResult]);
+
   function startGame() {
     setResult(null);
     setTuneResult(null);
+    setGolfResult(null);
+    setGolfRangeResult(null);
     setServerBest(null);
     setPaused(false);
     setScreen('guess');
     // Push the back-gesture guard entry (see the popstate effect). The
-    // marker is game-agnostic — the guess screen renders GuessGame or
-    // TuneGame from `game`, and the pause/back choreography is identical.
+    // marker is game-agnostic — the guess screen renders GuessGame,
+    // TuneGame, GolfGame or the range's RangeGame from `game`/`golfMode`,
+    // and the pause/back choreography is identical.
     nav(location.pathname, { state: { fog: 'guess' } });
+  }
+
+  // Golf mode picker → the right flow. Putting and the range Target
+  // Challenge both run through the scored guess screen; range Practice is an
+  // open, unscored session on the free screen (like Fog's free play).
+  function startGolf(mode: GolfSubMode, clubId?: string) {
+    setGolfMode(mode);
+    setGolfClub(clubId);
+    if (mode === 'range-practice') {
+      setScreen('free');
+      nav(location.pathname, { state: { fog: 'free' } });
+    } else {
+      startGame();
+    }
   }
 
   function changeSkin(id: string) {
@@ -425,6 +524,40 @@ export function Fog() {
               consumeHistoryEntry('guess');
             }}
           />
+        ) : screen === 'guess' && game === 'golf' && golfMode === 'range-challenge' ? (
+          <RangeGame
+            mode="challenge"
+            initialClubId={golfClub}
+            paused={paused}
+            // Same guard-entry contract as GuessGame above.
+            onResume={() => setPaused(false)}
+            onFinish={(r) => {
+              setPaused(false);
+              if (r.roundsPlayed > 0) {
+                setGolfRangeResult(r);
+                setScreen('results');
+              } else {
+                setScreen('menu');
+              }
+              consumeHistoryEntry('guess');
+            }}
+          />
+        ) : screen === 'guess' && game === 'golf' ? (
+          <GolfGame
+            paused={paused}
+            // Same guard-entry contract as GuessGame above.
+            onResume={() => setPaused(false)}
+            onFinish={(r) => {
+              setPaused(false);
+              if (r.roundsPlayed > 0) {
+                setGolfResult(r);
+                setScreen('results');
+              } else {
+                setScreen('menu');
+              }
+              consumeHistoryEntry('guess');
+            }}
+          />
         ) : screen === 'free' ? (
           <>
             <div className="px-4 pb-2">
@@ -440,7 +573,7 @@ export function Fog() {
                 ‹ Back
               </button>
             </div>
-            <FreePlay />
+            {game === 'golf' ? <RangeGame mode="practice" initialClubId={golfClub} /> : <FreePlay />}
           </>
         ) : screen === 'results' && game === 'fog' && result ? (
           <div className="px-4 flex flex-col gap-4">
@@ -579,6 +712,157 @@ export function Fog() {
             </div>
 
             <TuneLeaderboard refreshKey={lbKey} />
+          </div>
+        ) : screen === 'results' && game === 'golf' && golfMode === 'range-challenge' && golfRangeResult ? (
+          <div className="px-4 flex flex-col gap-4">
+            <div
+              className="rounded-2xl p-5 text-center"
+              style={{ background: 'var(--card-bg)', border: '1px solid var(--separator)' }}
+            >
+              <div className="text-xs font-bold tracking-wider" style={{ color: 'var(--text-dim)' }}>
+                FINAL SCORE
+              </div>
+              <div className="text-[40px] font-bold tabular-nums fog-pop" style={{ color: 'var(--text)' }}>
+                {golfRangeResult.score.toLocaleString()}
+              </div>
+              <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
+                Best streak x{golfRangeResult.bestStreak}
+                {serverBest != null ? (
+                  <span className="ml-2 font-semibold" style={{ color: 'var(--accent)' }}>
+                    Best: {serverBest.toLocaleString()}
+                  </span>
+                ) : null}
+              </div>
+              {golfRangeResult.roundsPlayed < RANGE_BALLS ? (
+                <div className="text-xs pt-1" style={{ color: 'var(--text-dim)' }}>
+                  Ended early — {golfRangeResult.roundsPlayed}/{RANGE_BALLS} balls
+                </div>
+              ) : null}
+              {/* Per-shot chips: distance-to-pin, or Splash / Out for a miss. */}
+              <div className="flex flex-wrap justify-center gap-1.5 pt-3">
+                {golfRangeResult.perShot.map((s, i) => {
+                  const miss = s.result === 'water' || s.result === 'fence';
+                  const label = miss
+                    ? s.result === 'water'
+                      ? 'Splash'
+                      : 'Out'
+                    : `${s.distToPin}yd`;
+                  return (
+                    <span
+                      key={i}
+                      className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-bold tabular-nums"
+                      style={{
+                        background: s.onTarget
+                          ? 'color-mix(in srgb, var(--online) 18%, transparent)'
+                          : 'color-mix(in srgb, var(--ping) 15%, transparent)',
+                        color: s.onTarget ? 'var(--online)' : 'var(--ping)',
+                      }}
+                    >
+                      {s.onTarget ? '✓' : '✗'} {label}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="flex-1 rounded-xl py-3 text-[15px] font-bold"
+                style={{ background: 'var(--accent)', color: '#FFFFFF', border: 0 }}
+                onClick={() => startGolf('range-challenge', golfClub)}
+              >
+                Play again
+              </button>
+              <button
+                type="button"
+                className="flex-1 rounded-xl py-3 text-[15px] font-bold"
+                style={{
+                  background: 'var(--card-bg)',
+                  color: 'var(--text)',
+                  border: '1px solid var(--separator)',
+                }}
+                onClick={() => setScreen('menu')}
+              >
+                Menu
+              </button>
+            </div>
+
+            <GolfLeaderboard refreshKey={lbKey} game="golfrange" />
+          </div>
+        ) : screen === 'results' && game === 'golf' && golfResult ? (
+          <div className="px-4 flex flex-col gap-4">
+            <div
+              className="rounded-2xl p-5 text-center"
+              style={{ background: 'var(--card-bg)', border: '1px solid var(--separator)' }}
+            >
+              <div className="text-xs font-bold tracking-wider" style={{ color: 'var(--text-dim)' }}>
+                FINAL SCORE
+              </div>
+              <div className="text-[40px] font-bold tabular-nums fog-pop" style={{ color: 'var(--text)' }}>
+                {golfResult.score.toLocaleString()}
+              </div>
+              <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
+                Best streak x{golfResult.bestStreak}
+                {serverBest != null ? (
+                  <span className="ml-2 font-semibold" style={{ color: 'var(--accent)' }}>
+                    Best: {serverBest.toLocaleString()}
+                  </span>
+                ) : null}
+              </div>
+              {golfResult.roundsPlayed < GOLF_HOLES ? (
+                <div className="text-xs pt-1" style={{ color: 'var(--text-dim)' }}>
+                  Ended early — {golfResult.roundsPlayed}/{GOLF_HOLES} holes
+                </div>
+              ) : null}
+              {/* Per-hole chips: strokes relative to par (E / +1 / -1). */}
+              <div className="flex flex-wrap justify-center gap-1.5 pt-3">
+                {golfResult.perHole.map((h, i) => {
+                  const diff = h.strokes - h.par;
+                  const label = diff === 0 ? 'E' : diff > 0 ? `+${diff}` : `${diff}`;
+                  const under = diff <= 0;
+                  return (
+                    <span
+                      key={i}
+                      className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-bold tabular-nums"
+                      style={{
+                        background: under
+                          ? 'color-mix(in srgb, var(--online) 18%, transparent)'
+                          : 'color-mix(in srgb, var(--ping) 15%, transparent)',
+                        color: under ? 'var(--online)' : 'var(--ping)',
+                      }}
+                    >
+                      H{h.hole} {label}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="flex-1 rounded-xl py-3 text-[15px] font-bold"
+                style={{ background: 'var(--accent)', color: '#FFFFFF', border: 0 }}
+                onClick={startGame}
+              >
+                Play again
+              </button>
+              <button
+                type="button"
+                className="flex-1 rounded-xl py-3 text-[15px] font-bold"
+                style={{
+                  background: 'var(--card-bg)',
+                  color: 'var(--text)',
+                  border: '1px solid var(--separator)',
+                }}
+                onClick={() => setScreen('menu')}
+              >
+                Menu
+              </button>
+            </div>
+
+            <GolfLeaderboard refreshKey={lbKey} />
           </div>
         ) : (
           <div className="px-4 flex flex-col gap-4">
@@ -734,6 +1018,8 @@ export function Fog() {
 
                 <TuneLeaderboard refreshKey={lbKey} />
               </>
+            ) : game === 'golf' ? (
+              <GolfMenu onStart={startGolf} refreshKey={lbKey} />
             ) : (
             <>
             <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
