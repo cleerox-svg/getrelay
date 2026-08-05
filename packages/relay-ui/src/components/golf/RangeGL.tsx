@@ -684,16 +684,23 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
       // Water shimmer.
       waterTex.offset.y = (t * 0.03) % 1;
 
-      // Camera: follow the ball in flight, then ease back to the tee.
+      // Camera: chase the ball down-range in flight, then ease back to the tee.
       if (following && revertAt !== 0 && now >= revertAt) following = false;
       if (following) {
-        followTarget.set(b.x * 0.32, 7 + b.h * 0.42, 17 - b.d * 0.14);
-        lookTarget.set(b.x, b.h * 0.6 + 1.5, -b.d);
+        // Trail the ball at a fixed ~18yd back / above offset and look right
+        // at it, so a long drive stays framed instead of receding to a dot.
+        // (lookTarget uses full b.x, so the ball stays centred even though the
+        // camera only tracks lateral drift partially — a slight over-shoulder
+        // angle on off-line shots.)
+        followTarget.set(b.x * 0.7, 8 + b.h * 0.35, -b.d + 18);
+        lookTarget.set(b.x, b.h + BALL_R + 1, -b.d);
       } else {
         followTarget.copy(teeCamPos);
         lookTarget.copy(teeLookAt);
       }
-      const k = 1 - Math.exp(-dt * 3.2);
+      // Snappier tracking in flight so the chase keeps up with the ball;
+      // gentler on the ease back to the tee.
+      const k = 1 - Math.exp(-dt * (following ? 5 : 3.2));
       camera.position.lerp(followTarget, k);
       lookAt.lerp(lookTarget, k);
       camera.lookAt(lookAt);
