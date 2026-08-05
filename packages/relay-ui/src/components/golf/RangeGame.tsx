@@ -438,6 +438,127 @@ function describeAccuracy(e: number): { text: string; good: boolean } {
   return { text: label.charAt(0).toUpperCase() + label.slice(1), good: false };
 }
 
+// Dedicated aim control, fully DECOUPLED from the power pull. Hold-to-repeat
+// ◀ ▶ buttons swing the shot line left/right up to ±40° (the sim clamps);
+// the on-turf aim arrow (RangeGL) follows aimRad live as you nudge. Tapping the
+// centre readout re-centres to straight. Pinned bottom-right, mirroring the
+// spin puck, so it never sits in the central power-pull channel. The buttons
+// opt back into pointer events; everything else stays transparent.
+const AIM_STEP_DEG = 2;
+function AimControl({
+  deg,
+  disabled,
+  onNudge,
+  onCenter,
+}: {
+  deg: number;
+  disabled: boolean;
+  onNudge: (deltaDeg: number) => void;
+  onCenter: () => void;
+}) {
+  // Single timer id for the press-and-hold repeat; cleared on release/unmount so
+  // the armed/aim state can never strand a running interval.
+  const holdRef = useRef<number | null>(null);
+  // Live `disabled` for the running repeat loop: if the shot arms/launches
+  // mid-hold (a multi-touch edge), the loop bails instead of ticking on.
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
+  const stop = () => {
+    if (holdRef.current != null) {
+      window.clearTimeout(holdRef.current);
+      holdRef.current = null;
+    }
+  };
+  const start = (delta: number) => {
+    if (disabled) return;
+    onNudge(delta);
+    const rep = () => {
+      if (disabledRef.current) return stop();
+      onNudge(delta);
+      holdRef.current = window.setTimeout(rep, 55);
+    };
+    holdRef.current = window.setTimeout(rep, 300);
+  };
+  useEffect(() => stop, []);
+
+  const abs = Math.round(Math.abs(deg));
+  const label = abs < 1 ? 'CTR' : `${abs}°${deg < 0 ? 'L' : 'R'}`;
+
+  const btn = (dir: -1 | 1, glyph: string) => (
+    <button
+      type="button"
+      disabled={disabled}
+      aria-label={dir < 0 ? 'Aim left' : 'Aim right'}
+      onPointerDown={(e) => {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        start(dir * AIM_STEP_DEG);
+      }}
+      onPointerUp={stop}
+      onPointerLeave={stop}
+      onPointerCancel={stop}
+      style={{
+        pointerEvents: 'auto',
+        width: 40,
+        height: 40,
+        borderRadius: 12,
+        border: '1px solid var(--separator)',
+        background: 'var(--card-bg)',
+        color: 'var(--text)',
+        fontSize: 18,
+        fontWeight: 800,
+        lineHeight: 1,
+        opacity: disabled ? 0.5 : 1,
+        touchAction: 'none',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.16)',
+      }}
+    >
+      {glyph}
+    </button>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+      <div
+        style={{
+          fontSize: 8,
+          fontWeight: 800,
+          letterSpacing: 1,
+          color: '#fff',
+          textShadow: '0 1px 3px rgba(0,0,0,0.5)',
+        }}
+      >
+        AIM
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {btn(-1, '◀')}
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onCenter}
+          aria-label="Centre aim"
+          className="tabular-nums"
+          style={{
+            pointerEvents: 'auto',
+            minWidth: 54,
+            height: 40,
+            borderRadius: 12,
+            border: '1px solid var(--separator)',
+            background: 'var(--card-bg)',
+            color: abs < 1 ? 'var(--text-dim)' : 'var(--accent)',
+            fontSize: 14,
+            fontWeight: 800,
+            opacity: disabled ? 0.5 : 1,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.16)',
+          }}
+        >
+          {label}
+        </button>
+        {btn(1, '▶')}
+      </div>
+    </div>
+  );
+}
+
 const HINT_KEY = 'relay.golf.range.hintSeen';
 
 export function RangeGame({
@@ -472,6 +593,9 @@ export function RangeGame({
   const [readout, setReadout] = useState<RangeState | null>(null);
   const [ballNo, setBallNo] = useState(1);
   const [spin, setSpin] = useState({ back: 0, side: 0 });
+  // Aim in degrees (+ = right), mirrored from the sim for the dedicated aim
+  // control. Decoupled from the power pull; persists across shots.
+  const [aimDeg, setAimDeg] = useState(0);
   // Brief post-shot accuracy feedback ("Perfect!" / "Slight hook" / "Slice").
   const [feedback, setFeedback] = useState<{ text: string; good: boolean } | null>(null);
   const feedbackTimer = useRef<number | null>(null);
@@ -595,6 +719,18 @@ export function RangeGame({
   function changeSpin(back: number, side: number) {
     sim.setSpin(back, side);
     setSpin({ back, side });
+  }
+
+  // Aim nudge (dedicated control). The sim clamps to ±40°; read it back so the
+  // readout and the on-turf arrow stay in lockstep. Direction-independent of
+  // the power pull.
+  function changeAim(deltaDeg: number) {
+    sim.nudgeAim((deltaDeg * Math.PI) / 180);
+    setAimDeg((sim.aimRad * 180) / Math.PI);
+  }
+  function centerAim() {
+    sim.setAim(0);
+    setAimDeg((sim.aimRad * 180) / Math.PI);
   }
 
   // Step 2 tap: stop the accuracy marker, launch the armed shot with the miss
@@ -816,7 +952,7 @@ export function RangeGame({
                 : st.lastResult === 'fence'
                   ? 'Out of bounds'
                   : `${st.nearestPin}yd to pin`
-              : 'Drag back for power & aim'}
+              : 'Aim ◀ ▶ · drag back for power'}
         </div>
       </div>
 
@@ -882,6 +1018,24 @@ export function RangeGame({
         <SpinPuck value={spin} onChange={changeSpin} />
       </div>
 
+      {/* Dedicated aim control, bottom-right (mirrors the spin puck), clear of
+          the central power-pull channel and the right-edge power meter. */}
+      <div
+        style={{
+          position: 'absolute',
+          right: 'calc(env(safe-area-inset-right, 0px) + 12px)',
+          bottom: 'calc(env(safe-area-inset-bottom, 0px) + 52px)',
+          pointerEvents: 'none',
+        }}
+      >
+        <AimControl
+          deg={aimDeg}
+          disabled={!!st?.inFlight || !!st?.armed}
+          onNudge={changeAim}
+          onCenter={centerAim}
+        />
+      </div>
+
       {/* Step 2 accuracy bar — shown only while a shot is armed (aim+power
           locked). Full-bleed interactive overlay so a tap can't leak to the
           canvas as a drag. Firing (or leaving the armed state) unmounts it. */}
@@ -945,7 +1099,7 @@ export function RangeGame({
               boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
             }}
           >
-            Drag back for power &amp; aim · tap to stop the marker in the center
+            Aim with ◀ ▶ · drag straight back for power · tap to stop the marker
           </span>
         </div>
       ) : null}

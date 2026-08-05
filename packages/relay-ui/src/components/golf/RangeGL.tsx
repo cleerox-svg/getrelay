@@ -686,8 +686,9 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
     // --- Persistent aim guide (at the tee, before & during a drag) ------
     // A flat tapering arrow lying on the turf from the ball down-range in the
     // current aim direction, tipped with a reticle and flanked by subtle L/R
-    // chevrons, so it's obvious which way the shot goes and that the drag steers
-    // it. Built pointing straight down-range (−Z); a Y-rotation applies aimRad,
+    // chevrons, so it's obvious which way the shot goes. It follows aimRad live
+    // as the player works the dedicated aim control (the power pull no longer
+    // steers). Built pointing straight down-range (−Z); a Y-rotation applies aimRad,
     // a Z-scale grows it with power, and the colour ramps toward red near max.
     const AIM_LEN = 42; // yards to the reticle at rest
     const aimGuide = new THREE.Group();
@@ -950,8 +951,11 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
     canvas.addEventListener('pointerup', onUp);
     canvas.addEventListener('pointercancel', onUp);
 
-    // Full-power drag ≈ 38% of the canvas height.
-    const applyPull = () => sim.setMaxPull(Math.max(120, h * 0.38));
+    // Full-power drag ≈ 28% of the canvas height (min 120px floor). The ball
+    // sits low in the lower-middle of the viewport, so a shorter pull keeps a
+    // genuine 100% within an easy thumb reach without running off the bottom
+    // edge — the player can comfortably max the power meter.
+    const applyPull = () => sim.setMaxPull(Math.max(120, h * 0.28));
     applyPull();
 
     // --- Camera follow state -------------------------------------------
