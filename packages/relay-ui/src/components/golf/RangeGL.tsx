@@ -482,18 +482,19 @@ export default function RangeGL({
     const sun = new THREE.DirectionalLight(0xfff1d6, 2.7);
     sun.position.set(-52, 96, 40);
     sun.castShadow = true;
-    // Higher-res shadow map so the trees, flags and ball drop a readable,
-    // clean-edged contact shadow. Softness comes from PCFSoftShadowMap's own
-    // kernel + normalBias (which also kills self-shadow acne); if low-end
-    // Android GPUs strain, 1536² is the first dial to turn down.
-    sun.shadow.mapSize.set(2048, 2048);
+    // Shadow map kept at 1024² over a snug frustum. A 2048² map (shipped briefly
+    // in the visual pass) crashed the WebView GPU process on real Android devices
+    // — black screen needing an app restart — even though it rendered fine in
+    // desktop/software GL. 1024² + PCFSoftShadowMap still drops a clean, soft
+    // contact shadow. DO NOT raise this without testing on a low-end device.
+    sun.shadow.mapSize.set(1024, 1024);
     sun.shadow.camera.near = 1;
-    sun.shadow.camera.far = 280;
-    sun.shadow.camera.left = -80;
-    sun.shadow.camera.right = 80;
-    sun.shadow.camera.top = 80;
-    sun.shadow.camera.bottom = -80;
-    sun.shadow.bias = -0.0005;
+    sun.shadow.camera.far = 260;
+    sun.shadow.camera.left = -70;
+    sun.shadow.camera.right = 70;
+    sun.shadow.camera.top = 70;
+    sun.shadow.camera.bottom = -70;
+    sun.shadow.bias = -0.0006;
     sun.shadow.normalBias = 0.02;
     sun.target.position.set(0, 0, -55);
     scene.add(sun);
