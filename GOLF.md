@@ -1,0 +1,158 @@
+# Golf — in-app game (Mini-Golf + Driving Range)
+
+An in-app 3D golf game in the Relay **Games** hub (`/discover`), built with
+Three.js and a hand-rolled physics sim. This doc is the source of truth for what
+exists today and the plan to reach PGA-app-level controls and visuals. Read it
+first when picking up golf work.
+
+> Reference the user wants to match: **PGA TOUR Golf Shootout** (a Unity game) —
+> its aiming (shot line + landing reticle + power arc + wind-adjusted landing)
+> and its textured, lit 3D look.
+
+---
+
+## What exists today
+
+Two modes behind the "Golf" chiclet in the Games hub:
+
+- **Mini-Golf (putting)** — top-down/angled 3D hole; drag-to-putt; 6 holes;
+  sink the cup; par/stroke scoring. Cohesive 3D (Three.js).
+- **Driving Range** — down-range 3D; **Practice** (open, unlimited) and
+  **Target Challenge** (8 balls, proximity scoring). Full-screen immersive.
+
+Both are real 3D (Three.js), lazy-loaded so `three` never bloats the main
+bundle, with all GPU resources disposed (`forceContextLoss()`) on unmount.
+
+### Shooting / controls (range) — current
+- **Pull-back = power only** (direction-independent); a vertical **power meter**.
+- **Aim** is a dedicated **AIM slider** (±40°), decoupled from the pull, with an
+  on-turf aim arrow.
+- **Spin** via a contact-point **spin puck** (back/top + draw/fade) → bounded
+  flight curve; backspin checks/zips back on the bounce.
+- **Accuracy** via a **tap-timing bar** (Golf-Clash style): release arms the
+  shot, a marker sweeps, tap to fire; off-center adds hook/slice.
+- **Club ladder** (full power, neutral spin, harness-measured): Driver 291
+  carry / 348 total → SW 109/121. Forgiving/linear power map
+  (`s = baseSpeed·√(FLOOR + (1−FLOOR)·power)`).
+
+### Range layouts — current
+A data-driven **Range layout** picker (persisted, default `fairway`):
+- `lane` — grass causeway through the water, both modes; every club lands+rolls.
+- `practiceLane` — lane in Practice; Challenge is full water + islands (aim).
+- `fairway` — grass fairway with a crossing water hazard (247–285 yд) holding
+  island targets; driver carries it to the far fairway; short irons land near.
+
+> **Known issue (user feedback):** the water + floating-island range reads as
+> "odd" / un-golf-like, and the controls still don't feel like the PGA app. The
+> plan below addresses both. Treat the range layout as a stepping stone toward
+> the hole/course format.
+
+### Physics, testing, telemetry
+- **Physics** is a small, deterministic ballistics sim — **keep it, don't
+  replace it.** World space: `d` downrange, `x` lateral, `h` height; gravity +
+  drag + wind + bounce/roll; spin as bounded accelerations.
+- **Headless test harness** (vitest): `pnpm --filter @relay/ui test` drives the
+  REAL sim via `simulateShot({clubId,power,aimDeg,spinBack,spinSide,accuracy,
+  layout,isChallenge})` and prints per-club/per-layout tables with
+  regression-failing assertions. **Use this to tune — don't guess.**
+- **In-app telemetry**: a last-shot debug panel + "Copy telemetry" button
+  (last 30 shots as JSON) so real device numbers can be compared to the harness.
+
+### Leaderboard / scoring
+- Shared, contact-scoped `game_scores` table; discriminators `golf` (putting)
+  and `golfrange` (range challenge). Worker: `packages/relay-worker/src/games.ts`
+  (`GAME_IDS`, `POST /game/score`, `GET /game/leaderboard`). Clamps: ≤8 rounds,
+  ≤2000 pts each. No migration needed to add a game id.
+
+### Key files
+| Area | Path |
+|---|---|
+| Range physics/sim (headless) | `packages/relay-ui/src/lib/golf/rangeSim.ts` |
+| Sim tests / harness | `packages/relay-ui/src/lib/golf/rangeSim.test.ts` |
+| Range 3D scene (Three.js) | `packages/relay-ui/src/components/golf/RangeGL.tsx` |
+| Range HUD + controls + telemetry + layout picker | `packages/relay-ui/src/components/golf/RangeGame.tsx` |
+| Layouts, pins, `surfaceAt` | `packages/relay-ui/src/lib/golf/rangeTargets.ts` |
+| Club ladder | `packages/relay-ui/src/lib/golf/clubs.ts` |
+| Putting sim / scene / round | `src/lib/golf/puttSim.ts`, `components/golf/PuttGL.tsx`, `GolfGame.tsx` |
+| Ball material (dimple normal map) | `packages/relay-ui/src/lib/golf/ballTexture.ts` |
+| Hub wiring | `packages/relay-ui/src/routes/Fog.tsx`, `components/golf/GolfMenu.tsx` |
+| Worker leaderboard | `packages/relay-worker/src/games.ts` |
+
+### Commands
+- `pnpm --filter @relay/ui test` — the golf sim harness (dynamics tables).
+- `pnpm typecheck` · `pnpm --filter @relay/ui build` (three stays a lazy chunk).
+- `pnpm --filter @relay/worker test` — worker suite (unaffected by golf UI).
+
+---
+
+## Assessment — closing the gap to the PGA app
+
+**Bottom line: not an engine problem.** Keep our physics (small, correct,
+tested). Do **not** build a rendering engine — Three.js already is one and can
+reach the target look. The two real gaps are a proper **aim/trajectory control**
+(buildable on the sim we already have) and **art + shading** (textures,
+lighting, shadows, trees, sky). PGA Shootout is Unity, but a Unity rewrite is
+the wrong fit for a messenger mini-game.
+
+### 1. Shooting controls — replicate PGA (highest impact, no new tech)
+Touch **on the ball** → pull back to load a **power arc** hugging the ball →
+show a shot line to an adjustable **landing reticle**, plus a **second,
+wind-adjusted** path to the real landing point → release on the tap-timing beat.
+A **dispersion cone** shows the risk.
+
+Why it's safe: the predicted arc is just `rangeSim` stepped forward with the
+current club/power/aim/spin/wind (no commit), drawn as a line + reticle. The
+harness verifies the prediction matches the real shot to the yard. Effort: days,
+not weeks.
+
+### 2. Graphics — the look gap is assets + shading, not the renderer
+Ranked by fit for an in-messenger PWA/Capacitor game:
+
+| Path | Fidelity | Effort | Fit | Verdict |
+|---|---|---|---|---|
+| **Push our Three.js** — PBR turf/sand, sun + soft shadows, ambient/hemisphere light, sky + haze, billboard tree sprites w/ shadows, light bloom/tone-mapping | ~80% | Medium | Excellent (stays in the lazy chunk) | **Do this first** |
+| Babylon.js or React-Three-Fiber + drei — batteries-included PBR/shadows/post | ~85% | Medium-High | OK (new dep / partial rewrite) | Only if #1 stalls |
+| Unity / Godot → WebGL — what PGA uses | ~100% | Very high | Poor (multi-MB, heavy load, separate embedded app) | Not for a mini-game |
+| Write our own renderer | Unbounded | Enormous | No | Don't |
+
+**Real bottleneck: art content.** Agents can write the shaders, procedural
+textures, lighting rig, and asset integration — but the last mile of the PGA
+look is real art (turf/sand albedo+normal maps, tree sprites, a skybox). Either
+license/curate CC0 or asset-store packs (agents integrate; adds bundle weight,
+mitigated by lazy-load + compression), or a designer produces bespoke art.
+
+### 3. Direct answers
+- **Own physics?** Already have it — keep it (deterministic, unit-tested).
+- **Own visual engine?** No — Three.js is our engine and can reach the look.
+- **Need agents?** Yes for the engineering (fleet + harness). Agents can't
+  manufacture licensed art — that's the one non-agent input.
+- **Range odd?** Agreed — retire the water-island idiom; aim the work at the
+  hole/course format (the destination).
+
+---
+
+## Roadmap (recommended order)
+
+Gameplay clean first, then the look, then the course — each step reuses the last.
+
+1. **Nail the aim/shot control** — touch-the-ball → power arc → aim line +
+   landing reticle → wind-adjusted second path → tap-timing release. Prediction
+   from the sim; verified by the harness. Biggest felt improvement.
+2. **Level up visuals in Three.js** — PBR turf/sand, real sun + soft shadows +
+   ambient light, sky + distance haze, lit tree sprites, glossier ball, light
+   bloom/tone-mapping. The ~80% path, no new dep. Retire the odd range look here.
+3. **Hole engine → 9-hole par-5 course** — a hole = tee → fairway → green → cup
+   with per-hole terrain, par, distance-to-pin, wind. Same sim, same aim UI,
+   same shaders. Then it's mostly hole data + terrain art to build the nine.
+   (User's stated goal: a 9-hole course of par 5s, after gameplay is clean.)
+
+**Working principle going forward:** tune against the **harness** and **device
+telemetry**, not guesses — that's why both exist.
+
+---
+
+## Continuing in a new session
+Start with **Roadmap step 1 (aim/shot control)** unless the user says otherwise.
+The user is gathering more reference screenshots of the PGA app's shooting and
+will share them in the next session. Full visual write-up of this assessment
+was also produced as an artifact during the session it was written.
