@@ -24,9 +24,11 @@ Both are real 3D (Three.js), lazy-loaded so `three` never bloats the main
 bundle, with all GPU resources disposed (`forceContextLoss()`) on unmount.
 
 ### Shooting / controls (range) — current
-- **Pull-back = power only** (direction-independent); a vertical **power meter**.
-- **Aim** is a dedicated **AIM slider** (±40°), decoupled from the pull, with an
-  on-turf aim arrow.
+- **Pull-back = power + aim (slingshot).** One drag sets both: power tracks the
+  pull MAGNITUDE (vertical **power meter**), and the pull's ANGLE steers the
+  shot — it flings OPPOSITE the pull, so dragging the finger RIGHT aims LEFT and
+  vice-versa, clamped to ±40° with a small deadzone. The on-turf aim arrow and
+  the predicted arc follow it live. (The old dedicated ±40° AIM slider is gone.)
 - **Spin** via a contact-point **spin puck** (back/top + draw/fade) → bounded
   flight curve; backspin checks/zips back on the bounce.
 - **Accuracy** via a **tap-timing bar** (Golf-Clash style): release arms the

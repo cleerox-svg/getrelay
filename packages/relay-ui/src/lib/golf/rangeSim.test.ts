@@ -149,6 +149,35 @@ describe('range shot dynamics', () => {
     expect(missR.lateral).toBeGreaterThan(10);
   });
 
+  it('slingshot pull steers aim opposite the drag; power tracks magnitude', () => {
+    const sim = bench();
+    sim.setMaxPull(200);
+    // Drag the finger DOWN and to the RIGHT (start 100,100 → 160,260): the shot
+    // flings the other way → aims LEFT (aimRad < 0).
+    sim.onPointerDown({ x: 100, y: 100 });
+    sim.onPointerMove({ x: 160, y: 260 });
+    expect(sim.aimRad, 'drag right → aim left').toBeLessThan(-0.05);
+    expect(sim.power, 'power tracks pull magnitude').toBeGreaterThan(0.5);
+    // DOWN and to the LEFT → aims RIGHT (aimRad > 0).
+    sim.onPointerDown({ x: 100, y: 100 });
+    sim.onPointerMove({ x: 40, y: 260 });
+    expect(sim.aimRad, 'drag left → aim right').toBeGreaterThan(0.05);
+    // Straight DOWN → dead straight.
+    sim.onPointerDown({ x: 100, y: 100 });
+    sim.onPointerMove({ x: 100, y: 280 });
+    expect(Math.abs(sim.aimRad), 'straight pull → straight').toBeLessThan(0.02);
+    // A tiny pull inside the deadzone doesn't steer (stays straight).
+    sim.onPointerDown({ x: 100, y: 100 });
+    sim.onPointerMove({ x: 118, y: 108 });
+    expect(sim.aimRad, 'deadzone: short pull stays straight').toBe(0);
+    // arm() locks the steered aim from the final pull vector.
+    sim.onPointerDown({ x: 100, y: 100 });
+    sim.onPointerMove({ x: 150, y: 250 });
+    sim.arm({ x: 150, y: 250 });
+    expect(sim.armed).toBe(true);
+    expect(sim.aimRad).toBeLessThan(-0.05);
+  });
+
   it('neutral shot equals the tuned baseline (no drift)', () => {
     // A dead-center strike with zero spin/aim must land dead straight, so the
     // club ladder the bag is tuned against is never silently moved by the

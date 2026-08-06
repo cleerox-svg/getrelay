@@ -444,220 +444,6 @@ function describeAccuracy(e: number): { text: string; good: boolean } {
   return { text: label.charAt(0).toUpperCase() + label.slice(1), good: false };
 }
 
-// Dedicated AIM control, fully DECOUPLED from the power pull. A prominent
-// horizontal SLIDER (drag the thumb left/right to swing the shot line ±40°, the
-// sim clamps) is the primary control, flanked by hold-to-repeat ◀ ▶ fine-nudge
-// buttons and a live degree readout ("AIM 20°R"). The on-turf aim arrow (RangeGL)
-// follows aimRad live as you drag/nudge, so it's obvious which way the shot goes.
-// Tapping the readout re-centres to straight. Big touch targets; only the control
-// opts into pointer events, and it lives in the top HUD, clear of the central
-// power-pull drag channel and the club strip.
-const AIM_STEP_DEG = 2;
-const AIM_MAX_DEG = 40;
-function AimSlider({
-  deg,
-  disabled,
-  onSet,
-  onNudge,
-  onCenter,
-}: {
-  deg: number;
-  disabled: boolean;
-  onSet: (deg: number) => void;
-  onNudge: (deltaDeg: number) => void;
-  onCenter: () => void;
-}) {
-  const trackRef = useRef<HTMLDivElement | null>(null);
-  // Single timer id for the press-and-hold nudge repeat; cleared on release/
-  // unmount so the armed/aim state can never strand a running interval.
-  const holdRef = useRef<number | null>(null);
-  // Live `disabled` for the running repeat loop: if the shot arms/launches
-  // mid-hold (a multi-touch edge), the loop bails instead of ticking on.
-  const disabledRef = useRef(disabled);
-  disabledRef.current = disabled;
-  const stopHold = () => {
-    if (holdRef.current != null) {
-      window.clearTimeout(holdRef.current);
-      holdRef.current = null;
-    }
-  };
-  const startHold = (delta: number) => {
-    if (disabled) return;
-    onNudge(delta);
-    const rep = () => {
-      if (disabledRef.current) return stopHold();
-      onNudge(delta);
-      holdRef.current = window.setTimeout(rep, 55);
-    };
-    holdRef.current = window.setTimeout(rep, 300);
-  };
-  useEffect(() => stopHold, []);
-
-  const setFromClientX = (clientX: number) => {
-    const el = trackRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const f = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
-    onSet((f * 2 - 1) * AIM_MAX_DEG);
-  };
-
-  const clamped = Math.max(-AIM_MAX_DEG, Math.min(AIM_MAX_DEG, deg));
-  const frac = (clamped / AIM_MAX_DEG + 1) / 2; // 0..1 thumb position
-  const abs = Math.round(Math.abs(deg));
-  const label = abs < 1 ? 'CTR' : `${abs}°${deg < 0 ? 'L' : 'R'}`;
-
-  const nudgeBtn = (dir: -1 | 1, glyph: string) => (
-    <button
-      type="button"
-      disabled={disabled}
-      aria-label={dir < 0 ? 'Aim left' : 'Aim right'}
-      onPointerDown={(e) => {
-        e.currentTarget.setPointerCapture(e.pointerId);
-        startHold(dir * AIM_STEP_DEG);
-      }}
-      onPointerUp={stopHold}
-      onPointerLeave={stopHold}
-      onPointerCancel={stopHold}
-      style={{
-        pointerEvents: 'auto',
-        flex: '0 0 auto',
-        width: 38,
-        height: 38,
-        borderRadius: 10,
-        border: '1px solid var(--separator)',
-        background: 'var(--card-bg)',
-        color: 'var(--text)',
-        fontSize: 17,
-        fontWeight: 800,
-        lineHeight: 1,
-        opacity: disabled ? 0.5 : 1,
-        touchAction: 'none',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.16)',
-      }}
-    >
-      {glyph}
-    </button>
-  );
-
-  return (
-    <div
-      style={{
-        pointerEvents: 'auto',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 4,
-        background: 'var(--card-bg)',
-        border: '1px solid var(--separator)',
-        borderRadius: 14,
-        padding: '6px 10px 8px',
-        boxShadow: '0 2px 10px rgba(0,0,0,0.18)',
-        opacity: disabled ? 0.6 : 1,
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span
-          style={{ fontSize: 9, fontWeight: 800, letterSpacing: 1.5, color: 'var(--text-dim)' }}
-        >
-          AIM
-        </span>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={onCenter}
-          aria-label="Centre aim"
-          className="tabular-nums"
-          style={{
-            pointerEvents: 'auto',
-            border: 0,
-            background: 'transparent',
-            color: abs < 1 ? 'var(--text-dim)' : 'var(--accent)',
-            fontSize: 15,
-            fontWeight: 800,
-            padding: 0,
-          }}
-        >
-          {label}
-        </button>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        {nudgeBtn(-1, '◀')}
-        <div
-          ref={trackRef}
-          onPointerDown={(e) => {
-            if (disabled) return;
-            e.currentTarget.setPointerCapture(e.pointerId);
-            setFromClientX(e.clientX);
-          }}
-          onPointerMove={(e) => {
-            if (disabled) return;
-            if (e.currentTarget.hasPointerCapture(e.pointerId)) setFromClientX(e.clientX);
-          }}
-          onPointerUp={(e) => {
-            if (e.currentTarget.hasPointerCapture(e.pointerId))
-              e.currentTarget.releasePointerCapture(e.pointerId);
-          }}
-          onPointerCancel={(e) => {
-            if (e.currentTarget.hasPointerCapture(e.pointerId))
-              e.currentTarget.releasePointerCapture(e.pointerId);
-          }}
-          style={{
-            position: 'relative',
-            flex: '1 1 auto',
-            height: 38,
-            borderRadius: 10,
-            background: 'rgba(20,28,40,0.35)',
-            border: '1px solid var(--separator)',
-            touchAction: 'none',
-            cursor: disabled ? 'default' : 'pointer',
-          }}
-        >
-          {/* Baseline track + centre tick. */}
-          <div
-            style={{
-              position: 'absolute',
-              left: 10,
-              right: 10,
-              top: '50%',
-              height: 4,
-              transform: 'translateY(-50%)',
-              borderRadius: 999,
-              background: 'rgba(255,255,255,0.28)',
-            }}
-          />
-          <div
-            style={{
-              position: 'absolute',
-              left: '50%',
-              top: 7,
-              bottom: 7,
-              width: 2,
-              transform: 'translateX(-50%)',
-              background: 'rgba(255,255,255,0.5)',
-            }}
-          />
-          {/* Draggable thumb. */}
-          <div
-            style={{
-              position: 'absolute',
-              left: `calc(10px + ${frac} * (100% - 20px))`,
-              top: '50%',
-              width: 22,
-              height: 22,
-              marginLeft: -11,
-              marginTop: -11,
-              borderRadius: '50%',
-              background: 'var(--accent)',
-              border: '2px solid #fff',
-              boxShadow: '0 1px 5px rgba(0,0,0,0.4)',
-            }}
-          />
-        </div>
-        {nudgeBtn(1, '▶')}
-      </div>
-    </div>
-  );
-}
-
 // Range-layout picker: a compact segmented control (Center lane / Practice lane
 // / Fairway) with a one-line blurb for the active choice, so the player can try
 // each landing-area design on-device. Persisted by the parent; changing it
@@ -821,9 +607,6 @@ export function RangeGame({
   const [readout, setReadout] = useState<RangeState | null>(null);
   const [ballNo, setBallNo] = useState(1);
   const [spin, setSpin] = useState({ back: 0, side: 0 });
-  // Aim in degrees (+ = right), mirrored from the sim for the dedicated aim
-  // control. Decoupled from the power pull; persists across shots.
-  const [aimDeg, setAimDeg] = useState(0);
   // Brief post-shot accuracy feedback ("Perfect!" / "Slight hook" / "Slice").
   const [feedback, setFeedback] = useState<{ text: string; good: boolean } | null>(null);
   const feedbackTimer = useRef<number | null>(null);
@@ -980,22 +763,9 @@ export function RangeGame({
     setSpin({ back, side });
   }
 
-  // Aim nudge (dedicated control). The sim clamps to ±40°; read it back so the
-  // readout and the on-turf arrow stay in lockstep. Direction-independent of
-  // the power pull.
-  function changeAim(deltaDeg: number) {
-    sim.nudgeAim((deltaDeg * Math.PI) / 180);
-    setAimDeg((sim.aimRad * 180) / Math.PI);
-  }
-  // Absolute aim set (degrees, + = right) from the slider drag; the sim clamps.
-  function setAimAbsolute(deg: number) {
-    sim.setAim((deg * Math.PI) / 180);
-    setAimDeg((sim.aimRad * 180) / Math.PI);
-  }
-  function centerAim() {
-    sim.setAim(0);
-    setAimDeg((sim.aimRad * 180) / Math.PI);
-  }
+  // Aim is no longer a HUD control — it's steered by the pull-back gesture
+  // (slingshot) in the sim; the on-turf arrow + predicted arc read sim.aimRad
+  // live as you drag.
 
   // Capture a completed shot into the rolling telemetry log (+ the debug panel).
   function recordTelemetry() {
@@ -1244,16 +1014,10 @@ export function RangeGame({
           {stat('BALL', `${st?.ballSpeed ?? 0}`)}
         </div>
 
-        {/* Prominent AIM slider — the primary aim control, decoupled from the
-            power pull and sitting in the top HUD, clear of the central drag
-            channel and the club strip. Drives the on-turf aim arrow live. */}
-        <AimSlider
-          deg={aimDeg}
-          disabled={!!st?.inFlight || !!st?.armed}
-          onSet={setAimAbsolute}
-          onNudge={changeAim}
-          onCenter={centerAim}
-        />
+        {/* Aim is steered by the pull-back gesture now (drag back for power,
+            angle the pull to steer left/right — slingshot), so there's no
+            separate AIM control here. The on-turf arrow + predicted arc show
+            the direction live as you drag. */}
 
         {/* Range-layout picker — switch landing-area design on the fly. Disabled
             mid-swing so the scene can't rebuild while a shot is live. */}
@@ -1288,7 +1052,7 @@ export function RangeGame({
                 : st.lastResult === 'fence'
                   ? 'Out of bounds'
                   : `${st.nearestPin}yd to pin`
-              : 'Set AIM · drag straight back for power'}
+              : 'Pull back for power · angle the pull to aim'}
         </div>
       </div>
 
@@ -1520,7 +1284,7 @@ export function RangeGame({
               boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
             }}
           >
-            Drag the AIM slider · pull straight back for power · tap to stop the marker
+            Pull back for power · angle the pull left/right to aim · tap to stop the marker
           </span>
         </div>
       ) : null}
