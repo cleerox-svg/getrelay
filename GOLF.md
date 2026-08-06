@@ -217,10 +217,21 @@ Gameplay clean first, then the look, then the course — each step reuses the la
    framing trees, and the range's tuned lighting rig (ACES + warm sun + 2048²
    soft shadows + sky/haze). A golfer's-eye tee camera. Verified with a headless
    swiftshader screenshot of `HOLE_1` (reads as a tree-lined fairway to a distant
-   flag). Not wired to a route yet. **Next:** make it PLAYABLE — a Course route +
-   the aim UI (reuse the range's slingshot/predict), camera-follow, and a HUD
-   driving `CourseSim`; then per-surface PBR textures (mow stripes, sand grain,
-   water shimmer) and a putt-read arrow from `slopeUnder()`; then the nine holes.
+   flag).
+   **→ Also done — PLAYABLE v1:** `CourseGL` now drives a live `CourseSim` on the
+   fixed-step loop with the range's slingshot input (drag to aim — steering off
+   the bearing-to-pin so "straight" points at the flag on a dogleg — pull for
+   power, release to arm), a tap-timing accuracy bar, camera-follow, a ball
+   tracer and an aim line. `CourseSim` gained the interactive surface
+   (onPointerDown/Move/arm/fireArmed, club cycle, spin, getState, strokes,
+   water/OB replay-with-penalty, cup hole-out). `components/golf/CourseGame.tsx`
+   is the HUD wrapper (club selector, distance-to-pin/strokes/lie, accuracy bar,
+   hole-out banner) — lazy-loaded so `three` stays a chunk. Wired into the Games
+   hub: **Golf → "Course · Hole 1 (beta)"** plays the hole full-bleed. Verified
+   headless (a scripted driver flies with camera-follow; the HUD renders). 28/28
+   golf tests still pass. **Next:** per-surface PBR textures (mow stripes, sand
+   grain, water shimmer) + a putt-read arrow from `slopeUnder()` + the predicted-
+   arc aim aid; then build out the nine holes as data.
 
 **Working principle going forward:** tune against the **harness** and **device
 telemetry**, not guesses — that's why both exist.

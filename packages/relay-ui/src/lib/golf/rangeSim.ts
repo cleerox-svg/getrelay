@@ -97,11 +97,11 @@ function terrainFor(surf: 'grass' | 'island'): Terrain {
 // Max lateral aim swing (~0.70 rad ≈ 40° each way). Aim is now folded INTO the
 // power pull (slingshot — see onPointerMove): the pull-back vector's angle sets
 // the shot direction, and this clamps how far off-straight it can be steered.
-const MAX_AIM_RAD = 0.7;
+export const MAX_AIM_RAD = 0.7;
 // Fraction of a full pull's BACK (downward) component below which the drag
 // doesn't steer yet, so a nascent, shallow, sideways or forward pull stays dead
 // straight instead of snapping the aim to the clamp.
-const AIM_DEADZONE_FRAC = 0.12;
+export const AIM_DEADZONE_FRAC = 0.12;
 
 // --- Spin (player-controlled, bounded & forgiving) ---
 // Side spin → a steady lateral acceleration while airborne (yd/s²) at full
@@ -135,14 +135,14 @@ export const CHECK_TOP_FRAC = 0.4;
 // spin on top of the player's intentional spin; the net is clamped to
 // ±ACCURACY_SPIN_MAX so a total whiff is a strong-but-legible banana and a
 // dead-center stop stays pristine (leaving the tuned club ladder untouched).
-const ACCURACY_CURVE = 0.9;
-const ACCURACY_SPIN_MAX = 1.4;
+export const ACCURACY_CURVE = 0.9;
+export const ACCURACY_SPIN_MAX = 1.4;
 // Power weighting of the miss: at zero power a mishit still curves this fraction
 // of ACCURACY_CURVE; at full power the whole of it applies.
-const ACCURACY_POWER_FLOOR = 0.45;
+export const ACCURACY_POWER_FLOOR = 0.45;
 // A mishit also starts a hair offline (a small straight push), radians at a full
 // miss at full power. Kept tiny — the curve is the main effect.
-const ACCURACY_AIM = 0.05;
+export const ACCURACY_AIM = 0.05;
 // Island containment: a soft rim. Beyond this fraction of the green radius the
 // outward roll is damped; at the rim the outward component is reflected so a
 // ball that landed on the green settles on it instead of trickling into water.

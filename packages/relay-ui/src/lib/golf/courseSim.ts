@@ -12,16 +12,22 @@
 // h ABSOLUTE elevation yд (the range treats ground as h=0; here the ground is
 // heightAt(d,x)). The course renderer will drive this on the same fixed step.
 
-import { clubById, DEFAULT_CLUB_ID } from './clubs';
+import { CLUBS, clubById, DEFAULT_CLUB_ID } from './clubs';
 import type { Club } from './clubs';
-import { FIXED_MS } from './tuning';
+import { FIXED_MS, MIN_PULL } from './tuning';
 import {
+  ACCURACY_AIM,
+  ACCURACY_CURVE,
+  ACCURACY_POWER_FLOOR,
+  ACCURACY_SPIN_MAX,
+  AIM_DEADZONE_FRAC,
   AIR_DRAG,
   BITE_K,
   CHECK_BACK_FRAC,
   CHECK_BACK_KICK,
   CHECK_TOP_FRAC,
   GRAVITY,
+  MAX_AIM_RAD,
   POWER_FLOOR,
   ROLL_FRICTION,
   SPIN_BITE,
@@ -109,6 +115,27 @@ export interface CourseShotOptions {
   windCross?: number;
 }
 
+// Live readouts the HUD polls each frame.
+export interface CourseState {
+  clubId: string;
+  clubName: string;
+  par: number;
+  strokes: number;
+  power: number;
+  aiming: boolean;
+  armed: boolean;
+  inFlight: boolean;
+  resting: boolean;
+  holed: boolean;
+  aimDeg: number;
+  distToPin: number;
+  lie: Surface;
+  lastResult: CourseResult;
+  spinBack: number;
+  spinSide: number;
+  penaltyPending: boolean;
+}
+
 const TRAIL_MAX = 64;
 
 export class CourseSim {
@@ -135,8 +162,27 @@ export class CourseSim {
   private rollDecay = ROLL_FRICTION;
   private result: CourseResult = 'tee';
 
+  // --- Interactive play (drag-to-aim slingshot, reused from the range) ------
+  // aimRad STEERS off the bearing-to-pin (so "straight" points at the flag even
+  // on a dogleg); the pull magnitude sets power. arm() locks them and raises the
+  // accuracy bar; fireArmed() launches. The ball plays shot-by-shot from wherever
+  // it lies until it's holed.
+  private readonly par: number;
+  aiming = false;
+  power = 0;
+  aimRad = 0;
+  armed = false;
+  strokes = 0;
+  holed = false;
+  private dragStart = { x: 0, y: 0 };
+  private maxPull = 220;
+  private shotOriginD = 0;
+  private shotOriginX = 0;
+  private penaltyPending = false;
+
   constructor(hole: CourseHole, clubId = DEFAULT_CLUB_ID) {
     this.hole = hole;
+    this.par = hole.par;
     this.clubId = clubId;
     this.windAlong = hole.wind.along;
     this.windCross = hole.wind.cross;
@@ -167,21 +213,21 @@ export class CourseSim {
     return surfaceAt(this.hole, d, x);
   }
 
-  // Launch from a lie with a locked club/power/aim/spin (mirrors rangeSim.swing,
-  // but off an arbitrary origin at the ground's elevation there).
-  private swing(power: number, aimRad: number, accuracy: number): void {
+  // Launch from a lie with a locked club/power and an ABSOLUTE direction (dirRad,
+  // angle off the +d axis) plus a precomputed net side-spin. Off an arbitrary
+  // origin at the ground's elevation there. Mirrors rangeSim.swing.
+  private swing(power: number, dirRad: number, launchSpinSide: number): void {
     const club = this.club();
     const b = this.ball;
     const sPow = POWER_FLOOR + (1 - POWER_FLOOR) * Math.max(0, Math.min(1, power));
     const s = club.baseSpeed * Math.sqrt(sPow);
     const loft = (club.loft * Math.PI) / 180;
-    // Accuracy miss folds into side-spin like the range (kept simple here).
-    this.launchSpinSide = this.spinSide + accuracy * 0.9;
+    this.launchSpinSide = launchSpinSide;
     const sH = s * Math.cos(loft);
     b.h = this.ground(b.d, b.x);
     b.vh = s * Math.sin(loft);
-    b.vd = sH * Math.cos(aimRad);
-    b.vx = sH * Math.sin(aimRad);
+    b.vd = sH * Math.cos(dirRad);
+    b.vx = sH * Math.sin(dirRad);
     b.inFlight = true;
     b.grounded = false;
     b.resting = false;
@@ -213,6 +259,139 @@ export class CourseSim {
     b.h = this.ground(b.d, b.x);
     this.total = this.origin2D(b.d, b.x);
     this.result = result;
+    if (result === 'holed') this.holed = true;
+    // Water / OB → the next address replays from the previous spot for a penalty.
+    if (result === 'water' || result === 'ob') this.penaltyPending = true;
+  }
+
+  // --- Interactive control surface (CourseGL drives this; CourseGame reads it) --
+
+  selectClub(id: string): void {
+    if (this.ball.inFlight) return;
+    if (CLUBS.some((c) => c.id === id)) this.clubId = id;
+  }
+  cycleClub(dir: 1 | -1): void {
+    if (this.ball.inFlight) return;
+    const i = CLUBS.findIndex((c) => c.id === this.clubId);
+    this.clubId = CLUBS[(i + dir + CLUBS.length) % CLUBS.length]!.id;
+  }
+  setSpin(back: number, side: number): void {
+    this.spinBack = Math.max(-1, Math.min(1, back));
+    this.spinSide = Math.max(-1, Math.min(1, side));
+  }
+  setMaxPull(px: number): void {
+    this.maxPull = Math.max(40, px);
+  }
+
+  // Bearing (rad off +d) from the ball to the pin, so "straight" aims at the flag
+  // even on a dogleg; the slingshot steer is added on top of this.
+  private bearingToPin(): number {
+    const b = this.ball;
+    const p = this.hole.pin;
+    return Math.atan2(p.x - b.x, Math.max(1e-3, p.d - b.d));
+  }
+
+  // Slingshot steer from a pull-back vector (start − finger, CSS px): the shot
+  // flings OPPOSITE the pull. Identical mapping/deadzone to the range.
+  private pullAim(rawX: number, rawY: number): number {
+    const back = -rawY;
+    if (back < this.maxPull * AIM_DEADZONE_FRAC) return 0;
+    return Math.max(-MAX_AIM_RAD, Math.min(MAX_AIM_RAD, Math.atan2(rawX, back)));
+  }
+
+  onPointerDown(p: { x: number; y: number }): void {
+    if (this.ball.inFlight || this.holed) return;
+    if (this.penaltyPending) this.applyPenalty();
+    this.aiming = true;
+    this.armed = false;
+    this.dragStart = { x: p.x, y: p.y };
+    this.power = 0;
+    this.aimRad = 0;
+  }
+  onPointerMove(p: { x: number; y: number }): void {
+    if (!this.aiming) return;
+    const rawX = this.dragStart.x - p.x;
+    const rawY = this.dragStart.y - p.y;
+    this.power = Math.min(Math.hypot(rawX, rawY), this.maxPull) / this.maxPull;
+    this.aimRad = this.pullAim(rawX, rawY);
+  }
+  // Release: lock power + steer and raise the accuracy bar (no launch yet). A
+  // sub-min pull cancels back to address.
+  arm(p: { x: number; y: number }): boolean {
+    if (!this.aiming) return false;
+    this.aiming = false;
+    const pullX = this.dragStart.x - p.x;
+    const pullY = this.dragStart.y - p.y;
+    if (Math.hypot(pullX, pullY) < MIN_PULL) {
+      this.armed = false;
+      this.power = 0;
+      return false;
+    }
+    this.power = Math.min(Math.hypot(pullX, pullY), this.maxPull) / this.maxPull;
+    this.aimRad = this.pullAim(pullX, pullY);
+    this.armed = true;
+    return true;
+  }
+  cancelArm(): void {
+    this.armed = false;
+    this.aiming = false;
+    this.power = 0;
+  }
+
+  // Fire the armed shot with the tap-timing error e∈[-1..1] (0 = pure). Turns the
+  // miss into a straight push + side-spin curve (same model as the range), aims
+  // at bearing-to-pin + steer, launches, counts the stroke.
+  fireArmed(accuracyError: number): void {
+    if (!this.armed) return;
+    this.armed = false;
+    const e = Math.max(-1, Math.min(1, accuracyError));
+    const powerW = ACCURACY_POWER_FLOOR + (1 - ACCURACY_POWER_FLOOR) * this.power;
+    const curve = e * ACCURACY_CURVE * powerW;
+    const pushAim = e * ACCURACY_AIM * powerW;
+    const lss = Math.max(-ACCURACY_SPIN_MAX, Math.min(ACCURACY_SPIN_MAX, this.spinSide + curve));
+    const b = this.ball;
+    this.originD = this.shotOriginD = b.d;
+    this.originX = this.shotOriginX = b.x;
+    const dir = this.bearingToPin() + this.aimRad + pushAim;
+    this.swing(this.power, dir, lss);
+    this.strokes += 1;
+    this.power = 0;
+  }
+
+  // Replay from the previous shot's origin after water/OB, adding a penalty.
+  private applyPenalty(): void {
+    const b = this.ball;
+    b.d = this.shotOriginD;
+    b.x = this.shotOriginX;
+    b.h = this.ground(b.d, b.x);
+    b.vd = b.vx = b.vh = 0;
+    this.strokes += 1;
+    this.penaltyPending = false;
+    this.result = this.lieAt(b.d, b.x);
+  }
+
+  getState(): CourseState {
+    const b = this.ball;
+    const pin = this.hole.pin;
+    return {
+      clubId: this.clubId,
+      clubName: this.club().name,
+      par: this.par,
+      strokes: this.strokes,
+      power: this.power,
+      aiming: this.aiming,
+      armed: this.armed,
+      inFlight: b.inFlight,
+      resting: b.resting,
+      holed: this.holed,
+      aimDeg: (this.aimRad * 180) / Math.PI,
+      distToPin: Math.round(Math.hypot(b.d - pin.d, b.x - pin.x)),
+      lie: this.lieAt(b.d, b.x),
+      lastResult: this.result,
+      spinBack: this.spinBack,
+      spinSide: this.spinSide,
+      penaltyPending: this.penaltyPending,
+    };
   }
 
   substep(dt: number): void {
@@ -328,7 +507,7 @@ export class CourseSim {
     if (opts.windAlong != null) this.windAlong = opts.windAlong;
     if (opts.windCross != null) this.windCross = opts.windCross;
     const aim = ((opts.aimDeg ?? 0) * Math.PI) / 180;
-    this.swing(opts.power ?? 1, aim, 0);
+    this.swing(opts.power ?? 1, aim, this.spinSide);
     let guard = 0;
     while (this.ball.inFlight && guard < 100000) {
       this.substep(fixedS);
