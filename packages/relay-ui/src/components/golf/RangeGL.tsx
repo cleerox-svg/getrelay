@@ -5,13 +5,15 @@ import type { RangeEvent } from '../../lib/golf/rangeSim';
 import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
 import {
   FAIRWAY_HALF_W,
+  FAIRWAY_WATER_END,
+  FAIRWAY_WATER_START,
   GRASS_END,
   ISLAND_SURFACE_SCALE,
   RANGE_YD,
   WATER_END,
   surfaceAt,
 } from '../../lib/golf/rangeTargets';
-import type { Pin } from '../../lib/golf/rangeTargets';
+import type { Pin, RangeLayout } from '../../lib/golf/rangeTargets';
 import { FIXED_MS } from '../../lib/golf/tuning';
 
 // Real-time 3D driving range (Three.js). Owns the WebGL renderer, scene and
@@ -43,6 +45,11 @@ const TRACER_MAX = 900;
 interface Props {
   sim: RangeSim;
   pins: Pin[];
+  // Active landing-area design + mode, so the scene draws the matching surfaces
+  // (causeway vs crossing hazard) and classifies impacts like the sim. The
+  // parent remounts this component (keyed on layout) when the picker changes.
+  layout: RangeLayout;
+  isChallenge: boolean;
   targetId?: string | null;
   paused?: boolean;
   onEvent?: (e: RangeEvent) => void;
@@ -383,7 +390,15 @@ function makeSoftDotTexture(): THREE.Texture {
   return tex;
 }
 
-export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }: Props) {
+export default function RangeGL({
+  sim,
+  pins,
+  layout,
+  isChallenge,
+  targetId,
+  paused = false,
+  onEvent,
+}: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
@@ -498,10 +513,17 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
     scene.add(teeMat);
 
     // --- Water hazard ---------------------------------------------------
+    // Layout selects the hazard footprint: lane / practiceLane flood the whole
+    // 100..390 range; fairway is a single crossing band between the near and
+    // far fairways. (The ground plane is grass everywhere underneath, so the
+    // far/near fairway needs no extra mesh — just this water band on top.)
+    const isFairway = layout === 'fairway';
+    const waterNear = isFairway ? FAIRWAY_WATER_START : GRASS_END;
+    const waterFar = isFairway ? FAIRWAY_WATER_END : WATER_END;
     const WATER_Y = 0.06;
     const waterTex = track(makeWaterTexture());
     const waterNorm = track(makeWaterNormalMap());
-    const waterGeo = track(new THREE.PlaneGeometry(150, WATER_END - GRASS_END));
+    const waterGeo = track(new THREE.PlaneGeometry(150, waterFar - waterNear));
     const waterMat = track(
       new THREE.MeshStandardMaterial({
         map: waterTex,
@@ -518,34 +540,38 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
     );
     const water = new THREE.Mesh(waterGeo, waterMat);
     water.rotation.x = -Math.PI / 2;
-    water.position.set(0, WATER_Y, -(GRASS_END + WATER_END) / 2);
+    water.position.set(0, WATER_Y, -(waterNear + waterFar) / 2);
     scene.add(water);
 
-    // --- Grass fairway causeway ----------------------------------------
+    // --- Grass fairway causeway (lane / practiceLane only) -------------
     // A turf lane laid over the water straight down the middle so an online
     // shot lands on grass and runs out (visuals match rangeTargets.surfaceAt's
-    // central fairway corridor). Sits just above the water surface, spanning the
-    // full hazard depth at ±FAIRWAY_HALF_W wide.
-    const fairwayTex = track(makeTurfTexture());
-    fairwayTex.repeat.set(2, 44);
-    const fairwayNorm = track(makeTurfNormalMap());
-    fairwayNorm.repeat.set(6, 140);
-    const fairwayGeo = track(
-      new THREE.PlaneGeometry(FAIRWAY_HALF_W * 2, WATER_END - GRASS_END),
-    );
-    const fairwayMat = track(
-      new THREE.MeshStandardMaterial({
-        map: fairwayTex,
-        roughness: 0.92,
-        normalMap: fairwayNorm,
-        normalScale: new THREE.Vector2(0.35, 0.35),
-      }),
-    );
-    const fairway = new THREE.Mesh(fairwayGeo, fairwayMat);
-    fairway.rotation.x = -Math.PI / 2;
-    fairway.position.set(0, WATER_Y + 0.04, -(GRASS_END + WATER_END) / 2);
-    fairway.receiveShadow = true;
-    scene.add(fairway);
+    // central corridor). Present for 'lane' always, and for 'practiceLane' only
+    // while practising — in the practiceLane CHALLENGE the causeway is gone
+    // (full water), so it isn't drawn. 'fairway' has no causeway at all.
+    const drawCauseway = layout === 'lane' || (layout === 'practiceLane' && !isChallenge);
+    if (drawCauseway) {
+      const fairwayTex = track(makeTurfTexture());
+      fairwayTex.repeat.set(2, 44);
+      const fairwayNorm = track(makeTurfNormalMap());
+      fairwayNorm.repeat.set(6, 140);
+      const fairwayGeo = track(
+        new THREE.PlaneGeometry(FAIRWAY_HALF_W * 2, WATER_END - GRASS_END),
+      );
+      const fairwayMat = track(
+        new THREE.MeshStandardMaterial({
+          map: fairwayTex,
+          roughness: 0.92,
+          normalMap: fairwayNorm,
+          normalScale: new THREE.Vector2(0.35, 0.35),
+        }),
+      );
+      const fairway = new THREE.Mesh(fairwayGeo, fairwayMat);
+      fairway.rotation.x = -Math.PI / 2;
+      fairway.position.set(0, WATER_Y + 0.04, -(GRASS_END + WATER_END) / 2);
+      fairway.receiveShadow = true;
+      scene.add(fairway);
+    }
 
     // --- Islands + flags + yardage labels ------------------------------
     const ISLAND_TOP = 0.85;
@@ -1029,7 +1055,7 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
           // First ground contact: a subtle turf divot on grass/island only
           // (water landings are handled by the splash below).
           if (ev.d != null && ev.x != null) {
-            const surf = surfaceAt(ev.d, ev.x);
+            const surf = surfaceAt(ev.d, ev.x, layout, isChallenge);
             if (surf !== 'water' && surf !== 'fence') {
               spawnDivot(ev.x, -ev.d, surf === 'island');
             }

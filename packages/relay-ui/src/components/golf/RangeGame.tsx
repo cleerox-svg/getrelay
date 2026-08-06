@@ -4,8 +4,14 @@ import { api } from '../../lib/api';
 import { RangeSim } from '../../lib/golf/rangeSim';
 import type { RangeState, ShotResult } from '../../lib/golf/rangeSim';
 import { CLUBS, DEFAULT_CLUB_ID } from '../../lib/golf/clubs';
-import { PINS, spawnTarget } from '../../lib/golf/rangeTargets';
-import type { Pin } from '../../lib/golf/rangeTargets';
+import {
+  RANGE_LAYOUTS,
+  pinsFor,
+  readStoredLayout,
+  spawnTarget,
+  writeStoredLayout,
+} from '../../lib/golf/rangeTargets';
+import type { Pin, RangeLayout } from '../../lib/golf/rangeTargets';
 import { recordRangeGame } from '../../lib/golf/stats';
 import { MAX_HOLE_POINTS, RANGE_BALLS } from '../../lib/golf/tuning';
 
@@ -652,6 +658,92 @@ function AimSlider({
   );
 }
 
+// Range-layout picker: a compact segmented control (Center lane / Practice lane
+// / Fairway) with a one-line blurb for the active choice, so the player can try
+// each landing-area design on-device. Persisted by the parent; changing it
+// rebuilds the scene. Lives in the top HUD, clear of the central drag channel
+// and the play controls. Disabled while a shot is in flight/armed so the scene
+// can't rebuild mid-swing. Only the buttons opt into pointer events.
+function LayoutPicker({
+  layout,
+  disabled,
+  onChange,
+}: {
+  layout: RangeLayout;
+  disabled: boolean;
+  onChange: (l: RangeLayout) => void;
+}) {
+  const meta = RANGE_LAYOUTS.find((m) => m.id === layout);
+  return (
+    <div
+      style={{
+        // Container is pointer-transparent so the label/blurb region can't
+        // swallow a power-pull drag that starts high on the screen; only the
+        // buttons below opt back into pointer events.
+        pointerEvents: 'none',
+        background: 'var(--card-bg)',
+        border: '1px solid var(--separator)',
+        borderRadius: 14,
+        padding: '6px 8px 7px',
+        boxShadow: '0 2px 10px rgba(0,0,0,0.18)',
+        opacity: disabled ? 0.6 : 1,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 9,
+          fontWeight: 800,
+          letterSpacing: 1.5,
+          color: 'var(--text-dim)',
+          paddingBottom: 4,
+        }}
+      >
+        RANGE LAYOUT
+      </div>
+      <div style={{ display: 'flex', gap: 4 }}>
+        {RANGE_LAYOUTS.map((m) => {
+          const active = m.id === layout;
+          return (
+            <button
+              key={m.id}
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange(m.id)}
+              style={{
+                pointerEvents: 'auto',
+                flex: '1 1 0',
+                border: `1px solid ${active ? 'var(--accent)' : 'var(--separator)'}`,
+                background: active ? 'var(--accent)' : 'var(--card-bg)',
+                color: active ? '#FFFFFF' : 'var(--text)',
+                borderRadius: 9,
+                padding: '5px 2px',
+                fontSize: 11,
+                fontWeight: 700,
+                lineHeight: 1.1,
+              }}
+            >
+              {m.label}
+            </button>
+          );
+        })}
+      </div>
+      {meta ? (
+        <div
+          style={{
+            fontSize: 10,
+            lineHeight: 1.3,
+            color: 'var(--text-dim)',
+            paddingTop: 5,
+            textAlign: 'center',
+          }}
+        >
+          {meta.blurb}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // A completed shot's full record — captured for the in-app telemetry panel and
 // the "Copy telemetry" export, so real device numbers can be compared against
 // the headless harness (rangeSim.test.ts). One per shot that comes to rest.
@@ -685,20 +777,44 @@ export function RangeGame({
 
   const wind = useMemo(makeWind, []);
   const seedRef = useRef(Math.floor(Math.random() * 1e6) + 1);
-  // First challenge target (also drives the initial flag highlight).
-  const firstTargetRef = useRef<Pin>(spawnTarget(0, seedRef.current));
+
+  // Selectable landing-area design (persisted to localStorage, default
+  // 'fairway'). Changing it rebuilds the sim + remounts RangeGL below so the
+  // whole scene swaps to the new layout.
+  const [layout, setLayoutState] = useState<RangeLayout>(() => readStoredLayout());
+
+  // First challenge target (also drives the initial flag highlight) — drawn
+  // from the ACTIVE layout's pin set.
+  const firstTargetRef = useRef<Pin>(spawnTarget(0, seedRef.current, undefined, layout));
   const [target, setTarget] = useState<Pin | null>(isChallenge ? firstTargetRef.current : null);
 
-  // The headless sim: created once, owned here, driven by RangeGL each frame.
+  // Challenge run state, mirrored in refs for the event/unmount paths. Declared
+  // before the sim so a layout rebuild can reset them synchronously.
+  const perShotRef = useRef<RangeShot[]>([]);
+  const longestRef = useRef(0);
+  const reportedRef = useRef(false);
+
+  // The headless sim, owned here and driven by RangeGL each frame. Rebuilt when
+  // the layout changes (a fresh scene): the run is reset so challenge scoring
+  // restarts cleanly on the new design.
   const simRef = useRef<RangeSim | null>(null);
-  if (!simRef.current) {
+  const simLayoutRef = useRef<RangeLayout | null>(null);
+  if (!simRef.current || simLayoutRef.current !== layout) {
+    const ft = spawnTarget(0, seedRef.current, undefined, layout);
+    firstTargetRef.current = ft;
     simRef.current = new RangeSim({
-      pins: PINS,
-      target: isChallenge ? firstTargetRef.current : null,
+      pins: pinsFor(layout),
+      target: isChallenge ? ft : null,
       initialClubId: initialClubId ?? DEFAULT_CLUB_ID,
       windAlong: wind.along,
       windCross: wind.cross,
+      layout,
+      isChallenge,
     });
+    simLayoutRef.current = layout;
+    perShotRef.current = [];
+    longestRef.current = 0;
+    reportedRef.current = false;
   }
   const sim = simRef.current;
 
@@ -730,11 +846,6 @@ export function RangeGame({
     }
   });
 
-  // Challenge run state, mirrored in refs for the event/unmount paths.
-  const perShotRef = useRef<RangeShot[]>([]);
-  const longestRef = useRef(0);
-  const reportedRef = useRef(false);
-
   const onFinishRef = useRef(onFinish);
   onFinishRef.current = onFinish;
 
@@ -753,6 +864,31 @@ export function RangeGame({
     }, 100);
     return () => window.clearInterval(id);
   }, [paused, sim]);
+
+  // When the layout changes the sim was rebuilt (above, during render); reflect
+  // the fresh sim + reset run in the HUD. Skips the initial mount.
+  const didMountRef = useRef(false);
+  useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
+    }
+    setTarget(isChallenge ? firstTargetRef.current : null);
+    setBallNo(1);
+    setFeedback(null);
+    const next = sim.getState();
+    lastReadoutRef.current = JSON.stringify(next);
+    setReadout(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout]);
+
+  // Persist + switch the landing-area design. No-op if unchanged; the render
+  // rebuild + the effect above do the rest.
+  function changeLayout(next: RangeLayout) {
+    if (next === layout) return;
+    writeStoredLayout(next);
+    setLayoutState(next);
+  }
 
   function score(): number {
     return perShotRef.current.reduce((s, x) => s + x.points, 0);
@@ -824,7 +960,7 @@ export function RangeGame({
       finishRef.current();
       return;
     }
-    const chosen = spawnTarget(perShotRef.current.length, seedRef.current, target?.id);
+    const chosen = spawnTarget(perShotRef.current.length, seedRef.current, target?.id, layout);
     sim.setTarget(chosen);
     setTarget(chosen);
     setBallNo(perShotRef.current.length + 1);
@@ -997,8 +1133,11 @@ export function RangeGame({
       {/* 3D scene, lazy-loaded into its own chunk. */}
       <Suspense fallback={<Spinner />}>
         <RangeGL
+          key={layout}
           sim={sim}
-          pins={PINS}
+          pins={pinsFor(layout)}
+          layout={layout}
+          isChallenge={isChallenge}
           targetId={isChallenge ? (target?.id ?? null) : null}
           paused={paused}
           onEvent={(e) => onEvent(e.type)}
@@ -1114,6 +1253,17 @@ export function RangeGame({
           onSet={setAimAbsolute}
           onNudge={changeAim}
           onCenter={centerAim}
+        />
+
+        {/* Range-layout picker — switch landing-area design on the fly. Disabled
+            mid-swing so the scene can't rebuild while a shot is live. */}
+        <LayoutPicker
+          layout={layout}
+          // Also lock it once a Challenge run is underway — switching rebuilds
+          // the scene and resets the round, so it must not silently discard
+          // banked shots. A fresh run (ballNo 1) can still pick a layout.
+          disabled={!!st?.inFlight || !!st?.armed || (isChallenge && ballNo > 1)}
+          onChange={changeLayout}
         />
 
         {/* Hint / nearest-pin / result line — top-centred so it never sits on

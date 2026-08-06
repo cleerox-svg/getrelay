@@ -12,7 +12,8 @@ import { describe, it, expect } from 'vitest';
 import { RangeSim } from './rangeSim';
 import type { SimulateShotOptions } from './rangeSim';
 import { CLUBS } from './clubs';
-import { PINS } from './rangeTargets';
+import { PINS, pinsFor, surfaceAt } from './rangeTargets';
+import type { RangeLayout } from './rangeTargets';
 
 // A fresh sim with NO wind and no challenge target — the deterministic bench.
 function bench(): RangeSim {
@@ -157,5 +158,97 @@ describe('range shot dynamics', () => {
     expect(a.total).toBe(b.total);
     expect(a.carry).toBe(b.carry);
     expect(Math.abs(a.lateral)).toBeLessThan(1);
+  });
+});
+
+// --- Layout system: validate all three landing-area designs -----------------
+// Each layout (+ practice/challenge where it matters) is driven through the
+// REAL sim; we print the per-layout full-power straight bag with the landing
+// `result` per club, then assert each layout's contract. The neutral distance
+// ladder is layout-independent (surface only decides grass/island/water/fence),
+// so the driver still totals ~348 wherever it finishes on turf.
+
+// A full-power straight shot's landing on a given layout+mode.
+function landing(layout: RangeLayout, isChallenge: boolean, clubId: string, aimDeg = 0) {
+  const sim = new RangeSim({ pins: pinsFor(layout), target: null, layout, isChallenge });
+  return sim.simulateShot({ clubId, power: 1, aimDeg, layout, isChallenge });
+}
+
+function bagTable(layout: RangeLayout, isChallenge: boolean): string {
+  const rows: string[] = [];
+  rows.push('  club     | carry | total | result');
+  rows.push('  ---------+-------+-------+-------');
+  for (const c of CLUBS) {
+    const m = landing(layout, isChallenge, c.id);
+    rows.push(`  ${pad(c.name, 8)} | ${pad(m.carry, 5)} | ${pad(m.total, 5)} | ${m.result}`);
+  }
+  return rows.join('\n');
+}
+
+function grassCount(layout: RangeLayout, isChallenge: boolean): number {
+  let n = 0;
+  for (const c of CLUBS) if (landing(layout, isChallenge, c.id).result === 'grass') n++;
+  return n;
+}
+
+describe('range layouts', () => {
+  it('prints the per-layout full-power straight bag tables', () => {
+    const modes: { layout: RangeLayout; isChallenge: boolean; label: string }[] = [
+      { layout: 'lane', isChallenge: false, label: 'lane · practice' },
+      { layout: 'lane', isChallenge: true, label: 'lane · challenge' },
+      { layout: 'practiceLane', isChallenge: false, label: 'practiceLane · practice' },
+      { layout: 'practiceLane', isChallenge: true, label: 'practiceLane · challenge' },
+      { layout: 'fairway', isChallenge: false, label: 'fairway · practice' },
+      { layout: 'fairway', isChallenge: true, label: 'fairway · challenge' },
+    ];
+    for (const m of modes) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `\n[LAYOUT: ${m.label}]  (grass ${grassCount(m.layout, m.isChallenge)}/8)\n` +
+          bagTable(m.layout, m.isChallenge) +
+          '\n',
+      );
+    }
+  });
+
+  it('lane: causeway catches the driver in both modes (~348 grass)', () => {
+    for (const isChallenge of [false, true]) {
+      const drv = landing('lane', isChallenge, 'driver');
+      expect(drv.result, `lane driver result (challenge=${isChallenge})`).toBe('grass');
+      expect(drv.total).toBeGreaterThanOrEqual(338);
+      expect(drv.total).toBeLessThanOrEqual(352);
+    }
+  });
+
+  it('practiceLane: causeway in practice, full water in the challenge', () => {
+    // Practice → identical to lane: straight driver lands & rolls on the lane.
+    const prac = landing('practiceLane', false, 'driver');
+    expect(prac.result).toBe('grass');
+    expect(prac.total).toBeGreaterThanOrEqual(338);
+    expect(prac.total).toBeLessThanOrEqual(352);
+    // Challenge → causeway gone: a straight driver splashes; you must aim islands.
+    const chal = landing('practiceLane', true, 'driver');
+    expect(chal.result).toBe('water');
+    // The centre pins ARE islands the challenge can spawn (aim finds turf).
+    expect(surfaceAt(165, -14, 'practiceLane', true)).toBe('island');
+  });
+
+  it('fairway: driver carries to the far fairway, ≥5/8 land on grass', () => {
+    // Driver clears the crossing hazard and rolls out on the far fairway.
+    const drv = landing('fairway', true, 'driver');
+    expect(drv.result).toBe('grass');
+    expect(drv.total).toBeGreaterThanOrEqual(338);
+    expect(drv.total).toBeLessThanOrEqual(352);
+    // Most clubs land on grass straight (near or far fairway) — same in both modes.
+    expect(grassCount('fairway', false)).toBeGreaterThanOrEqual(5);
+    expect(grassCount('fairway', true)).toBeGreaterThanOrEqual(5);
+    // An island green is still surrounded by water: a small off-aim miss splashes.
+    expect(surfaceAt(256, -20, 'fairway', true)).toBe('island'); // on the green
+    expect(surfaceAt(256, -8, 'fairway', true)).toBe('water'); // ~12yd off-aim
+    // The middle of the crossing stays water — no centred stepping-stone.
+    expect(surfaceAt(265, 0, 'fairway', true)).toBe('water');
+    // The hazard is real: at least one club splashes straight (can't trivially
+    // bomb every club onto turf).
+    expect(grassCount('fairway', true)).toBeLessThan(8);
   });
 });
