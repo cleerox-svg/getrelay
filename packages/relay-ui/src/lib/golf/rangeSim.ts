@@ -116,6 +116,37 @@ export interface ShotMeasurement {
   result: ShotResult;
 }
 
+// A world-space point (d = downrange, x = lateral). Landing/rest markers.
+export interface WorldPt {
+  d: number;
+  x: number;
+}
+
+// Non-committing trajectory prediction returned by predict(). `path` is the
+// sampled flight+roll trajectory (world space) from the tee to rest; `landing`
+// is the first-ground-contact (carry) point, null if the shot never lands
+// (flew out over the fence); `rest` is where the ball finally settles. Mirrors
+// exactly what the real shot would produce — the harness asserts it matches
+// simulateShot() to the yard — so the aim UI can draw the true line.
+export interface ShotPrediction {
+  path: TrailPt[];
+  landing: WorldPt | null;
+  rest: WorldPt;
+  apex: number;
+  ballSpeed: number;
+  result: ShotResult;
+}
+
+// Options for predict(). Uses the sim's CURRENT club/power/aim/spin/wind unless
+// overridden. `accuracy` bakes in a tap-timing miss (0 = the pure center line);
+// `includeWind` false zeroes wind for the "intended" pre-wind line; `stride`
+// sub-samples the path (keep every Nth substep) to bound the point count.
+export interface PredictOptions {
+  accuracy?: number;
+  includeWind?: boolean;
+  stride?: number;
+}
+
 // Options for simulateShot(). All optional; omitted fields use neutral values
 // (straight aim, no spin, dead-center strike).
 export interface SimulateShotOptions {
@@ -304,6 +335,12 @@ export class RangeSim {
 
   private club(): Club {
     return clubById(this.clubId);
+  }
+
+  // The selected club's id — a cheap, allocation-free read for callers (the
+  // renderer's prediction signature) that only need the club, not full state.
+  get activeClubId(): string {
+    return this.clubId;
   }
 
   // --- Control surface (RangeGame / RangeGL) -----------------------------
@@ -693,6 +730,109 @@ export class RangeSim {
     this.pendingCurve = 0;
     this.pendingAim = 0;
     this.events.push({ type: 'launch' });
+  }
+
+  // --- Non-committing shot prediction (the aim aid) ----------------------
+  // Run the CURRENT inputs (club/power/aim/spin/wind) through the SAME launch +
+  // flight + roll pipeline the live shot uses and capture the trajectory,
+  // WITHOUT disturbing any live state: every field swing()/substep() touch is
+  // snapshotted and restored, and the events/trail they push are wiped, so the
+  // ball stays teed and nothing leaks to the renderer. Because it reuses the
+  // real integrator, the predicted landing/rest match the shot to the yard
+  // (the harness asserts this), so the on-turf arc + reticle tell the truth.
+  //
+  // This is a READ-ONLY probe — callers may run it several times per frame
+  // (center line, dispersion edges, pre-wind line) without side effects.
+  predict(opts: PredictOptions = {}): ShotPrediction {
+    const stride = Math.max(1, Math.floor(opts.stride ?? 3));
+    const fixedS = FIXED_MS / 1000;
+    const b = this.ball;
+
+    // Snapshot every mutable field the pipeline writes, plus the ball, trail
+    // and event queue (swing() pushes 'launch'; substep() pushes land/rest/…).
+    const savedBall: Ball = { ...b };
+    const savedTrail = this.trail.slice();
+    const savedEvents = this.events.slice();
+    const saved = {
+      armed: this.armed,
+      aiming: this.aiming,
+      power: this.power,
+      launchSpinSide: this.launchSpinSide,
+      pendingCurve: this.pendingCurve,
+      pendingAim: this.pendingAim,
+      carry: this.carry,
+      total: this.total,
+      apex: this.apex,
+      ballSpeed: this.ballSpeed,
+      longestDrive: this.longestDrive,
+      lastResult: this.lastResult,
+      firstLanding: this.firstLanding,
+      rollDecay: this.rollDecay,
+      containPin: this.containPin,
+      windAlong: this.windAlong,
+      windCross: this.windCross,
+    };
+    if (opts.includeWind === false) {
+      this.windAlong = 0;
+      this.windCross = 0;
+    }
+
+    // Fire with the current locked inputs at the requested accuracy. fireArmed()
+    // requires armed; force it, then let the real swing() set the launch state.
+    this.armed = true;
+    this.fireArmed(opts.accuracy ?? 0);
+
+    const path: TrailPt[] = [{ d: 0, x: 0, h: 0 }];
+    let landing: WorldPt | null = null;
+    let i = 0;
+    let guard = 0;
+    while (this.ball.inFlight && guard < 72000) {
+      const wasFirst = this.firstLanding;
+      this.substep(fixedS);
+      // Capture the carry point at the instant of first ground contact.
+      if (wasFirst && !this.firstLanding && landing == null) {
+        landing = { d: this.carry, x: b.x };
+      }
+      if (i % stride === 0) path.push({ d: b.d, x: b.x, h: b.h });
+      i++;
+      guard++;
+    }
+    // Always include the resting point as the final sample.
+    path.push({ d: b.d, x: b.x, h: b.h });
+    const out: ShotPrediction = {
+      path,
+      landing,
+      rest: { d: b.d, x: b.x },
+      apex: this.apex,
+      ballSpeed: this.ballSpeed,
+      result: this.lastResult ?? 'grass',
+    };
+
+    // Restore every snapshotted field, then the ball / trail / events verbatim.
+    this.armed = saved.armed;
+    this.aiming = saved.aiming;
+    this.power = saved.power;
+    this.launchSpinSide = saved.launchSpinSide;
+    this.pendingCurve = saved.pendingCurve;
+    this.pendingAim = saved.pendingAim;
+    this.carry = saved.carry;
+    this.total = saved.total;
+    this.apex = saved.apex;
+    this.ballSpeed = saved.ballSpeed;
+    this.longestDrive = saved.longestDrive;
+    this.lastResult = saved.lastResult;
+    this.firstLanding = saved.firstLanding;
+    this.rollDecay = saved.rollDecay;
+    this.containPin = saved.containPin;
+    this.windAlong = saved.windAlong;
+    this.windCross = saved.windCross;
+    Object.assign(b, savedBall);
+    this.trail.length = 0;
+    for (const p of savedTrail) this.trail.push(p);
+    this.events.length = 0;
+    for (const e of savedEvents) this.events.push(e);
+
+    return out;
   }
 
   // --- Headless measurement hook (tests / tuning) ------------------------

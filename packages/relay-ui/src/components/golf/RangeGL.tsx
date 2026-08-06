@@ -810,6 +810,153 @@ export default function RangeGL({
     scene.add(aimGuide);
     const aimCol = new THREE.Color();
 
+    // --- Predicted trajectory (the aim aid) ----------------------------
+    // A live, non-committing preview of where THIS pull lands, drawn from the
+    // real sim via sim.predict() (same physics as the shot, so it's true to the
+    // yard). Four elements, PGA-app style: a wind-adjusted flight+roll arc, a
+    // filled landing reticle at the carry point, a small rest marker after the
+    // roll-out, a hollow pre-wind reticle (the gap to the landing ring shows how
+    // far the wind pushes the ball), and a translucent dispersion cone spanning
+    // the two tap-timing extremes (worst hook ↔ worst slice) so the risk reads.
+    // Recomputed only when the inputs change (a cheap per-frame signature), and
+    // shown only while setting up a shot at the tee.
+    const PRED_MAX = 260; // max samples in the predicted flight line
+    const PRED_Y = 0.2; // lift the ground markers just above the turf
+    const predColor = 0x46e0ff;
+    const predGroup = new THREE.Group();
+    predGroup.visible = false;
+
+    const predPos = new Float32Array(PRED_MAX * 3);
+    const predGeo = track(new THREE.BufferGeometry());
+    const predAttr = new THREE.BufferAttribute(predPos, 3);
+    predGeo.setAttribute('position', predAttr);
+    const predMat = track(
+      new THREE.LineBasicMaterial({
+        color: predColor,
+        transparent: true,
+        opacity: 0.9,
+        fog: false,
+      }),
+    );
+    const predLine = new THREE.Line(predGeo, predMat);
+    predLine.frustumCulled = false;
+    predGroup.add(predLine);
+
+    // Landing reticle (wind-adjusted carry point).
+    const landRingGeo = track(new THREE.RingGeometry(1.5, 2.2, 28));
+    const landRingMat = track(
+      new THREE.MeshBasicMaterial({
+        color: predColor,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.92,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
+    const landRing = new THREE.Mesh(landRingGeo, landRingMat);
+    landRing.rotation.x = -Math.PI / 2;
+    predGroup.add(landRing);
+
+    // Rest marker (after the roll-out).
+    const restRingGeo = track(new THREE.RingGeometry(0.7, 1.1, 20));
+    const restRingMat = track(
+      new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.72,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
+    const restRing = new THREE.Mesh(restRingGeo, restRingMat);
+    restRing.rotation.x = -Math.PI / 2;
+    predGroup.add(restRing);
+
+    // Pre-wind (intended) reticle — hollow amber; the gap to landRing = wind push.
+    const aimRingGeo = track(new THREE.RingGeometry(2.4, 2.8, 28));
+    const aimRingMat = track(
+      new THREE.MeshBasicMaterial({
+        color: 0xffd54a,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.6,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
+    const aimRing = new THREE.Mesh(aimRingGeo, aimRingMat);
+    aimRing.rotation.x = -Math.PI / 2;
+    predGroup.add(aimRing);
+
+    // Dispersion cone: a flat translucent triangle from the ball to the two
+    // tap-timing edge landings (worst hook / worst slice).
+    const coneVerts = new Float32Array(9);
+    const coneGeo = track(new THREE.BufferGeometry());
+    const coneAttr = new THREE.BufferAttribute(coneVerts, 3);
+    coneGeo.setAttribute('position', coneAttr);
+    const coneMat = track(
+      new THREE.MeshBasicMaterial({
+        color: predColor,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.13,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
+    const cone = new THREE.Mesh(coneGeo, coneMat);
+    cone.frustumCulled = false;
+    predGroup.add(cone);
+    scene.add(predGroup);
+
+    // Recompute the prediction, called only when the input signature changes.
+    let predSig = '';
+    const updatePrediction = () => {
+      // Wind-adjusted center line + landing/rest.
+      const wind = sim.predict({ accuracy: 0, includeWind: true, stride: 3 });
+      const n = Math.min(wind.path.length, PRED_MAX);
+      for (let k = 0; k < n; k++) {
+        const p = wind.path[k]!;
+        predPos[k * 3] = p.x;
+        predPos[k * 3 + 1] = p.h + BALL_R;
+        predPos[k * 3 + 2] = -p.d;
+      }
+      predGeo.setDrawRange(0, n);
+      predAttr.needsUpdate = true;
+
+      // Landing reticle (carry). If the shot flew out over the fence with no
+      // landing, fall back to the rest point so the ring still reads.
+      const land = wind.landing ?? wind.rest;
+      landRing.position.set(land.x, PRED_Y, -land.d);
+      const rolled = Math.hypot(wind.rest.d - land.d, wind.rest.x - land.x);
+      restRing.position.set(wind.rest.x, PRED_Y, -wind.rest.d);
+      restRing.visible = rolled > 4;
+
+      // Pre-wind (intended) reticle — only when it visibly differs.
+      const intended = sim.predict({ accuracy: 0, includeWind: false, stride: 12 });
+      const iLand = intended.landing ?? intended.rest;
+      aimRing.position.set(iLand.x, PRED_Y, -iLand.d);
+      aimRing.visible = Math.hypot(iLand.d - land.d, iLand.x - land.x) > 3;
+
+      // Dispersion cone from the two tap-timing extremes' landings.
+      const missL = sim.predict({ accuracy: -1, includeWind: true, stride: 999 });
+      const missR = sim.predict({ accuracy: 1, includeWind: true, stride: 999 });
+      const lL = missL.landing ?? missL.rest;
+      const lR = missR.landing ?? missR.rest;
+      coneVerts[0] = 0;
+      coneVerts[1] = PRED_Y;
+      coneVerts[2] = 0;
+      coneVerts[3] = lL.x;
+      coneVerts[4] = PRED_Y;
+      coneVerts[5] = -lL.d;
+      coneVerts[6] = lR.x;
+      coneVerts[7] = PRED_Y;
+      coneVerts[8] = -lR.d;
+      coneAttr.needsUpdate = true;
+    };
+
     // --- Toptracer full-path line --------------------------------------
     const tracerPos = new Float32Array(TRACER_MAX * 3);
     const tracerGeo = track(new THREE.BufferGeometry());
@@ -1147,6 +1294,31 @@ export default function RangeGL({
         const pulse = sim.aiming ? 1 : 0.82 + 0.18 * Math.sin(now / 320);
         aimMat.opacity = (0.42 + sim.power * 0.45) * pulse;
         chevMat.opacity = 0.42 * pulse;
+      }
+
+      // Predicted trajectory: shown while actively setting up a shot at the tee
+      // (dragging back, or the locked accuracy phase). Recomputed only when the
+      // inputs (club/power/aim/spin) change, so the 4 sim.predict() probes run
+      // on input change, never every frame.
+      const setup = teed && (sim.aiming || sim.armed || sim.power > 0.01);
+      predGroup.visible = setup;
+      if (setup) {
+        const sig =
+          sim.activeClubId +
+          '|' +
+          Math.round(sim.power * 50) +
+          '|' +
+          Math.round(sim.aimRad * 200) +
+          '|' +
+          Math.round(sim.spinBack * 20) +
+          '|' +
+          Math.round(sim.spinSide * 20);
+        if (sig !== predSig) {
+          predSig = sig;
+          updatePrediction();
+        }
+      } else {
+        predSig = '';
       }
 
       // Tracer: append current ball position while in flight.

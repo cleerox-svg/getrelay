@@ -31,6 +31,14 @@ bundle, with all GPU resources disposed (`forceContextLoss()`) on unmount.
   flight curve; backspin checks/zips back on the bounce.
 - **Accuracy** via a **tap-timing bar** (Golf-Clash style): release arms the
   shot, a marker sweeps, tap to fire; off-center adds hook/slice.
+- **Live aim prediction** (Roadmap step 1, done): while setting up a shot the
+  turf shows a **wind-adjusted predicted arc** to a **landing reticle**, a
+  **pre-wind reticle** (the gap between the two reads the wind push), a
+  **roll-out marker**, and a **tap-timing dispersion cone** (worst hook ↔ worst
+  slice). It's `rangeSim.predict()` — the CURRENT club/power/aim/spin/wind run
+  through the SAME launch+flight+roll pipeline as the live shot via a
+  snapshot/restore (no commit, no state mutation), so it's true to the yard.
+  The harness asserts `predict()` matches `simulateShot()` per club.
 - **Club ladder** (full power, neutral spin, harness-measured): Driver 291
   carry / 348 total → SW 109/121. Forgiving/linear power map
   (`s = baseSpeed·√(FLOOR + (1−FLOOR)·power)`).
@@ -138,6 +146,10 @@ Gameplay clean first, then the look, then the course — each step reuses the la
 1. **Nail the aim/shot control** — touch-the-ball → power arc → aim line +
    landing reticle → wind-adjusted second path → tap-timing release. Prediction
    from the sim; verified by the harness. Biggest felt improvement.
+   **→ Done:** `rangeSim.predict()` + the on-turf arc/reticles/dispersion cone
+   in `RangeGL` (see "Live aim prediction" above). Next felt improvements here
+   would be a draggable landing reticle (adjust aim by dragging the target) and
+   folding the power arc onto the ball itself; both build on `predict()`.
 2. **Level up visuals in Three.js** — PBR turf/sand, real sun + soft shadows +
    ambient light, sky + distance haze, lit tree sprites, glossier ball, light
    bloom/tone-mapping. The ~80% path, no new dep. Retire the odd range look here.

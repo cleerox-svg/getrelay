@@ -161,6 +161,124 @@ describe('range shot dynamics', () => {
   });
 });
 
+// --- Shot prediction: the aim aid must match the real shot -------------------
+// predict() runs the CURRENT inputs through the SAME pipeline as the live shot
+// (snapshot/restore), so the on-turf arc + landing reticle can be trusted. These
+// tests pin that guarantee: the predicted landing/rest match simulateShot() to
+// the yard, predict() never mutates the sim, and wind shifts the prediction the
+// expected way. If prediction ever forks from the real integrator, this fails.
+
+// Build a sim with fixed inputs (no wind unless asked), matching simulateShot's
+// setup, so predict() and simulateShot() see identical state.
+function primed(opts: SimulateShotOptions & { windAlong?: number; windCross?: number }): RangeSim {
+  const sim = new RangeSim({
+    pins: PINS,
+    target: null,
+    windAlong: opts.windAlong ?? 0,
+    windCross: opts.windCross ?? 0,
+    layout: opts.layout,
+    isChallenge: opts.isChallenge,
+  });
+  sim.teeUp();
+  if (opts.layout) sim.layout = opts.layout;
+  if (opts.isChallenge != null) sim.isChallenge = opts.isChallenge;
+  if (opts.clubId) sim.selectClub(opts.clubId);
+  sim.setSpin(opts.spinBack ?? 0, opts.spinSide ?? 0);
+  sim.setAim(((opts.aimDeg ?? 0) * Math.PI) / 180);
+  sim.power = Math.max(0, Math.min(1, opts.power ?? 1));
+  return sim;
+}
+
+describe('shot prediction (aim aid)', () => {
+  it('predicted landing/rest match the real shot to the yard, every club', () => {
+    const rows: string[] = [];
+    rows.push('  club     | pred carry/total | real carry/total');
+    rows.push('  ---------+------------------+-----------------');
+    for (const c of CLUBS) {
+      const sim = primed({ clubId: c.id, power: 1 });
+      const pred = sim.predict({ accuracy: 0, includeWind: true });
+      const real = shot({ clubId: c.id, power: 1 });
+      const predCarry = Math.round(pred.landing?.d ?? pred.rest.d);
+      const predTotal = Math.round(pred.rest.d);
+      rows.push(
+        `  ${pad(c.name, 8)} | ${pad(predCarry, 7)}/${pad(predTotal, 8)} | ${pad(
+          real.carry,
+          7,
+        )}/${pad(real.total, 8)}`,
+      );
+      // Same integrator → within a yard (rounding only).
+      expect(Math.abs(predTotal - real.total), `${c.name} total`).toBeLessThanOrEqual(1);
+      expect(Math.abs(predCarry - real.carry), `${c.name} carry`).toBeLessThanOrEqual(1);
+      expect(Math.round(pred.apex), `${c.name} apex`).toBe(real.apex);
+      expect(pred.result, `${c.name} result`).toBe(real.result);
+    }
+    // eslint-disable-next-line no-console
+    console.log('\n[PREDICTION vs REAL]\n' + rows.join('\n') + '\n');
+  });
+
+  it('prediction tracks aim and spin like the real shot (lateral to the yard)', () => {
+    const cases: SimulateShotOptions[] = [
+      { clubId: 'driver', power: 1, aimDeg: 30 },
+      { clubId: 'driver', power: 1, aimDeg: -30 },
+      { clubId: 'driver', power: 1, spinSide: -1 },
+      { clubId: '7iron', power: 0.7, spinSide: 1 },
+      { clubId: 'pw', power: 0.5, spinBack: 1 },
+    ];
+    for (const opts of cases) {
+      const pred = primed(opts).predict({ accuracy: 0, includeWind: true });
+      const real = shot(opts);
+      const label = JSON.stringify(opts);
+      expect(Math.abs(pred.rest.x - real.lateral), `${label} lateral`).toBeLessThanOrEqual(1);
+      expect(Math.abs(Math.round(pred.rest.d) - real.total), `${label} total`).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('a tap-timing miss bends the prediction the way it bends the shot', () => {
+    const missL = primed({ clubId: 'driver', power: 1 }).predict({ accuracy: -1 });
+    const missR = primed({ clubId: 'driver', power: 1 }).predict({ accuracy: 1 });
+    const realL = shot({ clubId: 'driver', power: 1, accuracy: -1 });
+    const realR = shot({ clubId: 'driver', power: 1, accuracy: 1 });
+    // Left miss hooks (-x), right miss slices (+x) — matching the real shot.
+    expect(missL.rest.x).toBeLessThan(-10);
+    expect(missR.rest.x).toBeGreaterThan(10);
+    expect(Math.abs(missL.rest.x - realL.lateral)).toBeLessThanOrEqual(1);
+    expect(Math.abs(missR.rest.x - realR.lateral)).toBeLessThanOrEqual(1);
+    // The dispersion the cone spans is real (edges are far apart).
+    expect(missR.rest.x - missL.rest.x).toBeGreaterThan(20);
+  });
+
+  it('predict() never mutates the sim (read-only probe)', () => {
+    const sim = primed({ clubId: '5iron', power: 0.8, aimDeg: 12, spinSide: -0.5, spinBack: 0.3 });
+    const before = JSON.stringify(sim.getState());
+    const ballBefore = JSON.stringify(sim.ball);
+    // Several probes, as the renderer does per input change.
+    sim.predict({ accuracy: 0, includeWind: true });
+    sim.predict({ accuracy: 0, includeWind: false });
+    sim.predict({ accuracy: -1 });
+    sim.predict({ accuracy: 1 });
+    expect(JSON.stringify(sim.getState())).toBe(before);
+    expect(JSON.stringify(sim.ball)).toBe(ballBefore);
+    expect(sim.ball.inFlight).toBe(false);
+    // A live shot after probing still produces the tuned number (nothing drifted).
+    const real = sim.simulateShot({ clubId: '5iron', power: 0.8, aimDeg: 12, spinSide: -0.5, spinBack: 0.3 });
+    const pred = primed({ clubId: '5iron', power: 0.8, aimDeg: 12, spinSide: -0.5, spinBack: 0.3 }).predict();
+    expect(Math.abs(Math.round(pred.rest.d) - real.total)).toBeLessThanOrEqual(1);
+  });
+
+  it('wind bends the prediction; includeWind:false is the pre-wind line', () => {
+    // A stiff left-to-right crosswind pushes the ball right (+x).
+    const sim = primed({ clubId: 'driver', power: 1, windCross: 3 });
+    const withWind = sim.predict({ accuracy: 0, includeWind: true });
+    const preWind = sim.predict({ accuracy: 0, includeWind: false });
+    // Wind visibly shifts the landing to the right of the pre-wind line.
+    expect(withWind.rest.x - preWind.rest.x).toBeGreaterThan(5);
+    // The pre-wind line matches a genuine no-wind shot (isolates the wind term).
+    const noWind = shot({ clubId: 'driver', power: 1 });
+    expect(Math.abs(Math.round(preWind.rest.d) - noWind.total)).toBeLessThanOrEqual(1);
+    expect(Math.abs(preWind.rest.x - noWind.lateral)).toBeLessThanOrEqual(1);
+  });
+});
+
 // --- Layout system: validate all three landing-area designs -----------------
 // Each layout (+ practice/challenge where it matters) is driven through the
 // REAL sim; we print the per-layout full-power straight bag with the landing
