@@ -35,6 +35,12 @@ export interface FcmSendOptions {
   // High priority wakes a dozing Android device immediately (Doze/idle),
   // matching the Web Push `urgency: high` used for messages + score alerts.
   highPriority?: boolean;
+  // Message lifetime in seconds. When the device is offline/asleep longer
+  // than this, FCM DROPS the message instead of holding it. Omitting it
+  // means FCM's default of 4 weeks — which is how a time-sensitive alert
+  // ("game starting") ends up delivered a day late. Time-sensitive callers
+  // should pass a short value so a stale alert expires rather than arrives.
+  ttlSeconds?: number;
 }
 
 export interface FcmSendResult {
@@ -155,16 +161,22 @@ export async function sendFcm(
   }
 
   const tag = typeof payload.tag === 'string' && payload.tag ? payload.tag : undefined;
+  const android: Record<string, unknown> = {
+    priority: opts.highPriority === false ? 'NORMAL' : 'HIGH',
+    // `tag` collapses same-thread notifications (a second message
+    // overwrites the first) exactly like the Web Push SW does.
+    notification: tag ? { tag } : {},
+  };
+  // FCM v1 wants the TTL as a Duration string ("3600s"). Clamp to a
+  // non-negative integer of seconds; 0 means "deliver now or drop".
+  if (typeof opts.ttlSeconds === 'number' && Number.isFinite(opts.ttlSeconds)) {
+    android.ttl = `${Math.max(0, Math.floor(opts.ttlSeconds))}s`;
+  }
   const message = {
     token,
     notification: { title, body: bodyText },
     data,
-    android: {
-      priority: opts.highPriority === false ? 'NORMAL' : 'HIGH',
-      // `tag` collapses same-thread notifications (a second message
-      // overwrites the first) exactly like the Web Push SW does.
-      notification: tag ? { tag } : {},
-    },
+    android,
   };
 
   const res = await fetch(
