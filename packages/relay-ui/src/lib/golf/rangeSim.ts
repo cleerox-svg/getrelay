@@ -42,11 +42,14 @@ const ROLL_FRICTION = 0.95;
 const BITE_K = 0.16;
 // Below this ground speed a rolling ball is snapped to rest.
 const ROLL_REST = 2.5;
-// Max lateral aim swing. Aim is now a DEDICATED HUD control (RangeGame's
-// nudge buttons), fully DECOUPLED from the power pull, so the range can be
-// wide without the drag ever feeling twitchy: ~0.70 rad ≈ 40° each way makes
-// "choosing direction" feel real. setAim()/nudgeAim() clamp to this.
+// Max lateral aim swing (~0.70 rad ≈ 40° each way). Aim is now folded INTO the
+// power pull (slingshot — see onPointerMove): the pull-back vector's angle sets
+// the shot direction, and this clamps how far off-straight it can be steered.
 const MAX_AIM_RAD = 0.7;
+// Fraction of a full pull's BACK (downward) component below which the drag
+// doesn't steer yet, so a nascent, shallow, sideways or forward pull stays dead
+// straight instead of snapping the aim to the clamp.
+const AIM_DEADZONE_FRAC = 0.12;
 
 // --- Spin (player-controlled, bounded & forgiving) ---
 // Side spin → a steady lateral acceleration while airborne (yd/s²) at full
@@ -253,9 +256,9 @@ export class RangeSim {
   readonly ball: Ball;
   readonly trail: TrailPt[] = [];
 
-  // Aim state, surfaced for the renderer's ground aim/power indicator. aimRad
-  // is set ONLY by the dedicated aim control (setAim/nudgeAim), never by the
-  // power pull, and PERSISTS across shots (teeUp does not clear it).
+  // Aim state, surfaced for the renderer's ground aim/power indicator + the
+  // predicted arc. aimRad is steered by the power pull (slingshot — pullAim);
+  // onPointerDown resets it to 0 so each drag re-aims from straight.
   aiming = false;
   power = 0;
   aimRad = 0;
@@ -383,10 +386,11 @@ export class RangeSim {
     this.maxPull = Math.max(40, px);
   }
 
-  // --- Aim (dedicated control, decoupled from the power pull) -------------
-  // The HUD's aim buttons/slider drive these; the power pull no longer touches
-  // aimRad. Both clamp to ±MAX_AIM_RAD and take effect immediately (the on-turf
-  // aim arrow reads aimRad every frame). Aim persists across shots.
+  // --- Aim ---------------------------------------------------------------
+  // Aim is driven by the power pull now (the slingshot angle — see
+  // onPointerMove / pullAim), not a dedicated HUD control. setAim() remains the
+  // PROGRAMMATIC setter used by the headless harness (simulateShot) and clamps
+  // to ±MAX_AIM_RAD; the on-turf aim arrow reads aimRad every frame.
 
   // Set the aim absolutely, in radians (+ = right). Ignored once a shot is in
   // flight or locked (armed), so the accuracy phase can't have its line moved.
@@ -395,9 +399,18 @@ export class RangeSim {
     this.aimRad = Math.max(-MAX_AIM_RAD, Math.min(MAX_AIM_RAD, rad));
   }
 
-  // Nudge the aim by a delta (radians); used by the hold-to-repeat ◀ ▶ buttons.
-  nudgeAim(delta: number): void {
-    this.setAim(this.aimRad + delta);
+  // Slingshot aim from a pull-back vector (start − finger, CSS px). The shot
+  // flings OPPOSITE the pull, so its angle off straight-back sets the direction:
+  // finger dragged RIGHT (rawX < 0) aims the shot LEFT, finger LEFT (rawX > 0)
+  // aims RIGHT, clamped to ±MAX_AIM_RAD. `back` = −rawY is how far "down"/back
+  // the pull is; steering engages only once THAT clears the deadzone (not the
+  // raw length), so a shallow, sideways or forward drag stays dead straight
+  // rather than snapping to the clamp.
+  private pullAim(rawX: number, rawY: number): number {
+    const back = -rawY;
+    if (back < this.maxPull * AIM_DEADZONE_FRAC) return 0;
+    const a = Math.atan2(rawX, back);
+    return Math.max(-MAX_AIM_RAD, Math.min(MAX_AIM_RAD, a));
   }
 
   // Return the ball to the tee, ready to aim. Keeps the last shot's readouts
@@ -413,8 +426,8 @@ export class RangeSim {
     this.aiming = false;
     this.armed = false;
     this.power = 0;
-    // aimRad is intentionally NOT reset here: aim is owned by the dedicated
-    // control and persists across shots / re-tees / cancels.
+    // aimRad is left as-is here; a fresh drag (onPointerDown) resets it to 0 and
+    // the pull then steers it (slingshot aim).
     this.launchSpinSide = 0;
     this.pendingCurve = 0;
     this.pendingAim = 0;
@@ -624,34 +637,37 @@ export class RangeSim {
     return Math.hypot(b.d - this.target.d, b.x - this.target.x) <= this.target.r;
   }
 
-  // --- Input (drag back for POWER ONLY, in CSS pixels) -------------------
-  // The pull-back gesture is now power-only: power = clamp(|drag| / maxPull)
-  // using the drag MAGNITUDE regardless of direction, so the player can yank
-  // back to any comfortable spot without steering. Aim is a separate control
-  // (setAim/nudgeAim) and is never touched here.
+  // --- Input (slingshot: drag back for POWER, steer L/R for AIM) ---------
+  // ONE gesture sets both. power = clamp(|pull| / maxPull) from the drag
+  // MAGNITUDE (pull farther = more power, any direction). aim = the pull-back
+  // vector's angle off straight-down: the shot launches OPPOSITE the pull, so
+  // dragging the finger RIGHT aims the shot LEFT and dragging LEFT aims RIGHT
+  // (pullAim, clamped to ±MAX_AIM_RAD). A deadzone keeps a short pull straight.
 
   onPointerDown(p: Vec2): void {
     if (this.ball.inFlight) return;
     // Re-tee for the next shot the moment the player starts a new drag, so the
-    // ball always launches from the tee. Aim persists (teeUp keeps aimRad).
+    // ball always launches from the tee, and start straight — the pull steers.
     this.teeUp();
     this.aiming = true;
     this.dragStart = { x: p.x, y: p.y };
     this.power = 0;
+    this.aimRad = 0;
   }
 
   onPointerMove(p: Vec2): void {
     if (!this.aiming) return;
-    // Direction-independent: power tracks the drag magnitude only.
     const rawX = this.dragStart.x - p.x;
     const rawY = this.dragStart.y - p.y;
-    this.power = Math.min(Math.hypot(rawX, rawY), this.maxPull) / this.maxPull;
+    const len = Math.hypot(rawX, rawY);
+    this.power = Math.min(len, this.maxPull) / this.maxPull;
+    this.aimRad = this.pullAim(rawX, rawY);
   }
 
-  // Step 1 → Step 2 (release): LOCK the pulled power (aim is already set on the
-  // dedicated control) and enter the accuracy phase. Does NOT launch — the HUD
-  // now runs the accuracy bar and calls fireArmed() to release. A sub-min pull
-  // cancels back to the tee.
+  // Step 1 → Step 2 (release): LOCK the pulled power AND the steered aim (both
+  // re-derived from the final pull vector below) and enter the accuracy phase.
+  // Does NOT launch — the HUD now runs the accuracy bar and calls fireArmed() to
+  // release. A sub-min pull cancels back to the tee.
   arm(p: Vec2): void {
     if (!this.aiming) return;
     this.aiming = false;
@@ -663,6 +679,8 @@ export class RangeSim {
       return;
     }
     this.power = Math.min(len, this.maxPull) / this.maxPull;
+    // Lock the final steered direction from the same pull vector.
+    this.aimRad = this.pullAim(pullX, pullY);
     this.armed = true;
     // Signal the HUD to raise the accuracy bar immediately, rather than on the
     // next ~100ms poll tick (a timing mechanic can't afford a dead window).
