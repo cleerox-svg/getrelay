@@ -102,6 +102,9 @@ importers:
       vite:
         specifier: ^6.0.5
         version: 6.4.2(@types/node@25.9.1)(jiti@1.21.7)
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@25.9.1)
 
   packages/relay-worker:
     dependencies:

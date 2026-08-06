@@ -4,8 +4,14 @@ import { api } from '../../lib/api';
 import { RangeSim } from '../../lib/golf/rangeSim';
 import type { RangeState, ShotResult } from '../../lib/golf/rangeSim';
 import { CLUBS, DEFAULT_CLUB_ID } from '../../lib/golf/clubs';
-import { PINS, spawnTarget } from '../../lib/golf/rangeTargets';
-import type { Pin } from '../../lib/golf/rangeTargets';
+import {
+  RANGE_LAYOUTS,
+  pinsFor,
+  readStoredLayout,
+  spawnTarget,
+  writeStoredLayout,
+} from '../../lib/golf/rangeTargets';
+import type { Pin, RangeLayout } from '../../lib/golf/rangeTargets';
 import { recordRangeGame } from '../../lib/golf/stats';
 import { MAX_HOLE_POINTS, RANGE_BALLS } from '../../lib/golf/tuning';
 
@@ -438,73 +444,90 @@ function describeAccuracy(e: number): { text: string; good: boolean } {
   return { text: label.charAt(0).toUpperCase() + label.slice(1), good: false };
 }
 
-// Dedicated aim control, fully DECOUPLED from the power pull. Hold-to-repeat
-// ◀ ▶ buttons swing the shot line left/right up to ±40° (the sim clamps);
-// the on-turf aim arrow (RangeGL) follows aimRad live as you nudge. Tapping the
-// centre readout re-centres to straight. Pinned bottom-right, mirroring the
-// spin puck, so it never sits in the central power-pull channel. The buttons
-// opt back into pointer events; everything else stays transparent.
+// Dedicated AIM control, fully DECOUPLED from the power pull. A prominent
+// horizontal SLIDER (drag the thumb left/right to swing the shot line ±40°, the
+// sim clamps) is the primary control, flanked by hold-to-repeat ◀ ▶ fine-nudge
+// buttons and a live degree readout ("AIM 20°R"). The on-turf aim arrow (RangeGL)
+// follows aimRad live as you drag/nudge, so it's obvious which way the shot goes.
+// Tapping the readout re-centres to straight. Big touch targets; only the control
+// opts into pointer events, and it lives in the top HUD, clear of the central
+// power-pull drag channel and the club strip.
 const AIM_STEP_DEG = 2;
-function AimControl({
+const AIM_MAX_DEG = 40;
+function AimSlider({
   deg,
   disabled,
+  onSet,
   onNudge,
   onCenter,
 }: {
   deg: number;
   disabled: boolean;
+  onSet: (deg: number) => void;
   onNudge: (deltaDeg: number) => void;
   onCenter: () => void;
 }) {
-  // Single timer id for the press-and-hold repeat; cleared on release/unmount so
-  // the armed/aim state can never strand a running interval.
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  // Single timer id for the press-and-hold nudge repeat; cleared on release/
+  // unmount so the armed/aim state can never strand a running interval.
   const holdRef = useRef<number | null>(null);
   // Live `disabled` for the running repeat loop: if the shot arms/launches
   // mid-hold (a multi-touch edge), the loop bails instead of ticking on.
   const disabledRef = useRef(disabled);
   disabledRef.current = disabled;
-  const stop = () => {
+  const stopHold = () => {
     if (holdRef.current != null) {
       window.clearTimeout(holdRef.current);
       holdRef.current = null;
     }
   };
-  const start = (delta: number) => {
+  const startHold = (delta: number) => {
     if (disabled) return;
     onNudge(delta);
     const rep = () => {
-      if (disabledRef.current) return stop();
+      if (disabledRef.current) return stopHold();
       onNudge(delta);
       holdRef.current = window.setTimeout(rep, 55);
     };
     holdRef.current = window.setTimeout(rep, 300);
   };
-  useEffect(() => stop, []);
+  useEffect(() => stopHold, []);
 
+  const setFromClientX = (clientX: number) => {
+    const el = trackRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const f = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+    onSet((f * 2 - 1) * AIM_MAX_DEG);
+  };
+
+  const clamped = Math.max(-AIM_MAX_DEG, Math.min(AIM_MAX_DEG, deg));
+  const frac = (clamped / AIM_MAX_DEG + 1) / 2; // 0..1 thumb position
   const abs = Math.round(Math.abs(deg));
   const label = abs < 1 ? 'CTR' : `${abs}°${deg < 0 ? 'L' : 'R'}`;
 
-  const btn = (dir: -1 | 1, glyph: string) => (
+  const nudgeBtn = (dir: -1 | 1, glyph: string) => (
     <button
       type="button"
       disabled={disabled}
       aria-label={dir < 0 ? 'Aim left' : 'Aim right'}
       onPointerDown={(e) => {
         e.currentTarget.setPointerCapture(e.pointerId);
-        start(dir * AIM_STEP_DEG);
+        startHold(dir * AIM_STEP_DEG);
       }}
-      onPointerUp={stop}
-      onPointerLeave={stop}
-      onPointerCancel={stop}
+      onPointerUp={stopHold}
+      onPointerLeave={stopHold}
+      onPointerCancel={stopHold}
       style={{
         pointerEvents: 'auto',
-        width: 40,
-        height: 40,
-        borderRadius: 12,
+        flex: '0 0 auto',
+        width: 38,
+        height: 38,
+        borderRadius: 10,
         border: '1px solid var(--separator)',
         background: 'var(--card-bg)',
         color: 'var(--text)',
-        fontSize: 18,
+        fontSize: 17,
         fontWeight: 800,
         lineHeight: 1,
         opacity: disabled ? 0.5 : 1,
@@ -517,20 +540,26 @@ function AimControl({
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-      <div
-        style={{
-          fontSize: 8,
-          fontWeight: 800,
-          letterSpacing: 1,
-          color: '#fff',
-          textShadow: '0 1px 3px rgba(0,0,0,0.5)',
-        }}
-      >
-        AIM
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        {btn(-1, '◀')}
+    <div
+      style={{
+        pointerEvents: 'auto',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+        background: 'var(--card-bg)',
+        border: '1px solid var(--separator)',
+        borderRadius: 14,
+        padding: '6px 10px 8px',
+        boxShadow: '0 2px 10px rgba(0,0,0,0.18)',
+        opacity: disabled ? 0.6 : 1,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span
+          style={{ fontSize: 9, fontWeight: 800, letterSpacing: 1.5, color: 'var(--text-dim)' }}
+        >
+          AIM
+        </span>
         <button
           type="button"
           disabled={disabled}
@@ -539,24 +568,199 @@ function AimControl({
           className="tabular-nums"
           style={{
             pointerEvents: 'auto',
-            minWidth: 54,
-            height: 40,
-            borderRadius: 12,
-            border: '1px solid var(--separator)',
-            background: 'var(--card-bg)',
+            border: 0,
+            background: 'transparent',
             color: abs < 1 ? 'var(--text-dim)' : 'var(--accent)',
-            fontSize: 14,
+            fontSize: 15,
             fontWeight: 800,
-            opacity: disabled ? 0.5 : 1,
-            boxShadow: '0 2px 8px rgba(0,0,0,0.16)',
+            padding: 0,
           }}
         >
           {label}
         </button>
-        {btn(1, '▶')}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {nudgeBtn(-1, '◀')}
+        <div
+          ref={trackRef}
+          onPointerDown={(e) => {
+            if (disabled) return;
+            e.currentTarget.setPointerCapture(e.pointerId);
+            setFromClientX(e.clientX);
+          }}
+          onPointerMove={(e) => {
+            if (disabled) return;
+            if (e.currentTarget.hasPointerCapture(e.pointerId)) setFromClientX(e.clientX);
+          }}
+          onPointerUp={(e) => {
+            if (e.currentTarget.hasPointerCapture(e.pointerId))
+              e.currentTarget.releasePointerCapture(e.pointerId);
+          }}
+          onPointerCancel={(e) => {
+            if (e.currentTarget.hasPointerCapture(e.pointerId))
+              e.currentTarget.releasePointerCapture(e.pointerId);
+          }}
+          style={{
+            position: 'relative',
+            flex: '1 1 auto',
+            height: 38,
+            borderRadius: 10,
+            background: 'rgba(20,28,40,0.35)',
+            border: '1px solid var(--separator)',
+            touchAction: 'none',
+            cursor: disabled ? 'default' : 'pointer',
+          }}
+        >
+          {/* Baseline track + centre tick. */}
+          <div
+            style={{
+              position: 'absolute',
+              left: 10,
+              right: 10,
+              top: '50%',
+              height: 4,
+              transform: 'translateY(-50%)',
+              borderRadius: 999,
+              background: 'rgba(255,255,255,0.28)',
+            }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              left: '50%',
+              top: 7,
+              bottom: 7,
+              width: 2,
+              transform: 'translateX(-50%)',
+              background: 'rgba(255,255,255,0.5)',
+            }}
+          />
+          {/* Draggable thumb. */}
+          <div
+            style={{
+              position: 'absolute',
+              left: `calc(10px + ${frac} * (100% - 20px))`,
+              top: '50%',
+              width: 22,
+              height: 22,
+              marginLeft: -11,
+              marginTop: -11,
+              borderRadius: '50%',
+              background: 'var(--accent)',
+              border: '2px solid #fff',
+              boxShadow: '0 1px 5px rgba(0,0,0,0.4)',
+            }}
+          />
+        </div>
+        {nudgeBtn(1, '▶')}
       </div>
     </div>
   );
+}
+
+// Range-layout picker: a compact segmented control (Center lane / Practice lane
+// / Fairway) with a one-line blurb for the active choice, so the player can try
+// each landing-area design on-device. Persisted by the parent; changing it
+// rebuilds the scene. Lives in the top HUD, clear of the central drag channel
+// and the play controls. Disabled while a shot is in flight/armed so the scene
+// can't rebuild mid-swing. Only the buttons opt into pointer events.
+function LayoutPicker({
+  layout,
+  disabled,
+  onChange,
+}: {
+  layout: RangeLayout;
+  disabled: boolean;
+  onChange: (l: RangeLayout) => void;
+}) {
+  const meta = RANGE_LAYOUTS.find((m) => m.id === layout);
+  return (
+    <div
+      style={{
+        // Container is pointer-transparent so the label/blurb region can't
+        // swallow a power-pull drag that starts high on the screen; only the
+        // buttons below opt back into pointer events.
+        pointerEvents: 'none',
+        background: 'var(--card-bg)',
+        border: '1px solid var(--separator)',
+        borderRadius: 14,
+        padding: '6px 8px 7px',
+        boxShadow: '0 2px 10px rgba(0,0,0,0.18)',
+        opacity: disabled ? 0.6 : 1,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 9,
+          fontWeight: 800,
+          letterSpacing: 1.5,
+          color: 'var(--text-dim)',
+          paddingBottom: 4,
+        }}
+      >
+        RANGE LAYOUT
+      </div>
+      <div style={{ display: 'flex', gap: 4 }}>
+        {RANGE_LAYOUTS.map((m) => {
+          const active = m.id === layout;
+          return (
+            <button
+              key={m.id}
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange(m.id)}
+              style={{
+                pointerEvents: 'auto',
+                flex: '1 1 0',
+                border: `1px solid ${active ? 'var(--accent)' : 'var(--separator)'}`,
+                background: active ? 'var(--accent)' : 'var(--card-bg)',
+                color: active ? '#FFFFFF' : 'var(--text)',
+                borderRadius: 9,
+                padding: '5px 2px',
+                fontSize: 11,
+                fontWeight: 700,
+                lineHeight: 1.1,
+              }}
+            >
+              {m.label}
+            </button>
+          );
+        })}
+      </div>
+      {meta ? (
+        <div
+          style={{
+            fontSize: 10,
+            lineHeight: 1.3,
+            color: 'var(--text-dim)',
+            paddingTop: 5,
+            textAlign: 'center',
+          }}
+        >
+          {meta.blurb}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// A completed shot's full record — captured for the in-app telemetry panel and
+// the "Copy telemetry" export, so real device numbers can be compared against
+// the headless harness (rangeSim.test.ts). One per shot that comes to rest.
+interface ShotTelemetry {
+  club: string;
+  powerPct: number;
+  aimDeg: number;
+  spinBack: number;
+  spinSide: number;
+  accuracy: number;
+  carry: number;
+  total: number;
+  apex: number;
+  ballSpeed: number;
+  lateral: number;
+  result: ShotResult;
+  ts: number;
 }
 
 const HINT_KEY = 'relay.golf.range.hintSeen';
@@ -573,20 +777,44 @@ export function RangeGame({
 
   const wind = useMemo(makeWind, []);
   const seedRef = useRef(Math.floor(Math.random() * 1e6) + 1);
-  // First challenge target (also drives the initial flag highlight).
-  const firstTargetRef = useRef<Pin>(spawnTarget(0, seedRef.current));
+
+  // Selectable landing-area design (persisted to localStorage, default
+  // 'fairway'). Changing it rebuilds the sim + remounts RangeGL below so the
+  // whole scene swaps to the new layout.
+  const [layout, setLayoutState] = useState<RangeLayout>(() => readStoredLayout());
+
+  // First challenge target (also drives the initial flag highlight) — drawn
+  // from the ACTIVE layout's pin set.
+  const firstTargetRef = useRef<Pin>(spawnTarget(0, seedRef.current, undefined, layout));
   const [target, setTarget] = useState<Pin | null>(isChallenge ? firstTargetRef.current : null);
 
-  // The headless sim: created once, owned here, driven by RangeGL each frame.
+  // Challenge run state, mirrored in refs for the event/unmount paths. Declared
+  // before the sim so a layout rebuild can reset them synchronously.
+  const perShotRef = useRef<RangeShot[]>([]);
+  const longestRef = useRef(0);
+  const reportedRef = useRef(false);
+
+  // The headless sim, owned here and driven by RangeGL each frame. Rebuilt when
+  // the layout changes (a fresh scene): the run is reset so challenge scoring
+  // restarts cleanly on the new design.
   const simRef = useRef<RangeSim | null>(null);
-  if (!simRef.current) {
+  const simLayoutRef = useRef<RangeLayout | null>(null);
+  if (!simRef.current || simLayoutRef.current !== layout) {
+    const ft = spawnTarget(0, seedRef.current, undefined, layout);
+    firstTargetRef.current = ft;
     simRef.current = new RangeSim({
-      pins: PINS,
-      target: isChallenge ? firstTargetRef.current : null,
+      pins: pinsFor(layout),
+      target: isChallenge ? ft : null,
       initialClubId: initialClubId ?? DEFAULT_CLUB_ID,
       windAlong: wind.along,
       windCross: wind.cross,
+      layout,
+      isChallenge,
     });
+    simLayoutRef.current = layout;
+    perShotRef.current = [];
+    longestRef.current = 0;
+    reportedRef.current = false;
   }
   const sim = simRef.current;
 
@@ -599,6 +827,17 @@ export function RangeGame({
   // Brief post-shot accuracy feedback ("Perfect!" / "Slight hook" / "Slice").
   const [feedback, setFeedback] = useState<{ text: string; good: boolean } | null>(null);
   const feedbackTimer = useRef<number | null>(null);
+
+  // Telemetry: capture each completed shot for the collapsible debug panel and
+  // the "Copy telemetry" export (real device numbers to compare vs the harness).
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [lastShot, setLastShot] = useState<ShotTelemetry | null>(null);
+  const [copyMsg, setCopyMsg] = useState('');
+  const telemetryRef = useRef<ShotTelemetry[]>([]);
+  // Power + accuracy-error at the instant of firing (the sim clears power on
+  // launch), captured by fireAccuracy() and read back when the shot comes to rest.
+  const launchPowerRef = useRef(0);
+  const launchAccRef = useRef(0);
   const [showHint, setShowHint] = useState(() => {
     try {
       return localStorage.getItem(HINT_KEY) !== '1';
@@ -606,11 +845,6 @@ export function RangeGame({
       return true;
     }
   });
-
-  // Challenge run state, mirrored in refs for the event/unmount paths.
-  const perShotRef = useRef<RangeShot[]>([]);
-  const longestRef = useRef(0);
-  const reportedRef = useRef(false);
 
   const onFinishRef = useRef(onFinish);
   onFinishRef.current = onFinish;
@@ -630,6 +864,31 @@ export function RangeGame({
     }, 100);
     return () => window.clearInterval(id);
   }, [paused, sim]);
+
+  // When the layout changes the sim was rebuilt (above, during render); reflect
+  // the fresh sim + reset run in the HUD. Skips the initial mount.
+  const didMountRef = useRef(false);
+  useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
+    }
+    setTarget(isChallenge ? firstTargetRef.current : null);
+    setBallNo(1);
+    setFeedback(null);
+    const next = sim.getState();
+    lastReadoutRef.current = JSON.stringify(next);
+    setReadout(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout]);
+
+  // Persist + switch the landing-area design. No-op if unchanged; the render
+  // rebuild + the effect above do the rest.
+  function changeLayout(next: RangeLayout) {
+    if (next === layout) return;
+    writeStoredLayout(next);
+    setLayoutState(next);
+  }
 
   function score(): number {
     return perShotRef.current.reduce((s, x) => s + x.points, 0);
@@ -701,7 +960,7 @@ export function RangeGame({
       finishRef.current();
       return;
     }
-    const chosen = spawnTarget(perShotRef.current.length, seedRef.current, target?.id);
+    const chosen = spawnTarget(perShotRef.current.length, seedRef.current, target?.id, layout);
     sim.setTarget(chosen);
     setTarget(chosen);
     setBallNo(perShotRef.current.length + 1);
@@ -728,15 +987,64 @@ export function RangeGame({
     sim.nudgeAim((deltaDeg * Math.PI) / 180);
     setAimDeg((sim.aimRad * 180) / Math.PI);
   }
+  // Absolute aim set (degrees, + = right) from the slider drag; the sim clamps.
+  function setAimAbsolute(deg: number) {
+    sim.setAim((deg * Math.PI) / 180);
+    setAimDeg((sim.aimRad * 180) / Math.PI);
+  }
   function centerAim() {
     sim.setAim(0);
     setAimDeg((sim.aimRad * 180) / Math.PI);
+  }
+
+  // Capture a completed shot into the rolling telemetry log (+ the debug panel).
+  function recordTelemetry() {
+    const st = sim.getState();
+    const rec: ShotTelemetry = {
+      club: st.clubName,
+      powerPct: Math.round(launchPowerRef.current * 100),
+      aimDeg: Math.round(st.aimDeg * 10) / 10,
+      spinBack: Math.round(st.spinBack * 100) / 100,
+      spinSide: Math.round(st.spinSide * 100) / 100,
+      accuracy: Math.round(launchAccRef.current * 100) / 100,
+      carry: st.carry,
+      total: st.total,
+      apex: st.apex,
+      ballSpeed: st.ballSpeed,
+      lateral: Math.round(sim.ball.x * 10) / 10,
+      result: st.lastResult ?? 'water',
+      ts: Date.now(),
+    };
+    const log = telemetryRef.current;
+    log.push(rec);
+    if (log.length > 30) log.shift();
+    setLastShot(rec);
+  }
+
+  // Copy the rolling telemetry log as JSON to the clipboard, guarded for
+  // environments (older WebViews) without the async clipboard API.
+  async function copyTelemetry() {
+    const json = JSON.stringify(telemetryRef.current, null, 2);
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(json);
+        setCopyMsg(`Copied ${telemetryRef.current.length}`);
+      } else {
+        setCopyMsg('No clipboard');
+      }
+    } catch {
+      setCopyMsg('Copy failed');
+    }
+    window.setTimeout(() => setCopyMsg(''), 1500);
   }
 
   // Step 2 tap: stop the accuracy marker, launch the armed shot with the miss
   // baked into hook/slice spin, hide the bar, and flash brief feedback.
   function fireAccuracy(e: number) {
     if (!sim.armed) return;
+    // Snapshot the locked power + accuracy error before swing() clears power.
+    launchPowerRef.current = sim.power;
+    launchAccRef.current = e;
     sim.fireArmed(e);
     setFeedback(describeAccuracy(e));
     // Reflect the fired state at once so the accuracy bar unmounts without
@@ -769,7 +1077,10 @@ export function RangeGame({
       if (showHint) dismissHint();
       return;
     }
-    if (type === 'rest' || type === 'splash' || type === 'fence') handleTerminal();
+    if (type === 'rest' || type === 'splash' || type === 'fence') {
+      recordTelemetry();
+      handleTerminal();
+    }
   }
 
   function selectClub(id: string) {
@@ -822,8 +1133,11 @@ export function RangeGame({
       {/* 3D scene, lazy-loaded into its own chunk. */}
       <Suspense fallback={<Spinner />}>
         <RangeGL
+          key={layout}
           sim={sim}
-          pins={PINS}
+          pins={pinsFor(layout)}
+          layout={layout}
+          isChallenge={isChallenge}
           targetId={isChallenge ? (target?.id ?? null) : null}
           paused={paused}
           onEvent={(e) => onEvent(e.type)}
@@ -930,6 +1244,28 @@ export function RangeGame({
           {stat('BALL', `${st?.ballSpeed ?? 0}`)}
         </div>
 
+        {/* Prominent AIM slider — the primary aim control, decoupled from the
+            power pull and sitting in the top HUD, clear of the central drag
+            channel and the club strip. Drives the on-turf aim arrow live. */}
+        <AimSlider
+          deg={aimDeg}
+          disabled={!!st?.inFlight || !!st?.armed}
+          onSet={setAimAbsolute}
+          onNudge={changeAim}
+          onCenter={centerAim}
+        />
+
+        {/* Range-layout picker — switch landing-area design on the fly. Disabled
+            mid-swing so the scene can't rebuild while a shot is live. */}
+        <LayoutPicker
+          layout={layout}
+          // Also lock it once a Challenge run is underway — switching rebuilds
+          // the scene and resets the round, so it must not silently discard
+          // banked shots. A fresh run (ballNo 1) can still pick a layout.
+          disabled={!!st?.inFlight || !!st?.armed || (isChallenge && ballNo > 1)}
+          onChange={changeLayout}
+        />
+
         {/* Hint / nearest-pin / result line — top-centred so it never sits on
             the ball. Display-only. */}
         <div
@@ -952,7 +1288,7 @@ export function RangeGame({
                 : st.lastResult === 'fence'
                   ? 'Out of bounds'
                   : `${st.nearestPin}yd to pin`
-              : 'Aim ◀ ▶ · drag back for power'}
+              : 'Set AIM · drag straight back for power'}
         </div>
       </div>
 
@@ -1018,22 +1354,107 @@ export function RangeGame({
         <SpinPuck value={spin} onChange={changeSpin} />
       </div>
 
-      {/* Dedicated aim control, bottom-right (mirrors the spin puck), clear of
-          the central power-pull channel and the right-edge power meter. */}
+      {/* Telemetry: a tiny debug toggle + collapsible last-shot panel with a
+          Copy-to-clipboard export of the rolling shot log. Unobtrusive, pinned
+          to the left edge, clear of the central drag channel. */}
       <div
         style={{
           position: 'absolute',
-          right: 'calc(env(safe-area-inset-right, 0px) + 12px)',
-          bottom: 'calc(env(safe-area-inset-bottom, 0px) + 52px)',
+          left: 'calc(env(safe-area-inset-left, 0px) + 10px)',
+          top: '50%',
+          transform: 'translateY(-50%)',
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 8,
           pointerEvents: 'none',
+          zIndex: 40,
         }}
       >
-        <AimControl
-          deg={aimDeg}
-          disabled={!!st?.inFlight || !!st?.armed}
-          onNudge={changeAim}
-          onCenter={centerAim}
-        />
+        <button
+          type="button"
+          onClick={() => setDebugOpen((o) => !o)}
+          aria-label="Toggle shot telemetry"
+          style={{
+            pointerEvents: 'auto',
+            width: 26,
+            height: 26,
+            borderRadius: 8,
+            border: '1px solid var(--separator)',
+            background: 'var(--card-bg)',
+            color: debugOpen ? 'var(--accent)' : 'var(--text-dim)',
+            fontSize: 15,
+            fontWeight: 800,
+            lineHeight: 1,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.16)',
+          }}
+        >
+          ﹒
+        </button>
+        {debugOpen ? (
+          <div
+            style={{
+              pointerEvents: 'auto',
+              width: 188,
+              background: 'var(--card-bg)',
+              border: '1px solid var(--separator)',
+              borderRadius: 12,
+              padding: 10,
+              boxShadow: '0 4px 14px rgba(0,0,0,0.28)',
+              fontSize: 11,
+              color: 'var(--text)',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: 6,
+              }}
+            >
+              <span style={{ fontWeight: 800, letterSpacing: 0.5 }}>DEBUG</span>
+              <span style={{ color: 'var(--text-dim)' }}>{telemetryRef.current.length} logged</span>
+            </div>
+            {lastShot ? (
+              <div className="tabular-nums" style={{ lineHeight: 1.5 }}>
+                <div>
+                  {lastShot.club} · {lastShot.powerPct}% · aim {lastShot.aimDeg}°
+                </div>
+                <div>
+                  carry {lastShot.carry} · total {lastShot.total} · {lastShot.result}
+                </div>
+                <div>
+                  apex {lastShot.apex} · ball {lastShot.ballSpeed} · lat {lastShot.lateral}
+                </div>
+                <div>
+                  spin b{lastShot.spinBack}/s{lastShot.spinSide} · acc {lastShot.accuracy}
+                </div>
+              </div>
+            ) : (
+              <div style={{ color: 'var(--text-dim)' }}>No shots yet</div>
+            )}
+            <button
+              type="button"
+              onClick={copyTelemetry}
+              disabled={telemetryRef.current.length === 0}
+              style={{
+                pointerEvents: 'auto',
+                width: '100%',
+                marginTop: 8,
+                borderRadius: 8,
+                border: '1px solid var(--separator)',
+                background: 'var(--accent)',
+                color: '#fff',
+                fontSize: 12,
+                fontWeight: 700,
+                padding: '6px 0',
+                opacity: telemetryRef.current.length === 0 ? 0.5 : 1,
+              }}
+            >
+              {copyMsg || 'Copy telemetry'}
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {/* Step 2 accuracy bar — shown only while a shot is armed (aim+power
@@ -1099,7 +1520,7 @@ export function RangeGame({
               boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
             }}
           >
-            Aim with ◀ ▶ · drag straight back for power · tap to stop the marker
+            Drag the AIM slider · pull straight back for power · tap to stop the marker
           </span>
         </div>
       ) : null}

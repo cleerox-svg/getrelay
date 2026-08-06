@@ -15,8 +15,8 @@
 import { CLUBS, DEFAULT_CLUB_ID, clubById } from './clubs';
 import type { Club } from './clubs';
 import { RANGE_YD, islandAt, islandSurfaceR, surfaceAt } from './rangeTargets';
-import type { Pin } from './rangeTargets';
-import { MIN_PULL } from './tuning';
+import type { Pin, RangeLayout } from './rangeTargets';
+import { FIXED_MS, MIN_PULL } from './tuning';
 
 // --- Physics constants (world space, yards & seconds) ---
 
@@ -102,6 +102,35 @@ const DEFAULT_MAX_PULL = 220;
 
 export type ShotResult = 'grass' | 'island' | 'water' | 'fence';
 
+// One-shot headless measurement, returned by simulateShot(). Mirrors exactly
+// what the game measures at rest — carry is the first-landing downrange, total
+// is the ball's final resting downrange (carry + roll), so a harness reading
+// matches the on-screen CARRY/TOTAL readouts. `lateral` is the resting ball.x
+// (+right), for verifying aim/spin direction.
+export interface ShotMeasurement {
+  carry: number;
+  total: number;
+  apex: number;
+  ballSpeed: number;
+  lateral: number;
+  result: ShotResult;
+}
+
+// Options for simulateShot(). All optional; omitted fields use neutral values
+// (straight aim, no spin, dead-center strike).
+export interface SimulateShotOptions {
+  clubId?: string;
+  power?: number; // 0..1
+  aimDeg?: number; // + = right
+  spinBack?: number; // -1..1 (back>0 lifts, top<0 presses)
+  spinSide?: number; // -1..1 (fade>0 curves right, draw<0 curves left)
+  accuracy?: number; // tap-timing error -1..1 (0 = pure strike)
+  // Landing-area design + practice-vs-challenge to classify the surface under
+  // the ball. Omitted → the sim's current layout/isChallenge (default 'lane').
+  layout?: RangeLayout;
+  isChallenge?: boolean;
+}
+
 export type RangeEventType = 'launch' | 'land' | 'splash' | 'fence' | 'rest' | 'arm';
 export interface RangeEvent {
   type: RangeEventType;
@@ -169,6 +198,10 @@ export interface RangeSimOptions {
   windCross?: number;
   pins: Pin[];
   target?: Pin | null;
+  // Active landing-area design and whether this is the scored challenge — both
+  // feed surface classification (surfaceAt/islandAt). Default: 'lane' / false.
+  layout?: RangeLayout;
+  isChallenge?: boolean;
 }
 
 export class RangeSim {
@@ -177,6 +210,11 @@ export class RangeSim {
   private clubId: string;
   private windAlong: number;
   private windCross: number;
+  // Landing-area design + mode, threaded into every surface lookup so the same
+  // physics serves all three layouts. Public so the harness can flip them per
+  // shot; RangeGame rebuilds the sim (fresh scene) when the picker changes.
+  layout: RangeLayout;
+  isChallenge: boolean;
 
   // Public so the renderer can read positions each frame without allocating.
   readonly ball: Ball;
@@ -234,7 +272,20 @@ export class RangeSim {
     this.clubId = opts.initialClubId ?? DEFAULT_CLUB_ID;
     this.windAlong = opts.windAlong ?? 0;
     this.windCross = opts.windCross ?? 0;
+    // Default 'lane' preserves the original single-causeway physics for callers
+    // (and the harness bench) that don't specify a layout.
+    this.layout = opts.layout ?? 'lane';
+    this.isChallenge = opts.isChallenge ?? false;
     this.ball = this.teedBall();
+  }
+
+  // Layout-aware surface lookups: every classification in the sim goes through
+  // these so the active layout + mode are applied uniformly.
+  private surfaceAt(d: number, x: number): ShotResult {
+    return surfaceAt(d, x, this.layout, this.isChallenge);
+  }
+  private islandAt(d: number, x: number): Pin | null {
+    return islandAt(d, x, this.layout);
   }
 
   private teedBall(): Ball {
@@ -385,7 +436,7 @@ export class RangeSim {
       // Island containment: keep a ball that settled on a green ON the green.
       if (this.containPin) this.containOnIsland();
       this.total = b.d;
-      const surf = surfaceAt(b.d, b.x);
+      const surf = this.surfaceAt(b.d, b.x);
       if (surf === 'water') return this.stop('water');
       if (surf === 'fence' || b.d >= RANGE_YD) return this.stop('fence');
       if (Math.hypot(b.vd, b.vx) <= ROLL_REST) return this.stop('rest');
@@ -419,7 +470,7 @@ export class RangeSim {
         this.firstLanding = false;
         this.events.push({ type: 'land', d: b.d, x: b.x });
       }
-      const surf = surfaceAt(b.d, b.x);
+      const surf = this.surfaceAt(b.d, b.x);
       if (surf === 'fence' || b.d >= RANGE_YD) return this.stop('fence');
       if (surf === 'water') return this.stop('water');
       // First ground contact: the player's spin "checks" the ball. Strong
@@ -440,7 +491,7 @@ export class RangeSim {
         b.grounded = true;
         b.vh = 0;
         // If it settled onto an island green, remember it for rim containment.
-        this.containPin = surf === 'island' ? islandAt(b.d, b.x) : null;
+        this.containPin = surf === 'island' ? this.islandAt(b.d, b.x) : null;
         // Topspin runs out more (keeps more forward speed); backspin bites and
         // adds roll friction so wedge-y spin checks up near the pitch mark.
         const top = Math.max(0, -this.spinBack);
@@ -503,7 +554,7 @@ export class RangeSim {
       this.lastResult = 'fence';
       this.events.push({ type: 'fence', d: b.d, x: b.x });
     } else {
-      this.lastResult = surfaceAt(b.d, b.x) === 'island' ? 'island' : 'grass';
+      this.lastResult = this.surfaceAt(b.d, b.x) === 'island' ? 'island' : 'grass';
       this.events.push({ type: 'rest', d: b.d, x: b.x });
     }
     this.longestDrive = Math.max(this.longestDrive, b.d);
@@ -642,5 +693,45 @@ export class RangeSim {
     this.pendingCurve = 0;
     this.pendingAim = 0;
     this.events.push({ type: 'launch' });
+  }
+
+  // --- Headless measurement hook (tests / tuning) ------------------------
+  // Drive a single shot end-to-end through the REAL launch pipeline: set the
+  // club/spin/aim/power, arm, fire (baking in any accuracy miss), then run the
+  // same fixed-timestep substep loop RangeGL uses until the ball comes to rest.
+  // Returns the exact carry/total/apex/ballSpeed the game would show, plus the
+  // resting lateral offset. Deterministic — the caller controls wind (default
+  // 0 in the harness). Not called by the app runtime; kept tiny and allocation-
+  // free beyond the single result object.
+  simulateShot(opts: SimulateShotOptions = {}): ShotMeasurement {
+    const fixedS = FIXED_MS / 1000;
+    this.teeUp();
+    // Let the harness classify against any layout/mode without a new sim.
+    if (opts.layout) this.layout = opts.layout;
+    if (opts.isChallenge != null) this.isChallenge = opts.isChallenge;
+    if (opts.clubId) this.selectClub(opts.clubId);
+    this.setSpin(opts.spinBack ?? 0, opts.spinSide ?? 0);
+    this.setAim(((opts.aimDeg ?? 0) * Math.PI) / 180);
+    // Lock a power directly (the drag gesture only exists to set this.power).
+    this.power = Math.max(0, Math.min(1, opts.power ?? 1));
+    this.armed = true;
+    // fireArmed() consumes the accuracy miss and calls the real swing().
+    this.fireArmed(opts.accuracy ?? 0);
+    // Integrate to rest. The cap (~600s of flight) can never be reached by a
+    // legal shot, but guards against a physics regression spinning forever.
+    let guard = 0;
+    while (this.ball.inFlight && guard < 72000) {
+      this.substep(fixedS);
+      guard++;
+    }
+    const st = this.getState();
+    return {
+      carry: st.carry,
+      total: st.total,
+      apex: st.apex,
+      ballSpeed: st.ballSpeed,
+      lateral: this.ball.x,
+      result: st.lastResult ?? 'grass',
+    };
   }
 }
