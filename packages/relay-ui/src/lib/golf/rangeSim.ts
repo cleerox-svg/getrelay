@@ -35,7 +35,7 @@ export const POWER_FLOOR = 0.35;
 // Base roll friction per (dt*60); backspin subtracts up to BITE_K from it so
 // wedges check up and the driver runs out. Surface run (TERRAIN[..].runMul)
 // then pulls this toward 1 (longer roll) or away (grabbier lie).
-const ROLL_FRICTION = 0.955;
+export const ROLL_FRICTION = 0.955;
 const BITE_K = 0.16;
 // Below this ground speed a rolling ball is snapped to rest.
 const ROLL_REST = 2.5;
