@@ -71,6 +71,34 @@ function makeTurf(): THREE.Texture {
   return t;
 }
 
+// A fine blade-relief NORMAL map so the sun catches the turf and it reads as
+// grass, not flat paint. Short near-vertical bluish streaks on a neutral normal
+// base — the same idea as the range's turf, kept cheap (one small tile, tiled).
+function makeGrassNormal(): THREE.Texture {
+  const S = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#8080ff'; // flat normal (points straight up)
+  g.fillRect(0, 0, S, S);
+  for (let i = 0; i < 5000; i++) {
+    const x = Math.random() * S;
+    const y = Math.random() * S;
+    const len = 2 + Math.random() * 4;
+    // Tilt the normal left/right along each blade so light rakes across it.
+    g.strokeStyle = Math.random() < 0.5 ? 'rgba(150,120,255,0.5)' : 'rgba(90,150,255,0.5)';
+    g.lineWidth = 1;
+    g.beginPath();
+    g.moveTo(x, y);
+    g.lineTo(x + (Math.random() - 0.5) * 1.5, y - len);
+    g.stroke();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 8;
+  return t;
+}
+
 // Sand: warm base with fine grain speckle + soft rake arcs.
 function makeSand(): THREE.Texture {
   const S = 256;
@@ -251,15 +279,22 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     geo.setIndex(idx);
     geo.computeVertexNormals();
     const turfTex = track(makeTurf());
-    turfTex.repeat.set(2, 6); // mow stripes run across the fairway, down the hole
+    // Tile the turf MANY times over the big terrain so blades/mow read as grass
+    // — the old 2×6 stretched one 512px tile over ~120yd and looked like flat
+    // plastic. ~13yd tiles show detail without shimmering.
+    turfTex.repeat.set(18, 50);
+    const turfNorm = track(makeGrassNormal());
+    turfNorm.repeat.set(48, 140); // finer than the colour tile so blades read
     const groundMat = track(
       new THREE.MeshStandardMaterial({
         vertexColors: true,
         map: turfTex,
+        normalMap: turfNorm,
         roughness: 0.95,
         metalness: 0,
       }),
     );
+    groundMat.normalScale.set(0.6, 0.6);
     const ground = new THREE.Mesh(geo, groundMat);
     ground.receiveShadow = true;
     scene.add(ground);
@@ -297,12 +332,58 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         shore.position.set(hz.x, rimY - 0.02, -hz.d);
         scene.add(shore);
       } else if (hz.kind === 'bunker') {
-        // A sand cap that follows the basin lip, sat just above the mesh.
-        const sGeo = track(new THREE.CircleGeometry(hz.r, 32));
-        const sMat = track(new THREE.MeshStandardMaterial({ map: sandTex, roughness: 1 }));
+        // A DISHED sand mesh that samples the heightfield (the basin bowl), so a
+        // ball — which rests on the terrain height — sits ON the sand instead of
+        // floating above a flat disc laid at the basin's low centre.
+        const RINGS = 6;
+        const SEG = 40;
+        const LIFT = 0.05;
+        const vcount = 1 + RINGS * SEG;
+        const spos = new Float32Array(vcount * 3);
+        const suv = new Float32Array(vcount * 2);
+        spos[0] = hz.x;
+        spos[1] = heightAt(hole, hz.d, hz.x) + LIFT;
+        spos[2] = -hz.d;
+        suv[0] = 0.5;
+        suv[1] = 0.5;
+        let sp = 3;
+        let su = 2;
+        for (let ri = 1; ri <= RINGS; ri++) {
+          const frac = ri / RINGS;
+          const rad = hz.r * frac;
+          for (let s = 0; s < SEG; s++) {
+            const ang = (s / SEG) * Math.PI * 2;
+            const wx = hz.x + Math.cos(ang) * rad;
+            const wd = hz.d + Math.sin(ang) * rad;
+            spos[sp] = wx;
+            spos[sp + 1] = heightAt(hole, wd, wx) + LIFT;
+            spos[sp + 2] = -wd;
+            suv[su] = 0.5 + Math.cos(ang) * frac * 0.5;
+            suv[su + 1] = 0.5 + Math.sin(ang) * frac * 0.5;
+            sp += 3;
+            su += 2;
+          }
+        }
+        const sidx: number[] = [];
+        for (let s = 0; s < SEG; s++) sidx.push(0, 1 + s, 1 + ((s + 1) % SEG));
+        for (let ri = 1; ri < RINGS; ri++) {
+          const b0 = 1 + (ri - 1) * SEG;
+          const b1 = 1 + ri * SEG;
+          for (let s = 0; s < SEG; s++) {
+            const s1 = (s + 1) % SEG;
+            sidx.push(b0 + s, b1 + s, b0 + s1, b0 + s1, b1 + s, b1 + s1);
+          }
+        }
+        const sGeo = track(new THREE.BufferGeometry());
+        sGeo.setAttribute('position', new THREE.BufferAttribute(spos, 3));
+        sGeo.setAttribute('uv', new THREE.BufferAttribute(suv, 2));
+        sGeo.setIndex(sidx);
+        sGeo.computeVertexNormals();
+        // DoubleSide so a downward-facing fan normal can't cull the sand away.
+        const sMat = track(
+          new THREE.MeshStandardMaterial({ map: sandTex, roughness: 1, side: THREE.DoubleSide }),
+        );
         const sand = new THREE.Mesh(sGeo, sMat);
-        sand.rotation.x = -Math.PI / 2;
-        sand.position.set(hz.x, heightAt(hole, hz.d, hz.x) + 0.08, -hz.d);
         sand.receiveShadow = true;
         scene.add(sand);
       }
