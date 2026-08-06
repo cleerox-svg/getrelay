@@ -186,6 +186,22 @@ Gameplay clean first, then the look, then the course — each step reuses the la
    with per-hole terrain, par, distance-to-pin, wind. Same sim, same aim UI,
    same shaders. Then it's mostly hole data + terrain art to build the nine.
    (User's stated goal: a 9-hole course of par 5s, after gameplay is clean.)
+   **Decision (user):** slopes are **physics-coupled EVERYWHERE** — putts break,
+   the ball rolls downhill / checks uphill, sidehill lies push — not visual-only.
+   **→ Started:** `lib/golf/terrain.ts` — a hole is DATA (`CourseHole`): a
+   fairway CENTERLINE + half-width (doglegs are bent points), a raised, planar-
+   TILTED green, circular bunker/water features that DISH the heightfield, a cart
+   path ribbon, rough/OB falloff, and a tee→green grade + rolling value-noise
+   hills. `heightAt()`/`gradientAt()` give elevation + slope and `surfaceAt()`
+   the lie — ONE source of truth for both the (coming) terrain mesh and the ball
+   physics. `slopeAccel()` is the downhill roll term (a ≈ −g·gradient) the course
+   sim will add each grounded substep; greens are graded flat under the pad so
+   their own tilt (not the surrounding mounds) breaks a putt. Showcase `HOLE_1`
+   (dogleg-right par 5) + a headless harness (`terrain.test.ts`) proving break,
+   downhill-vs-uphill run and a flat-hole regression. **Next:** a terrain-aware
+   `CourseSim` (flight lands at `heightAt`, roll adds `slopeAccel`), then the
+   Three.js terrain mesh (displaced grid, surface-splat textured from
+   `surfaceAt`) with the sand/fringe/rough/cart-path materials, then the nine.
 
 **Working principle going forward:** tune against the **harness** and **device
 telemetry**, not guesses — that's why both exist.
