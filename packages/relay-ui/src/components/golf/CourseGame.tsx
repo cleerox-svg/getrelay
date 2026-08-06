@@ -199,21 +199,30 @@ export default function CourseGame({ onExit }: { onExit?: () => void }) {
           }}
         >
           <div className="flex items-center gap-1" style={{ pointerEvents: 'auto' }}>
-            <button
-              onClick={() => club(-1)}
-              className="rounded-full bg-black/45 text-white w-8 h-8 text-lg font-bold"
-            >
-              ‹
-            </button>
-            <div className="rounded-xl bg-black/45 px-3 py-1 text-white text-sm font-bold min-w-[92px] text-center">
-              {st.clubName}
-            </div>
-            <button
-              onClick={() => club(1)}
-              className="rounded-full bg-black/45 text-white w-8 h-8 text-lg font-bold"
-            >
-              ›
-            </button>
+            {st.putting ? (
+              // On the green the stroke is a putt — no club choice, so just label it.
+              <div className="rounded-xl bg-black/45 px-3 py-1 text-white text-sm font-bold min-w-[92px] text-center">
+                Putter
+              </div>
+            ) : (
+              <>
+                <button
+                  onClick={() => club(-1)}
+                  className="rounded-full bg-black/45 text-white w-8 h-8 text-lg font-bold"
+                >
+                  ‹
+                </button>
+                <div className="rounded-xl bg-black/45 px-3 py-1 text-white text-sm font-bold min-w-[92px] text-center">
+                  {st.clubName}
+                </div>
+                <button
+                  onClick={() => club(1)}
+                  className="rounded-full bg-black/45 text-white w-8 h-8 text-lg font-bold"
+                >
+                  ›
+                </button>
+              </>
+            )}
           </div>
           <div className="rounded-xl bg-black/45 px-3 py-1 text-white text-xs">
             {st.aiming || st.armed ? `${Math.round(st.power * 100)}%` : 'Drag to aim'}

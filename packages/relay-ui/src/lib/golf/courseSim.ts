@@ -28,7 +28,6 @@ import {
   CHECK_TOP_FRAC,
   GRAVITY,
   MAX_AIM_RAD,
-  POWER_FLOOR,
   ROLL_FRICTION,
   SPIN_BITE,
   SPIN_LIFT_ACC,
@@ -44,6 +43,21 @@ import type { CourseHole, Surface } from './terrain';
 // a slope the per-substep slopeAccel keeps feeding it, so it only rests where
 // the ground is shallow enough that friction wins — exactly like a real green.
 const ROLL_REST = 2.0;
+// A near-stopped ball only RESTS where the slope under it is gentle enough that
+// friction can hold it; on anything steeper it keeps trickling downhill (a putt
+// that dies above the hole feeds back down the tilt) instead of freezing on a
+// visibly tilted lie. In yd/s² of downhill pull (GRAVITY·gradient): a 4% green
+// (~0.64) holds, a steeper mound rolls on.
+const STOP_SLOPE_ACC = 1.4;
+// The course allows genuine FINESSE: a much lower effective power floor than the
+// range (0.35), so a soft pitch can fly a few yards instead of a forced ~40. Full
+// power (sPow=1) is unchanged, so the club ladder off the tee is untouched.
+const COURSE_POWER_FLOOR = 0.06;
+// Putt: on the green a stroke ROLLS along the ground (no loft, no floor) instead
+// of a lofted swing. Drag power maps to an initial ground speed in this band —
+// full power comfortably crosses the green; a touch still trickles.
+const PUTT_MIN_SPEED = 2.5;
+const PUTT_MAX_SPEED = 18;
 // Cup capture: a grounded ball within this radius of the pin and slower than
 // CUP_SPEED drops. Faster or wider and it rolls on (lips out).
 const CUP_R = 0.6;
@@ -144,6 +158,9 @@ export interface CourseState {
   spinBack: number;
   spinSide: number;
   penaltyPending: boolean;
+  // On the green → the next stroke is a putt (ground roll), so the HUD can label
+  // the club "Putter" and read the power meter as putt strength.
+  putting: boolean;
 }
 
 const TRAIL_MAX = 64;
@@ -189,6 +206,7 @@ export class CourseSim {
   private shotOriginD = 0;
   private shotOriginX = 0;
   private penaltyPending = false;
+  private stepGuard = 0;
 
   constructor(hole: CourseHole, clubId = DEFAULT_CLUB_ID) {
     this.hole = hole;
@@ -229,7 +247,7 @@ export class CourseSim {
   private swing(power: number, dirRad: number, launchSpinSide: number): void {
     const club = this.club();
     const b = this.ball;
-    const sPow = POWER_FLOOR + (1 - POWER_FLOOR) * Math.max(0, Math.min(1, power));
+    const sPow = COURSE_POWER_FLOOR + (1 - COURSE_POWER_FLOOR) * Math.max(0, Math.min(1, power));
     const s = club.baseSpeed * Math.sqrt(sPow);
     const loft = (club.loft * Math.PI) / 180;
     this.launchSpinSide = launchSpinSide;
@@ -248,6 +266,35 @@ export class CourseSim {
     this.firstLanding = true;
     this.result = 'tee';
     this.trail.length = 0;
+    this.stepGuard = 0;
+  }
+
+  // Roll a PUTT from the current lie: no launch angle, no power floor — the drag
+  // power maps to an initial GROUND speed and the ball rolls (and breaks on the
+  // green's tilt via the grounded substep). Reuses the same roll integrator as a
+  // settled shot, so a well-judged putt trickles into the cup.
+  private puttLaunch(power: number, dirRad: number): void {
+    const b = this.ball;
+    const speed = PUTT_MIN_SPEED + Math.max(0, Math.min(1, power)) * (PUTT_MAX_SPEED - PUTT_MIN_SPEED);
+    b.h = this.ground(b.d, b.x);
+    b.vh = 0;
+    b.vd = speed * Math.cos(dirRad);
+    b.vx = speed * Math.sin(dirRad);
+    b.inFlight = true;
+    b.grounded = true;
+    b.resting = false;
+    this.launchSpinSide = 0;
+    this.ballSpeed = speed;
+    this.carry = 0;
+    this.total = 0;
+    this.apex = 0;
+    this.firstLanding = false;
+    this.result = 'green';
+    this.trail.length = 0;
+    this.stepGuard = 0;
+    // Smooth green roll — the green lie's own run, no club bite.
+    const mat = TERRAIN.green;
+    this.rollDecay = Math.max(0.6, Math.min(0.99, 1 - (1 - 0.985) / mat.runMul));
   }
 
   private pushTrail(): void {
@@ -298,7 +345,16 @@ export class CourseSim {
   private bearingToPin(): number {
     const b = this.ball;
     const p = this.hole.pin;
-    return Math.atan2(p.x - b.x, Math.max(1e-3, p.d - b.d));
+    // TRUE signed bearing — no clamp on the forward component — so a ball BEHIND
+    // the pin (the whole back half of the green) can still aim back at the cup
+    // (bearing points backward, |angle| > 90°). Clamping the denominator used to
+    // snap it sideways/away, making the hole unputtable from long.
+    return Math.atan2(p.x - b.x, p.d - b.d);
+  }
+
+  // Is the ball on the green? Then a stroke is a PUTT (ground roll), not a swing.
+  private putting(): boolean {
+    return this.lieAt(this.ball.d, this.ball.x) === 'green';
   }
 
   // Slingshot steer from a pull-back vector (start − finger, CSS px): the shot
@@ -363,7 +419,10 @@ export class CourseSim {
     this.originD = this.shotOriginD = b.d;
     this.originX = this.shotOriginX = b.x;
     const dir = this.bearingToPin() + this.aimRad + pushAim;
-    this.swing(this.power, dir, lss);
+    // On the green the stroke is a PUTT (ground roll); everywhere else a lofted
+    // swing. Both aim at bearing-to-pin + the steer, and both count a stroke.
+    if (this.putting()) this.puttLaunch(this.power, dir);
+    else this.swing(this.power, dir, lss);
     this.strokes += 1;
     this.power = 0;
   }
@@ -401,6 +460,7 @@ export class CourseSim {
       spinBack: this.spinBack,
       spinSide: this.spinSide,
       penaltyPending: this.penaltyPending,
+      putting: this.putting(),
     };
   }
 
@@ -408,8 +468,17 @@ export class CourseSim {
     const b = this.ball;
     if (!b.inFlight) return;
 
-    b.vd += this.windAlong * dt;
-    b.vx += this.windCross * dt;
+    // Safety: guarantee a shot always terminates (~833s of sim time) even if a
+    // future physics change breaks convergence, so the live loop can never
+    // strand the player waiting on a ball that won't rest.
+    if (++this.stepGuard > 100000) return this.stop(this.lieAt(b.d, b.x));
+
+    // Wind only pushes an AIRBORNE ball; a grounded/near-resting ball isn't
+    // shoved around by wind (that used to nudge settled balls on a windy hole).
+    if (!b.grounded) {
+      b.vd += this.windAlong * dt;
+      b.vx += this.windCross * dt;
+    }
 
     if (b.grounded) {
       // Gravity down the fall line (this is the break / downhill run / uphill
@@ -429,7 +498,10 @@ export class CourseSim {
       if (surf === 'ob') return this.stop('ob');
       const speed = Math.hypot(b.vd, b.vx);
       if (this.holedOut(speed)) return this.stop('holed');
-      if (speed <= ROLL_REST) return this.stop(surf);
+      // Rest ONLY where the slope is gentle enough that friction holds the ball;
+      // on a steeper lie a near-stopped ball keeps trickling downhill instead of
+      // freezing mid-tilt (ad/ax are the downhill pull computed just above).
+      if (speed <= ROLL_REST && Math.hypot(ad, ax) <= STOP_SLOPE_ACC) return this.stop(surf);
       this.pushTrail();
       return;
     }
@@ -450,7 +522,11 @@ export class CourseSim {
     this.pushTrail();
 
     const ground = this.ground(b.d, b.x);
-    if (b.h <= ground && b.vh < 0) {
+    // Land on descent (h dropping to the surface), OR when a still-climbing liner
+    // has clearly PENETRATED rising terrain — the latter catches a low shot that
+    // would otherwise tunnel through an upslope. The penetration MARGIN keeps a
+    // just-launched skim (h ≈ ground) from false-settling at the tee.
+    if ((b.h <= ground && b.vh < 0) || b.h < ground - 0.5) {
       b.h = ground;
       const wasFirst = this.firstLanding;
       if (this.firstLanding) {
@@ -535,7 +611,10 @@ export class CourseSim {
     this.originD = b.d;
     this.originX = b.x;
     const dir = this.bearingToPin() + this.aimRad + e * ACCURACY_AIM * powerW;
-    this.swing(this.power, dir, lss);
+    // Predict the SAME stroke the live fire will make — a putt roll on the green,
+    // a lofted swing elsewhere — so the on-turf aim line never lies about it.
+    if (this.putting()) this.puttLaunch(this.power, dir);
+    else this.swing(this.power, dir, lss);
 
     const path: CourseTrailPt[] = [{ d: b.d, x: b.x, h: b.h }];
     let landing: { d: number; x: number; h: number } | null = null;

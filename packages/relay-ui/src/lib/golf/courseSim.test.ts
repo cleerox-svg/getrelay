@@ -124,3 +124,79 @@ describe('course sim — putting on the tilted green', () => {
     expect(holed).toBe(true);
   });
 });
+
+// --- The real fire pipeline (what the game actually calls) -------------------
+// simulateShot/simulatePutt are measurement hooks; the GAME fires through
+// onPointerDown → onPointerMove → arm → fireArmed. These pin the play-test
+// fixes to THAT path: a stroke on the green is a putt (rolls, can hole), a soft
+// wedge flies genuinely short (finesse floor), and a ball behind the pin aims
+// back at the cup instead of away.
+
+// Fire a straight-at-pin shot at the given power through the interactive path.
+function fireStraight(s: CourseSim, power: number): void {
+  const MP = 100;
+  s.setMaxPull(MP);
+  s.onPointerDown({ x: 0, y: 0 });
+  s.onPointerMove({ x: 0, y: power * MP }); // straight-back pull → aim at pin
+  s.arm({ x: 0, y: power * MP });
+  s.fireArmed(0); // pure strike
+  let g = 0;
+  while (s.ball.inFlight && g++ < 200000) s.substep(1 / 120);
+}
+
+describe('course sim — play-test fixes (interactive fire path)', () => {
+  const g = HOLE_1.green;
+
+  it('a stroke ON THE GREEN is a putt: it rolls, it does not fly off', () => {
+    const s = sim();
+    s.ball.d = g.d - 8;
+    s.ball.x = g.x;
+    s.ball.h = 0;
+    expect(s.getState().putting).toBe(true);
+    fireStraight(s, 1); // full power
+    // A putt rolls along the green — it never becomes a 40yd lofted shot: it
+    // stays on the green/fringe and finishes within a green's length of start.
+    expect(['green', 'fringe', 'holed']).toContain(s.getState().lastResult);
+    expect(Math.hypot(s.ball.d - (g.d - 8), s.ball.x - g.x)).toBeLessThan(40);
+  });
+
+  it('a putt through the real pipeline can be HOLED', () => {
+    let holed = false;
+    for (const power of [0.3, 0.4, 0.5, 0.6, 0.7, 0.8]) {
+      const s = sim();
+      s.ball.d = g.d - 6;
+      s.ball.x = g.x;
+      s.ball.h = 0;
+      fireStraight(s, power);
+      if (s.holed) {
+        holed = true;
+        break;
+      }
+    }
+    expect(holed).toBe(true);
+  });
+
+  it('finesse: a soft wedge now flies genuinely short (low power floor)', () => {
+    // Before the course floor drop, POWER_FLOOR 0.35 forced even a min wedge to
+    // carry ~40yd. A 15% SW must now be a true short pitch.
+    const soft = sim().simulateShot({ clubId: 'sw', power: 0.15, from: { d: 300, x: 4 } });
+    expect(soft.carry).toBeLessThan(35);
+    // Full power is unchanged (floor only lifts the low end).
+    const full = sim().simulateShot({ clubId: 'sw', power: 1, from: { d: 300, x: 4 } });
+    expect(full.carry).toBeGreaterThan(95);
+  });
+
+  it('a ball BEHIND the pin aims back at the cup, not away', () => {
+    const s = sim();
+    s.selectClub('sw'); // a realistic short shot back toward the pin
+    s.ball.d = g.d + 28; // 28yd past the green, on the pin's line
+    s.ball.x = g.x;
+    s.ball.h = 0;
+    fireStraight(s, 0.4);
+    // The shot fired BACKWARD toward the pin — its downrange position dropped by
+    // more than the 28yd gap, carrying it back past the cup. The old clamped
+    // bearing snapped sideways/away and could never turn the shot around.
+    expect(s.ball.d).toBeLessThan(g.d); // ended up on the pin's side, not behind
+    expect(s.ball.x).toBeCloseTo(g.x, 0); // and stayed on line (didn't snap sideways)
+  });
+});
