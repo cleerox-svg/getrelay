@@ -198,10 +198,19 @@ Gameplay clean first, then the look, then the course — each step reuses the la
    sim will add each grounded substep; greens are graded flat under the pad so
    their own tilt (not the surrounding mounds) breaks a putt. Showcase `HOLE_1`
    (dogleg-right par 5) + a headless harness (`terrain.test.ts`) proving break,
-   downhill-vs-uphill run and a flat-hole regression. **Next:** a terrain-aware
-   `CourseSim` (flight lands at `heightAt`, roll adds `slopeAccel`), then the
-   Three.js terrain mesh (displaced grid, surface-splat textured from
-   `surfaceAt`) with the sand/fringe/rough/cart-path materials, then the nine.
+   downhill-vs-uphill run and a flat-hole regression.
+   **→ Also done:** `lib/golf/courseSim.ts` — a terrain-aware full-shot sim that
+   REUSES the range's tuned ballistics + `TERRAIN` lie materials (constants
+   exported from `rangeSim`), but the ground is the hole's heightfield: flight
+   lands at `heightAt`, the grounded roll adds `slopeAccel` each substep, the lie
+   under the ball drives bounce/roll, and a cup captures a slow putt. Added a
+   `cartpath` lie material (firm/lively). `courseSim.test.ts` proves it on
+   `HOLE_1`: tee shots land on terrain with real lies, a putt BREAKS (vs a flat-
+   green control) and can be HOLED, a wedge finds the pond, a pull goes OB, and a
+   downhill putt outruns the same uphill one. 28/28 golf tests pass (range still
+   15, untouched). **Next:** the Three.js terrain MESH (displaced grid, surface-
+   splat textured from `surfaceAt`, sand/fringe/rough/cart-path materials) + a
+   `CourseGL`/HUD driving `CourseSim`, then build the nine holes as data.
 
 **Working principle going forward:** tune against the **harness** and **device
 telemetry**, not guesses — that's why both exist.

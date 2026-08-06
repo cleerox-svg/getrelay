@@ -36,7 +36,7 @@ export const POWER_FLOOR = 0.35;
 // wedges check up and the driver runs out. Surface run (TERRAIN[..].runMul)
 // then pulls this toward 1 (longer roll) or away (grabbier lie).
 export const ROLL_FRICTION = 0.955;
-const BITE_K = 0.16;
+export const BITE_K = 0.16;
 // Below this ground speed a rolling ball is snapped to rest.
 const ROLL_REST = 2.5;
 
@@ -57,7 +57,7 @@ const ROLL_REST = 2.5;
 //                longer run-out, <1 a shorter one.
 //   biteMul      how hard backspin bites on this lie (greens grab; sand digs).
 //   bounceMin    post-bounce upward speed below which hopping ends and it rolls.
-export type Terrain = 'fairway' | 'green' | 'fringe' | 'rough' | 'bunker' | 'tee';
+export type Terrain = 'fairway' | 'green' | 'fringe' | 'rough' | 'bunker' | 'cartpath' | 'tee';
 
 export interface TerrainMaterial {
   restitution: number;
@@ -79,6 +79,8 @@ export const TERRAIN: Record<Terrain, TerrainMaterial> = {
   rough: { restitution: 0.3, bounceKeep: 0.42, rollMul: 0.5, runMul: 0.58, biteMul: 1.2, bounceMin: 3.4 },
   // Sand: deadens almost everything — plugs near the pitch mark.
   bunker: { restitution: 0.12, bounceKeep: 0.2, rollMul: 0.24, runMul: 0.34, biteMul: 1.6, bounceMin: 5 },
+  // Asphalt: the classic cart-path bounce — very lively, runs forever, no bite.
+  cartpath: { restitution: 0.62, bounceKeep: 0.85, rollMul: 1.6, runMul: 1.9, biteMul: 0.3, bounceMin: 1.8 },
   // The tee lie plays like a fresh fairway.
   tee: { restitution: 0.5, bounceKeep: 0.7, rollMul: 1.18, runMul: 1.24, biteMul: 0.85, bounceMin: 2.4 },
 };
@@ -105,22 +107,22 @@ const AIM_DEADZONE_FRAC = 0.12;
 // Side spin → a steady lateral acceleration while airborne (yd/s²) at full
 // draw/fade; over a full flight this curves a drive a believable ~15-30yd, and
 // only bananas when maxed. Comparable in scale to the round's cross-wind.
-const SPIN_SIDE_ACC = 1.9;
+export const SPIN_SIDE_ACC = 1.9;
 // Back/top spin → a vertical acceleration while airborne (yd/s²) at full spin:
 // backspin (+) lifts, raising apex and adding a touch of carry; topspin (−)
 // presses the flight down for a lower, shorter shot. Kept well under GRAVITY.
-const SPIN_LIFT_ACC = 2.2;
+export const SPIN_LIFT_ACC = 2.2;
 // Backspin bite added to the roll-friction term at the settle (checks up).
-const SPIN_BITE = 0.18;
+export const SPIN_BITE = 0.18;
 // Topspin roll boost: extra fraction of forward speed kept through the bounce.
-const SPIN_ROLL = 0.5;
+export const SPIN_ROLL = 0.5;
 // First-bounce spin "check": at full backspin the ball loses this fraction of
 // its landing ground speed plus a fixed reverse kick (so a spinny wedge zips
 // BACK a little); at full topspin it keeps an extra fraction forward. Only the
 // player's spin drives this, so neutral-spin carries/ladders are untouched.
-const CHECK_BACK_FRAC = 0.7;
-const CHECK_BACK_KICK = 6;
-const CHECK_TOP_FRAC = 0.4;
+export const CHECK_BACK_FRAC = 0.7;
+export const CHECK_BACK_KICK = 6;
+export const CHECK_TOP_FRAC = 0.4;
 // --- Accuracy (Golf-Clash-style tap-timing) → hook/slice --------------------
 // After aim+power are locked (armed), the player taps to stop a sweeping marker.
 // The stop error e ∈ [-1..1] (0 = dead center = pure shot) is turned into ADDED
