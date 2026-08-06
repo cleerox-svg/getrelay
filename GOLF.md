@@ -156,8 +156,8 @@ Gameplay clean first, then the look, then the course — each step reuses the la
    ambient light, sky + distance haze, lit tree sprites, glossier ball, light
    bloom/tone-mapping. The ~80% path, no new dep. Retire the odd range look here.
    **→ Done (first pass):** ACES filmic tone mapping + exposure; a stronger warm
-   key sun with a 2048 soft-shadow map (ball/tree/flag contact shadows now read)
-   over a sky/ground hemisphere fill; deeper, crisper sky with defined puffy
+   key sun with a soft-shadow map (ball/tree/flag contact shadows now read) over
+   a sky/ground hemisphere fill; deeper, crisper sky with defined puffy
    cumulus; warmer, denser distance haze (fog); richer, glossier striped turf
    with a subtler mow delta and stronger blade normals; the odd flat tee-mat
    disc removed (tee peg + soft ball shadow ground the ball). All in `RangeGL`,
@@ -165,6 +165,11 @@ Gameplay clean first, then the look, then the course — each step reuses the la
    stays a lazy chunk. **Not yet:** post-process bloom (needs EffectComposer —
    deferred for GPU cost on low-end mobile), billboard tree sprites, real sand/
    bunkers. Tune light intensity/exposure against device screenshots next.
+   **Gotcha (learned the hard way):** the shadow map MUST stay at 1024² — a
+   2048² map crashed the WebView GPU process on real Android (black screen,
+   needs an app restart) though it rendered fine in desktop/software GL. Test
+   GPU-cost changes on a low-end device, not just the headless screenshot
+   harness.
 3. **Hole engine → 9-hole par-5 course** — a hole = tee → fairway → green → cup
    with per-hole terrain, par, distance-to-pin, wind. Same sim, same aim UI,
    same shaders. Then it's mostly hole data + terrain art to build the nine.
