@@ -6,7 +6,10 @@
 //  - Never intercept API calls (they go to relay-api.* — different origin).
 //  - Stale-while-revalidate for same-origin static assets.
 
-const SHELL_CACHE = 'relay-shell-v3';
+// Bump this on any caching-logic change: activate() purges every cache whose
+// name isn't the current one, so bumping also clears a previously poisoned shell
+// (e.g. an error page cached as /index.html) from every device on next load.
+const SHELL_CACHE = 'relay-shell-v4';
 const SHELL_URLS = ['/', '/index.html', '/manifest.webmanifest', '/favicon.svg', '/icon.svg'];
 
 self.addEventListener('install', (event) => {
@@ -44,8 +47,13 @@ self.addEventListener('fetch', (event) => {
       (async () => {
         try {
           const res = await fetch(req);
-          const cache = await caches.open(SHELL_CACHE);
-          cache.put('/index.html', res.clone()).catch(() => undefined);
+          // Only cache a REAL, ok navigation as the shell. Never cache an error
+          // page / SPA-fallback HTML for a bad response — that's how a transient
+          // blip used to get pinned as a broken shell and survive reloads.
+          if (res.ok) {
+            const cache = await caches.open(SHELL_CACHE);
+            cache.put('/index.html', res.clone()).catch(() => undefined);
+          }
           return res;
         } catch {
           const cache = await caches.open(SHELL_CACHE);

@@ -1,3 +1,10 @@
+# The HTML shell must always revalidate so a new deploy's asset hashes are picked
+# up immediately — never serve a stale index.html that references pruned assets.
+/
+  Cache-Control: no-store
+/index.html
+  Cache-Control: no-store
+
 # Service worker must not be cached at the edge — updates need to ship immediately.
 /sw.js
   Cache-Control: no-cache, no-store, must-revalidate
