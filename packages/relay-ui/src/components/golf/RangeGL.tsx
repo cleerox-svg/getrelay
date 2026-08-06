@@ -684,39 +684,116 @@ export default function RangeGL({
       scene.add(label);
     }
 
-    // --- Framing trees (low-poly) --------------------------------------
-    const trunkMat = track(new THREE.MeshStandardMaterial({ color: 0x6f4a2a, roughness: 1 }));
-    const leafMat = track(new THREE.MeshStandardMaterial({ color: 0x2f7d3a, roughness: 1 }));
-    const leafMat2 = track(new THREE.MeshStandardMaterial({ color: 0x3c8f44, roughness: 1 }));
-    const trunkGeo = track(new THREE.CylinderGeometry(0.5, 0.7, 4, 6));
-    const coneGeoA = track(new THREE.ConeGeometry(3.4, 6, 7));
-    const coneGeoB = track(new THREE.ConeGeometry(2.6, 5, 7));
-    const addTree = (x: number, z: number, s: number) => {
+    // --- Framing trees -------------------------------------------------
+    // Two species built from SHARED low-poly geometry (kept faceted with
+    // flatShading so a single sun catches every plane — reads as stylized-real,
+    // like the PGA app, not a billboard that fakes the light and casts no
+    // shadow). A seeded RNG jitters every tree's scale, lean, canopy shape and
+    // green tone so no two clone — that variation is the "character" a repeated
+    // cone lacks. Real meshes, so the 2048² sun still drops a proper shadow.
+    const trunkMat = track(new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 1 }));
+    // A small palette of leaf tones (cool→warm, light→dark); each canopy blob
+    // picks one by seed so a tree is mottled and the grove varies tree to tree.
+    const leafMats = [0x2f7d3a, 0x3c8f44, 0x59a24a, 0x276b34, 0x4f9a52].map((c) =>
+      track(new THREE.MeshStandardMaterial({ color: c, roughness: 0.95, flatShading: true })),
+    );
+    // Low-poly organic canopy blob (icosahedron = 20 facets) + a slightly
+    // tapered trunk; a hexagonal cone tier for the pines. All shared + disposed.
+    const blobGeo = track(new THREE.IcosahedronGeometry(1, 0));
+    const bTrunkGeo = track(new THREE.CylinderGeometry(0.45, 0.85, 5.5, 6));
+    const pTrunkGeo = track(new THREE.CylinderGeometry(0.32, 0.6, 5, 6));
+    const pineGeo = track(new THREE.ConeGeometry(1, 1, 7));
+
+    // Deterministic per-tree RNG (mulberry32) so screenshots are stable and the
+    // grove looks hand-placed rather than random noise each reload.
+    const treeRng = (seed: number) => {
+      let a = seed >>> 0;
+      return () => {
+        a = (a + 0x6d2b79f5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    };
+    const pickLeaf = (r: number) => leafMats[Math.floor(r * leafMats.length)] ?? leafMats[0]!;
+
+    // Broadleaf: a tapered trunk under a cluster of 5–7 faceted blobs massed into
+    // a rounded, slightly squashed, irregular crown — the everyday course tree.
+    const addBroadleaf = (x: number, z: number, s: number, seed: number) => {
+      const r = treeRng(seed);
       const g = new THREE.Group();
-      const trunk = new THREE.Mesh(trunkGeo, trunkMat);
-      trunk.position.y = 2;
+      const trunk = new THREE.Mesh(bTrunkGeo, trunkMat);
+      trunk.position.y = 2.5;
+      trunk.rotation.z = (r() - 0.5) * 0.12;
       trunk.castShadow = true;
       g.add(trunk);
-      const c1 = new THREE.Mesh(coneGeoA, leafMat);
-      c1.position.y = 6;
-      c1.castShadow = true;
-      g.add(c1);
-      const c2 = new THREE.Mesh(coneGeoB, leafMat2);
-      c2.position.y = 9;
-      c2.castShadow = true;
-      g.add(c2);
+      const blobs = 5 + Math.floor(r() * 3);
+      const crownR = 3 + r() * 0.8;
+      const crownY = 6 + r() * 1.2;
+      for (let i = 0; i < blobs; i++) {
+        const b = new THREE.Mesh(blobGeo, pickLeaf(r()));
+        const ang = r() * Math.PI * 2;
+        const rad = r() * crownR * 0.8;
+        b.position.set(Math.cos(ang) * rad, crownY + (r() - 0.5) * crownR * 0.9, Math.sin(ang) * rad);
+        const bs = crownR * (0.55 + r() * 0.45);
+        // Squash slightly so the crown domes rather than balls up.
+        b.scale.set(bs, bs * (0.8 + r() * 0.25), bs);
+        b.rotation.set(r() * 3, r() * 3, r() * 3);
+        b.castShadow = true;
+        g.add(b);
+      }
+      g.position.set(x, 0, z);
+      g.rotation.y = r() * Math.PI * 2;
+      g.scale.setScalar(s);
+      scene.add(g);
+    };
+
+    // Pine: a narrow trunk under 4–5 shrinking, jittered, faceted cone tiers —
+    // darker and taller, for the tree-line depth behind the broadleaves.
+    const addPine = (x: number, z: number, s: number, seed: number) => {
+      const r = treeRng(seed);
+      const g = new THREE.Group();
+      const trunk = new THREE.Mesh(pTrunkGeo, trunkMat);
+      trunk.position.y = 2.5;
+      trunk.castShadow = true;
+      g.add(trunk);
+      const tiers = 4 + Math.floor(r() * 2);
+      const mat = pickLeaf(r() * 0.5); // bias to the darker greens
+      let y = 4.2;
+      let rad = 2.6 + r() * 0.7;
+      for (let i = 0; i < tiers; i++) {
+        const t = new THREE.Mesh(pineGeo, mat);
+        const h = 2.6 + r() * 0.6;
+        t.scale.set(rad, h, rad);
+        t.position.y = y;
+        t.rotation.y = r() * Math.PI;
+        t.castShadow = true;
+        g.add(t);
+        y += h * 0.62;
+        rad *= 0.74 + r() * 0.06;
+      }
       g.position.set(x, 0, z);
       g.scale.setScalar(s);
       scene.add(g);
     };
+
     // Receding tree lines down both banks of the hazard (just outside the
     // ±60yd water). The narrow portrait FOV can't frame trees at the tee, so
-    // these flank the fairway/water toward the horizon for depth instead.
-    for (let i = 0; i < 10; i++) {
-      const z = -58 - i * 34;
-      const jitter = ((i * 37) % 9) - 4;
-      addTree(-63 - (i % 2) * 4, z + jitter, 1.15 - i * 0.05);
-      addTree(63 + (i % 2) * 4, z - jitter, 1.1 - i * 0.045);
+    // these flank the fairway/water toward the horizon for depth. Broadleaves
+    // up front, pines woven in behind for a layered, natural tree line.
+    for (let i = 0; i < 11; i++) {
+      const z = -56 - i * 32;
+      const jitter = ((i * 37) % 11) - 5;
+      const fade = 1.15 - i * 0.045;
+      const pineL = i % 3 === 1;
+      const pineR = i % 3 === 2;
+      (pineL ? addPine : addBroadleaf)(-62 - (i % 2) * 5, z + jitter, fade, 1000 + i);
+      (pineR ? addPine : addBroadleaf)(62 + (i % 2) * 5, z - jitter, fade * 0.97, 2000 + i);
+      // A second, staggered row further out for depth (smaller, mostly pines).
+      if (i % 2 === 0) {
+        addPine(-74 - (i % 3) * 4, z - 10 + jitter, fade * 0.82, 3000 + i);
+        addBroadleaf(75 + (i % 3) * 4, z + 8 - jitter, fade * 0.85, 4000 + i);
+      }
     }
 
     // --- Back boundary net + posts -------------------------------------
