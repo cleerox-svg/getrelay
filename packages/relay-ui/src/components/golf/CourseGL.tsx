@@ -21,9 +21,9 @@ interface Props {
 }
 
 const SURFACE_RGB: Record<Surface, [number, number, number]> = {
-  fairway: [0.4, 0.66, 0.3],
-  green: [0.5, 0.78, 0.36],
-  fringe: [0.56, 0.72, 0.36],
+  fairway: [0.38, 0.63, 0.28],
+  green: [0.6, 0.88, 0.44],
+  fringe: [0.5, 0.75, 0.36],
   rough: [0.22, 0.46, 0.22],
   bunker: [0.9, 0.82, 0.6],
   water: [0.14, 0.42, 0.66],
@@ -46,10 +46,12 @@ function makeTurf(): THREE.Texture {
   const c = document.createElement('canvas');
   c.width = c.height = S;
   const g = c.getContext('2d')!;
-  const bands = 8;
+  const bands = 6;
   for (let i = 0; i < bands; i++) {
     const up = i % 2 === 0;
-    g.fillStyle = up ? '#ffffff' : '#dfe6da';
+    // Clear light/dark mow contrast so the stripes actually read at distance
+    // (this multiplies the per-lie vertex colour, so it only darkens).
+    g.fillStyle = up ? '#ffffff' : '#adc19c';
     g.fillRect(0, (i * S) / bands, S, S / bands);
   }
   for (let i = 0; i < 4000; i++) {
@@ -132,6 +134,10 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     const host = hostRef.current;
     if (!host) return;
     const hole: CourseHole = sim.hole;
+
+    // Visible ball radius (yards). Small enough not to dominate the frame, big
+    // enough to read when the camera follows it downrange.
+    const BALL_R = 0.55;
 
     const disposables: { dispose: () => void }[] = [];
     const track = <T extends { dispose: () => void }>(o: T): T => {
@@ -245,7 +251,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     geo.setIndex(idx);
     geo.computeVertexNormals();
     const turfTex = track(makeTurf());
-    turfTex.repeat.set(2, 8); // mow stripes run across the fairway, down the hole
+    turfTex.repeat.set(2, 6); // mow stripes run across the fairway, down the hole
     const groundMat = track(
       new THREE.MeshStandardMaterial({
         vertexColors: true,
@@ -265,22 +271,31 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     for (const hz of hole.hazards) {
       if (hz.kind === 'water') {
         const rimY = heightAt(hole, hz.d + hz.r, hz.x) + 0.06;
-        const wGeo = track(new THREE.CircleGeometry(hz.r, 44));
+        const wGeo = track(new THREE.CircleGeometry(hz.r, 48));
         const wMat = track(
           new THREE.MeshStandardMaterial({
-            color: 0x2f6fb0,
-            roughness: 0.18,
-            metalness: 0.35,
+            color: 0x1d5a86, // deeper teal-blue reads as water, not flat paint
+            roughness: 0.12,
+            metalness: 0.6,
             transparent: true,
-            opacity: 0.9,
+            opacity: 0.92,
             normalMap: waterNormal,
           }),
         );
-        wMat.normalScale.set(0.35, 0.35);
+        wMat.normalScale.set(0.9, 0.9); // stronger ripple so the sheen catches
         const water = new THREE.Mesh(wGeo, wMat);
         water.rotation.x = -Math.PI / 2;
         water.position.set(hz.x, rimY, -hz.d);
         scene.add(water);
+        // A pale shoreline ring so the edge isn't a hard oval cut-out.
+        const shoreGeo = track(new THREE.RingGeometry(hz.r * 0.93, hz.r * 1.06, 48));
+        const shoreMat = track(
+          new THREE.MeshBasicMaterial({ color: 0xcfe6ea, transparent: true, opacity: 0.5 }),
+        );
+        const shore = new THREE.Mesh(shoreGeo, shoreMat);
+        shore.rotation.x = -Math.PI / 2;
+        shore.position.set(hz.x, rimY - 0.02, -hz.d);
+        scene.add(shore);
       } else if (hz.kind === 'bunker') {
         // A sand cap that follows the basin lip, sat just above the mesh.
         const sGeo = track(new THREE.CircleGeometry(hz.r, 32));
@@ -311,7 +326,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     scene.add(flag);
 
     // Ball.
-    const ballGeo = track(new THREE.SphereGeometry(0.9, 20, 16));
+    const ballGeo = track(new THREE.SphereGeometry(BALL_R, 20, 16));
     const ballMat = track(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.35 }));
     const ball = new THREE.Mesh(ballGeo, ballMat);
     ball.castShadow = true;
@@ -332,30 +347,42 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     // Fed by sim.predict() — the SAME integrator as the live shot, on the
     // terrain — so what it draws is where the ball actually goes.
     const ARC_MAX = 700;
-    const makeLine = (color: number, opacity: number, width = 1) => {
+    // The centre trajectory is drawn as DOTS (constant screen size) so it reads
+    // clearly at any distance — thin GL lines were nearly invisible. The two
+    // dispersion edges stay as faint lines.
+    const arcGeo = track(new THREE.BufferGeometry());
+    arcGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ARC_MAX * 3), 3));
+    arcGeo.setDrawRange(0, 0);
+    const arcMat = track(
+      new THREE.PointsMaterial({ color: 0xffffff, size: 7, sizeAttenuation: false, transparent: true, opacity: 0.95 }),
+    );
+    const arcPts = new THREE.Points(arcGeo, arcMat);
+    arcPts.visible = false;
+    scene.add(arcPts);
+    const arc = { g: arcGeo, l: arcPts };
+    const makeLine = (color: number, opacity: number) => {
       const g = track(new THREE.BufferGeometry());
       g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ARC_MAX * 3), 3));
       g.setDrawRange(0, 0);
-      const m = track(new THREE.LineBasicMaterial({ color, transparent: true, opacity, linewidth: width }));
+      const m = track(new THREE.LineBasicMaterial({ color, transparent: true, opacity }));
       const l = new THREE.Line(g, m);
       l.visible = false;
       scene.add(l);
       return { g, l };
     };
-    const arc = makeLine(0xffffff, 0.95);
-    const edgeL = makeLine(0xffe08a, 0.4);
-    const edgeR = makeLine(0xffe08a, 0.4);
+    const edgeL = makeLine(0xffe08a, 0.45);
+    const edgeR = makeLine(0xffe08a, 0.45);
     const ringMat = track(
-      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, side: THREE.DoubleSide }),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, side: THREE.DoubleSide }),
     );
-    const landRingGeo = track(new THREE.RingGeometry(1.6, 2.4, 28));
+    const landRingGeo = track(new THREE.RingGeometry(2.4, 3.6, 32));
     const landRing = new THREE.Mesh(landRingGeo, ringMat);
     landRing.rotation.x = -Math.PI / 2;
     landRing.visible = false;
     scene.add(landRing);
-    const restRingGeo = track(new THREE.RingGeometry(1.0, 1.5, 24));
+    const restRingGeo = track(new THREE.RingGeometry(1.6, 2.4, 28));
     const restRingMat = track(
-      new THREE.MeshBasicMaterial({ color: 0x66e0ff, transparent: true, opacity: 0.8, side: THREE.DoubleSide }),
+      new THREE.MeshBasicMaterial({ color: 0x66e0ff, transparent: true, opacity: 0.85, side: THREE.DoubleSide }),
     );
     const restRing = new THREE.Mesh(restRingGeo, restRingMat);
     restRing.rotation.x = -Math.PI / 2;
@@ -476,13 +503,15 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     const UP = new THREE.Vector3(0, 1, 0);
     const wvec = new THREE.Vector3();
 
-    const ballWorld = (out: THREE.Vector3) => out.set(sim.ball.x, sim.ball.h + 0.9, -sim.ball.d);
+    const ballWorld = (out: THREE.Vector3) => out.set(sim.ball.x, sim.ball.h + BALL_R, -sim.ball.d);
 
     // Initialise camera at the address position.
     ballWorld(tmpB);
     tmpDir.subVectors(pinV, tmpB).setY(0).normalize();
-    camPos.copy(tmpB).addScaledVector(tmpDir, -16).setY(tmpB.y + 8);
-    camLook.copy(tmpB).addScaledVector(tmpDir, 40).setY(tmpB.y + 2);
+    camPos.copy(tmpB).addScaledVector(tmpDir, -17);
+    camPos.y = tmpB.y + 10;
+    camLook.copy(tmpB).addScaledVector(tmpDir, 46);
+    camLook.y = tmpB.y - 0.5;
     camera.position.copy(camPos);
     camera.lookAt(camLook);
 
@@ -546,7 +575,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         }
       }
       const b = sim.ball;
-      ball.position.set(b.x, b.h + 0.9, -b.d);
+      ball.position.set(b.x, b.h + BALL_R, -b.d);
 
       // Water shimmer: drift the ripple normal map.
       waterNormal.offset.x += dt * 0.014;
@@ -588,16 +617,19 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       // Camera: chase the ball in flight, sit behind it toward the pin at rest.
       ballWorld(tmpB);
       if (b.inFlight) {
-        tmpDir.set(b.vd, 0, 0); // horizontal travel dir in world (d→−z)
-        tmpDir.set(b.vx, 0, -b.vd);
+        tmpDir.set(b.vx, 0, -b.vd); // horizontal travel dir in world (d→−z)
         if (tmpDir.lengthSq() < 1e-4) tmpDir.subVectors(pinV, tmpB).setY(0);
         tmpDir.setY(0).normalize();
-        desiredPos.copy(tmpB).addScaledVector(tmpDir, -22).setY(tmpB.y + 12);
-        desiredLook.copy(tmpB).addScaledVector(tmpDir, 10);
+        desiredPos.copy(tmpB).addScaledVector(tmpDir, -22);
+        desiredPos.y = tmpB.y + 13;
+        desiredLook.copy(tmpB).addScaledVector(tmpDir, 24);
+        desiredLook.y = tmpB.y - 1.5;
       } else {
         tmpDir.subVectors(pinV, tmpB).setY(0).normalize();
-        desiredPos.copy(tmpB).addScaledVector(tmpDir, -16).setY(tmpB.y + 8);
-        desiredLook.copy(tmpB).addScaledVector(tmpDir, 40).setY(tmpB.y + 2);
+        desiredPos.copy(tmpB).addScaledVector(tmpDir, -17);
+        desiredPos.y = tmpB.y + 10;
+        desiredLook.copy(tmpB).addScaledVector(tmpDir, 46);
+        desiredLook.y = tmpB.y - 0.5;
       }
       const k = 1 - Math.pow(0.001, dt);
       camPos.lerp(desiredPos, k);
