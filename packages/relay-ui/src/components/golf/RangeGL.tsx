@@ -4,6 +4,7 @@ import { RangeSim } from '../../lib/golf/rangeSim';
 import type { RangeEvent } from '../../lib/golf/rangeSim';
 import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
 import {
+  FAIRWAY_HALF_W,
   GRASS_END,
   ISLAND_SURFACE_SCALE,
   RANGE_YD,
@@ -519,6 +520,32 @@ export default function RangeGL({ sim, pins, targetId, paused = false, onEvent }
     water.rotation.x = -Math.PI / 2;
     water.position.set(0, WATER_Y, -(GRASS_END + WATER_END) / 2);
     scene.add(water);
+
+    // --- Grass fairway causeway ----------------------------------------
+    // A turf lane laid over the water straight down the middle so an online
+    // shot lands on grass and runs out (visuals match rangeTargets.surfaceAt's
+    // central fairway corridor). Sits just above the water surface, spanning the
+    // full hazard depth at ±FAIRWAY_HALF_W wide.
+    const fairwayTex = track(makeTurfTexture());
+    fairwayTex.repeat.set(2, 44);
+    const fairwayNorm = track(makeTurfNormalMap());
+    fairwayNorm.repeat.set(6, 140);
+    const fairwayGeo = track(
+      new THREE.PlaneGeometry(FAIRWAY_HALF_W * 2, WATER_END - GRASS_END),
+    );
+    const fairwayMat = track(
+      new THREE.MeshStandardMaterial({
+        map: fairwayTex,
+        roughness: 0.92,
+        normalMap: fairwayNorm,
+        normalScale: new THREE.Vector2(0.35, 0.35),
+      }),
+    );
+    const fairway = new THREE.Mesh(fairwayGeo, fairwayMat);
+    fairway.rotation.x = -Math.PI / 2;
+    fairway.position.set(0, WATER_Y + 0.04, -(GRASS_END + WATER_END) / 2);
+    fairway.receiveShadow = true;
+    scene.add(fairway);
 
     // --- Islands + flags + yardage labels ------------------------------
     const ISLAND_TOP = 0.85;

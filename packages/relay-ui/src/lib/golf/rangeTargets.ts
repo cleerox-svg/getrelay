@@ -28,6 +28,15 @@ export interface Pin {
 export const GRASS_END = 100;
 export const WATER_END = 390;
 
+// A grass FAIRWAY causeway runs straight down the middle of the range, over the
+// water, so a shot hit online lands on turf and RUNS OUT (carry + roll) instead
+// of splashing at its carry distance — the range is a place to bomb drives, not
+// a forced water carry on every swing. Half-width in yards each side of centre
+// (a 2*FAIRWAY_HALF_W-wide lane). Water still flanks it on both sides and
+// surrounds the outer island greens, so an off-line shot (aim/spin/wind) still
+// finds the hazard. RangeGL renders a matching turf strip so visuals == physics.
+export const FAIRWAY_HALF_W = 16;
+
 // The rendered island green is drawn at pin.r * ISLAND_SURFACE_SCALE (the green
 // cap radius in RangeGL). Physics classification and the renderer share this
 // constant so a ball resting on the visible green counts as 'island', not
@@ -78,7 +87,10 @@ export function surfaceAt(d: number, x: number): 'grass' | 'island' | 'water' | 
   if (d >= RANGE_YD) return 'fence';
   if (d < GRASS_END) return 'grass';
   if (d > WATER_END) return 'grass'; // back lip is grass
-  return islandAt(d, x) ? 'island' : 'water';
+  if (islandAt(d, x)) return 'island';
+  // Central fairway causeway: online shots land on turf and roll out.
+  if (Math.abs(x) < FAIRWAY_HALF_W) return 'grass';
+  return 'water';
 }
 
 // Small deterministic PRNG (mulberry32) so a given (seed, shotIndex) always

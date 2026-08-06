@@ -16,7 +16,7 @@ import { CLUBS, DEFAULT_CLUB_ID, clubById } from './clubs';
 import type { Club } from './clubs';
 import { RANGE_YD, islandAt, islandSurfaceR, surfaceAt } from './rangeTargets';
 import type { Pin } from './rangeTargets';
-import { MIN_PULL } from './tuning';
+import { FIXED_MS, MIN_PULL } from './tuning';
 
 // --- Physics constants (world space, yards & seconds) ---
 
@@ -101,6 +101,31 @@ const TRAIL_MAX = 48;
 const DEFAULT_MAX_PULL = 220;
 
 export type ShotResult = 'grass' | 'island' | 'water' | 'fence';
+
+// One-shot headless measurement, returned by simulateShot(). Mirrors exactly
+// what the game measures at rest — carry is the first-landing downrange, total
+// is the ball's final resting downrange (carry + roll), so a harness reading
+// matches the on-screen CARRY/TOTAL readouts. `lateral` is the resting ball.x
+// (+right), for verifying aim/spin direction.
+export interface ShotMeasurement {
+  carry: number;
+  total: number;
+  apex: number;
+  ballSpeed: number;
+  lateral: number;
+  result: ShotResult;
+}
+
+// Options for simulateShot(). All optional; omitted fields use neutral values
+// (straight aim, no spin, dead-center strike).
+export interface SimulateShotOptions {
+  clubId?: string;
+  power?: number; // 0..1
+  aimDeg?: number; // + = right
+  spinBack?: number; // -1..1 (back>0 lifts, top<0 presses)
+  spinSide?: number; // -1..1 (fade>0 curves right, draw<0 curves left)
+  accuracy?: number; // tap-timing error -1..1 (0 = pure strike)
+}
 
 export type RangeEventType = 'launch' | 'land' | 'splash' | 'fence' | 'rest' | 'arm';
 export interface RangeEvent {
@@ -642,5 +667,42 @@ export class RangeSim {
     this.pendingCurve = 0;
     this.pendingAim = 0;
     this.events.push({ type: 'launch' });
+  }
+
+  // --- Headless measurement hook (tests / tuning) ------------------------
+  // Drive a single shot end-to-end through the REAL launch pipeline: set the
+  // club/spin/aim/power, arm, fire (baking in any accuracy miss), then run the
+  // same fixed-timestep substep loop RangeGL uses until the ball comes to rest.
+  // Returns the exact carry/total/apex/ballSpeed the game would show, plus the
+  // resting lateral offset. Deterministic — the caller controls wind (default
+  // 0 in the harness). Not called by the app runtime; kept tiny and allocation-
+  // free beyond the single result object.
+  simulateShot(opts: SimulateShotOptions = {}): ShotMeasurement {
+    const fixedS = FIXED_MS / 1000;
+    this.teeUp();
+    if (opts.clubId) this.selectClub(opts.clubId);
+    this.setSpin(opts.spinBack ?? 0, opts.spinSide ?? 0);
+    this.setAim(((opts.aimDeg ?? 0) * Math.PI) / 180);
+    // Lock a power directly (the drag gesture only exists to set this.power).
+    this.power = Math.max(0, Math.min(1, opts.power ?? 1));
+    this.armed = true;
+    // fireArmed() consumes the accuracy miss and calls the real swing().
+    this.fireArmed(opts.accuracy ?? 0);
+    // Integrate to rest. The cap (~600s of flight) can never be reached by a
+    // legal shot, but guards against a physics regression spinning forever.
+    let guard = 0;
+    while (this.ball.inFlight && guard < 72000) {
+      this.substep(fixedS);
+      guard++;
+    }
+    const st = this.getState();
+    return {
+      carry: st.carry,
+      total: st.total,
+      apex: st.apex,
+      ballSpeed: st.ballSpeed,
+      lateral: this.ball.x,
+      result: st.lastResult ?? 'grass',
+    };
   }
 }
