@@ -98,14 +98,15 @@ export const WATER_END = 390;
 export const FAIRWAY_HALF_W = 16;
 
 // 'fairway' CROSSING WATER HAZARD band (downrange yards). Tuned against the
-// neutral bag (harness). The band starts just past the 5-Iron's TOTAL (~245) so
-// SW..5-Iron rest on the NEAR fairway, and is wide enough that a club landing
-// short can't BOUNCE across it — with this bag a thin band gets hopped, so a
-// credible crossing that actually swallows the mid clubs must be ~38yd deep:
-//   SW..5-Iron  → near fairway (total < START);
-//   Hybrid (lands 243, releases in) & 3-Wood (carry 260, lands in) → SPLASH
-//                 unless aimed at an island — the risk/reward carry clubs;
-//   Driver (carry 291 > END) → carries clean to the FAR fairway, rolling ~348.
+// neutral bag (harness). Roughly ~38yd deep so a club landing just short can't
+// simply BOUNCE across it. After the bounce/run pass gave the fairway lie much
+// more release, the mid clubs run FURTHER, so the near-fairway shots are the
+// short sticks:
+//   SW..7-Iron  → rest on the near fairway (total < START);
+//   5-Iron (carry 217, now RUNS into the band) & 3-Wood (carry 260, lands in) →
+//                 SPLASH unless aimed at an island — the risk/reward clubs;
+//   Hybrid (carry 243) hops the band to the far fairway; Driver (carry 291 >
+//                 END) carries it clean and rolls out ~377 on the far fairway.
 // Island greens sit inside this band; a straight bomb still can't trivially
 // score the challenge (targets are islands/greens you must be near).
 export const FAIRWAY_WATER_START = 247;

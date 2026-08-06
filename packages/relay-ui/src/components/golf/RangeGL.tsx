@@ -482,19 +482,21 @@ export default function RangeGL({
     const sun = new THREE.DirectionalLight(0xfff1d6, 2.7);
     sun.position.set(-52, 96, 40);
     sun.castShadow = true;
-    // Shadow map kept at 1024² over a snug frustum. A 2048² map (shipped briefly
-    // in the visual pass) crashed the WebView GPU process on real Android devices
-    // — black screen needing an app restart — even though it rendered fine in
-    // desktop/software GL. 1024² + PCFSoftShadowMap still drops a clean, soft
-    // contact shadow. DO NOT raise this without testing on a low-end device.
-    sun.shadow.mapSize.set(1024, 1024);
+    // Higher-res 2048² shadow map (re-enabled by request) so the trees, flags
+    // and ball drop a crisper, cleaner-edged contact shadow. NOTE: a 2048² map
+    // was previously reverted because it crashed the WebView GPU process on some
+    // real Android devices (black screen needing an app restart) though it
+    // rendered fine in desktop/software GL — VERIFY this build on a low-end
+    // Android device before shipping the release AAB. If low-end GPUs strain,
+    // 1536² is the first dial to turn down.
+    sun.shadow.mapSize.set(2048, 2048);
     sun.shadow.camera.near = 1;
-    sun.shadow.camera.far = 260;
-    sun.shadow.camera.left = -70;
-    sun.shadow.camera.right = 70;
-    sun.shadow.camera.top = 70;
-    sun.shadow.camera.bottom = -70;
-    sun.shadow.bias = -0.0006;
+    sun.shadow.camera.far = 280;
+    sun.shadow.camera.left = -80;
+    sun.shadow.camera.right = 80;
+    sun.shadow.camera.top = 80;
+    sun.shadow.camera.bottom = -80;
+    sun.shadow.bias = -0.0005;
     sun.shadow.normalBias = 0.02;
     sun.target.position.set(0, 0, -55);
     scene.add(sun);
@@ -1182,11 +1184,13 @@ export default function RangeGL({
     canvas.addEventListener('pointerup', onUp);
     canvas.addEventListener('pointercancel', onUp);
 
-    // Full-power drag ≈ 28% of the canvas height (min 120px floor). The ball
-    // sits low in the lower-middle of the viewport, so a shorter pull keeps a
-    // genuine 100% within an easy thumb reach without running off the bottom
-    // edge — the player can comfortably max the power meter.
-    const applyPull = () => sim.setMaxPull(Math.max(120, h * 0.28));
+    // Full-power drag ≈ 17% of the canvas height (min 90px floor). On a phone a
+    // natural thumb pull was only reaching ~60% power at the old 28%, so the
+    // meter couldn't be maxed without dragging off the bottom edge; shortening
+    // the full-power travel to ~60% of that (0.28→0.17) puts a genuine 100%
+    // within an easy, comfortable pull. The ball sits low in the lower-middle of
+    // the viewport, so this stays clear of the bottom edge.
+    const applyPull = () => sim.setMaxPull(Math.max(90, h * 0.17));
     applyPull();
 
     // --- Camera follow state -------------------------------------------

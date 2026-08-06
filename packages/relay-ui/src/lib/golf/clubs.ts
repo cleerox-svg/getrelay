@@ -8,16 +8,18 @@
 // (GRAVITY=16, AIR_DRAG=0.996, POWER_FLOOR=0.35), MEASURED end-to-end by the
 // headless harness (rangeSim.test.ts) which drives the real swing()+flight+roll
 // integration to rest on the grass fairway causeway (rangeTargets FAIRWAY_HALF_W)
-// at neutral spin. FULL-POWER (power=1) carry/total (yд):
-//   Driver 291/348, 3-Wood 260/305, Hybrid 243/279, 5-Iron 217/245,
-//   7-Iron 191/218, 9-Iron 165/186, PW 137/153, SW 109/121.
-// The bag was bumped so a full-power driver bombs ~290 carry / ~350 total (was
-// ~271/325): online shots now land on the fairway and RUN OUT rather than
-// splashing at their carry. Low-loft/high-speed clubs bomb-and-run; high-loft
-// wedges fly steep and check up. baseSpeed falls and loft rises monotonically
-// down the bag; rollFactor/backspin are unchanged so the run-vs-bite feel is
-// identical, just longer. Re-run `pnpm --filter @relay/ui test` after any edit
-// here — the harness prints this table and asserts the ladder/target invariants.
+// at neutral spin. FULL-POWER (power=1) carry/total (yд), on the firm fairway lie:
+//   Driver 291/377, 3-Wood 260/329, Hybrid 243/303, 5-Iron 217/266,
+//   7-Iron 191/230, 9-Iron 165/196, PW 137/161, SW 109/128.
+// CARRY is set by loft+baseSpeed here; TOTAL is carry + the run-out, which the
+// bounce+roll core now derives from the LANDING LIE (see TERRAIN in rangeSim.ts).
+// A firm fairway takes a few diminishing forward hops then RUNS a long way
+// (driver ~86yd of release); a green checks; sand plugs. Low-loft/high-speed
+// clubs bomb-and-run; high-loft wedges fly steep and sit down. baseSpeed falls
+// and loft rises monotonically down the bag; rollFactor/backspin still set the
+// per-club run-vs-bite, the lie just scales it. Re-run `pnpm --filter @relay/ui
+// test` after any edit here — the harness prints this table and asserts the
+// ladder/target invariants.
 
 export interface Club {
   id: string;

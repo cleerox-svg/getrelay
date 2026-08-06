@@ -55,10 +55,12 @@ describe('range shot dynamics', () => {
       prevTotal = m.total;
     }
 
-    // Distance target: a full-power driver totals ~340-350 yd (carry ~290-300).
+    // Distance target: a full-power driver CARRIES ~290 and, on the firm
+    // fairway lie, RUNS OUT to ~375 (the golf-like bounce+run pass gave the
+    // fairway much more release — see TERRAIN.fairway in rangeSim.ts).
     const drv = shot({ clubId: 'driver', power: 1 });
-    expect(drv.total).toBeGreaterThanOrEqual(338);
-    expect(drv.total).toBeLessThanOrEqual(352);
+    expect(drv.total).toBeGreaterThanOrEqual(365);
+    expect(drv.total).toBeLessThanOrEqual(390);
     expect(drv.carry).toBeGreaterThanOrEqual(285);
     expect(drv.carry).toBeLessThanOrEqual(305);
   });
@@ -358,12 +360,12 @@ describe('range layouts', () => {
     }
   });
 
-  it('lane: causeway catches the driver in both modes (~348 grass)', () => {
+  it('lane: causeway catches the driver in both modes (~375 grass)', () => {
     for (const isChallenge of [false, true]) {
       const drv = landing('lane', isChallenge, 'driver');
       expect(drv.result, `lane driver result (challenge=${isChallenge})`).toBe('grass');
-      expect(drv.total).toBeGreaterThanOrEqual(338);
-      expect(drv.total).toBeLessThanOrEqual(352);
+      expect(drv.total).toBeGreaterThanOrEqual(365);
+      expect(drv.total).toBeLessThanOrEqual(390);
     }
   });
 
@@ -371,8 +373,8 @@ describe('range layouts', () => {
     // Practice → identical to lane: straight driver lands & rolls on the lane.
     const prac = landing('practiceLane', false, 'driver');
     expect(prac.result).toBe('grass');
-    expect(prac.total).toBeGreaterThanOrEqual(338);
-    expect(prac.total).toBeLessThanOrEqual(352);
+    expect(prac.total).toBeGreaterThanOrEqual(365);
+    expect(prac.total).toBeLessThanOrEqual(390);
     // Challenge → causeway gone: a straight driver splashes; you must aim islands.
     const chal = landing('practiceLane', true, 'driver');
     expect(chal.result).toBe('water');
@@ -384,8 +386,8 @@ describe('range layouts', () => {
     // Driver clears the crossing hazard and rolls out on the far fairway.
     const drv = landing('fairway', true, 'driver');
     expect(drv.result).toBe('grass');
-    expect(drv.total).toBeGreaterThanOrEqual(338);
-    expect(drv.total).toBeLessThanOrEqual(352);
+    expect(drv.total).toBeGreaterThanOrEqual(365);
+    expect(drv.total).toBeLessThanOrEqual(390);
     // Most clubs land on grass straight (near or far fairway) — same in both modes.
     expect(grassCount('fairway', false)).toBeGreaterThanOrEqual(5);
     expect(grassCount('fairway', true)).toBeGreaterThanOrEqual(5);
