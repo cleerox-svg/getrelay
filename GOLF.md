@@ -153,6 +153,16 @@ Gameplay clean first, then the look, then the course — each step reuses the la
 2. **Level up visuals in Three.js** — PBR turf/sand, real sun + soft shadows +
    ambient light, sky + distance haze, lit tree sprites, glossier ball, light
    bloom/tone-mapping. The ~80% path, no new dep. Retire the odd range look here.
+   **→ Done (first pass):** ACES filmic tone mapping + exposure; a stronger warm
+   key sun with a 2048 soft-shadow map (ball/tree/flag contact shadows now read)
+   over a sky/ground hemisphere fill; deeper, crisper sky with defined puffy
+   cumulus; warmer, denser distance haze (fog); richer, glossier striped turf
+   with a subtler mow delta and stronger blade normals; the odd flat tee-mat
+   disc removed (tee peg + soft ball shadow ground the ball). All in `RangeGL`,
+   verified by headless Chromium screenshots of every layout. No new dep; `three`
+   stays a lazy chunk. **Not yet:** post-process bloom (needs EffectComposer —
+   deferred for GPU cost on low-end mobile), billboard tree sprites, real sand/
+   bunkers. Tune light intensity/exposure against device screenshots next.
 3. **Hole engine → 9-hole par-5 course** — a hole = tee → fairway → green → cup
    with per-hole terrain, par, distance-to-pin, wind. Same sim, same aim UI,
    same shaders. Then it's mostly hole data + terrain art to build the nine.
@@ -164,7 +174,17 @@ telemetry**, not guesses — that's why both exist.
 ---
 
 ## Continuing in a new session
-Start with **Roadmap step 1 (aim/shot control)** unless the user says otherwise.
+Steps 1 (aim/shot control) and 2 (visual first pass) are **done** — see the
+roadmap markers above. Next up is **step 3 (hole engine → 9-hole par-5
+course)**, unless the user wants to keep polishing the look (device-tuned
+exposure/lighting, bloom, tree sprites, bunkers) first.
+
+Tip for visual work: a throwaway `golfpreview.html` + `src/golfpreview.tsx` that
+mounts only `<RangeGL>` (no app shell/auth) lets you screenshot the range with
+the pre-installed headless Chromium (`--use-angle=swiftshader
+--enable-unsafe-swiftshader`) for real before/after feedback. Recreate it when
+iterating on the scene; it's not committed.
+
 The user is gathering more reference screenshots of the PGA app's shooting and
-will share them in the next session. Full visual write-up of this assessment
-was also produced as an artifact during the session it was written.
+will share them. Full visual write-up of the assessment was also produced as an
+artifact during the session it was written.

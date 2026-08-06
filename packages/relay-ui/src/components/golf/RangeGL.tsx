@@ -64,14 +64,17 @@ function makeSkyTexture(): THREE.Texture {
   const g = c.getContext('2d')!;
   // Vertical gradient: deep blue up top fading to a hazy horizon.
   const grad = g.createLinearGradient(0, 0, 0, c.height);
-  grad.addColorStop(0, '#2f7fd0');
-  grad.addColorStop(0.45, '#4f9bde');
-  grad.addColorStop(0.72, '#a9d4ef');
-  grad.addColorStop(0.85, '#dceff8');
-  grad.addColorStop(1, '#eaf5fb');
+  // Deeper, more saturated blue up top (survives the ACES roll-off) grading to
+  // a clean pale horizon — a crisp sunny sky rather than a flat hazy wash.
+  grad.addColorStop(0, '#1f6ec8');
+  grad.addColorStop(0.42, '#3d8ed9');
+  grad.addColorStop(0.7, '#8ac6ea');
+  grad.addColorStop(0.85, '#cde8f6');
+  grad.addColorStop(1, '#e8f4fb');
   g.fillStyle = grad;
   g.fillRect(0, 0, c.width, c.height);
-  // Soft puffy clouds — each a cluster of translucent white blobs.
+  // Puffy cumulus clouds — a cluster of white blobs with a brighter, tighter
+  // core and a flat shaded base, so they read as defined clouds, not fuzz.
   const cloud = (cx: number, cy: number, s: number, seed: number) => {
     let a = seed >>> 0;
     const rnd = () => {
@@ -79,13 +82,15 @@ function makeSkyTexture(): THREE.Texture {
       return a / 4294967296;
     };
     for (let i = 0; i < 7; i++) {
-      const bx = cx + (rnd() - 0.5) * s * 2.4;
-      const by = cy + (rnd() - 0.5) * s * 0.7;
-      const br = s * (0.5 + rnd() * 0.6);
-      const rg = g.createRadialGradient(bx, by, 0, bx, by, br);
-      rg.addColorStop(0, 'rgba(255,255,255,0.82)');
-      rg.addColorStop(0.55, 'rgba(255,255,255,0.36)');
-      rg.addColorStop(1, 'rgba(255,255,255,0)');
+      const bx = cx + (rnd() - 0.5) * s * 1.9;
+      // Bias blobs upward so the cluster has a flatter base and a domed top.
+      const by = cy - Math.abs(rnd() - 0.5) * s * 0.5;
+      const br = s * (0.42 + rnd() * 0.5);
+      const rg = g.createRadialGradient(bx, by - br * 0.2, 0, bx, by, br);
+      rg.addColorStop(0, 'rgba(255,255,255,0.98)');
+      rg.addColorStop(0.5, 'rgba(248,251,255,0.72)');
+      rg.addColorStop(0.82, 'rgba(214,232,246,0.28)');
+      rg.addColorStop(1, 'rgba(214,232,246,0)');
       g.fillStyle = rg;
       g.beginPath();
       g.arc(bx, by, br, 0, Math.PI * 2);
@@ -95,11 +100,13 @@ function makeSkyTexture(): THREE.Texture {
   // Deterministic spread ACROSS THE FULL WIDTH (the sphere's azimuth) so the
   // camera's ~15%-wide window always frames a few, kept in the vertical band
   // (canvas y ~300..520 ≈ just above the viewing horizon) the tee camera sees.
-  const N = 20;
+  // More, smaller clusters spread across the full azimuth and higher up the
+  // dome (the tee camera frames a narrow slice, so smaller reads as defined).
+  const N = 30;
   for (let i = 0; i < N; i++) {
-    const cx = ((i + 0.5) / N) * c.width;
-    const cy = 320 + ((i * 5) % 3) * 66 + ((i * 3) % 2) * 30;
-    cloud(cx, cy, 40 + ((i * 7) % 4) * 12, i * 2654435761);
+    const cx = ((i + 0.5) / N) * c.width + ((i * 13) % 17) - 8;
+    const cy = 250 + ((i * 5) % 4) * 54 + ((i * 3) % 2) * 24;
+    cloud(cx, cy, 22 + ((i * 7) % 4) * 9, i * 2654435761);
   }
   // Hazy distant hills sitting on the horizon band.
   g.fillStyle = 'rgba(150,190,175,0.55)';
@@ -142,14 +149,16 @@ function makeTurfTexture(): THREE.Texture {
   for (let i = 0; i < stripes; i++) {
     const up = i % 2 === 0;
     const grad = g.createLinearGradient(i * sw, 0, (i + 1) * sw, 0);
+    // Brighter, richer greens with a GENTLER light/dark delta between the two
+    // mow directions, so the stripes read as mown grass rather than heavy blocks.
     if (up) {
-      grad.addColorStop(0, '#54a247');
-      grad.addColorStop(0.5, '#5aa94c');
-      grad.addColorStop(1, '#54a247');
+      grad.addColorStop(0, '#5db152');
+      grad.addColorStop(0.5, '#66ba5a');
+      grad.addColorStop(1, '#5db152');
     } else {
-      grad.addColorStop(0, '#478f3c');
-      grad.addColorStop(0.5, '#4c9741');
-      grad.addColorStop(1, '#478f3c');
+      grad.addColorStop(0, '#54a648');
+      grad.addColorStop(0.5, '#5cae50');
+      grad.addColorStop(1, '#54a648');
     }
     g.fillStyle = grad;
     g.fillRect(i * sw, 0, sw, S);
@@ -434,6 +443,12 @@ export default function RangeGL({
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // ACES filmic tone mapping + a touch of exposure: compresses the sky/sun
+    // highlights and deepens the mid-greens so the scene reads like a lit
+    // photograph rather than flat vertex colours. Light intensities below are
+    // tuned UP to compensate for the filmic roll-off.
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
     const canvas = renderer.domElement;
     canvas.style.width = '100%';
     canvas.style.height = '100%';
@@ -442,7 +457,9 @@ export default function RangeGL({
     host.appendChild(canvas);
 
     const scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(0xcfe6f2, 140, 560);
+    // Warm, slightly denser distance haze so flags/trees/greens fade into the
+    // horizon instead of ending on a hard line — reads as depth on a sunny day.
+    scene.fog = new THREE.Fog(0xd6ecf4, 130, 500);
 
     const camera = new THREE.PerspectiveCamera(56, w / h, 0.5, 1400);
     // Sit a touch lower and aim a touch higher than dead-level so the teed
@@ -457,19 +474,27 @@ export default function RangeGL({
     camera.lookAt(lookAt);
 
     // --- Lights ---------------------------------------------------------
-    const hemi = new THREE.HemisphereLight(0xbfe3ff, 0x5a8a4a, 0.95);
+    // Sky/ground hemisphere fill for soft ambient, plus a strong warm key sun
+    // that actually casts. Intensities are raised for the ACES roll-off so the
+    // turf keeps its punch while the sky highlights stay controlled.
+    const hemi = new THREE.HemisphereLight(0xcdeaff, 0x4f7d3f, 1.05);
     scene.add(hemi);
-    const sun = new THREE.DirectionalLight(0xfff4e0, 1.15);
-    sun.position.set(-46, 90, 34);
+    const sun = new THREE.DirectionalLight(0xfff1d6, 2.7);
+    sun.position.set(-52, 96, 40);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(1024, 1024);
+    // Higher-res shadow map so the trees, flags and ball drop a readable,
+    // clean-edged contact shadow. Softness comes from PCFSoftShadowMap's own
+    // kernel + normalBias (which also kills self-shadow acne); if low-end
+    // Android GPUs strain, 1536² is the first dial to turn down.
+    sun.shadow.mapSize.set(2048, 2048);
     sun.shadow.camera.near = 1;
-    sun.shadow.camera.far = 260;
-    sun.shadow.camera.left = -70;
-    sun.shadow.camera.right = 70;
-    sun.shadow.camera.top = 70;
-    sun.shadow.camera.bottom = -70;
-    sun.shadow.bias = -0.0006;
+    sun.shadow.camera.far = 280;
+    sun.shadow.camera.left = -80;
+    sun.shadow.camera.right = 80;
+    sun.shadow.camera.top = 80;
+    sun.shadow.camera.bottom = -80;
+    sun.shadow.bias = -0.0005;
+    sun.shadow.normalBias = 0.02;
     sun.target.position.set(0, 0, -55);
     scene.add(sun);
     scene.add(sun.target);
@@ -491,9 +516,13 @@ export default function RangeGL({
     const groundMat = track(
       new THREE.MeshStandardMaterial({
         map: turfTex,
-        roughness: 0.92,
+        // A touch glossier so the sun rakes a soft directional sheen across the
+        // fairway (the blade normal map now catches a highlight) instead of the
+        // old dead-matte look. Stronger normals give the turf more relief.
+        roughness: 0.82,
+        metalness: 0,
         normalMap: turfNorm,
-        normalScale: new THREE.Vector2(0.35, 0.35),
+        normalScale: new THREE.Vector2(0.5, 0.5),
       }),
     );
     const ground = new THREE.Mesh(groundGeo, groundMat);
@@ -503,14 +532,9 @@ export default function RangeGL({
     ground.receiveShadow = true;
     scene.add(ground);
 
-    // Tee mat: a small darker patch under the tee.
-    const matGeo = track(new THREE.CircleGeometry(4, 24));
-    const matMat = track(new THREE.MeshStandardMaterial({ color: 0x3c7d33, roughness: 1 }));
-    const teeMat = new THREE.Mesh(matGeo, matMat);
-    teeMat.rotation.x = -Math.PI / 2;
-    teeMat.position.set(0, 0.02, 0);
-    teeMat.receiveShadow = true;
-    scene.add(teeMat);
+    // No flat tee-mat disc: an untextured circle reads as an odd patch against
+    // the striped turf. The tee peg + the ball's soft contact shadow ground the
+    // ball on the fairway, which looks cleaner and more golf-like.
 
     // --- Water hazard ---------------------------------------------------
     // Layout selects the hazard footprint: lane / practiceLane flood the whole
@@ -561,9 +585,11 @@ export default function RangeGL({
       const fairwayMat = track(
         new THREE.MeshStandardMaterial({
           map: fairwayTex,
-          roughness: 0.92,
+          // Match the main ground's PBR so the causeway reads as the same lit
+          // turf under the new sun (not a flatter, matte lane through the water).
+          roughness: 0.82,
           normalMap: fairwayNorm,
-          normalScale: new THREE.Vector2(0.35, 0.35),
+          normalScale: new THREE.Vector2(0.5, 0.5),
         }),
       );
       const fairway = new THREE.Mesh(fairwayGeo, fairwayMat);
