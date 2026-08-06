@@ -5,7 +5,7 @@ import { CLUBS, DEFAULT_CLUB_ID } from '../../lib/golf/clubs';
 
 // The two flows behind the single "Golf" chiclet: Phase-1 putting and the
 // Phase-2 driving range (open practice or the scored Target Challenge).
-export type GolfSubMode = 'putt' | 'range-practice' | 'range-challenge';
+export type GolfSubMode = 'putt' | 'range-practice' | 'range-challenge' | 'course';
 
 interface Props {
   onStart: (mode: GolfSubMode, clubId?: string) => void;
@@ -72,6 +72,11 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
           subtitle: 'Real 3D. Pick a club, carry the water, land on the island targets.',
           onClick: () => setExpanded((e) => !e),
           active: expanded,
+        })}
+        {card({
+          title: 'Course · Hole 1 (beta)',
+          subtitle: 'Play a real 3D hole — rolling terrain, hazards, a sloped green. Drag to aim, tap to strike.',
+          onClick: () => onStart('course'),
         })}
       </div>
 

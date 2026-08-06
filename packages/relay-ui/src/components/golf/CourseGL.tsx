@@ -1,24 +1,25 @@
-// 3D render of a course hole (GOLF.md roadmap step 3). It visualises the SAME
-// data the physics reads: the ground is a displaced mesh sampled from
-// terrain.heightAt() and vertex-COLOURED per lie from terrain.surfaceAt(), so
-// the fairway corridor, green, bunkers, rough, cart path and water you see are
-// exactly the surfaces the ball plays (CourseSim). One source of truth — the
-// look can't drift from the physics. Lighting/tone-mapping mirror the range's
-// tuned rig (ACES + warm sun + soft shadows + sky/haze). Trees frame it.
-//
-// World→scene mapping: d (downrange) → −Z, x (lateral) → X, h (elevation) → Y.
-// This v1 renders a hole statically (ball on the tee); the aim UI + camera
-// follow + HUD that drive CourseSim come next.
+// Interactive 3D scene for a course hole. It renders the hole from the terrain
+// data (displaced ground vertex-coloured per lie — see terrain.ts) AND drives a
+// live CourseSim on a fixed-timestep loop: the player drags to aim (slingshot,
+// reused from the range), the shot flies and rolls on the terrain, the camera
+// follows, a tracer trails the ball, and it plays shot-by-shot until holed. The
+// React HUD (CourseGame.tsx) polls sim.getState() for readouts and runs the
+// accuracy bar. World→scene: d → −Z, x → X, h → Y.
 
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
+import { FIXED_MS } from '../../lib/golf/tuning';
 import { heightAt, surfaceAt, type CourseHole, type Surface } from '../../lib/golf/terrain';
+import type { CourseSim } from '../../lib/golf/courseSim';
 
 interface Props {
-  hole: CourseHole;
+  sim: CourseSim;
+  // Raised when a drag is released into a valid shot (armed) — the HUD then runs
+  // the accuracy bar and calls sim.fireArmed().
+  onArm?: () => void;
+  paused?: boolean;
 }
 
-// Per-lie base albedo (linear-ish sRGB), tuned to read under the ACES roll-off.
 const SURFACE_RGB: Record<Surface, [number, number, number]> = {
   fairway: [0.4, 0.66, 0.3],
   green: [0.5, 0.78, 0.36],
@@ -31,19 +32,23 @@ const SURFACE_RGB: Record<Surface, [number, number, number]> = {
   ob: [0.16, 0.36, 0.18],
 };
 
-// Small deterministic hash for per-vertex colour jitter (mown-turf life).
 function jitter(d: number, x: number): number {
   let h = (Math.floor(d) * 73856093) ^ (Math.floor(x) * 19349663);
   h = (h ^ (h >>> 13)) * 1274126177;
   return (((h ^ (h >>> 16)) >>> 0) / 4294967296 - 0.5) * 0.08;
 }
 
-export default function CourseGL({ hole }: Props) {
+export default function CourseGL({ sim, onArm, paused }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const onArmRef = useRef(onArm);
+  onArmRef.current = onArm;
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
+    const hole: CourseHole = sim.hole;
 
     const disposables: { dispose: () => void }[] = [];
     const track = <T extends { dispose: () => void }>(o: T): T => {
@@ -65,12 +70,12 @@ export default function CourseGL({ hole }: Props) {
     canvas.style.width = '100%';
     canvas.style.height = '100%';
     canvas.style.display = 'block';
+    canvas.style.touchAction = 'none';
     host.appendChild(canvas);
 
     const scene = new THREE.Scene();
     scene.fog = new THREE.Fog(0xd6ecf4, 220, 900);
 
-    // Sky gradient backdrop.
     const skyC = document.createElement('canvas');
     skyC.width = 16;
     skyC.height = 256;
@@ -85,7 +90,6 @@ export default function CourseGL({ hole }: Props) {
     skyTex.colorSpace = THREE.SRGBColorSpace;
     scene.background = skyTex;
 
-    // --- Lights (mirror the range rig) ---------------------------------
     const hemi = new THREE.HemisphereLight(0xcdeaff, 0x4f7d3f, 1.05);
     scene.add(hemi);
     const sun = new THREE.DirectionalLight(0xfff1d6, 2.7);
@@ -100,14 +104,12 @@ export default function CourseGL({ hole }: Props) {
     sun.shadow.camera.bottom = -340;
     sun.shadow.bias = -0.0005;
     sun.shadow.normalBias = 0.03;
-    // Aim the sun's shadow frustum at the middle of the hole.
     const mid = hole.centerline[Math.floor(hole.centerline.length / 2)] ?? hole.pin;
     sun.target.position.set(mid.x, 0, -mid.d);
     scene.add(sun);
     scene.add(sun.target);
 
-    // --- Base ground fill: a big plane so the world reaches the horizon --
-    // beyond the detailed play corridor (otherwise the mesh edges fall to sky).
+    // --- Base fill + terrain mesh --------------------------------------
     const baseY = Math.min(hole.terrain.teeElev, hole.terrain.greenElev) - 0.6;
     const fillGeo = track(new THREE.PlaneGeometry(2600, 2600));
     const fillMat = track(new THREE.MeshStandardMaterial({ color: 0x3f7a3a, roughness: 1 }));
@@ -117,12 +119,11 @@ export default function CourseGL({ hole }: Props) {
     fill.receiveShadow = true;
     scene.add(fill);
 
-    // --- Terrain mesh: displaced grid, vertex-coloured per lie ----------
     const dMin = -20;
     const dMax = hole.pin.d + 110;
     const xHalf = 120;
-    const nd = 224; // downrange segments
-    const nx = 128; // lateral segments
+    const nd = 224;
+    const nx = 128;
     const geo = track(new THREE.BufferGeometry());
     const verts = new Float32Array((nd + 1) * (nx + 1) * 3);
     const cols = new Float32Array((nd + 1) * (nx + 1) * 3);
@@ -131,9 +132,8 @@ export default function CourseGL({ hole }: Props) {
       const d = dMin + (j / nd) * (dMax - dMin);
       for (let i = 0; i <= nx; i++) {
         const x = -xHalf + (i / nx) * (xHalf * 2);
-        const y = heightAt(hole, d, x);
         verts[vi] = x;
-        verts[vi + 1] = y;
+        verts[vi + 1] = heightAt(hole, d, x);
         verts[vi + 2] = -d;
         const surf = surfaceAt(hole, d, x);
         const [r, g, b] = SURFACE_RGB[surf];
@@ -146,12 +146,11 @@ export default function CourseGL({ hole }: Props) {
     }
     const idx: number[] = [];
     const row = nx + 1;
-    for (let j = 0; j < nd; j++) {
+    for (let j = 0; j < nd; j++)
       for (let i = 0; i < nx; i++) {
         const a = j * row + i;
         idx.push(a, a + row, a + 1, a + 1, a + row, a + row + 1);
       }
-    }
     geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
     geo.setIndex(idx);
@@ -161,10 +160,9 @@ export default function CourseGL({ hole }: Props) {
     );
     const ground = new THREE.Mesh(geo, groundMat);
     ground.receiveShadow = true;
-    ground.castShadow = false;
     scene.add(ground);
 
-    // --- Water surfaces: a translucent disc at each pond's rim level -----
+    // Water discs.
     for (const hz of hole.hazards) {
       if (hz.kind !== 'water') continue;
       const rimY = heightAt(hole, hz.d + hz.r, hz.x) + 0.05;
@@ -184,7 +182,7 @@ export default function CourseGL({ hole }: Props) {
       scene.add(water);
     }
 
-    // --- Flagstick at the pin ------------------------------------------
+    // Flagstick.
     const pinY = heightAt(hole, hole.pin.d, hole.pin.x);
     const poleGeo = track(new THREE.CylinderGeometry(0.12, 0.12, 8, 6));
     const poleMat = track(new THREE.MeshStandardMaterial({ color: 0xf4f4f4, roughness: 0.6 }));
@@ -201,16 +199,32 @@ export default function CourseGL({ hole }: Props) {
     flag.castShadow = true;
     scene.add(flag);
 
-    // --- Ball on the tee ------------------------------------------------
-    const teeY = heightAt(hole, hole.tee.d, hole.tee.x);
-    const ballGeo = track(new THREE.SphereGeometry(0.7, 20, 16));
+    // Ball.
+    const ballGeo = track(new THREE.SphereGeometry(0.9, 20, 16));
     const ballMat = track(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.35 }));
     const ball = new THREE.Mesh(ballGeo, ballMat);
-    ball.position.set(hole.tee.x, teeY + 0.7, -hole.tee.d);
     ball.castShadow = true;
     scene.add(ball);
 
-    // --- Framing trees along the corridor edges (faceted, low-poly) -----
+    // Aim line (shown while addressing) — a strip on the ground from the ball
+    // along the current aim, its length scaling with the pulled power.
+    const aimMat = track(new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }));
+    const aimGeo = track(new THREE.BufferGeometry());
+    aimGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+    const aimLine = new THREE.Line(aimGeo, aimMat);
+    aimLine.visible = false;
+    scene.add(aimLine);
+
+    // Tracer (ball flight/roll trail).
+    const tracerMat = track(new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 }));
+    const tracerGeo = track(new THREE.BufferGeometry());
+    const tracerBuf = new Float32Array(70 * 3);
+    tracerGeo.setAttribute('position', new THREE.BufferAttribute(tracerBuf, 3));
+    tracerGeo.setDrawRange(0, 0);
+    const tracer = new THREE.Line(tracerGeo, tracerMat);
+    scene.add(tracer);
+
+    // Trees.
     const trunkMat = track(new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 1 }));
     const leafMats = [0x2f7d3a, 0x3c8f44, 0x276b34, 0x4f9a52].map((c) =>
       track(new THREE.MeshStandardMaterial({ color: c, roughness: 0.95, flatShading: true })),
@@ -251,27 +265,6 @@ export default function CourseGL({ hole }: Props) {
       g.scale.setScalar(s);
       scene.add(g);
     };
-    // Line trees just outside the rough on both sides, along the centerline.
-    for (let d = 20; d < dMax - 20; d += 26) {
-      // Interpolate the centerline x at this d (linear over segments).
-      let cx = 0;
-      const cl = hole.centerline;
-      for (let s = 0; s < cl.length - 1; s++) {
-        const a = cl[s]!;
-        const bb = cl[s + 1]!;
-        if (d >= a.d && d <= bb.d) {
-          cx = a.x + ((bb.x - a.x) * (d - a.d)) / (bb.d - a.d || 1);
-          break;
-        }
-      }
-      const off = hole.roughHalf + 8;
-      addTree(cx - off - (d % 3) * 2, d + (d % 7) - 3, 1.1 + (d % 5) * 0.08, 5000 + d);
-      addTree(cx + off + (d % 4) * 2, d + (d % 5) - 2, 1.05 + (d % 4) * 0.09, 9000 + d);
-    }
-
-    // --- Camera: a golfer's-eye view from behind the tee down the hole --
-    const camera = new THREE.PerspectiveCamera(60, w / h, 0.5, 2000);
-    // Centerline x a given distance down the hole (for aiming the look).
     const clX = (d: number): number => {
       const cl = hole.centerline;
       for (let s = 0; s < cl.length - 1; s++) {
@@ -281,9 +274,57 @@ export default function CourseGL({ hole }: Props) {
       }
       return cl[cl.length - 1]!.x;
     };
-    camera.position.set(hole.tee.x, teeY + 7.5, -hole.tee.d + 11);
-    const lookD = 150;
-    camera.lookAt(new THREE.Vector3(clX(lookD), heightAt(hole, lookD, clX(lookD)) + 4, -lookD));
+    for (let d = 20; d < dMax - 20; d += 26) {
+      const cx = clX(d);
+      const off = hole.roughHalf + 8;
+      addTree(cx - off - (d % 3) * 2, d + (d % 7) - 3, 1.1 + (d % 5) * 0.08, 5000 + d);
+      addTree(cx + off + (d % 4) * 2, d + (d % 5) - 2, 1.05 + (d % 4) * 0.09, 9000 + d);
+    }
+
+    // --- Camera ---------------------------------------------------------
+    const camera = new THREE.PerspectiveCamera(60, w / h, 0.5, 2000);
+    const camPos = new THREE.Vector3();
+    const camLook = new THREE.Vector3();
+    const tmpB = new THREE.Vector3();
+    const tmpDir = new THREE.Vector3();
+    const desiredPos = new THREE.Vector3();
+    const desiredLook = new THREE.Vector3();
+    const pinV = new THREE.Vector3(hole.pin.x, pinY + 2, -hole.pin.d);
+
+    const ballWorld = (out: THREE.Vector3) => out.set(sim.ball.x, sim.ball.h + 0.9, -sim.ball.d);
+
+    // Initialise camera at the address position.
+    ballWorld(tmpB);
+    tmpDir.subVectors(pinV, tmpB).setY(0).normalize();
+    camPos.copy(tmpB).addScaledVector(tmpDir, -16).setY(tmpB.y + 8);
+    camLook.copy(tmpB).addScaledVector(tmpDir, 40).setY(tmpB.y + 2);
+    camera.position.copy(camPos);
+    camera.lookAt(camLook);
+
+    // --- Input (slingshot) ---------------------------------------------
+    const applyPull = () => sim.setMaxPull(Math.max(90, h * 0.17));
+    applyPull();
+    const local = (e: PointerEvent) => {
+      const r = canvas.getBoundingClientRect();
+      return { x: e.clientX - r.left, y: e.clientY - r.top };
+    };
+    const onDown = (e: PointerEvent) => {
+      if (pausedRef.current) return;
+      canvas.setPointerCapture?.(e.pointerId);
+      sim.onPointerDown(local(e));
+    };
+    const onMove = (e: PointerEvent) => {
+      if (pausedRef.current) return;
+      sim.onPointerMove(local(e));
+    };
+    const onUp = (e: PointerEvent) => {
+      if (pausedRef.current) return;
+      if (sim.arm(local(e))) onArmRef.current?.();
+    };
+    canvas.addEventListener('pointerdown', onDown);
+    canvas.addEventListener('pointermove', onMove);
+    canvas.addEventListener('pointerup', onUp);
+    canvas.addEventListener('pointercancel', onUp);
 
     const onResize = () => {
       w = host.clientWidth || window.innerWidth;
@@ -291,25 +332,96 @@ export default function CourseGL({ hole }: Props) {
       renderer.setSize(w, h, false);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
+      applyPull();
     };
     window.addEventListener('resize', onResize);
 
+    // --- Loop -----------------------------------------------------------
+    const fixed = FIXED_MS / 1000;
+    let acc = 0;
+    let last = performance.now();
     let raf = 0;
-    const frame = () => {
-      renderer.render(scene, camera);
+    const frame = (now: number) => {
       raf = requestAnimationFrame(frame);
+      let dt = (now - last) / 1000;
+      last = now;
+      if (dt > 0.1) dt = 0.1;
+      if (!pausedRef.current) {
+        acc += dt;
+        while (acc >= fixed) {
+          sim.substep(fixed);
+          acc -= fixed;
+        }
+      }
+      const b = sim.ball;
+      ball.position.set(b.x, b.h + 0.9, -b.d);
+
+      // Tracer from the sim trail.
+      const tr = sim.trail;
+      const n = Math.min(tr.length, 70);
+      for (let i = 0; i < n; i++) {
+        const p = tr[tr.length - n + i]!;
+        tracerBuf[i * 3] = p.x;
+        tracerBuf[i * 3 + 1] = p.h + 0.2;
+        tracerBuf[i * 3 + 2] = -p.d;
+      }
+      tracerGeo.setDrawRange(0, b.inFlight || tr.length > 1 ? n : 0);
+      (tracerGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+
+      // Aim line while addressing.
+      const st = sim.getState();
+      if ((st.aiming || st.armed) && !st.inFlight) {
+        const bearing = Math.atan2(pinV.x - b.x, -pinV.z - b.d);
+        const dir = bearing + (st.aimDeg * Math.PI) / 180;
+        const len = 8 + st.power * 46;
+        const ex = b.x + Math.sin(dir) * len;
+        const ed = b.d + Math.cos(dir) * len;
+        const pos = aimGeo.attributes.position as THREE.BufferAttribute;
+        pos.setXYZ(0, b.x, b.h + 0.4, -b.d);
+        pos.setXYZ(1, ex, heightAt(hole, ed, ex) + 0.4, -ed);
+        pos.needsUpdate = true;
+        aimLine.visible = true;
+      } else {
+        aimLine.visible = false;
+      }
+
+      // Camera: chase the ball in flight, sit behind it toward the pin at rest.
+      ballWorld(tmpB);
+      if (b.inFlight) {
+        tmpDir.set(b.vd, 0, 0); // horizontal travel dir in world (d→−z)
+        tmpDir.set(b.vx, 0, -b.vd);
+        if (tmpDir.lengthSq() < 1e-4) tmpDir.subVectors(pinV, tmpB).setY(0);
+        tmpDir.setY(0).normalize();
+        desiredPos.copy(tmpB).addScaledVector(tmpDir, -22).setY(tmpB.y + 12);
+        desiredLook.copy(tmpB).addScaledVector(tmpDir, 10);
+      } else {
+        tmpDir.subVectors(pinV, tmpB).setY(0).normalize();
+        desiredPos.copy(tmpB).addScaledVector(tmpDir, -16).setY(tmpB.y + 8);
+        desiredLook.copy(tmpB).addScaledVector(tmpDir, 40).setY(tmpB.y + 2);
+      }
+      const k = 1 - Math.pow(0.001, dt);
+      camPos.lerp(desiredPos, k);
+      camLook.lerp(desiredLook, k);
+      camera.position.copy(camPos);
+      camera.lookAt(camLook);
+
+      renderer.render(scene, camera);
     };
-    frame();
+    raf = requestAnimationFrame(frame);
 
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener('resize', onResize);
+      canvas.removeEventListener('pointerdown', onDown);
+      canvas.removeEventListener('pointermove', onMove);
+      canvas.removeEventListener('pointerup', onUp);
+      canvas.removeEventListener('pointercancel', onUp);
       for (const d of disposables) d.dispose();
       renderer.dispose();
       renderer.forceContextLoss();
       if (canvas.parentNode) canvas.parentNode.removeChild(canvas);
     };
-  }, [hole]);
+  }, [sim]);
 
   return <div ref={hostRef} style={{ position: 'fixed', inset: 0 }} />;
 }

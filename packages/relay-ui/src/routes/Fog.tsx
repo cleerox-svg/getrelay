@@ -31,6 +31,7 @@ import { GolfMenu } from '../components/golf/GolfMenu';
 import type { GolfSubMode } from '../components/golf/GolfMenu';
 import { RangeGame } from '../components/golf/RangeGame';
 import type { RangeGameResult } from '../components/golf/RangeGame';
+import CourseGame from '../components/golf/CourseGame';
 import { getGolfStats, recordGolfGame, recordRangeGame } from '../lib/golf/stats';
 import { HOLES as GOLF_HOLES, RANGE_BALLS } from '../lib/golf/tuning';
 import { TUNE_GENRES, tuneAvailable } from '../lib/tune/sources';
@@ -411,7 +412,7 @@ export function Fog() {
   function startGolf(mode: GolfSubMode, clubId?: string) {
     setGolfMode(mode);
     setGolfClub(clubId);
-    if (mode === 'range-practice') {
+    if (mode === 'range-practice' || mode === 'course') {
       setScreen('free');
       nav(location.pathname, { state: { fog: 'free' } });
     } else {
@@ -575,16 +576,25 @@ export function Fog() {
           />
         ) : screen === 'free' ? (
           game === 'golf' ? (
-            // The 3D range renders full-bleed (its own fixed overlay), so its
-            // in-HUD "Done" button takes the place of the boxed back link.
-            <RangeGame
-              mode="practice"
-              initialClubId={golfClub}
-              onExit={() => {
-                setScreen('menu');
-                consumeHistoryEntry('free');
-              }}
-            />
+            // The 3D range / course render full-bleed (their own fixed overlay),
+            // so the in-HUD back button takes the place of the boxed back link.
+            golfMode === 'course' ? (
+              <CourseGame
+                onExit={() => {
+                  setScreen('menu');
+                  consumeHistoryEntry('free');
+                }}
+              />
+            ) : (
+              <RangeGame
+                mode="practice"
+                initialClubId={golfClub}
+                onExit={() => {
+                  setScreen('menu');
+                  consumeHistoryEntry('free');
+                }}
+              />
+            )
           ) : (
             <>
               <div className="px-4 pb-2">
