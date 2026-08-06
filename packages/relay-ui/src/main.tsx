@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { initLegacyUi } from './lib/legacy';
 import { registerServiceWorker } from './lib/register-sw';
 import { initTheme } from './lib/theme';
@@ -15,7 +16,9 @@ if (!root) throw new Error('root element not found');
 
 createRoot(root).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 );
 
