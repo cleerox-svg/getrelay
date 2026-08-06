@@ -208,9 +208,19 @@ Gameplay clean first, then the look, then the course — each step reuses the la
    `HOLE_1`: tee shots land on terrain with real lies, a putt BREAKS (vs a flat-
    green control) and can be HOLED, a wedge finds the pond, a pull goes OB, and a
    downhill putt outruns the same uphill one. 28/28 golf tests pass (range still
-   15, untouched). **Next:** the Three.js terrain MESH (displaced grid, surface-
-   splat textured from `surfaceAt`, sand/fringe/rough/cart-path materials) + a
-   `CourseGL`/HUD driving `CourseSim`, then build the nine holes as data.
+   15, untouched).
+   **→ Also done (v1):** `components/golf/CourseGL.tsx` renders a hole in 3D from
+   the SAME data — a displaced ground mesh sampled from `heightAt`, vertex-
+   COLOURED per lie from `surfaceAt` (so the fairway/green/rough/bunker/water/
+   cart-path you see are the surfaces the ball plays), a big fill plane to the
+   horizon, translucent water discs, a flagstick, the ball on the tee, faceted
+   framing trees, and the range's tuned lighting rig (ACES + warm sun + 2048²
+   soft shadows + sky/haze). A golfer's-eye tee camera. Verified with a headless
+   swiftshader screenshot of `HOLE_1` (reads as a tree-lined fairway to a distant
+   flag). Not wired to a route yet. **Next:** make it PLAYABLE — a Course route +
+   the aim UI (reuse the range's slingshot/predict), camera-follow, and a HUD
+   driving `CourseSim`; then per-surface PBR textures (mow stripes, sand grain,
+   water shimmer) and a putt-read arrow from `slopeUnder()`; then the nine holes.
 
 **Working principle going forward:** tune against the **harness** and **device
 telemetry**, not guesses — that's why both exist.
