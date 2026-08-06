@@ -61,6 +61,33 @@ describe('course sim — full shots on HOLE_1', () => {
   });
 });
 
+describe('course sim — aim prediction', () => {
+  it('predict() matches the committed live shot to the yard, and never mutates', () => {
+    // Address a full driver at the tee (aim toward the pin, aimRad 0).
+    const s1 = sim();
+    s1.power = 1;
+    const before = JSON.stringify(s1.getState());
+    const ballBefore = JSON.stringify(s1.ball);
+    const pred = s1.predict(0);
+    // Read-only probe: state + ball untouched.
+    expect(JSON.stringify(s1.getState())).toBe(before);
+    expect(JSON.stringify(s1.ball)).toBe(ballBefore);
+
+    // The same address fired for real (arm + fire) lands where predict said.
+    const s2 = sim();
+    s2.power = 1;
+    s2.onPointerDown({ x: 0, y: 0 });
+    s2.onPointerMove({ x: 0, y: 400 }); // straight-back pull → aimRad 0, full power
+    s2.arm({ x: 0, y: 400 });
+    s2.fireArmed(0);
+    let guard = 0;
+    while (s2.ball.inFlight && guard++ < 100000) s2.substep(1 / 120);
+    expect(Math.abs(pred.rest.d - s2.ball.d)).toBeLessThanOrEqual(1);
+    expect(Math.abs(pred.rest.x - s2.ball.x)).toBeLessThanOrEqual(1);
+    expect(pred.landing).not.toBeNull();
+  });
+});
+
 describe('course sim — putting on the tilted green', () => {
   const g = HOLE_1.green;
 

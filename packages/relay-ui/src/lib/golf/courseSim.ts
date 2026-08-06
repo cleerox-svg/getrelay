@@ -115,6 +115,16 @@ export interface CourseShotOptions {
   windCross?: number;
 }
 
+// Non-committing prediction returned by predict(): the sampled flight+roll
+// `path` (world space), the first-ground-contact `landing` (carry point, null
+// only for a shot that never touches down), and the resting point.
+export interface CoursePrediction {
+  path: CourseTrailPt[];
+  landing: { d: number; x: number; h: number } | null;
+  rest: { d: number; x: number; h: number };
+  result: CourseResult;
+}
+
 // Live readouts the HUD polls each frame.
 export interface CourseState {
   clubId: string;
@@ -485,6 +495,87 @@ export class CourseSim {
     const b = this.ball;
     const p = this.hole.pin;
     return speed <= CUP_SPEED && Math.hypot(b.d - p.d, b.x - p.x) <= CUP_R;
+  }
+
+  // Non-committing trajectory PREDICTION for the aim aid — runs the CURRENT
+  // address inputs (club/power/steer/spin) through the SAME launch+flight+roll
+  // pipeline the live shot uses and captures the path, WITHOUT disturbing any
+  // live state (every mutated field + the ball/trail is snapshotted and
+  // restored). Because it reuses the real integrator ON THE TERRAIN, the drawn
+  // arc, landing reticle and roll-out marker are true to the yard. `accuracy`
+  // bakes in a tap-timing miss so the dispersion edges can be drawn. Read-only —
+  // the renderer calls it several times per address (centre + both edges).
+  predict(accuracy = 0): CoursePrediction {
+    const fixedS = FIXED_MS / 1000;
+    const stride = 2;
+    const b = this.ball;
+    const savedBall: CourseBall = { ...b };
+    const savedTrail = this.trail.slice();
+    const saved = {
+      launchSpinSide: this.launchSpinSide,
+      carry: this.carry,
+      total: this.total,
+      apex: this.apex,
+      ballSpeed: this.ballSpeed,
+      firstLanding: this.firstLanding,
+      rollDecay: this.rollDecay,
+      result: this.result,
+      originD: this.originD,
+      originX: this.originX,
+      holed: this.holed,
+      penaltyPending: this.penaltyPending,
+    };
+
+    const e = Math.max(-1, Math.min(1, accuracy));
+    const powerW = ACCURACY_POWER_FLOOR + (1 - ACCURACY_POWER_FLOOR) * this.power;
+    const lss = Math.max(
+      -ACCURACY_SPIN_MAX,
+      Math.min(ACCURACY_SPIN_MAX, this.spinSide + e * ACCURACY_CURVE * powerW),
+    );
+    this.originD = b.d;
+    this.originX = b.x;
+    const dir = this.bearingToPin() + this.aimRad + e * ACCURACY_AIM * powerW;
+    this.swing(this.power, dir, lss);
+
+    const path: CourseTrailPt[] = [{ d: b.d, x: b.x, h: b.h }];
+    let landing: { d: number; x: number; h: number } | null = null;
+    let i = 0;
+    let guard = 0;
+    while (b.inFlight && guard < 100000) {
+      const wasFirst = this.firstLanding;
+      this.substep(fixedS);
+      if (wasFirst && !this.firstLanding && landing == null) {
+        landing = { d: b.d, x: b.x, h: b.h };
+      }
+      if (i % stride === 0) path.push({ d: b.d, x: b.x, h: b.h });
+      i++;
+      guard++;
+    }
+    path.push({ d: b.d, x: b.x, h: b.h });
+    const out: CoursePrediction = {
+      path,
+      landing,
+      rest: { d: b.d, x: b.x, h: b.h },
+      result: this.result,
+    };
+
+    // Restore.
+    this.launchSpinSide = saved.launchSpinSide;
+    this.carry = saved.carry;
+    this.total = saved.total;
+    this.apex = saved.apex;
+    this.ballSpeed = saved.ballSpeed;
+    this.firstLanding = saved.firstLanding;
+    this.rollDecay = saved.rollDecay;
+    this.result = saved.result;
+    this.originD = saved.originD;
+    this.originX = saved.originX;
+    this.holed = saved.holed;
+    this.penaltyPending = saved.penaltyPending;
+    Object.assign(b, savedBall);
+    this.trail.length = 0;
+    for (const p of savedTrail) this.trail.push(p);
+    return out;
   }
 
   // Drive a single shot end to end and MEASURE it (tests / tuning / AI). Sets
