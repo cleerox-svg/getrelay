@@ -1751,6 +1751,15 @@ async function broadcastSportsPush(
         ? 'sports_notify_score'
         : 'sports_notify_final';
 
+  // Message lifetime. These alerts are time-sensitive: an offline or
+  // sleeping device that can't be reached within the window should get
+  // the alert DROPPED, not delivered stale hours (or a day) later. Without
+  // this, Web Push falls back to a 24h TTL and FCM to 4 weeks — which is
+  // exactly how a "game starting" push lands ~24h late. A goal/score is
+  // worthless once it's minutes old; a start is only useful early; a final
+  // stays relevant a bit longer.
+  const ttlSeconds = kind === 'score' ? 900 : kind === 'start' ? 1800 : 10800;
+
   // --- Web Push fan-out ---
   const keys = vapidKeys(env);
   if (keys) {
@@ -1778,9 +1787,11 @@ async function broadcastSportsPush(
             keys,
             // Live score / goal / final alerts are time-sensitive: high
             // urgency so FCM wakes a dozing device immediately instead of
-            // batching delivery until the next wakeup (the "delayed alerts"
-            // symptom on Chrome/Android).
-            { urgency: 'high' },
+            // batching delivery until the next wakeup, PLUS a short TTL so a
+            // device that's offline past the window drops the alert instead
+            // of receiving it stale (the "delayed alerts ~24h late" symptom
+            // on Chrome/Android — the default TTL is 24h).
+            { urgency: 'high', ttlSeconds },
           );
           if (r.status === 404 || r.status === 410) dead.push(s.endpoint);
         } catch (err) {
@@ -1816,7 +1827,10 @@ async function broadcastSportsPush(
     if (tokens.length > 0) {
       const results = await Promise.all(
         tokens.map((t) =>
-          sendFcm(env, t, payload as NativePushPayload, { highPriority: true }).catch(
+          sendFcm(env, t, payload as NativePushPayload, {
+            highPriority: true,
+            ttlSeconds,
+          }).catch(
             (err) =>
               ({ token: t, ok: false, status: 0, unregistered: false, body: String(err) }) as FcmSendResult,
           ),
