@@ -221,6 +221,53 @@ export default function CourseGame({ onExit }: { onExit?: () => void }) {
         </div>
       )}
 
+      {/* Vertical power meter (fills as you pull back), like the range. */}
+      {(st.aiming || st.armed) && !st.holed && (
+        <div
+          style={{
+            position: 'absolute',
+            left: 14,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            zIndex: 42,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 6,
+            pointerEvents: 'none',
+          }}
+        >
+          <div
+            style={{
+              width: 16,
+              height: 190,
+              borderRadius: 10,
+              background: 'rgba(0,0,0,.4)',
+              border: '1px solid rgba(255,255,255,.35)',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'flex-end',
+            }}
+          >
+            <div
+              style={{
+                width: '100%',
+                height: `${Math.round(st.power * 100)}%`,
+                background:
+                  st.power > 0.9
+                    ? 'linear-gradient(#fca5a5,#ef4444)'
+                    : 'linear-gradient(#bbf7d0,#22c55e)',
+                transition: 'height 40ms linear',
+              }}
+            />
+          </div>
+          <div className="text-white text-[11px] font-bold drop-shadow">
+            {Math.round(st.power * 100)}%
+          </div>
+        </div>
+      )}
+
       {armed && !st.holed && <AccuracyBar onStop={fire} />}
 
       {/* Hole-out banner */}

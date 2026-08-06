@@ -228,10 +228,21 @@ Gameplay clean first, then the look, then the course — each step reuses the la
    is the HUD wrapper (club selector, distance-to-pin/strokes/lie, accuracy bar,
    hole-out banner) — lazy-loaded so `three` stays a chunk. Wired into the Games
    hub: **Golf → "Course · Hole 1 (beta)"** plays the hole full-bleed. Verified
-   headless (a scripted driver flies with camera-follow; the HUD renders). 28/28
-   golf tests still pass. **Next:** per-surface PBR textures (mow stripes, sand
-   grain, water shimmer) + a putt-read arrow from `slopeUnder()` + the predicted-
-   arc aim aid; then build out the nine holes as data.
+   headless (a scripted driver flies with camera-follow; the HUD renders).
+   **→ Also done — range parity + polish (user feedback "the aim arc, the
+   power… so much is missing"):** `CourseSim.predict()` (non-committing
+   trajectory on the terrain, snapshot/restore, harness-asserted to match the
+   committed shot to the yard) drives a **predicted aim arc** in `CourseGL` — a
+   bright centre trajectory to a **landing reticle** + a **roll-out marker**, and
+   two faded **dispersion** edges (worst hook ↔ slice), refreshed on drag/arm.
+   Added a **vertical power meter** to the HUD (fills as you pull, reddens near
+   max), a **putt-read break arrow** on the green (fall line from `slopeUnder()`),
+   and **textures**: a mow-stripe turf map on the ground, sand-grain caps on the
+   bunkers, and a drifting ripple normal on the water. The strike/accuracy bar
+   was kept (the user likes it). 29/29 golf tests pass; verified headless
+   (aiming shows the arc + dispersion + power meter). **Next:** build out the
+   nine holes as data (+ optional: dial mow-stripe strength, tighten the tee
+   camera framing) — pending on-device feel feedback.
 
 **Working principle going forward:** tune against the **harness** and **device
 telemetry**, not guesses — that's why both exist.
