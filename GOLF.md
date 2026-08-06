@@ -42,8 +42,18 @@ bundle, with all GPU resources disposed (`forceContextLoss()`) on unmount.
   snapshot/restore (no commit, no state mutation), so it's true to the yard.
   The harness asserts `predict()` matches `simulateShot()` per club.
 - **Club ladder** (full power, neutral spin, harness-measured): Driver 291
-  carry / 348 total → SW 109/121. Forgiving/linear power map
-  (`s = baseSpeed·√(FLOOR + (1−FLOOR)·power)`).
+  carry / 377 total → SW 109/128. Forgiving/linear power map
+  (`s = baseSpeed·√(FLOOR + (1−FLOOR)·power)`). CARRY is loft+baseSpeed; TOTAL is
+  carry + a run-out the bounce/roll core derives from the LANDING LIE.
+- **Landing lies (surface materials).** The bounce+roll core is one shared model
+  MODULATED per surface by a `TERRAIN` table in `rangeSim.ts` (restitution,
+  forward bounce-keep, roll multiplier, run-out, backspin bite, settle
+  threshold). A **fairway** is firm and lively — a few diminishing FORWARD hops
+  then a long run-out (driver releases ~86yd); a **green** is receptive and
+  CHECKS (short release); **fringe/rough/bunker/tee** are defined too so a future
+  course maps each lie straight onto these numbers without touching the
+  integrator. Today's range only classifies fairway (grass) + green (island);
+  extend `surfaceAt()` + `ShotResult` + `terrainFor()` to add the rest.
 
 ### Range layouts — current
 A data-driven **Range layout** picker (persisted, default `fairway`):
@@ -165,11 +175,13 @@ Gameplay clean first, then the look, then the course — each step reuses the la
    stays a lazy chunk. **Not yet:** post-process bloom (needs EffectComposer —
    deferred for GPU cost on low-end mobile), billboard tree sprites, real sand/
    bunkers. Tune light intensity/exposure against device screenshots next.
-   **Gotcha (learned the hard way):** the shadow map MUST stay at 1024² — a
-   2048² map crashed the WebView GPU process on real Android (black screen,
-   needs an app restart) though it rendered fine in desktop/software GL. Test
-   GPU-cost changes on a low-end device, not just the headless screenshot
-   harness.
+   **Gotcha (learned the hard way):** a 2048² shadow map once crashed the
+   WebView GPU process on real Android (black screen, needs an app restart)
+   though it rendered fine in desktop/software GL, so it was reverted to 1024².
+   It has since been **re-enabled to 2048² by request** — this MUST be
+   re-verified on a low-end Android device before the release AAB ships; if it
+   regresses, 1536² is the first dial to turn down. Test GPU-cost changes on a
+   low-end device, not just the headless screenshot harness.
 3. **Hole engine → 9-hole par-5 course** — a hole = tee → fairway → green → cup
    with per-hole terrain, par, distance-to-pin, wind. Same sim, same aim UI,
    same shaders. Then it's mostly hole data + terrain art to build the nine.

@@ -32,16 +32,66 @@ export const AIR_DRAG = 0.996;
 // short drag still produces a real shot. sPow = FLOOR + (1-FLOOR)*power.
 export const POWER_FLOOR = 0.35;
 
-// First-bounce vertical restitution (grass/island).
-const BOUNCE_RESTITUTION = 0.42;
-// Below this post-bounce upward speed the ball stops hopping and rolls.
-const BOUNCE_MIN = 4;
 // Base roll friction per (dt*60); backspin subtracts up to BITE_K from it so
-// wedges check up and the driver runs out.
-const ROLL_FRICTION = 0.95;
+// wedges check up and the driver runs out. Surface run (TERRAIN[..].runMul)
+// then pulls this toward 1 (longer roll) or away (grabbier lie).
+const ROLL_FRICTION = 0.955;
 const BITE_K = 0.16;
 // Below this ground speed a rolling ball is snapped to rest.
 const ROLL_REST = 2.5;
+
+// --- Terrain materials: per-surface bounce & roll characteristics ----------
+// The course-ready lie palette. Golf balls behave nothing alike across a firm
+// fairway, a soft green, sand, grabby rough or the fringe — so each terrain
+// MODULATES the one shared bounce+roll core below instead of us forking the
+// physics per surface. Today's range layouts only classify fairway (grass) and
+// green (island); the rest are wired up now so a future course maps its lies
+// straight onto these numbers without touching the integrator.
+//
+//   restitution  vertical energy kept per bounce — how lively the lie is.
+//   bounceKeep   horizontal speed carried THROUGH each airborne bounce, so a
+//                firm lie skips FORWARD and runs while a soft one dies on the hop.
+//   rollMul      scales the club's rollFactor at settle: >1 the lie runs more
+//                than the club's baseline, <1 it grabs and checks.
+//   runMul       stretches the roll-friction bleed toward a full stop: >1 a
+//                longer run-out, <1 a shorter one.
+//   biteMul      how hard backspin bites on this lie (greens grab; sand digs).
+//   bounceMin    post-bounce upward speed below which hopping ends and it rolls.
+export type Terrain = 'fairway' | 'green' | 'fringe' | 'rough' | 'bunker' | 'tee';
+
+export interface TerrainMaterial {
+  restitution: number;
+  bounceKeep: number;
+  rollMul: number;
+  runMul: number;
+  biteMul: number;
+  bounceMin: number;
+}
+
+export const TERRAIN: Record<Terrain, TerrainMaterial> = {
+  // Firm and lively: a few diminishing forward hops, then a long run-out.
+  fairway: { restitution: 0.5, bounceKeep: 0.7, rollMul: 1.18, runMul: 1.24, biteMul: 0.85, bounceMin: 2.4 },
+  // Receptive: it takes the pitch, hops little and checks — short release.
+  green: { restitution: 0.34, bounceKeep: 0.5, rollMul: 0.66, runMul: 0.72, biteMul: 1.55, bounceMin: 3.2 },
+  // Between green and fairway — the collar around the green.
+  fringe: { restitution: 0.42, bounceKeep: 0.6, rollMul: 0.92, runMul: 0.95, biteMul: 1.15, bounceMin: 2.8 },
+  // Grabby: kills the hop and the run; a ball sits down fast.
+  rough: { restitution: 0.3, bounceKeep: 0.42, rollMul: 0.5, runMul: 0.58, biteMul: 1.2, bounceMin: 3.4 },
+  // Sand: deadens almost everything — plugs near the pitch mark.
+  bunker: { restitution: 0.12, bounceKeep: 0.2, rollMul: 0.24, runMul: 0.34, biteMul: 1.6, bounceMin: 5 },
+  // The tee lie plays like a fresh fairway.
+  tee: { restitution: 0.5, bounceKeep: 0.7, rollMul: 1.18, runMul: 1.24, biteMul: 0.85, bounceMin: 2.4 },
+};
+
+// Map a landing-surface classification onto its lie material. Only the SOLID
+// surfaces reach here — the settle path filters water/fence out first — so the
+// param is narrowed to those, which fails loud if a future caller forgets the
+// guard. As the course adds fringe/rough/bunker returns to surfaceAt(), widen
+// ShotResult + this union + the mapping; the bounce/roll core already reads
+// whatever this returns.
+function terrainFor(surf: 'grass' | 'island'): Terrain {
+  return surf === 'island' ? 'green' : 'fairway';
+}
 // Max lateral aim swing (~0.70 rad ≈ 40° each way). Aim is now folded INTO the
 // power pull (slingshot — see onPointerMove): the pull-back vector's angle sets
 // the shot direction, and this clamps how far off-straight it can be steered.
@@ -536,25 +586,38 @@ export class RangeSim {
         b.vd -= back * (CHECK_BACK_FRAC * hs + CHECK_BACK_KICK);
         b.vd += top * CHECK_TOP_FRAC * hs;
       }
-      // Grass / island: bounce, or settle into a roll if the hop is spent.
+      // Bounce or settle, per the LIE the ball is on. The terrain material
+      // decides how lively the surface is (restitution), how much the ball skips
+      // forward through a hop (bounceKeep), and — at settle — how far it runs
+      // (rollMul/runMul) and how hard backspin bites (biteMul). A firm fairway
+      // takes several diminishing forward hops then runs out; a green hops
+      // little and checks; sand plugs. Same core, different numbers per lie.
       const club = this.club();
-      const up = -b.vh * BOUNCE_RESTITUTION;
-      if (up < BOUNCE_MIN) {
+      const mat = TERRAIN[terrainFor(surf)];
+      const up = -b.vh * mat.restitution;
+      if (up < mat.bounceMin) {
         b.grounded = true;
         b.vh = 0;
         // If it settled onto an island green, remember it for rim containment.
         this.containPin = surf === 'island' ? this.islandAt(b.d, b.x) : null;
-        // Topspin runs out more (keeps more forward speed); backspin bites and
-        // adds roll friction so wedge-y spin checks up near the pitch mark.
+        // Topspin runs out more (keeps more forward speed); the lie's rollMul
+        // scales the club's baseline run (fairway runs, green/rough/sand grab).
         const top = Math.max(0, -this.spinBack);
-        const rollF = Math.min(0.95, club.rollFactor * (1 + top * SPIN_ROLL));
+        const rollF = Math.min(0.98, club.rollFactor * mat.rollMul * (1 + top * SPIN_ROLL));
         b.vd *= rollF;
         b.vx *= rollF;
+        // Roll friction: club backspin (bite scaled by the lie) plus any
+        // player backspin, then the lie's runMul stretches the survivor toward
+        // a full stop (>1 longer run, <1 grabbier).
         const biteExtra = Math.max(0, this.spinBack) * SPIN_BITE;
-        this.rollDecay = Math.max(0.6, ROLL_FRICTION - club.backspin * BITE_K - biteExtra);
+        const base = ROLL_FRICTION - club.backspin * BITE_K * mat.biteMul - biteExtra;
+        this.rollDecay = Math.max(0.6, Math.min(0.99, 1 - (1 - base) / mat.runMul));
       } else {
+        // Still hopping: keep vertical restitution, and carry horizontal speed
+        // forward per the lie (firm skips on, soft deadens) plus a little of the
+        // club's own release so a driver runs on the bounce and a wedge sits.
         b.vh = up;
-        const keep = 0.55 + 0.4 * club.rollFactor;
+        const keep = Math.min(0.92, mat.bounceKeep + 0.2 * club.rollFactor);
         b.vd *= keep;
         b.vx *= keep;
       }
