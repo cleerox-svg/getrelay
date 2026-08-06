@@ -124,8 +124,10 @@ export interface WorldPt {
 
 // Non-committing trajectory prediction returned by predict(). `path` is the
 // sampled flight+roll trajectory (world space) from the tee to rest; `landing`
-// is the first-ground-contact (carry) point, null if the shot never lands
-// (flew out over the fence); `rest` is where the ball finally settles. Mirrors
+// is the first-ground-contact (carry) point — recorded at the first descent, so
+// it's set for any legal shot; `null` is only a defensive fallback (a shot that
+// never touches down) the standard bag never reaches. `rest` is where the ball
+// finally settles. Mirrors
 // exactly what the real shot would produce — the harness asserts it matches
 // simulateShot() to the yard — so the aim UI can draw the true line.
 export interface ShotPrediction {

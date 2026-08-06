@@ -820,7 +820,11 @@ export default function RangeGL({
     // the two tap-timing extremes (worst hook ↔ worst slice) so the risk reads.
     // Recomputed only when the inputs change (a cheap per-frame signature), and
     // shown only while setting up a shot at the tee.
-    const PRED_MAX = 260; // max samples in the predicted flight line
+    // Max samples in the drawn flight line. A normal shot is ~190 stride-3
+    // samples; sized well above so a long tailwind roll (substep keeps nudging a
+    // grounded ball) can't truncate the drawn arc before the rest marker. The
+    // landing/rest reticles are placed from wind.landing/wind.rest regardless.
+    const PRED_MAX = 512;
     const PRED_Y = 0.2; // lift the ground markers just above the turf
     const predColor = 0x46e0ff;
     const predGroup = new THREE.Group();
