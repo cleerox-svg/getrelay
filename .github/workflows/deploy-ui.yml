@@ -209,37 +209,47 @@ jobs:
             --branch=main \
             --commit-dirty=true
 
-      - name: Smoke-test production (fail if the live boot JS isn't served)
+      - name: Smoke-test production (fail if the just-deployed bundle isn't served)
         env:
-          SITE: https://relay.averrow.com
+          SITE: https://${{ env.CUSTOM_DOMAIN }}
         run: |
           set -uo pipefail
-          # After deploy, verify the LIVE site actually boots: fetch /, find the
-          # hashed boot module it references, and confirm that URL returns 200
-          # with a JavaScript content-type. An incomplete Pages upload serves the
-          # SPA-fallback index.html (text/html) for the missing .js — the browser
-          # then executes HTML as a module and the app dies with a blank screen.
-          # This turns that silent bad deploy into a RED build. Retries cover edge
-          # propagation right after the deploy.
+          dist="${GITHUB_WORKSPACE}/packages/relay-ui/dist"
+          # The EXACT boot module this build emitted (from the <script type=module
+          # src="…"> in the built HTML — no assumption about the chunk's name).
+          want=$(grep -oE 'src="/assets/[^"]+\.js"' "$dist/index.html" \
+            | head -1 | sed -E 's/^src="//; s/"$//')
+          if [ -z "$want" ]; then
+            echo "::error::could not find the boot module in built dist/index.html"; exit 1
+          fi
+          echo "waiting for $SITE to serve the just-deployed boot module: $want"
+          # Poll until the LIVE site's HTML references THIS build's boot module
+          # (so we validate the new deploy, not a stale one still on the edge),
+          # then confirm that module returns 200 with a JavaScript content-type.
+          # An incomplete Pages upload serves the SPA-fallback index.html
+          # (text/html) for the missing .js — the browser then executes HTML as a
+          # module and the app dies with a blank screen. This makes that silent
+          # bad deploy a RED build. Retries cover edge propagation after deploy.
           ok=0
-          for attempt in 1 2 3 4 5 6; do
+          for attempt in $(seq 1 8); do
             html=$(curl -fsS --max-time 20 "$SITE/" || true)
-            js=$(printf '%s' "$html" | grep -oE '/assets/index-[^"]+\.js' | head -1 || true)
-            if [ -z "$js" ]; then
-              echo "attempt $attempt: boot module not found in HTML yet; retrying…"
+            live=$(printf '%s' "$html" | grep -oE 'src="/assets/[^"]+\.js"' \
+              | head -1 | sed -E 's/^src="//; s/"$//')
+            if [ "$live" != "$want" ]; then
+              echo "attempt $attempt: live serves '$live' (want '$want') — waiting for propagation…"
               sleep 8; continue
             fi
             meta=$(curl -fsS --max-time 20 -o /dev/null \
-              -w '%{http_code} %{content_type}' "$SITE$js" || echo "000 none")
+              -w '%{http_code} %{content_type}' "$SITE$want" || echo "000 none")
             code=${meta%% *}; ctype=${meta#* }
-            echo "attempt $attempt: $js -> HTTP $code ($ctype)"
+            echo "attempt $attempt: $want -> HTTP $code ($ctype)"
             if [ "$code" = "200" ] && printf '%s' "$ctype" | grep -qi 'javascript'; then
               ok=1; break
             fi
             sleep 8
           done
           if [ "$ok" != "1" ]; then
-            echo "::error::Post-deploy smoke test FAILED — $SITE is not serving its boot JavaScript (likely an incomplete Pages upload). Re-run this deploy to republish a consistent bundle."
+            echo "::error::Post-deploy smoke test FAILED — $SITE is not serving this build's boot module ($want) as JavaScript (likely an incomplete Pages upload). Re-run this deploy to republish a consistent bundle."
             exit 1
           fi
-          echo "Smoke test passed: $SITE serves a working boot module."
+          echo "Smoke test passed: $SITE serves this build's boot module as JavaScript."
