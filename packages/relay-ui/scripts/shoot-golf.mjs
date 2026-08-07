@@ -29,9 +29,13 @@ const pkgDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.join(pkgDir, '.golf-shots');
 
 // Scene matrix: id → preview query. Portrait viewport ~ a phone screen.
+// `drag` scenes perform a pointer pull-back (down near the ball, move up) and
+// screenshot the AIMING state — the only way to capture the aim arc/reticles,
+// which pointer events drive.
 const SCENES = {
   course: { query: 'scene=course', label: 'course-hole1' },
   green: { query: 'scene=course&at=green', label: 'course-green' },
+  aim: { query: 'scene=course&at=fairway', label: 'course-aim-iron', drag: true },
   range: { query: 'scene=range&layout=fairway', label: 'range-fairway' },
 };
 const VIEWPORT = { width: 900, height: 1600 };
@@ -91,7 +95,7 @@ async function main() {
       args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
     });
     for (const id of ids) {
-      const { query, label } = SCENES[id];
+      const { query, label, drag } = SCENES[id];
       const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1 });
       const errors = [];
       page.on('pageerror', (e) => errors.push(String(e)));
@@ -101,8 +105,19 @@ async function main() {
         await page.waitForFunction('window.__golfReady === true', { timeout: READY_TIMEOUT_MS });
         // Let one more frame land after the ready beacon.
         await page.waitForTimeout(150);
+        if (drag) {
+          // Pull back from near the ball (lower-middle) to load power + aim, and
+          // hold — the aim arc/reticles render only while aiming.
+          const cx = VIEWPORT.width / 2;
+          const y0 = VIEWPORT.height * 0.8;
+          await page.mouse.move(cx, y0);
+          await page.mouse.down();
+          for (let s = 1; s <= 6; s++) await page.mouse.move(cx, y0 - (250 * s) / 6);
+          await page.waitForTimeout(300);
+        }
         const file = path.join(outDir, `${label}.png`);
         await page.screenshot({ path: file });
+        if (drag) await page.mouse.up();
         saved.push(file);
         console.log(`✓ ${id.padEnd(7)} → ${path.relative(pkgDir, file)}`);
         if (errors.length) {
