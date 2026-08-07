@@ -4,6 +4,12 @@ import { RangeSim } from '../../lib/golf/rangeSim';
 import type { RangeEvent } from '../../lib/golf/rangeSim';
 import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
 import {
+  addSkyDome,
+  createTreeKit,
+  makeTurfColor,
+  makeTurfNormalMap,
+} from '../../lib/golf/scenery';
+import {
   FAIRWAY_HALF_W,
   FAIRWAY_WATER_END,
   FAIRWAY_WATER_START,
@@ -57,202 +63,6 @@ interface Props {
 
 // --- Procedural canvas textures (no binary assets) ------------------------
 
-function makeSkyTexture(): THREE.Texture {
-  const c = document.createElement('canvas');
-  c.width = 1024;
-  c.height = 1024;
-  const g = c.getContext('2d')!;
-  // Vertical gradient: deep blue up top fading to a hazy horizon.
-  const grad = g.createLinearGradient(0, 0, 0, c.height);
-  // Deeper, more saturated blue up top (survives the ACES roll-off) grading to
-  // a clean pale horizon — a crisp sunny sky rather than a flat hazy wash.
-  grad.addColorStop(0, '#1f6ec8');
-  grad.addColorStop(0.42, '#3d8ed9');
-  grad.addColorStop(0.7, '#8ac6ea');
-  grad.addColorStop(0.85, '#cde8f6');
-  grad.addColorStop(1, '#e8f4fb');
-  g.fillStyle = grad;
-  g.fillRect(0, 0, c.width, c.height);
-  // Puffy cumulus clouds — a cluster of white blobs with a brighter, tighter
-  // core and a flat shaded base, so they read as defined clouds, not fuzz.
-  const cloud = (cx: number, cy: number, s: number, seed: number) => {
-    let a = seed >>> 0;
-    const rnd = () => {
-      a = (a * 1664525 + 1013904223) >>> 0;
-      return a / 4294967296;
-    };
-    for (let i = 0; i < 7; i++) {
-      const bx = cx + (rnd() - 0.5) * s * 1.9;
-      // Bias blobs upward so the cluster has a flatter base and a domed top.
-      const by = cy - Math.abs(rnd() - 0.5) * s * 0.5;
-      const br = s * (0.42 + rnd() * 0.5);
-      const rg = g.createRadialGradient(bx, by - br * 0.2, 0, bx, by, br);
-      rg.addColorStop(0, 'rgba(255,255,255,0.98)');
-      rg.addColorStop(0.5, 'rgba(248,251,255,0.72)');
-      rg.addColorStop(0.82, 'rgba(214,232,246,0.28)');
-      rg.addColorStop(1, 'rgba(214,232,246,0)');
-      g.fillStyle = rg;
-      g.beginPath();
-      g.arc(bx, by, br, 0, Math.PI * 2);
-      g.fill();
-    }
-  };
-  // Deterministic spread ACROSS THE FULL WIDTH (the sphere's azimuth) so the
-  // camera's ~15%-wide window always frames a few, kept in the vertical band
-  // (canvas y ~300..520 ≈ just above the viewing horizon) the tee camera sees.
-  // More, smaller clusters spread across the full azimuth and higher up the
-  // dome (the tee camera frames a narrow slice, so smaller reads as defined).
-  const N = 30;
-  for (let i = 0; i < N; i++) {
-    const cx = ((i + 0.5) / N) * c.width + ((i * 13) % 17) - 8;
-    const cy = 250 + ((i * 5) % 4) * 54 + ((i * 3) % 2) * 24;
-    cloud(cx, cy, 22 + ((i * 7) % 4) * 9, i * 2654435761);
-  }
-  // Hazy distant hills sitting on the horizon band.
-  g.fillStyle = 'rgba(150,190,175,0.55)';
-  g.beginPath();
-  g.moveTo(0, 760);
-  for (let x = 0; x <= c.width; x += 64) {
-    g.lineTo(x, 720 + Math.sin(x * 0.012) * 26 + Math.sin(x * 0.03) * 12);
-  }
-  g.lineTo(c.width, 820);
-  g.lineTo(0, 820);
-  g.closePath();
-  g.fill();
-  g.fillStyle = 'rgba(120,170,150,0.4)';
-  g.beginPath();
-  g.moveTo(0, 790);
-  for (let x = 0; x <= c.width; x += 48) {
-    g.lineTo(x, 770 + Math.sin(x * 0.02 + 2) * 18);
-  }
-  g.lineTo(c.width, 830);
-  g.lineTo(0, 830);
-  g.closePath();
-  g.fill();
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = THREE.RepeatWrapping;
-  return tex;
-}
-
-function makeTurfTexture(): THREE.Texture {
-  const S = 512;
-  const c = document.createElement('canvas');
-  c.width = S;
-  c.height = S;
-  const g = c.getContext('2d')!;
-  // Mowing stripes down the width (become downrange bands once the plane is
-  // laid flat). Softened: a small light/dark delta on a common base green with
-  // a faint within-stripe gradient so the bands read as mown grass, not blocks.
-  const stripes = 8;
-  const sw = S / stripes;
-  for (let i = 0; i < stripes; i++) {
-    const up = i % 2 === 0;
-    const grad = g.createLinearGradient(i * sw, 0, (i + 1) * sw, 0);
-    // Brighter, richer greens with a GENTLER light/dark delta between the two
-    // mow directions, so the stripes read as mown grass rather than heavy blocks.
-    if (up) {
-      grad.addColorStop(0, '#5db152');
-      grad.addColorStop(0.5, '#66ba5a');
-      grad.addColorStop(1, '#5db152');
-    } else {
-      grad.addColorStop(0, '#54a648');
-      grad.addColorStop(0.5, '#5cae50');
-      grad.addColorStop(1, '#54a648');
-    }
-    g.fillStyle = grad;
-    g.fillRect(i * sw, 0, sw, S);
-  }
-  // Directional blade streaks: short, near-vertical strokes in varied green
-  // luminance so light catches individual "blades". Two passes (dark + light).
-  const blade = (n: number, alpha: number, light: boolean) => {
-    for (let i = 0; i < n; i++) {
-      const x = Math.random() * S;
-      const y = Math.random() * S;
-      const len = 3 + Math.random() * 7;
-      const lean = (Math.random() - 0.5) * 2.2;
-      const hue = 95 + Math.random() * 30;
-      const lum = light ? 46 + Math.random() * 20 : 22 + Math.random() * 12;
-      g.strokeStyle = `hsla(${hue},46%,${lum}%,${alpha})`;
-      g.lineWidth = Math.random() < 0.25 ? 1.5 : 1;
-      g.beginPath();
-      g.moveTo(x, y);
-      g.lineTo(x + lean, y - len);
-      g.stroke();
-    }
-  };
-  blade(5200, 0.16, false);
-  blade(4200, 0.16, true);
-  // Broad, low-frequency hue/luminance mottling (sun/shade patches).
-  for (let i = 0; i < 120; i++) {
-    const x = Math.random() * S;
-    const y = Math.random() * S;
-    const r = 20 + Math.random() * 70;
-    const rg = g.createRadialGradient(x, y, 0, x, y, r);
-    const dark = Math.random() < 0.5;
-    rg.addColorStop(0, dark ? 'rgba(30,60,25,0.06)' : 'rgba(150,200,120,0.06)');
-    rg.addColorStop(1, 'rgba(0,0,0,0)');
-    g.fillStyle = rg;
-    g.beginPath();
-    g.arc(x, y, r, 0, Math.PI * 2);
-    g.fill();
-  }
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.anisotropy = 8;
-  return tex;
-}
-
-// Cheap value-noise grass normal map: fine, near-vertical blade ridges so the
-// single sun catches a soft directional sheen across the fairway. Tileable.
-function makeTurfNormalMap(): THREE.Texture {
-  const S = 256;
-  const c = document.createElement('canvas');
-  c.width = S;
-  c.height = S;
-  const g = c.getContext('2d')!;
-  const img = g.createImageData(S, S);
-  const data = img.data;
-  const hash = (x: number, y: number) => {
-    const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
-    return s - Math.floor(s);
-  };
-  // Height field: blades run in Y, so vary fast in X, slow in Y — plus a coarse
-  // undulation. Sampled with toroidal wrap for a seamless tile.
-  const height = (x: number, y: number) => {
-    const xi = ((x % S) + S) % S;
-    const yi = ((y % S) + S) % S;
-    const blade = hash(Math.floor(xi * 0.9), Math.floor(yi * 0.18));
-    const fine = hash(Math.floor(xi), Math.floor(yi * 0.5));
-    const coarse =
-      Math.sin(xi * 0.05) * 0.5 + Math.sin(yi * 0.017 + xi * 0.01) * 0.5;
-    return blade * 0.7 + fine * 0.2 + coarse * 0.25;
-  };
-  for (let y = 0; y < S; y++) {
-    for (let x = 0; x < S; x++) {
-      const hx = height(x + 1, y) - height(x - 1, y);
-      const hy = height(x, y + 1) - height(x, y - 1);
-      let nx = -hx * 1.6;
-      let ny = -hy * 1.6;
-      let nz = 1;
-      const inv = 1 / Math.hypot(nx, ny, nz);
-      nx *= inv;
-      ny *= inv;
-      nz *= inv;
-      const idx = (y * S + x) * 4;
-      data[idx] = (nx * 0.5 + 0.5) * 255;
-      data[idx + 1] = (ny * 0.5 + 0.5) * 255;
-      data[idx + 2] = (nz * 0.5 + 0.5) * 255;
-      data[idx + 3] = 255;
-    }
-  }
-  g.putImageData(img, 0, 0);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.NoColorSpace;
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  return tex;
-}
 
 function makeWaterTexture(): THREE.Texture {
   const c = document.createElement('canvas');
@@ -502,16 +312,11 @@ export default function RangeGL({
     scene.add(sun);
     scene.add(sun.target);
 
-    // --- Sky dome -------------------------------------------------------
-    const skyTex = track(makeSkyTexture());
-    const skyGeo = track(new THREE.SphereGeometry(900, 32, 16));
-    const skyMat = track(
-      new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide, fog: false }),
-    );
-    scene.add(new THREE.Mesh(skyGeo, skyMat));
+    // --- Sky dome (shared kit) -----------------------------------------
+    addSkyDome(scene, track);
 
-    // --- Ground (mowing stripes) ---------------------------------------
-    const turfTex = track(makeTurfTexture());
+    // --- Ground (mowing stripes, shared kit) ---------------------------
+    const turfTex = track(makeTurfColor('green'));
     turfTex.repeat.set(10, 60);
     const turfNorm = track(makeTurfNormalMap());
     turfNorm.repeat.set(64, 180);
@@ -578,7 +383,7 @@ export default function RangeGL({
     // (full water), so it isn't drawn. 'fairway' has no causeway at all.
     const drawCauseway = layout === 'lane' || (layout === 'practiceLane' && !isChallenge);
     if (drawCauseway) {
-      const fairwayTex = track(makeTurfTexture());
+      const fairwayTex = track(makeTurfColor('green'));
       fairwayTex.repeat.set(2, 44);
       const fairwayNorm = track(makeTurfNormalMap());
       fairwayNorm.repeat.set(6, 140);
@@ -684,98 +489,11 @@ export default function RangeGL({
       scene.add(label);
     }
 
-    // --- Framing trees -------------------------------------------------
-    // Two species built from SHARED low-poly geometry (kept faceted with
-    // flatShading so a single sun catches every plane — reads as stylized-real,
-    // like the PGA app, not a billboard that fakes the light and casts no
-    // shadow). A seeded RNG jitters every tree's scale, lean, canopy shape and
-    // green tone so no two clone — that variation is the "character" a repeated
-    // cone lacks. Real meshes, so the 2048² sun still drops a proper shadow.
-    const trunkMat = track(new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 1 }));
-    // A small palette of leaf tones (cool→warm, light→dark); each canopy blob
-    // picks one by seed so a tree is mottled and the grove varies tree to tree.
-    const leafMats = [0x2f7d3a, 0x3c8f44, 0x59a24a, 0x276b34, 0x4f9a52].map((c) =>
-      track(new THREE.MeshStandardMaterial({ color: c, roughness: 0.95, flatShading: true })),
-    );
-    // Low-poly organic canopy blob (icosahedron = 20 facets) + a slightly
-    // tapered trunk; a hexagonal cone tier for the pines. All shared + disposed.
-    const blobGeo = track(new THREE.IcosahedronGeometry(1, 0));
-    const bTrunkGeo = track(new THREE.CylinderGeometry(0.45, 0.85, 5.5, 6));
-    const pTrunkGeo = track(new THREE.CylinderGeometry(0.32, 0.6, 5, 6));
-    const pineGeo = track(new THREE.ConeGeometry(1, 1, 7));
-
-    // Deterministic per-tree RNG (mulberry32) so screenshots are stable and the
-    // grove looks hand-placed rather than random noise each reload.
-    const treeRng = (seed: number) => {
-      let a = seed >>> 0;
-      return () => {
-        a = (a + 0x6d2b79f5) | 0;
-        let t = Math.imul(a ^ (a >>> 15), 1 | a);
-        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-      };
-    };
-    const pickLeaf = (r: number) => leafMats[Math.floor(r * leafMats.length)] ?? leafMats[0]!;
-
-    // Broadleaf: a tapered trunk under a cluster of 5–7 faceted blobs massed into
-    // a rounded, slightly squashed, irregular crown — the everyday course tree.
-    const addBroadleaf = (x: number, z: number, s: number, seed: number) => {
-      const r = treeRng(seed);
-      const g = new THREE.Group();
-      const trunk = new THREE.Mesh(bTrunkGeo, trunkMat);
-      trunk.position.y = 2.5;
-      trunk.rotation.z = (r() - 0.5) * 0.12;
-      trunk.castShadow = true;
-      g.add(trunk);
-      const blobs = 5 + Math.floor(r() * 3);
-      const crownR = 3 + r() * 0.8;
-      const crownY = 6 + r() * 1.2;
-      for (let i = 0; i < blobs; i++) {
-        const b = new THREE.Mesh(blobGeo, pickLeaf(r()));
-        const ang = r() * Math.PI * 2;
-        const rad = r() * crownR * 0.8;
-        b.position.set(Math.cos(ang) * rad, crownY + (r() - 0.5) * crownR * 0.9, Math.sin(ang) * rad);
-        const bs = crownR * (0.55 + r() * 0.45);
-        // Squash slightly so the crown domes rather than balls up.
-        b.scale.set(bs, bs * (0.8 + r() * 0.25), bs);
-        b.rotation.set(r() * 3, r() * 3, r() * 3);
-        b.castShadow = true;
-        g.add(b);
-      }
-      g.position.set(x, 0, z);
-      g.rotation.y = r() * Math.PI * 2;
-      g.scale.setScalar(s);
-      scene.add(g);
-    };
-
-    // Pine: a narrow trunk under 4–5 shrinking, jittered, faceted cone tiers —
-    // darker and taller, for the tree-line depth behind the broadleaves.
-    const addPine = (x: number, z: number, s: number, seed: number) => {
-      const r = treeRng(seed);
-      const g = new THREE.Group();
-      const trunk = new THREE.Mesh(pTrunkGeo, trunkMat);
-      trunk.position.y = 2.5;
-      trunk.castShadow = true;
-      g.add(trunk);
-      const tiers = 4 + Math.floor(r() * 2);
-      const mat = pickLeaf(r() * 0.5); // bias to the darker greens
-      let y = 4.2;
-      let rad = 2.6 + r() * 0.7;
-      for (let i = 0; i < tiers; i++) {
-        const t = new THREE.Mesh(pineGeo, mat);
-        const h = 2.6 + r() * 0.6;
-        t.scale.set(rad, h, rad);
-        t.position.y = y;
-        t.rotation.y = r() * Math.PI;
-        t.castShadow = true;
-        g.add(t);
-        y += h * 0.62;
-        rad *= 0.74 + r() * 0.06;
-      }
-      g.position.set(x, 0, z);
-      g.scale.setScalar(s);
-      scene.add(g);
-    };
+    // --- Framing trees (shared kit) ------------------------------------
+    // Two-species low-poly grove from scenery.ts (broadleaf + pine, 5-tone
+    // palette, faceted so the sun catches every plane and casts a real shadow).
+    // Placement below stays range-specific; the range ground is flat so no y.
+    const { addBroadleaf, addPine } = createTreeKit(scene, track);
 
     // Receding tree lines down both banks of the hazard (just outside the
     // ±60yd water). The narrow portrait FOV can't frame trees at the tee, so

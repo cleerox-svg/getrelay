@@ -17,6 +17,7 @@ small.
 | `media` | R2 uploads, avatars, GIFs (Giphy proxy), stickers/emoji pickers |
 | `sports` | Sports tab: NHL/MLB polling, subs, score-change push, Sports UI |
 | `frontend-pwa` | React PWA: routes, components, store, api client, theming, service worker |
+| `golf` | In-app golf game: `lib/golf/*` sim/data + `components/golf/*` scenes/HUD + GOLF.md |
 | `android` | Capacitor native shell, FCM wiring, Gradle signing, Android CI |
 | `data-migrations` | D1 `schema.sql` + numbered migrations + lint/test tooling |
 
@@ -27,6 +28,7 @@ small.
 | `devops-release` | `wrangler.toml` bindings/routes/secrets, deploy + CI workflows |
 | `code-reviewer` | Read-only diff review before commit/PR |
 | `qa-verify` | Runs typecheck / tests / migration tests / builds; reports pass-fail |
+| `golf-visual-qa` | Renders the golf scenes headlessly and reviews the actual pixels (Course/Range parity) |
 
 ## Routing rules (orchestrator)
 
@@ -41,6 +43,10 @@ small.
   one shared payload shape.
 - Native (Capacitor/FCM) behavior → **android**; the web UI it wraps →
   **frontend-pwa** (branch on `lib/platform.ts`).
+- Golf game (`src/**/golf/**`, GOLF.md) → **golf**, not frontend-pwa. Any change
+  to a golf 3D scene, its materials, lighting or geometry → **golf** implements,
+  then **golf-visual-qa** gates the RENDER (before/after screenshots) before the
+  orchestrator commits — typecheck/tests never catch a broken or regressed look.
 
 ## Standard flow
 
@@ -48,7 +54,10 @@ small.
 2. **Feature agent(s)** implement their slice (parallel when independent).
 3. **code-reviewer** reviews the working diff.
 4. **qa-verify** runs the real checks and reports.
-5. Fixes route back to the owning agent; repeat 3–4 until green.
+4b. For golf 3D scene/material/lighting/geometry changes, **golf-visual-qa**
+    renders the scenes and reviews the pixels (Course/Range parity) — a visible
+    regression or a no-op "visual" change is a finding, invisible to steps 3–4.
+5. Fixes route back to the owning agent; repeat 3–4b until green.
 6. Orchestrator commits, pushes to the working branch, opens a **draft PR**,
    and subscribes to PR activity.
 

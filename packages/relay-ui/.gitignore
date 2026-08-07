@@ -7,3 +7,6 @@ dist
 # Native launcher-icon sources, regenerated from public/ SVGs by
 # scripts/build-native-icons.mjs during the Android build.
 assets
+
+# Golf visual-QA screenshot output (headless harness)
+.golf-shots/

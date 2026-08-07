@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",
+    "shoot:golf": "node scripts/shoot-golf.mjs",
     "icons": "node scripts/build-icons.mjs",
     "store-assets": "node scripts/build-store-assets.mjs",
     "cap:sync": "cap sync android",

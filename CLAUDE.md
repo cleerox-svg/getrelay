@@ -17,9 +17,10 @@ before commit/PR.
 Quick routing: worker API (auth/chats/messages/contacts/blocks) →
 `messaging-core`; Durable Objects + WebSocket → `realtime`; push (Web Push +
 FCM) → `push`; R2/avatars/GIFs/stickers → `media`; Sports tab → `sports`;
-React UI/PWA → `frontend-pwa`; Capacitor Android → `android`; D1 schema +
-migrations → `data-migrations` (**first**, before feature code); `wrangler.toml`
-+ deploy/CI → `devops-release`.
+React UI/PWA → `frontend-pwa`; in-app golf game (`src/**/golf/**`, GOLF.md) →
+`golf` then `golf-visual-qa` screenshots the render; Capacitor Android →
+`android`; D1 schema + migrations → `data-migrations` (**first**, before feature
+code); `wrangler.toml` + deploy/CI → `devops-release`.
 
 ## Repo layout
 - `packages/relay-worker/` — Cloudflare Worker (API, WS, D1, DOs, R2).

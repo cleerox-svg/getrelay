@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Golf scene preview</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #0a1a0a;
+        overflow: hidden;
+      }
+      #root {
+        position: fixed;
+        inset: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      Dev/CI-only preview harness for the golf 3D scenes. Mounts ONE of CourseGL /
+      RangeGL standalone (no app shell, no auth, no store) so the scene can be
+      screenshotted headlessly for visual QA. NOT part of the production app build.
+      See scripts/shoot-golf.mjs and GOLF.md ("Visual change workflow").
+    -->
+    <div id="root"></div>
+    <script type="module" src="/src/golfpreview.tsx"></script>
+  </body>
+</html>

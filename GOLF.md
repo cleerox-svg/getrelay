@@ -87,6 +87,8 @@ A data-driven **Range layout** picker (persisted, default `fairway`):
 ### Key files
 | Area | Path |
 |---|---|
+| Shared scene kit (turf/sky/trees/fog) | `packages/relay-ui/src/lib/golf/scenery.ts` |
+| Headless screenshot harness | `packages/relay-ui/scripts/shoot-golf.mjs` + `golfpreview.html` + `src/golfpreview.tsx` |
 | Range physics/sim (headless) | `packages/relay-ui/src/lib/golf/rangeSim.ts` |
 | Sim tests / harness | `packages/relay-ui/src/lib/golf/rangeSim.test.ts` |
 | Range 3D scene (Three.js) | `packages/relay-ui/src/components/golf/RangeGL.tsx` |
@@ -246,6 +248,43 @@ Gameplay clean first, then the look, then the course — each step reuses the la
 
 **Working principle going forward:** tune against the **harness** and **device
 telemetry**, not guesses — that's why both exist.
+
+---
+
+## Rendering, the shared scene kit, and visual QA
+
+The Course and Range 3D scenes drifted — the Range grew rich lit turf, a cloud
+sky and a two-species tree grove while the Course stayed on flat paint. The
+shared ingredients now live in **`lib/golf/scenery.ts`** (turf colour + normal,
+sky dome, fog, tree kit) and BOTH `CourseGL` and `RangeGL` import them, so a
+look change happens once. The Course terrain is multi-surface (per-vertex
+`SURFACE_RGB`), so it uses `makeTurfColor('neutral')` — a near-white luminance
+detail that MULTIPLIES the vertex colour (keeping each lie's hue while adding
+mown texture); the Range bakes `'green'`. `three` stays lazy: `scenery.ts` is
+only imported by the already `lazy()`-loaded `*GL.tsx`.
+
+**Seeing the game (committed harness).** `pnpm --filter @relay/ui shoot:golf`
+renders each scene headlessly (Vite + pre-installed Chromium with
+`--use-angle=swiftshader --enable-unsafe-swiftshader`) and writes PNGs to
+`.golf-shots/` (git-ignored). It mounts one scene standalone via
+`golfpreview.html?scene=course|range` (no app shell/auth). This replaces the old
+throwaway preview and is what the **`golf-visual-qa`** agent runs.
+
+**Visual change workflow.** Any change to a golf scene, its materials, lighting
+or geometry: `golf` implements → `code-reviewer` (diff) → `qa-verify`
+(typecheck/tests/build) → **`golf-visual-qa`** (before/after screenshots, Course
+vs Range parity) → human review. Typecheck and unit tests never catch a broken
+or regressed render — capture a **before** (baseline) and **after**; a
+"visual" change that produces no visible delta is itself a finding.
+
+**Gotcha (learned the hard way):** the Course terrain is a custom displaced
+BufferGeometry — its triangles must be wound so the top surface FRONT-faces up.
+A downward winding gets back-face culled, so the whole textured ground vanishes
+and only the flat fill plane shows in the foreground (the long-standing "flat
+grass" look). Keep the fill plane a few yards BELOW the terrain minimum so it
+backs only the far-horizon void and never occludes the playable ground. The
+2048² shadow map is still an on-device GPU risk (see step 2) — swiftshader
+screenshots won't catch it.
 
 ---
 
