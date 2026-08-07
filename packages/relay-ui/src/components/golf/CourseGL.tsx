@@ -173,23 +173,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     scene.add(sun);
     scene.add(sun.target);
 
-    // --- Base fill + terrain mesh --------------------------------------
-    // A distant ground backdrop for the void BEYOND the terrain mesh edges (the
-    // hole is only meshed to ±120 yd / just past the pin). Dropped a few yards
-    // BELOW the terrain minimum so it can never poke through and occlude the
-    // playable ground (that used to hide the whole textured foreground), and
-    // given the shared turf so the far ground reads as grass, not flat paint.
-    const baseY = Math.min(hole.terrain.teeElev, hole.terrain.greenElev) - 5;
-    const fillGeo = track(new THREE.PlaneGeometry(2600, 2600));
-    const fillTex = track(makeTurfColor('green'));
-    fillTex.repeat.set(120, 120);
-    const fillMat = track(new THREE.MeshStandardMaterial({ map: fillTex, roughness: 0.95 }));
-    const fill = new THREE.Mesh(fillGeo, fillMat);
-    fill.rotation.x = -Math.PI / 2;
-    fill.position.set(hole.pin.x, baseY, -hole.pin.d / 2);
-    fill.receiveShadow = true;
-    scene.add(fill);
-
+    // --- Terrain mesh --------------------------------------------------
     const dMin = -20;
     const dMax = hole.pin.d + 110;
     const xHalf = 120;
@@ -218,12 +202,15 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     const uvs = new Float32Array((nd + 1) * (nx + 1) * 2);
     let vi = 0;
     let ui = 0;
+    let fieldMin = Infinity;
     for (let j = 0; j <= nd; j++) {
       const d = dMin + (j / nd) * (dMax - dMin);
       for (let i = 0; i <= nx; i++) {
         const x = -xHalf + (i / nx) * (xHalf * 2);
+        const y = field.height(x, d);
+        if (y < fieldMin) fieldMin = y;
         verts[vi] = x;
-        verts[vi + 1] = field.height(x, d);
+        verts[vi + 1] = y;
         verts[vi + 2] = -d;
         const surf = surfaceAt(hole, d, x);
         const [r, g, b] = SURFACE_RGB[surf];
@@ -277,6 +264,23 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     const ground = new THREE.Mesh(geo, groundMat);
     ground.receiveShadow = true;
     scene.add(ground);
+
+    // Distant ground backdrop for the void BEYOND the terrain mesh edges (the
+    // hole is only meshed to ±120 yd / just past the pin). Dropped a few yards
+    // below the ACTUAL sampled terrain minimum (not the tee/green grade, which a
+    // future hilly hole could dip well under) so it can never poke through and
+    // occlude the playable ground — that back-face-cull + this poke-through were
+    // the "flat grass" bug. Shared turf so the far ground reads as grass.
+    const baseY = fieldMin - 3;
+    const fillGeo = track(new THREE.PlaneGeometry(2600, 2600));
+    const fillTex = track(makeTurfColor('green'));
+    fillTex.repeat.set(120, 120);
+    const fillMat = track(new THREE.MeshStandardMaterial({ map: fillTex, roughness: 0.95 }));
+    const fill = new THREE.Mesh(fillGeo, fillMat);
+    fill.rotation.x = -Math.PI / 2;
+    fill.position.set(hole.pin.x, baseY, -hole.pin.d / 2);
+    fill.receiveShadow = true;
+    scene.add(fill);
 
     // Water discs (shimmer via an animated ripple normal map) + sand bunkers.
     const waterNormal = track(makeWaterNormal());

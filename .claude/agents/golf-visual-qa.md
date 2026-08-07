@@ -65,5 +65,7 @@ code — report so the orchestrator routes the fix.
   and parity, but NOT real-GPU behaviour. The 2048² shadow map has crashed the
   WebView GPU process on some low-end Android devices (see GOLF.md) — that is an
   on-device check you cannot cover; flag GPU-cost changes for device testing.
-- The harness is deterministic (seeded RNG), so shots are stable across runs; a
-  changed shot means the scene changed.
+- Geometry/placement is seeded (trees, clouds) but the turf blade/mottle grain
+  uses `Math.random()`, so the fine grass texture varies slightly per run. Judge
+  parity STRUCTURALLY (stripes present? sky dome? lit turf? ball dimples?) — do
+  not pixel-diff turf across runs.

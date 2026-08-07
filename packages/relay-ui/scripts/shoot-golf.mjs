@@ -77,16 +77,18 @@ async function main() {
     server: { port: 0, host: '127.0.0.1' },
   });
   await server.listen();
-  const base = server.resolvedUrls?.local?.[0]?.replace(/\/$/, '');
-  if (!base) throw new Error('Vite dev server did not report a local URL.');
-
-  const browser = await chromium.launch({
-    args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
-  });
 
   let failed = 0;
   const saved = [];
+  // Everything after the server is listening goes through this finally so the
+  // Vite server is always closed — even if chromium.launch throws.
+  let browser;
   try {
+    const base = server.resolvedUrls?.local?.[0]?.replace(/\/$/, '');
+    if (!base) throw new Error('Vite dev server did not report a local URL.');
+    browser = await chromium.launch({
+      args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+    });
     for (const id of ids) {
       const { query, label } = SCENES[id];
       const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1 });
@@ -114,7 +116,7 @@ async function main() {
       }
     }
   } finally {
-    await browser.close();
+    if (browser) await browser.close();
     await server.close();
   }
 
