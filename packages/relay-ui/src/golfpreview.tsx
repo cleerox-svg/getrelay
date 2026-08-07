@@ -17,7 +17,7 @@ import { createRoot } from 'react-dom/client';
 import CourseGL from './components/golf/CourseGL';
 import RangeGL from './components/golf/RangeGL';
 import { CourseSim } from './lib/golf/courseSim';
-import { HOLE_1 } from './lib/golf/terrain';
+import { HOLE_1, heightAt } from './lib/golf/terrain';
 import { RangeSim } from './lib/golf/rangeSim';
 import { pinsFor, DEFAULT_LAYOUT, type RangeLayout } from './lib/golf/rangeTargets';
 
@@ -68,6 +68,19 @@ function Preview() {
     );
   }
   const sim = new CourseSim(HOLE_1);
+  // ?at=green places the ball on the green a few yards short of the pin so the
+  // putting camera + green + cup can be screenshotted (the sim otherwise starts
+  // at the tee). The ball object is mutable; set the lie and let getState()
+  // reclassify it from position.
+  if (params.get('at') === 'green') {
+    const b = sim.ball;
+    b.d = HOLE_1.pin.d - 6;
+    b.x = HOLE_1.pin.x;
+    b.h = heightAt(HOLE_1, b.d, b.x);
+    b.inFlight = false;
+    b.grounded = false;
+    b.resting = true;
+  }
   return (
     <>
       <CourseGL sim={sim} />

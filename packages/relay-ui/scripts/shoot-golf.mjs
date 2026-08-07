@@ -31,6 +31,7 @@ const outDir = path.join(pkgDir, '.golf-shots');
 // Scene matrix: id → preview query. Portrait viewport ~ a phone screen.
 const SCENES = {
   course: { query: 'scene=course', label: 'course-hole1' },
+  green: { query: 'scene=course&at=green', label: 'course-green' },
   range: { query: 'scene=range&layout=fairway', label: 'range-fairway' },
 };
 const VIEWPORT = { width: 900, height: 1600 };
