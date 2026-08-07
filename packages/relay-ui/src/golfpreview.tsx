@@ -68,18 +68,27 @@ function Preview() {
     );
   }
   const sim = new CourseSim(HOLE_1);
-  // ?at=green places the ball on the green a few yards short of the pin so the
-  // putting camera + green + cup can be screenshotted (the sim otherwise starts
-  // at the tee). The ball object is mutable; set the lie and let getState()
-  // reclassify it from position.
-  if (params.get('at') === 'green') {
+  // ?at=<lie> places the ball somewhere other than the tee so the different
+  // views (putting camera, an approach with an iron) can be screenshotted. The
+  // ball object is mutable; set position and let getState() reclassify the lie.
+  const at = params.get('at');
+  if (at === 'green') {
     const b = sim.ball;
     b.d = HOLE_1.pin.d - 6;
     b.x = HOLE_1.pin.x;
     b.h = heightAt(HOLE_1, b.d, b.x);
-    b.inFlight = false;
-    b.grounded = false;
+    b.inFlight = b.grounded = false;
     b.resting = true;
+  } else if (at === 'fairway') {
+    // Mid-fairway approach, the "after driving" state — with an iron, so the
+    // aim arc for a non-driver club can be exercised by a scripted drag.
+    const b = sim.ball;
+    b.d = 254;
+    b.x = -0.7;
+    b.h = heightAt(HOLE_1, b.d, b.x);
+    b.inFlight = b.grounded = false;
+    b.resting = true;
+    sim.selectClub('5iron');
   }
   return (
     <>

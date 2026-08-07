@@ -292,23 +292,26 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         const wGeo = track(new THREE.CircleGeometry(hz.r, 48));
         const wMat = track(
           new THREE.MeshStandardMaterial({
-            color: 0x1d5a86, // deeper teal-blue reads as water, not flat paint
-            roughness: 0.12,
-            metalness: 0.6,
+            // A brighter sky-teal with LOW metalness reads as sunlit water; the
+            // old dark navy + high metalness reflected the dim scene and looked
+            // like a black pit. Semi-transparent so it reads as a water surface.
+            color: 0x4aa3d8,
+            roughness: 0.28,
+            metalness: 0.1,
             transparent: true,
-            opacity: 0.92,
+            opacity: 0.82,
             normalMap: waterNormal,
           }),
         );
-        wMat.normalScale.set(0.9, 0.9); // stronger ripple so the sheen catches
+        wMat.normalScale.set(0.5, 0.5);
         const water = new THREE.Mesh(wGeo, wMat);
         water.rotation.x = -Math.PI / 2;
         water.position.set(hz.x, rimY, -hz.d);
         scene.add(water);
-        // A pale shoreline ring so the edge isn't a hard oval cut-out.
-        const shoreGeo = track(new THREE.RingGeometry(hz.r * 0.93, hz.r * 1.06, 48));
+        // A soft pale shoreline so the edge isn't a hard oval cut-out.
+        const shoreGeo = track(new THREE.RingGeometry(hz.r * 0.9, hz.r * 1.08, 48));
         const shoreMat = track(
-          new THREE.MeshBasicMaterial({ color: 0xcfe6ea, transparent: true, opacity: 0.5 }),
+          new THREE.MeshBasicMaterial({ color: 0xdaf0f2, transparent: true, opacity: 0.55 }),
         );
         const shore = new THREE.Mesh(shoreGeo, shoreMat);
         shore.rotation.x = -Math.PI / 2;
@@ -372,6 +375,79 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       }
     }
 
+    // --- Green cap -----------------------------------------------------
+    // A distinct, smoother PUTTING SURFACE laid over the green: a terrain-
+    // following disc (samples heightAt so it hugs the green's tilt/undulation),
+    // a uniform brighter green with only a fine relief — no mow stripes — so it
+    // reads as a manicured green, not more fairway. Lifted a hair above the
+    // terrain and drawn a touch inside the collar so the fringe still shows.
+    {
+      const gDef = hole.green;
+      const capR = gDef.r + hole.fringeW * 0.5;
+      const RINGS = 10;
+      const SEG = 56;
+      const LIFT = 0.04;
+      const vcount = 1 + RINGS * SEG;
+      const gpos = new Float32Array(vcount * 3);
+      const guv = new Float32Array(vcount * 2);
+      gpos[0] = gDef.x;
+      gpos[1] = heightAt(hole, gDef.d, gDef.x) + LIFT;
+      gpos[2] = -gDef.d;
+      guv[0] = guv[1] = 0.5;
+      let gp = 3;
+      let gu = 2;
+      for (let ri = 1; ri <= RINGS; ri++) {
+        const frac = ri / RINGS;
+        const rad = capR * frac;
+        for (let s = 0; s < SEG; s++) {
+          const ang = (s / SEG) * Math.PI * 2;
+          const wx = gDef.x + Math.cos(ang) * rad;
+          const wd = gDef.d + Math.sin(ang) * rad;
+          gpos[gp] = wx;
+          gpos[gp + 1] = heightAt(hole, wd, wx) + LIFT;
+          gpos[gp + 2] = -wd;
+          guv[gu] = 0.5 + Math.cos(ang) * frac * 0.5;
+          guv[gu + 1] = 0.5 + Math.sin(ang) * frac * 0.5;
+          gp += 3;
+          gu += 2;
+        }
+      }
+      const gidx: number[] = [];
+      for (let s = 0; s < SEG; s++) gidx.push(0, 1 + s, 1 + ((s + 1) % SEG));
+      for (let ri = 1; ri < RINGS; ri++) {
+        const b0 = 1 + (ri - 1) * SEG;
+        const b1 = 1 + ri * SEG;
+        for (let s = 0; s < SEG; s++) {
+          const s1 = (s + 1) % SEG;
+          gidx.push(b0 + s, b0 + s1, b1 + s, b0 + s1, b1 + s1, b1 + s);
+        }
+      }
+      const capGeo = track(new THREE.BufferGeometry());
+      capGeo.setAttribute('position', new THREE.BufferAttribute(gpos, 3));
+      capGeo.setAttribute('uv', new THREE.BufferAttribute(guv, 2));
+      capGeo.setIndex(gidx);
+      // Uniform up-normals rather than computeVertexNormals: the center vertex
+      // fan otherwise creases into a dark ring around the hole, and a putting
+      // green is near-flat so flat-up shading reads clean.
+      const cnorm = new Float32Array(vcount * 3);
+      for (let i = 0; i < vcount; i++) cnorm[i * 3 + 1] = 1;
+      capGeo.setAttribute('normal', new THREE.BufferAttribute(cnorm, 3));
+      const capNorm = track(makeTurfNormalMap());
+      capNorm.repeat.set(16, 16);
+      const capMat = track(
+        new THREE.MeshStandardMaterial({
+          color: 0x7ec96a, // bright, uniform putting green — distinct from fairway
+          roughness: 0.68,
+          metalness: 0,
+          normalMap: capNorm,
+        }),
+      );
+      capMat.normalScale.set(0.25, 0.25);
+      const cap = new THREE.Mesh(capGeo, capMat);
+      cap.receiveShadow = true;
+      scene.add(cap);
+    }
+
     // Flagstick — normalized to the REGULATION height (2.13 m) from the Course
     // data layer. The scene is yard-space, so the metric constants convert with
     // YD_PER_M; the old pole was a hard-coded 8 yд (24 ft), 3.4× too tall.
@@ -402,13 +478,13 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     const cupMat = track(new THREE.MeshBasicMaterial({ color: 0x0a0f0a }));
     const cup = new THREE.Mesh(cupGeo, cupMat);
     cup.rotation.x = -Math.PI / 2;
-    cup.position.set(hole.pin.x, pinY + 0.04, -hole.pin.d);
+    cup.position.set(hole.pin.x, pinY + 0.09, -hole.pin.d);
     scene.add(cup);
     const rimGeo = track(new THREE.RingGeometry(cupR, cupR + 0.12, 24));
     const rimMat = track(new THREE.MeshBasicMaterial({ color: 0xf4faf4, side: THREE.DoubleSide }));
     const rim = new THREE.Mesh(rimGeo, rimMat);
     rim.rotation.x = -Math.PI / 2;
-    rim.position.set(hole.pin.x, pinY + 0.035, -hole.pin.d);
+    rim.position.set(hole.pin.x, pinY + 0.085, -hole.pin.d);
     scene.add(rim);
 
     // Ball. BALL_R is a VISUAL radius: the regulation ball (BALL_DIAMETER_M =
@@ -464,7 +540,20 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     arcPts.visible = false;
     arcPts.renderOrder = AIM_ORDER;
     scene.add(arcPts);
-    const arc = { g: arcGeo, l: arcPts };
+    // A connected LINE through the same path, sharing arcGeo. GL point sprites
+    // (arcPts) are unreliable on some mobile GPUs — a low iron/wedge arc rendered
+    // fine in software GL but vanished on-device while the tall driver arc
+    // survived. The line always renders, so the trajectory is guaranteed visible
+    // for every club (and for the putt roll line on the green); the points just
+    // add emphasis where they work.
+    const arcLineMat = track(
+      overlay(new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 })),
+    );
+    const arcLine = new THREE.Line(arcGeo, arcLineMat);
+    arcLine.visible = false;
+    arcLine.renderOrder = AIM_ORDER;
+    scene.add(arcLine);
+    const arc = { g: arcGeo, l: arcPts, line: arcLine };
     const makeLine = (color: number, opacity: number) => {
       const g = track(new THREE.BufferGeometry());
       g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ARC_MAX * 3), 3));
@@ -515,6 +604,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     };
     const showAim = (on: boolean) => {
       arc.l.visible = on;
+      arc.line.visible = on;
       edgeL.l.visible = on;
       edgeR.l.visible = on;
       landRing.visible = on;
@@ -532,7 +622,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         landRing.visible = false;
       }
       restRing.position.set(c.rest.x, c.rest.h + 0.12, -c.rest.d);
-      arc.l.visible = edgeL.l.visible = edgeR.l.visible = restRing.visible = true;
+      arc.l.visible = arc.line.visible = edgeL.l.visible = edgeR.l.visible = restRing.visible = true;
     };
 
     // --- Putt-read break arrow (shown on the green) --------------------
@@ -569,17 +659,18 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       // Front line: broadleaves. Every third step swap to a pine for variety.
       const leftPine = d % 3 === 0;
       const rightPine = d % 3 === 1;
+      // Bigger trees (~1.6×) so the tree line reads with presence, not toy shrubs.
       (leftPine ? trees.addPine : trees.addBroadleaf)(
-        lx, -ld, 1.1 + (d % 5) * 0.08, 5000 + d, heightAt(hole, ld, lx),
+        lx, -ld, 1.7 + (d % 5) * 0.12, 5000 + d, heightAt(hole, ld, lx),
       );
       (rightPine ? trees.addPine : trees.addBroadleaf)(
-        rx, -rd, 1.05 + (d % 4) * 0.09, 9000 + d, heightAt(hole, rd, rx),
+        rx, -rd, 1.65 + (d % 4) * 0.14, 9000 + d, heightAt(hole, rd, rx),
       );
-      // A receding pine further out each side for a layered tree line.
+      // A receding, still-sizable pine further out each side for a layered line.
       if (d % 2 === 0) {
         const ox = off + 14;
-        trees.addPine(cx - ox, -(ld - 6), 0.85, 3000 + d, heightAt(hole, ld - 6, cx - ox));
-        trees.addPine(cx + ox, -(rd + 6), 0.9, 4000 + d, heightAt(hole, rd + 6, cx + ox));
+        trees.addPine(cx - ox, -(ld - 6), 1.35, 3000 + d, heightAt(hole, ld - 6, cx - ox));
+        trees.addPine(cx + ox, -(rd + 6), 1.4, 4000 + d, heightAt(hole, rd + 6, cx + ox));
       }
     }
 
