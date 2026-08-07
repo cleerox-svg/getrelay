@@ -119,7 +119,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
 
     // Visible ball radius (yards). Small enough not to dominate the frame, big
     // enough to read when the camera follows it downrange.
-    const BALL_R = 0.55;
+    const BALL_R = 0.4;
 
     const disposables: { dispose: () => void }[] = [];
     const track = <T extends { dispose: () => void }>(o: T): T => {
@@ -393,15 +393,23 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     flag.position.set(hole.pin.x + flagW / 2, pinY + poleH - flagH / 2, -hole.pin.d);
     flag.castShadow = true;
     scene.add(flag);
-    // The cup — a regulation 0.108 m hole, drawn as a dark disc set into the
-    // green so the flag has a target. Metric radius, converted to the yard scene.
-    const cupR = (HOLE_DIAMETER_M / 2) * YD_PER_M; // 0.108 m ≈ 0.059 yд radius
-    const cupGeo = track(new THREE.CircleGeometry(cupR, 20));
-    const cupMat = track(new THREE.MeshStandardMaterial({ color: 0x101410, roughness: 1 }));
+    // The cup. The regulation hole (HOLE_DIAMETER_M = 0.108 m ≈ 0.06 yd radius,
+    // the data-model truth used by the physics capture) is sub-pixel to look at,
+    // so — like the ball — it's drawn OVERSIZED for readability: a dark hole with
+    // a white rim ring so you can actually see where to putt.
+    const cupR = 0.32;
+    const cupGeo = track(new THREE.CircleGeometry(cupR, 24));
+    const cupMat = track(new THREE.MeshBasicMaterial({ color: 0x0a0f0a }));
     const cup = new THREE.Mesh(cupGeo, cupMat);
     cup.rotation.x = -Math.PI / 2;
-    cup.position.set(hole.pin.x, pinY + 0.03, -hole.pin.d);
+    cup.position.set(hole.pin.x, pinY + 0.04, -hole.pin.d);
     scene.add(cup);
+    const rimGeo = track(new THREE.RingGeometry(cupR, cupR + 0.12, 24));
+    const rimMat = track(new THREE.MeshBasicMaterial({ color: 0xf4faf4, side: THREE.DoubleSide }));
+    const rim = new THREE.Mesh(rimGeo, rimMat);
+    rim.rotation.x = -Math.PI / 2;
+    rim.position.set(hole.pin.x, pinY + 0.035, -hole.pin.d);
+    scene.add(rim);
 
     // Ball. BALL_R is a VISUAL radius: the regulation ball (BALL_DIAMETER_M =
     // 0.0427 m ≈ 0.023 yд radius) is sub-pixel under the yard-tuned follow camera,
@@ -438,40 +446,55 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     const arcGeo = track(new THREE.BufferGeometry());
     arcGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ARC_MAX * 3), 3));
     arcGeo.setDrawRange(0, 0);
+    // The aim aids are UI overlays: draw them with depthTest OFF and a high
+    // renderOrder so they're ALWAYS visible, never occluded by the terrain. This
+    // is what broke for short clubs after the terrain started rendering — a low
+    // wedge/approach arc (only ~0.5 yd above the ground) was hidden behind the
+    // mesh; only the high driver arc cleared it.
+    const overlay = (m: THREE.Material) => {
+      m.depthTest = false;
+      m.depthWrite = false;
+      return m;
+    };
+    const AIM_ORDER = 10;
     const arcMat = track(
-      new THREE.PointsMaterial({ color: 0xffffff, size: 7, sizeAttenuation: false, transparent: true, opacity: 0.95 }),
-    );
+      overlay(new THREE.PointsMaterial({ color: 0xffffff, size: 7, sizeAttenuation: false, transparent: true, opacity: 0.95 })),
+    ) as THREE.PointsMaterial;
     const arcPts = new THREE.Points(arcGeo, arcMat);
     arcPts.visible = false;
+    arcPts.renderOrder = AIM_ORDER;
     scene.add(arcPts);
     const arc = { g: arcGeo, l: arcPts };
     const makeLine = (color: number, opacity: number) => {
       const g = track(new THREE.BufferGeometry());
       g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ARC_MAX * 3), 3));
       g.setDrawRange(0, 0);
-      const m = track(new THREE.LineBasicMaterial({ color, transparent: true, opacity }));
+      const m = track(overlay(new THREE.LineBasicMaterial({ color, transparent: true, opacity })));
       const l = new THREE.Line(g, m);
       l.visible = false;
+      l.renderOrder = AIM_ORDER;
       scene.add(l);
       return { g, l };
     };
     const edgeL = makeLine(0xffe08a, 0.45);
     const edgeR = makeLine(0xffe08a, 0.45);
     const ringMat = track(
-      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, side: THREE.DoubleSide }),
+      overlay(new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, side: THREE.DoubleSide })),
     );
     const landRingGeo = track(new THREE.RingGeometry(2.4, 3.6, 32));
     const landRing = new THREE.Mesh(landRingGeo, ringMat);
     landRing.rotation.x = -Math.PI / 2;
     landRing.visible = false;
+    landRing.renderOrder = AIM_ORDER;
     scene.add(landRing);
     const restRingGeo = track(new THREE.RingGeometry(1.6, 2.4, 28));
     const restRingMat = track(
-      new THREE.MeshBasicMaterial({ color: 0x66e0ff, transparent: true, opacity: 0.85, side: THREE.DoubleSide }),
+      overlay(new THREE.MeshBasicMaterial({ color: 0x66e0ff, transparent: true, opacity: 0.85, side: THREE.DoubleSide })),
     );
     const restRing = new THREE.Mesh(restRingGeo, restRingMat);
     restRing.rotation.x = -Math.PI / 2;
     restRing.visible = false;
+    restRing.renderOrder = AIM_ORDER;
     scene.add(restRing);
 
     const fillArc = (
@@ -513,9 +536,12 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     };
 
     // --- Putt-read break arrow (shown on the green) --------------------
-    const arrowMat = track(new THREE.MeshBasicMaterial({ color: 0x1b6fff, transparent: true, opacity: 0.85 }));
-    const arrowGeo = track(new THREE.ConeGeometry(1.1, 3, 12));
+    // Smaller than before (it dominated the tight putting view) and drawn as an
+    // overlay so it reads on the green surface.
+    const arrowMat = track(overlay(new THREE.MeshBasicMaterial({ color: 0x1b6fff, transparent: true, opacity: 0.85 })));
+    const arrowGeo = track(new THREE.ConeGeometry(0.5, 1.4, 12));
     const putt = new THREE.Mesh(arrowGeo, arrowMat);
+    putt.renderOrder = 9;
     putt.visible = false;
     scene.add(putt);
 
@@ -673,7 +699,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
           // World downhill vector: (d,x) downhill = (−gd,−gx) → world (x, −d).
           wvec.set(-gr.gx, 0, gr.gd).normalize();
           putt.quaternion.setFromUnitVectors(UP, wvec);
-          putt.position.set(b.x, b.h + 1.3, -b.d);
+          putt.position.set(b.x, b.h + 0.6, -b.d);
           const sc = Math.min(1.7, 0.7 + mag * 12);
           putt.scale.set(sc, sc * 1.5, sc);
           putt.visible = true;
@@ -690,6 +716,17 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         desiredPos.y = tmpB.y + 13;
         desiredLook.copy(tmpB).addScaledVector(tmpDir, 24);
         desiredLook.y = tmpB.y - 1.5;
+      } else if (st.lie === 'green' || st.putting || st.distToPin < 28) {
+        // Putts + short approaches: zoom IN. Sit low just behind the ball and
+        // look toward the cup so the ball AND the hole frame together, instead of
+        // the wide tee view that made the ball look huge and the green tiny.
+        tmpDir.subVectors(pinV, tmpB).setY(0).normalize();
+        const R = st.distToPin;
+        const back = Math.max(6, Math.min(11, R * 0.5 + 5));
+        desiredPos.copy(tmpB).addScaledVector(tmpDir, -back);
+        desiredPos.y = tmpB.y + Math.max(3.5, back * 0.5);
+        desiredLook.copy(tmpB).addScaledVector(tmpDir, Math.min(R + 3, 24));
+        desiredLook.y = tmpB.y - 0.2;
       } else {
         tmpDir.subVectors(pinV, tmpB).setY(0).normalize();
         desiredPos.copy(tmpB).addScaledVector(tmpDir, -17);
