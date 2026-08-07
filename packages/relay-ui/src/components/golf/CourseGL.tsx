@@ -17,6 +17,14 @@ import {
   BALL_DIAMETER_M,
   YD_PER_M,
 } from '../../lib/golf/courseData';
+import {
+  addSkyDome,
+  createTreeKit,
+  makeFog,
+  makeTurfColor,
+  makeTurfNormalMap,
+} from '../../lib/golf/scenery';
+import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
 import type { CourseSim } from '../../lib/golf/courseSim';
 
 interface Props {
@@ -43,67 +51,6 @@ function jitter(d: number, x: number): number {
   let h = (Math.floor(d) * 73856093) ^ (Math.floor(x) * 19349663);
   h = (h ^ (h >>> 13)) * 1274126177;
   return (((h ^ (h >>> 16)) >>> 0) / 4294967296 - 0.5) * 0.08;
-}
-
-// Mow-stripe turf detail (multiplies the per-lie vertex colour): soft light/dark
-// bands running down the hole + faint blade speckle, so the grass reads mown
-// rather than flat. Near-white so it only gently darkens the vertex colour.
-function makeTurf(): THREE.Texture {
-  const S = 256;
-  const c = document.createElement('canvas');
-  c.width = c.height = S;
-  const g = c.getContext('2d')!;
-  const bands = 6;
-  for (let i = 0; i < bands; i++) {
-    const up = i % 2 === 0;
-    // Clear light/dark mow contrast so the stripes actually read at distance
-    // (this multiplies the per-lie vertex colour, so it only darkens).
-    g.fillStyle = up ? '#ffffff' : '#adc19c';
-    g.fillRect(0, (i * S) / bands, S, S / bands);
-  }
-  for (let i = 0; i < 4000; i++) {
-    const a = 0.05 + Math.random() * 0.06;
-    g.strokeStyle = Math.random() < 0.5 ? `rgba(120,150,110,${a})` : `rgba(255,255,255,${a})`;
-    const x = Math.random() * S;
-    const y = Math.random() * S;
-    g.beginPath();
-    g.moveTo(x, y);
-    g.lineTo(x + (Math.random() - 0.5) * 2, y - 2 - Math.random() * 3);
-    g.stroke();
-  }
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.anisotropy = 8;
-  return t;
-}
-
-// A fine blade-relief NORMAL map so the sun catches the turf and it reads as
-// grass, not flat paint. Short near-vertical bluish streaks on a neutral normal
-// base — the same idea as the range's turf, kept cheap (one small tile, tiled).
-function makeGrassNormal(): THREE.Texture {
-  const S = 256;
-  const c = document.createElement('canvas');
-  c.width = c.height = S;
-  const g = c.getContext('2d')!;
-  g.fillStyle = '#8080ff'; // flat normal (points straight up)
-  g.fillRect(0, 0, S, S);
-  for (let i = 0; i < 5000; i++) {
-    const x = Math.random() * S;
-    const y = Math.random() * S;
-    const len = 2 + Math.random() * 4;
-    // Tilt the normal left/right along each blade so light rakes across it.
-    g.strokeStyle = Math.random() < 0.5 ? 'rgba(150,120,255,0.5)' : 'rgba(90,150,255,0.5)';
-    g.lineWidth = 1;
-    g.beginPath();
-    g.moveTo(x, y);
-    g.lineTo(x + (Math.random() - 0.5) * 1.5, y - len);
-    g.stroke();
-  }
-  const t = new THREE.CanvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.anisotropy = 8;
-  return t;
 }
 
 // Sand: warm base with fine grain speckle + soft rake arcs.
@@ -198,21 +145,14 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     host.appendChild(canvas);
 
     const scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(0xd6ecf4, 220, 900);
+    // Warm distance haze (shared with the range). The course corridor is long —
+    // the green sits ~512 yd out — so the far plane is pushed past the pin, but
+    // the near/feel matches the range so distant fairway/trees fade with depth.
+    scene.fog = makeFog(170, 780);
 
-    const skyC = document.createElement('canvas');
-    skyC.width = 16;
-    skyC.height = 256;
-    const sg = skyC.getContext('2d')!;
-    const grad = sg.createLinearGradient(0, 0, 0, 256);
-    grad.addColorStop(0, '#2f86d6');
-    grad.addColorStop(0.55, '#8ac6ea');
-    grad.addColorStop(1, '#dceff8');
-    sg.fillStyle = grad;
-    sg.fillRect(0, 0, 16, 256);
-    const skyTex = track(new THREE.CanvasTexture(skyC));
-    skyTex.colorSpace = THREE.SRGBColorSpace;
-    scene.background = skyTex;
+    // Cloud + distant-hill sky dome (shared with the range) — replaces the old
+    // flat 3-stop background so the sky reads with depth, not a painted wall.
+    addSkyDome(scene, track);
 
     const hemi = new THREE.HemisphereLight(0xcdeaff, 0x4f7d3f, 1.05);
     scene.add(hemi);
@@ -233,16 +173,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     scene.add(sun);
     scene.add(sun.target);
 
-    // --- Base fill + terrain mesh --------------------------------------
-    const baseY = Math.min(hole.terrain.teeElev, hole.terrain.greenElev) - 0.6;
-    const fillGeo = track(new THREE.PlaneGeometry(2600, 2600));
-    const fillMat = track(new THREE.MeshStandardMaterial({ color: 0x3f7a3a, roughness: 1 }));
-    const fill = new THREE.Mesh(fillGeo, fillMat);
-    fill.rotation.x = -Math.PI / 2;
-    fill.position.set(hole.pin.x, baseY, -hole.pin.d / 2);
-    fill.receiveShadow = true;
-    scene.add(fill);
-
+    // --- Terrain mesh --------------------------------------------------
     const dMin = -20;
     const dMax = hole.pin.d + 110;
     const xHalf = 120;
@@ -271,12 +202,15 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     const uvs = new Float32Array((nd + 1) * (nx + 1) * 2);
     let vi = 0;
     let ui = 0;
+    let fieldMin = Infinity;
     for (let j = 0; j <= nd; j++) {
       const d = dMin + (j / nd) * (dMax - dMin);
       for (let i = 0; i <= nx; i++) {
         const x = -xHalf + (i / nx) * (xHalf * 2);
+        const y = field.height(x, d);
+        if (y < fieldMin) fieldMin = y;
         verts[vi] = x;
-        verts[vi + 1] = field.height(x, d);
+        verts[vi + 1] = y;
         verts[vi + 2] = -d;
         const surf = surfaceAt(hole, d, x);
         const [r, g, b] = SURFACE_RGB[surf];
@@ -295,33 +229,58 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     for (let j = 0; j < nd; j++)
       for (let i = 0; i < nx; i++) {
         const a = j * row + i;
-        idx.push(a, a + row, a + 1, a + 1, a + row, a + row + 1);
+        // Wind triangles so the top surface FRONT-faces up. The original winding
+        // faced them down, so the whole top was back-face culled and only a flat
+        // fill plane showed in the foreground — the "flat grass" bug. Now the
+        // displaced, textured terrain renders directly (single-sided, cheap).
+        idx.push(a, a + 1, a + row, a + 1, a + row + 1, a + row);
       }
     geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
     geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
     geo.setIndex(idx);
     geo.computeVertexNormals();
-    const turfTex = track(makeTurf());
-    // Tile the turf MANY times over the big terrain so blades/mow read as grass
-    // — the old 2×6 stretched one 512px tile over ~120yd and looked like flat
-    // plastic. ~13yd tiles show detail without shimmering.
-    turfTex.repeat.set(18, 50);
-    const turfNorm = track(makeGrassNormal());
-    turfNorm.repeat.set(48, 140); // finer than the colour tile so blades read
+    // Turf: the range's rich blade/mow/mottle detail, shared from scenery.ts. The
+    // 'neutral' mode is a near-white luminance map that MULTIPLIES the per-lie
+    // vertex colour, so fairway/green/rough keep their hue but gain mown texture
+    // instead of the old flat paint. Roughness drops to the range's 0.82 so the
+    // blade normal map catches a soft sun sheen.
+    const turfTex = track(makeTurfColor('neutral'));
+    // Mow-stripe tiling: ~4 tiles across the 240 yd width → ~7.5 yd stripes
+    // running downrange, which read cleanly at the tee camera's grazing angle.
+    turfTex.repeat.set(4, 12);
+    const turfNorm = track(makeTurfNormalMap());
+    turfNorm.repeat.set(64, 180); // finer than the colour tile so blades read
     const groundMat = track(
       new THREE.MeshStandardMaterial({
         vertexColors: true,
         map: turfTex,
         normalMap: turfNorm,
-        roughness: 0.95,
+        roughness: 0.82,
         metalness: 0,
       }),
     );
-    groundMat.normalScale.set(0.6, 0.6);
+    groundMat.normalScale.set(0.5, 0.5);
     const ground = new THREE.Mesh(geo, groundMat);
     ground.receiveShadow = true;
     scene.add(ground);
+
+    // Distant ground backdrop for the void BEYOND the terrain mesh edges (the
+    // hole is only meshed to ±120 yd / just past the pin). Dropped a few yards
+    // below the ACTUAL sampled terrain minimum (not the tee/green grade, which a
+    // future hilly hole could dip well under) so it can never poke through and
+    // occlude the playable ground — that back-face-cull + this poke-through were
+    // the "flat grass" bug. Shared turf so the far ground reads as grass.
+    const baseY = fieldMin - 3;
+    const fillGeo = track(new THREE.PlaneGeometry(2600, 2600));
+    const fillTex = track(makeTurfColor('green'));
+    fillTex.repeat.set(120, 120);
+    const fillMat = track(new THREE.MeshStandardMaterial({ map: fillTex, roughness: 0.95 }));
+    const fill = new THREE.Mesh(fillGeo, fillMat);
+    fill.rotation.x = -Math.PI / 2;
+    fill.position.set(hole.pin.x, baseY, -hole.pin.d / 2);
+    fill.receiveShadow = true;
+    scene.add(fill);
 
     // Water discs (shimmer via an animated ripple normal map) + sand bunkers.
     const waterNormal = track(makeWaterNormal());
@@ -450,8 +409,10 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     // the scene converts to meters (that phase also owns the camera). Referenced
     // so the intent is explicit and the constant is a single source of truth.
     void BALL_DIAMETER_M;
-    const ballGeo = track(new THREE.SphereGeometry(BALL_R, 20, 16));
-    const ballMat = track(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.35 }));
+    const ballGeo = track(new THREE.SphereGeometry(BALL_R, 32, 24));
+    // Dimpled ball material shared with the range (ballTexture.ts) — a dimple
+    // normal map so the sun catches the surface, instead of a plain smooth sphere.
+    const ballMat = track(makeBallMaterial(track(makeDimpleNormalMap())));
     const ball = new THREE.Mesh(ballGeo, ballMat);
     ball.castShadow = true;
     scene.add(ball);
@@ -558,47 +519,11 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     putt.visible = false;
     scene.add(putt);
 
-    // Trees.
-    const trunkMat = track(new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 1 }));
-    const leafMats = [0x2f7d3a, 0x3c8f44, 0x276b34, 0x4f9a52].map((c) =>
-      track(new THREE.MeshStandardMaterial({ color: c, roughness: 0.95, flatShading: true })),
-    );
-    const blobGeo = track(new THREE.IcosahedronGeometry(1, 0));
-    const tTrunkGeo = track(new THREE.CylinderGeometry(0.4, 0.75, 5, 6));
-    const treeRng = (seed: number) => {
-      let a = seed >>> 0;
-      return () => {
-        a = (a + 0x6d2b79f5) | 0;
-        let t = Math.imul(a ^ (a >>> 15), 1 | a);
-        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-      };
-    };
-    const addTree = (x: number, d: number, s: number, seed: number) => {
-      const r = treeRng(seed);
-      const g = new THREE.Group();
-      const y = heightAt(hole, d, x);
-      const trunk = new THREE.Mesh(tTrunkGeo, trunkMat);
-      trunk.position.y = 2.3;
-      trunk.castShadow = true;
-      g.add(trunk);
-      const blobs = 4 + Math.floor(r() * 3);
-      const cr = 2.6 + r() * 0.9;
-      for (let k = 0; k < blobs; k++) {
-        const b = new THREE.Mesh(blobGeo, leafMats[Math.floor(r() * leafMats.length)] ?? leafMats[0]!);
-        const ang = r() * Math.PI * 2;
-        const rad = r() * cr * 0.8;
-        b.position.set(Math.cos(ang) * rad, 5.5 + (r() - 0.5) * cr, Math.sin(ang) * rad);
-        const bs = cr * (0.55 + r() * 0.45);
-        b.scale.set(bs, bs * (0.8 + r() * 0.2), bs);
-        b.rotation.set(r() * 3, r() * 3, r() * 3);
-        b.castShadow = true;
-        g.add(b);
-      }
-      g.position.set(x, y, -d);
-      g.scale.setScalar(s);
-      scene.add(g);
-    };
+    // Trees — the range's two-species grove (broadleaf + pine, 5-tone palette),
+    // shared from scenery.ts. Placement stays course-specific: a line down each
+    // side of the corridor, each tree lifted onto the terrain (heightAt) and, for
+    // depth, a pine woven in behind. World z = −d.
+    const trees = createTreeKit(scene, track);
     const clX = (d: number): number => {
       const cl = hole.centerline;
       for (let s = 0; s < cl.length - 1; s++) {
@@ -611,8 +536,25 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     for (let d = 20; d < dMax - 20; d += 26) {
       const cx = clX(d);
       const off = hole.roughHalf + 8;
-      addTree(cx - off - (d % 3) * 2, d + (d % 7) - 3, 1.1 + (d % 5) * 0.08, 5000 + d);
-      addTree(cx + off + (d % 4) * 2, d + (d % 5) - 2, 1.05 + (d % 4) * 0.09, 9000 + d);
+      const lx = cx - off - (d % 3) * 2;
+      const ld = d + (d % 7) - 3;
+      const rx = cx + off + (d % 4) * 2;
+      const rd = d + (d % 5) - 2;
+      // Front line: broadleaves. Every third step swap to a pine for variety.
+      const leftPine = d % 3 === 0;
+      const rightPine = d % 3 === 1;
+      (leftPine ? trees.addPine : trees.addBroadleaf)(
+        lx, -ld, 1.1 + (d % 5) * 0.08, 5000 + d, heightAt(hole, ld, lx),
+      );
+      (rightPine ? trees.addPine : trees.addBroadleaf)(
+        rx, -rd, 1.05 + (d % 4) * 0.09, 9000 + d, heightAt(hole, rd, rx),
+      );
+      // A receding pine further out each side for a layered tree line.
+      if (d % 2 === 0) {
+        const ox = off + 14;
+        trees.addPine(cx - ox, -(ld - 6), 0.85, 3000 + d, heightAt(hole, ld - 6, cx - ox));
+        trees.addPine(cx + ox, -(rd + 6), 0.9, 4000 + d, heightAt(hole, rd + 6, cx + ox));
+      }
     }
 
     // --- Camera ---------------------------------------------------------
