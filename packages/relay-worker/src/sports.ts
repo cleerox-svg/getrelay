@@ -1217,7 +1217,10 @@ function parseNhlTeam(t: NhlRawTeam, records: Record<string, string> = {}): Team
 
 // ---- MLB ----------------------------------------------------------------
 
-async function fetchMlbForTeam(teamKey: string, ymd: string): Promise<Game | null> {
+// Exported for tests: the pregame/live overlay logic here is what
+// decides whether a "game starting" push fires, so it's worth a
+// regression test against MLB's pregame linescore quirk.
+export async function fetchMlbForTeam(teamKey: string, ymd: string): Promise<Game | null> {
   const teamId = Number(teamKey);
   if (!Number.isFinite(teamId)) return null;
   try {
@@ -1230,21 +1233,21 @@ async function fetchMlbForTeam(teamKey: string, ymd: string): Promise<Game | nul
     const game = data.dates?.[0]?.games?.[0];
     if (!game) return null;
     const parsed = parseMlbGame(game, teamId);
-    // Overlay live state from the per-game linescore for any game
-    // that isn't final per the schedule. (Trusts the schedule's
-    // status — it's reliable for MLB; the NHL case where pre→live
-    // lags is league-specific.) Always overrides score + status
-    // detail (inning/outs); only flips status pre→live if linescore
-    // confirms the game has started.
-    if (parsed.status !== 'final' && game.gamePk != null) {
+    // Overlay the live score + inning/outs readout from the per-game
+    // linescore — but ONLY once the schedule's abstractGameState has
+    // actually flipped to 'Live' (parsed above). MLB's /linescore
+    // pre-populates currentInning=1 ("Top 1st") during pregame and
+    // warmup, so `currentInning > 0` is NOT a reliable "has started"
+    // signal — trusting it flipped a game to live (and fired a "game
+    // starting" push) hours before first pitch. abstractGameState is
+    // authoritative for MLB, so it owns the pre→live transition and the
+    // linescore only refines the numbers while the game is genuinely on.
+    if (parsed.status === 'live' && game.gamePk != null) {
       const live = await fetchMlbLiveState(String(game.gamePk));
       if (live) {
         parsed.homeTeam.score = live.homeScore;
         parsed.awayTeam.score = live.awayScore;
-        if (live.inning > 0) {
-          parsed.status = 'live';
-          if (live.statusDetail !== null) parsed.statusDetail = live.statusDetail;
-        }
+        if (live.statusDetail !== null) parsed.statusDetail = live.statusDetail;
       }
     }
     return parsed;
