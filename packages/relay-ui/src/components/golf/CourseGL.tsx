@@ -250,10 +250,12 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     const nx = 128;
     // The ground is a segmented plane DISPLACED from a HeightField (the Course
     // data layer, lib/golf/courseData.ts). The field's nodes are laid at exactly
-    // this mesh's (nx+1)×(nd+1) vertices, sampling the hole's heightAt, so the
-    // displacement reproduces the elevation at every vertex — the rendered ground
-    // and the physics ground are literally the same samples. (The scene works in
-    // yards; the metric normalization of this field lives in buildCourseData.)
+    // this mesh's (nx+1)×(nd+1) vertices, sampling the hole's heightAt. With this
+    // config the mesh's grid coords land on integer nodes, so bilinear returns
+    // each stored sample and the displacement reproduces the elevation exactly at
+    // every vertex — the rendered ground and the physics ground are the same
+    // samples. (The scene works in yards; the metric normalization of this field
+    // lives in buildCourseData.)
     const field = sampleHeightField(
       (x, d) => heightAt(hole, d, x),
       -xHalf,
