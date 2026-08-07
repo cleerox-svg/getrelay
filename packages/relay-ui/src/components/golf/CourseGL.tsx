@@ -10,6 +10,13 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { FIXED_MS } from '../../lib/golf/tuning';
 import { heightAt, surfaceAt, type CourseHole, type Surface } from '../../lib/golf/terrain';
+import {
+  sampleHeightField,
+  FLAGSTICK_HEIGHT_M,
+  HOLE_DIAMETER_M,
+  BALL_DIAMETER_M,
+  YD_PER_M,
+} from '../../lib/golf/courseData';
 import type { CourseSim } from '../../lib/golf/courseSim';
 
 interface Props {
@@ -241,6 +248,21 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     const xHalf = 120;
     const nd = 224;
     const nx = 128;
+    // The ground is a segmented plane DISPLACED from a HeightField (the Course
+    // data layer, lib/golf/courseData.ts). The field's nodes are laid at exactly
+    // this mesh's (nx+1)×(nd+1) vertices, sampling the hole's heightAt, so the
+    // displacement reproduces the elevation at every vertex — the rendered ground
+    // and the physics ground are literally the same samples. (The scene works in
+    // yards; the metric normalization of this field lives in buildCourseData.)
+    const field = sampleHeightField(
+      (x, d) => heightAt(hole, d, x),
+      -xHalf,
+      xHalf,
+      dMin,
+      dMax,
+      nx + 1,
+      nd + 1,
+    );
     const geo = track(new THREE.BufferGeometry());
     const verts = new Float32Array((nd + 1) * (nx + 1) * 3);
     const cols = new Float32Array((nd + 1) * (nx + 1) * 3);
@@ -252,7 +274,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       for (let i = 0; i <= nx; i++) {
         const x = -xHalf + (i / nx) * (xHalf * 2);
         verts[vi] = x;
-        verts[vi + 1] = heightAt(hole, d, x);
+        verts[vi + 1] = field.height(x, d);
         verts[vi + 2] = -d;
         const surf = surfaceAt(hole, d, x);
         const [r, g, b] = SURFACE_RGB[surf];
@@ -389,24 +411,43 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       }
     }
 
-    // Flagstick.
+    // Flagstick — normalized to the REGULATION height (2.13 m) from the Course
+    // data layer. The scene is yard-space, so the metric constants convert with
+    // YD_PER_M; the old pole was a hard-coded 8 yд (24 ft), 3.4× too tall.
     const pinY = heightAt(hole, hole.pin.d, hole.pin.x);
-    const poleGeo = track(new THREE.CylinderGeometry(0.12, 0.12, 8, 6));
+    const poleH = FLAGSTICK_HEIGHT_M * YD_PER_M; // 2.13 m ≈ 2.33 yд
+    const poleGeo = track(new THREE.CylinderGeometry(0.06, 0.06, poleH, 6));
     const poleMat = track(new THREE.MeshStandardMaterial({ color: 0xf4f4f4, roughness: 0.6 }));
     const pole = new THREE.Mesh(poleGeo, poleMat);
-    pole.position.set(hole.pin.x, pinY + 4, -hole.pin.d);
+    pole.position.set(hole.pin.x, pinY + poleH / 2, -hole.pin.d);
     pole.castShadow = true;
     scene.add(pole);
-    const flagGeo = track(new THREE.PlaneGeometry(3, 1.8));
+    const flagW = poleH * 0.42;
+    const flagH = poleH * 0.28;
+    const flagGeo = track(new THREE.PlaneGeometry(flagW, flagH));
     const flagMat = track(
       new THREE.MeshStandardMaterial({ color: 0xe8402c, roughness: 0.7, side: THREE.DoubleSide }),
     );
     const flag = new THREE.Mesh(flagGeo, flagMat);
-    flag.position.set(hole.pin.x + 1.5, pinY + 7, -hole.pin.d);
+    flag.position.set(hole.pin.x + flagW / 2, pinY + poleH - flagH / 2, -hole.pin.d);
     flag.castShadow = true;
     scene.add(flag);
+    // The cup — a regulation 0.108 m hole, drawn as a dark disc set into the
+    // green so the flag has a target. Metric radius, converted to the yard scene.
+    const cupR = (HOLE_DIAMETER_M / 2) * YD_PER_M; // 0.108 m ≈ 0.059 yд radius
+    const cupGeo = track(new THREE.CircleGeometry(cupR, 20));
+    const cupMat = track(new THREE.MeshStandardMaterial({ color: 0x101410, roughness: 1 }));
+    const cup = new THREE.Mesh(cupGeo, cupMat);
+    cup.rotation.x = -Math.PI / 2;
+    cup.position.set(hole.pin.x, pinY + 0.03, -hole.pin.d);
+    scene.add(cup);
 
-    // Ball.
+    // Ball. BALL_R is a VISUAL radius: the regulation ball (BALL_DIAMETER_M =
+    // 0.0427 m ≈ 0.023 yд radius) is sub-pixel under the yard-tuned follow camera,
+    // so it's drawn oversized for readability. True-metric ball sizing lands when
+    // the scene converts to meters (that phase also owns the camera). Referenced
+    // so the intent is explicit and the constant is a single source of truth.
+    void BALL_DIAMETER_M;
     const ballGeo = track(new THREE.SphereGeometry(BALL_R, 20, 16));
     const ballMat = track(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.35 }));
     const ball = new THREE.Mesh(ballGeo, ballMat);
