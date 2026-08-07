@@ -144,6 +144,34 @@ function fireStraight(s: CourseSim, power: number): void {
   while (s.ball.inFlight && g++ < 200000) s.substep(1 / 120);
 }
 
+describe('course sim — auto club recommendation', () => {
+  const g = HOLE_1.green;
+
+  it('the opening tee shot on a 512yd par 5 defaults to the driver', () => {
+    expect(sim().getState().clubId).toBe('driver');
+  });
+
+  it('a greenside bunker chip recommends a wedge, not a driver', () => {
+    const s = sim();
+    const b = HOLE_1.hazards.find((h) => h.kind === 'bunker' && h.d > 480)!;
+    s.ball.d = b.d;
+    s.ball.x = b.x; // ~16yd from the pin, in the sand
+    expect(s.getState().lie).toBe('bunker');
+    expect(['sw', 'pw']).toContain(s.recommendedClub());
+  });
+
+  it('club scales with distance: far → long club, near → wedge', () => {
+    const s = sim();
+    s.ball.d = g.d - 210; // long approach on the fairway
+    s.ball.x = -6;
+    const far = s.recommendedClub();
+    s.ball.d = g.d - 40; // short pitch
+    const near = s.recommendedClub();
+    const order = ['sw', 'pw', '9iron', '7iron', '5iron', 'hybrid', '3wood', 'driver'];
+    expect(order.indexOf(far)).toBeGreaterThan(order.indexOf(near));
+  });
+});
+
 describe('course sim — play-test fixes (interactive fire path)', () => {
   const g = HOLE_1.green;
 

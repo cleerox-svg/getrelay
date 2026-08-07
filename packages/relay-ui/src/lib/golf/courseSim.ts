@@ -228,6 +228,8 @@ export class CourseSim {
       grounded: false,
       resting: true,
     };
+    // Auto-club the opening tee shot for the hole length (long par 5 → driver).
+    this.clubId = this.recommendedClub();
   }
 
   private club(): Club {
@@ -319,9 +321,33 @@ export class CourseSim {
     if (result === 'holed') this.holed = true;
     // Water / OB → the next address replays from the previous spot for a penalty.
     if (result === 'water' || result === 'ob') this.penaltyPending = true;
+    // Auto-club the next shot for the new lie/distance (the player can still
+    // cycle). A driver-for-a-bunker-chip default is exactly what this avoids.
+    else this.clubId = this.recommendedClub();
   }
 
   // --- Interactive control surface (CourseGL drives this; CourseGame reads it) --
+
+  // The sensible club for the CURRENT lie + distance-to-pin: the shortest club
+  // whose full-power total still reaches (so full power gets there and the
+  // player dials back), and a wedge out of sand regardless. Green → putter
+  // (putt mode handles the stroke). Used to auto-set the club each new shot.
+  recommendedClub(): string {
+    const b = this.ball;
+    const p = this.hole.pin;
+    const R = Math.hypot(b.d - p.d, b.x - p.x);
+    const lie = this.lieAt(b.d, b.x);
+    if (lie === 'green') return 'pw'; // cosmetic; putt mode ignores the club
+    if (lie === 'bunker') return R > 110 ? 'pw' : 'sw'; // loft to escape sand
+    if (R > 343) return 'driver';
+    if (R > 301) return '3wood';
+    if (R > 255) return 'hybrid';
+    if (R > 224) return '5iron';
+    if (R > 195) return '7iron';
+    if (R > 157) return '9iron';
+    if (R > 128) return 'pw';
+    return 'sw';
+  }
 
   selectClub(id: string): void {
     if (this.ball.inFlight) return;
@@ -437,6 +463,7 @@ export class CourseSim {
     this.strokes += 1;
     this.penaltyPending = false;
     this.result = this.lieAt(b.d, b.x);
+    this.clubId = this.recommendedClub(); // re-club for the replay lie/distance
   }
 
   getState(): CourseState {
@@ -600,6 +627,7 @@ export class CourseSim {
       originX: this.originX,
       holed: this.holed,
       penaltyPending: this.penaltyPending,
+      clubId: this.clubId, // stop() auto-clubs; predict must not leak that
     };
 
     const e = Math.max(-1, Math.min(1, accuracy));
@@ -651,6 +679,7 @@ export class CourseSim {
     this.originX = saved.originX;
     this.holed = saved.holed;
     this.penaltyPending = saved.penaltyPending;
+    this.clubId = saved.clubId;
     Object.assign(b, savedBall);
     this.trail.length = 0;
     for (const p of savedTrail) this.trail.push(p);
