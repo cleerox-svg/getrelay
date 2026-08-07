@@ -9,7 +9,13 @@
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { FIXED_MS } from '../../lib/golf/tuning';
-import { heightAt, surfaceAt, type CourseHole, type Surface } from '../../lib/golf/terrain';
+import {
+  heightAt,
+  gradientAt,
+  surfaceAt,
+  type CourseHole,
+  type Surface,
+} from '../../lib/golf/terrain';
 import {
   sampleHeightField,
   FLAGSTICK_HEIGHT_M,
@@ -448,6 +454,107 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       scene.add(cap);
     }
 
+    // --- Green-reading heat grid (shown while putting) -----------------
+    // A contour grid over the green, HEAT-COLOURED by slope relative to the putt
+    // to the hole: warm = uphill toward the cup (putt firmer), cool = downhill
+    // (putt dies quick), neutral where it's flat. Built from gradientAt — the
+    // same slope the ball physically breaks on — so what you read is what rolls.
+    // Toggled visible only on the green (see the frame loop).
+    let greenGrid: THREE.Object3D | null = null;
+    {
+      const gDef = hole.green;
+      const R = gDef.r;
+      const N = 24; // cells across the green diameter (~1.25 yd cells)
+      const step = (2 * R) / N;
+      const vx = N + 1;
+      const gpos: number[] = [];
+      const gcol: number[] = [];
+      const idxOf: number[] = new Array(vx * vx).fill(-1);
+      // Heat ramp: slope-toward-hole s (rise/run, +uphill) → colour. SMAX is low
+      // so even a gentle break reads strongly (greens are subtly sloped); the
+      // endpoints are punchy red (uphill) / blue (downhill) with a neutral green
+      // at flat, so the grid POPS.
+      const SMAX = 0.028;
+      const heat = (s: number): [number, number, number] => {
+        const t = Math.max(-1, Math.min(1, s / SMAX));
+        if (t >= 0) return [0.95 * t + 0.3 * (1 - t), 0.85 - 0.6 * t, 0.35 - 0.2 * t]; // green→red
+        const u = -t;
+        return [0.3 - 0.15 * u, 0.85 - 0.35 * u, 0.35 + 0.6 * u]; // green→blue
+      };
+      let vcount = 0;
+      for (let j = 0; j <= N; j++) {
+        for (let i = 0; i <= N; i++) {
+          const x = gDef.x - R + i * step;
+          const d = gDef.d - R + j * step;
+          if (Math.hypot(x - gDef.x, d - gDef.d) > R + 0.01) continue;
+          const g = gradientAt(hole, d, x);
+          const dnx = gDef.x - x;
+          const dnd = gDef.d - d;
+          const len = Math.hypot(dnx, dnd) || 1;
+          const sTo = (g.gx * dnx + g.gd * dnd) / len; // slope toward hole
+          const [cr, cg, cb] = heat(sTo);
+          gpos.push(x, heightAt(hole, d, x) + 0.07, -d);
+          gcol.push(cr, cg, cb);
+          idxOf[j * vx + i] = vcount++;
+        }
+      }
+      const gi: number[] = [];
+      for (let j = 0; j < N; j++) {
+        for (let i = 0; i < N; i++) {
+          const a = idxOf[j * vx + i]!;
+          const b = idxOf[j * vx + i + 1]!;
+          const c = idxOf[(j + 1) * vx + i]!;
+          const e = idxOf[(j + 1) * vx + i + 1]!;
+          if (a < 0 || b < 0 || c < 0 || e < 0) continue; // keep cells fully inside
+          gi.push(a, b, c, b, e, c);
+        }
+      }
+      if (gi.length) {
+        const group = new THREE.Group();
+        // Heat fill: the slope colours, translucent, over the green.
+        const gGeo = track(new THREE.BufferGeometry());
+        gGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(gpos), 3));
+        gGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(gcol), 3));
+        gGeo.setIndex(gi);
+        const gMat = track(
+          new THREE.MeshBasicMaterial({
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.72,
+            depthWrite: false,
+          }),
+        );
+        const fill = new THREE.Mesh(gGeo, gMat);
+        fill.renderOrder = 6;
+        group.add(fill);
+        // Grid LINES: connect in-disc neighbours (drawn as their own layer so the
+        // lines read crisp white instead of being tinted/clipped by the fill).
+        const lp: number[] = [];
+        const at3 = (vi: number) => [gpos[vi * 3]!, gpos[vi * 3 + 1]!, gpos[vi * 3 + 2]!] as const;
+        for (let j = 0; j <= N; j++) {
+          for (let i = 0; i <= N; i++) {
+            const a = idxOf[j * vx + i]!;
+            if (a < 0) continue;
+            const r = i < N ? idxOf[j * vx + i + 1]! : -1;
+            const d2 = j < N ? idxOf[(j + 1) * vx + i]! : -1;
+            if (r >= 0) lp.push(...at3(a), ...at3(r));
+            if (d2 >= 0) lp.push(...at3(a), ...at3(d2));
+          }
+        }
+        const lGeo = track(new THREE.BufferGeometry());
+        lGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(lp), 3));
+        const lMat = track(
+          new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35, depthWrite: false }),
+        );
+        const lines = new THREE.LineSegments(lGeo, lMat);
+        lines.renderOrder = 7;
+        group.add(lines);
+        group.visible = false;
+        greenGrid = group;
+        scene.add(group);
+      }
+    }
+
     // Flagstick — normalized to the REGULATION height (2.13 m) from the Course
     // data layer. The scene is yard-space, so the metric constants convert with
     // YD_PER_M; the old pole was a hard-coded 8 yд (24 ft), 3.4× too tall.
@@ -486,6 +593,61 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     rim.rotation.x = -Math.PI / 2;
     rim.position.set(hole.pin.x, pinY + 0.085, -hole.pin.d);
     scene.add(rim);
+
+    // --- Hole-out celebration (the payoff) -----------------------------
+    // A ground ring that pulses outward + a burst of confetti points from the
+    // cup, fired once when the ball drops. Hidden until then; animated in the
+    // loop off `celebrate` (seconds since hole-out).
+    const PCOUNT = 60;
+    const celebRingGeo = track(new THREE.RingGeometry(0.35, 0.7, 40));
+    const celebRingMat = track(
+      new THREE.MeshBasicMaterial({
+        color: 0xffe66a,
+        transparent: true,
+        side: THREE.DoubleSide,
+        depthTest: false,
+        depthWrite: false,
+      }),
+    );
+    const celebRing = new THREE.Mesh(celebRingGeo, celebRingMat);
+    celebRing.rotation.x = -Math.PI / 2;
+    celebRing.renderOrder = 11;
+    celebRing.visible = false;
+    scene.add(celebRing);
+    const confColors = [0xff5a5a, 0xffd34e, 0x5ad0ff, 0x6ef07a, 0xff8ad0];
+    const confGeo = track(new THREE.BufferGeometry());
+    const confPos = new Float32Array(PCOUNT * 3);
+    const confCol = new Float32Array(PCOUNT * 3);
+    const confVel: { x: number; y: number; z: number }[] = [];
+    const tcol = new THREE.Color();
+    for (let i = 0; i < PCOUNT; i++) {
+      // Deterministic spread (no Math.random in scene setup elsewhere; here it's
+      // fine — confetti needn't be reproducible).
+      const ang = (i / PCOUNT) * Math.PI * 2 + (i % 5);
+      const sp = 4 + (i % 7);
+      confVel.push({ x: Math.cos(ang) * sp * 0.5, y: 8 + (i % 5) * 1.6, z: Math.sin(ang) * sp * 0.5 });
+      tcol.set(confColors[i % confColors.length]!);
+      confCol[i * 3] = tcol.r;
+      confCol[i * 3 + 1] = tcol.g;
+      confCol[i * 3 + 2] = tcol.b;
+    }
+    confGeo.setAttribute('position', new THREE.BufferAttribute(confPos, 3));
+    confGeo.setAttribute('color', new THREE.BufferAttribute(confCol, 3));
+    const confMat = track(
+      new THREE.PointsMaterial({
+        size: 9,
+        sizeAttenuation: false,
+        vertexColors: true,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+      }),
+    );
+    const confetti = new THREE.Points(confGeo, confMat);
+    confetti.renderOrder = 12;
+    confetti.visible = false;
+    scene.add(confetti);
+    let celebrate = -1; // seconds since hole-out; <0 = not celebrating
 
     // Ball. BALL_R is a VISUAL radius: the regulation ball (BALL_DIAMETER_M =
     // 0.0427 m ≈ 0.023 yд radius) is sub-pixel under the yard-tuned follow camera,
@@ -625,15 +787,6 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       arc.l.visible = arc.line.visible = edgeL.l.visible = edgeR.l.visible = restRing.visible = true;
     };
 
-    // --- Putt-read break arrow (shown on the green) --------------------
-    // Smaller than before (it dominated the tight putting view) and drawn as an
-    // overlay so it reads on the green surface.
-    const arrowMat = track(overlay(new THREE.MeshBasicMaterial({ color: 0x1b6fff, transparent: true, opacity: 0.85 })));
-    const arrowGeo = track(new THREE.ConeGeometry(0.5, 1.4, 12));
-    const putt = new THREE.Mesh(arrowGeo, arrowMat);
-    putt.renderOrder = 9;
-    putt.visible = false;
-    scene.add(putt);
 
     // Trees — the range's two-species grove (broadleaf + pine, 5-tone palette),
     // shared from scenery.ts. Placement stays course-specific: a line down each
@@ -781,21 +934,48 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       const st = sim.getState();
       if (st.inFlight || (!st.aiming && !st.armed)) showAim(false);
 
-      // Putt-read break arrow: on the green, point downhill (the fall line), its
-      // size scaling with the slope so a steep tilt reads as a bigger break.
-      if (!st.inFlight && st.lie === 'green') {
-        const gr = sim.slopeUnder(b.d, b.x); // uphill gradient (∂h/∂d, ∂h/∂x)
-        const mag = Math.hypot(gr.gd, gr.gx);
-        if (mag > 1.5e-3) {
-          // World downhill vector: (d,x) downhill = (−gd,−gx) → world (x, −d).
-          wvec.set(-gr.gx, 0, gr.gd).normalize();
-          putt.quaternion.setFromUnitVectors(UP, wvec);
-          putt.position.set(b.x, b.h + 0.6, -b.d);
-          const sc = Math.min(1.7, 0.7 + mag * 12);
-          putt.scale.set(sc, sc * 1.5, sc);
-          putt.visible = true;
-        } else putt.visible = false;
-      } else putt.visible = false;
+      // On the green (reading a putt): show the slope heat grid. It hides once
+      // the putt is rolling or the ball is off the green. (The old chunky break-
+      // arrow cone is gone — the heat grid + predicted roll line read the break.)
+      const onGreen = !st.inFlight && st.lie === 'green';
+      if (greenGrid) greenGrid.visible = onGreen && celebrate < 0;
+
+      // Hole-out celebration: fire once when the ball drops, then animate the
+      // ring pulse + confetti for ~1.6 s.
+      if (st.holed && celebrate < 0) {
+        celebrate = 0;
+        celebRing.position.set(hole.pin.x, pinY + 0.06, -hole.pin.d);
+        for (let i = 0; i < PCOUNT; i++) {
+          confPos[i * 3] = hole.pin.x;
+          confPos[i * 3 + 1] = pinY + 0.2;
+          confPos[i * 3 + 2] = -hole.pin.d;
+        }
+      }
+      if (celebrate >= 0) {
+        celebrate += dt;
+        const T = 1.6;
+        const p = Math.min(1, celebrate / T);
+        // Ring: expand and fade.
+        const rs = 1 + p * 9;
+        celebRing.scale.set(rs, rs, rs);
+        celebRingMat.opacity = 0.8 * (1 - p);
+        celebRing.visible = true;
+        // Confetti: ballistic rise + fall, fading out.
+        for (let i = 0; i < PCOUNT; i++) {
+          const v = confVel[i]!;
+          confPos[i * 3]! += v.x * dt;
+          confPos[i * 3 + 1]! += (v.y - 16 * celebrate) * dt;
+          confPos[i * 3 + 2]! += v.z * dt;
+        }
+        (confGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+        confMat.opacity = 1 - p;
+        confetti.visible = true;
+        if (p >= 1) {
+          celebrate = -1;
+          celebRing.visible = false;
+          confetti.visible = false;
+        }
+      }
 
       // Camera: chase the ball in flight, sit behind it toward the pin at rest.
       ballWorld(tmpB);

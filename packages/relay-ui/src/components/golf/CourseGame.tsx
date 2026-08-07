@@ -145,6 +145,32 @@ export default function CourseGame({ onExit }: { onExit?: () => void }) {
 
   const club = (dir: 1 | -1) => sim.cycleClub(dir);
 
+  // Putt read (on the green): distance in feet + uphill/downhill + break, from
+  // the slope under the ball relative to the line to the cup. World: x lateral
+  // (+right), z = −d; downhill = (−∂h/∂x, ∂h/∂d) mirrors CourseGL's break vector.
+  let puttRead: { ft: number; slope: string; brk: string } | null = null;
+  if (st.putting && !st.inFlight && !st.holed) {
+    const b = sim.ball;
+    const pin = sim.hole.pin;
+    const gr = sim.slopeUnder(b.d, b.x);
+    const fdx = pin.x - b.x;
+    const fdz = -(pin.d - b.d);
+    const L = Math.hypot(fdx, fdz) || 1;
+    const fx = fdx / L;
+    const fz = fdz / L;
+    const rx = -fz; // player's right = rotate forward −90°
+    const rz = fx;
+    const dwx = -gr.gx; // downhill (world x)
+    const dwz = gr.gd; // downhill (world z)
+    const up = -(dwx * fx + dwz * fz); // + = uphill to the cup
+    const brk = dwx * rx + dwz * rz; // + = green falls to the right
+    puttRead = {
+      ft: Math.max(1, Math.round(st.distToPin * 3)),
+      slope: up > 0.003 ? 'uphill' : up < -0.003 ? 'downhill' : 'flat',
+      brk: brk > 0.003 ? 'breaks right' : brk < -0.003 ? 'breaks left' : 'dead straight',
+    };
+  }
+
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#000', zIndex: 30 }}>
       <Suspense fallback={<div style={{ position: 'fixed', inset: 0, background: '#0a1a0a' }} />}>
@@ -175,10 +201,17 @@ export default function CourseGame({ onExit }: { onExit?: () => void }) {
         </button>
         <div className="rounded-2xl bg-black/45 px-3 py-1.5 text-center">
           <div className="text-[11px] opacity-80">HOLE 1 · PAR {st.par}</div>
-          <div className="text-lg font-extrabold leading-tight">{st.distToPin} yd</div>
+          <div className="text-lg font-extrabold leading-tight">
+            {puttRead ? `${puttRead.ft} ft` : `${st.distToPin} yd`}
+          </div>
           <div className="text-[11px] opacity-80">
             Stroke {st.strokes} · {lieLabel[st.lie] ?? st.lie}
           </div>
+          {puttRead && (
+            <div className="text-[11px] font-semibold text-emerald-200">
+              {puttRead.slope} · {puttRead.brk}
+            </div>
+          )}
         </div>
         <div className="w-[52px]" />
       </div>

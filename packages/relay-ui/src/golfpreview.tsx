@@ -79,6 +79,16 @@ function Preview() {
     b.h = heightAt(HOLE_1, b.d, b.x);
     b.inFlight = b.grounded = false;
     b.resting = true;
+  } else if (at === 'holed') {
+    // Ball in the cup + holed flag set, so CourseGL fires the hole-out
+    // celebration — the ready beacon captures it mid-animation.
+    const b = sim.ball;
+    b.d = HOLE_1.pin.d;
+    b.x = HOLE_1.pin.x;
+    b.h = heightAt(HOLE_1, b.d, b.x);
+    b.inFlight = b.grounded = false;
+    b.resting = true;
+    sim.holed = true;
   } else if (at === 'fairway') {
     // Mid-fairway approach, the "after driving" state — with an iron, so the
     // aim arc for a non-driver club can be exercised by a scripted drag.
