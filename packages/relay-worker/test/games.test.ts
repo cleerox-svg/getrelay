@@ -60,6 +60,20 @@ const DDL = [
      best_streak INTEGER NOT NULL DEFAULT 0,
      created_at INTEGER NOT NULL
    )`,
+  `CREATE TABLE IF NOT EXISTS golf_records (
+     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+     longest_drive_yards REAL,
+     longest_drive_hole INTEGER,
+     longest_drive_at INTEGER,
+     closest_to_pin_yards REAL,
+     closest_to_pin_hole INTEGER,
+     closest_to_pin_at INTEGER,
+     longest_putt_yards REAL,
+     longest_putt_hole INTEGER,
+     longest_putt_at INTEGER,
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL
+   )`,
 ];
 
 const USERS = {
@@ -148,6 +162,20 @@ async function insertScoreGame(
 
 function getLeaderboardGame(cookie: string, game: string): Promise<Response> {
   return request(`/game/leaderboard?game=${game}`, { headers: { Cookie: cookie } });
+}
+
+function postGolfRecords(cookie: string | null, body: unknown): Promise<Response> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (cookie) headers['Cookie'] = cookie;
+  return request('/game/golf-records', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+}
+
+function getGolfRecords(cookie: string): Promise<Response> {
+  return request('/game/golf-records', { headers: { Cookie: cookie } });
 }
 
 beforeAll(seed);
@@ -303,5 +331,98 @@ describe('GET /game/leaderboard', () => {
       [USERS.A.id, 1200],
       [USERS.B.id, 300],
     ]);
+  });
+});
+
+describe('golf-records', () => {
+  it('rejects both endpoints without a session cookie', async () => {
+    const post = await postGolfRecords(null, { longestDriveYards: 250 });
+    expect(post.status).toBe(401);
+    const get = await request('/game/golf-records');
+    expect(get.status).toBe(401);
+  });
+
+  it('returns null metrics before any submission', async () => {
+    const res = await getGolfRecords(cookies.C);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      records: { longestDrive: null, closestToPin: null, longestPutt: null },
+    });
+  });
+
+  it('upserts on improve in both directions, ignoring worse shots', async () => {
+    // First submission sets every metric — all newly improved.
+    const first = await postGolfRecords(cookies.A, {
+      longestDriveYards: 250,
+      longestDriveHole: 3,
+      closestToPinYards: 12,
+      closestToPinHole: 3,
+      longestPuttYards: 8,
+      longestPuttHole: 7,
+    });
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as {
+      improved: { longestDrive: boolean; closestToPin: boolean; longestPutt: boolean };
+      records: {
+        longestDrive: { yards: number; hole: number } | null;
+        closestToPin: { yards: number; hole: number } | null;
+        longestPutt: { yards: number; hole: number } | null;
+      };
+    };
+    expect(firstBody.improved).toEqual({
+      longestDrive: true,
+      closestToPin: true,
+      longestPutt: true,
+    });
+    expect(firstBody.records.longestDrive).toMatchObject({ yards: 250, hole: 3 });
+    expect(firstBody.records.closestToPin).toMatchObject({ yards: 12, hole: 3 });
+    expect(firstBody.records.longestPutt).toMatchObject({ yards: 8, hole: 7 });
+
+    // A longer drive wins; a *longer* (worse) closest-to-pin loses; a
+    // shorter putt loses. Only the drive improves.
+    const second = await postGolfRecords(cookies.A, {
+      longestDriveYards: 300,
+      closestToPinYards: 40,
+      longestPuttYards: 2,
+    });
+    const secondBody = (await second.json()) as typeof firstBody;
+    expect(secondBody.improved).toEqual({
+      longestDrive: true,
+      closestToPin: false,
+      longestPutt: false,
+    });
+    expect(secondBody.records.longestDrive?.yards).toBe(300);
+    expect(secondBody.records.closestToPin?.yards).toBe(12); // unchanged
+    expect(secondBody.records.longestPutt?.yards).toBe(8); // unchanged
+
+    // A *closer* pin (smaller) now wins.
+    const third = await postGolfRecords(cookies.A, { closestToPinYards: 5, closestToPinHole: 9 });
+    const thirdBody = (await third.json()) as typeof firstBody;
+    expect(thirdBody.improved.closestToPin).toBe(true);
+    expect(thirdBody.records.closestToPin).toMatchObject({ yards: 5, hole: 9 });
+
+    // GET reflects the persisted bests.
+    const get = await getGolfRecords(cookies.A);
+    const getBody = (await get.json()) as { records: typeof firstBody.records };
+    expect(getBody.records.longestDrive?.yards).toBe(300);
+    expect(getBody.records.closestToPin?.yards).toBe(5);
+    expect(getBody.records.longestPutt?.yards).toBe(8);
+  });
+
+  it('rejects bogus distances (negative / NaN / absurd)', async () => {
+    const bad = [
+      { longestDriveYards: -5 },
+      { longestDriveYards: 5000 }, // past the drive clamp
+      { longestPuttYards: 500 }, // past the putt clamp
+      { closestToPinYards: -1 },
+      { longestDriveYards: 'far' },
+      { longestDriveYards: 250, longestDriveHole: 0 }, // hole below 1
+      { longestDriveYards: 250, longestDriveHole: 2.5 }, // non-integer hole
+    ];
+    for (const body of bad) {
+      const res = await postGolfRecords(cookies.B, body);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid_records' });
+    }
   });
 });

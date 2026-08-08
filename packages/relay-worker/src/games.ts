@@ -16,10 +16,89 @@ export const MAX_POINTS_PER_ROUND = 2000;
 export const GAME_IDS = ['fog', 'tune', 'golf', 'golfrange'] as const;
 export type GameId = (typeof GAME_IDS)[number];
 
+// Sanity clamps for golf best-shot records (see /game/golf-records). Like
+// the Fog score clamps above, these only reject values that couldn't come
+// from a real shot — the longest recorded drive in pro golf is ~500yd, a
+// putt over a green is a handful of yards, so anything past these ceilings
+// is a bug or tampering. Distances must also be finite and non-negative.
+export const MAX_DRIVE_YARDS = 1000;
+export const MAX_PUTT_YARDS = 200;
+// Closest-to-pin is the distance left to the hole after a shot; clamp it to
+// the same generous drive ceiling.
+export const MAX_CLOSEST_YARDS = 1000;
+// A hole number, when supplied, has to be a small positive integer.
+export const MAX_HOLE = 999;
+
 function normalizeGame(v: unknown): GameId {
   return typeof v === 'string' && (GAME_IDS as readonly string[]).includes(v)
     ? (v as GameId)
     : 'fog';
+}
+
+// ---- Golf best-shot records ----------------------------------------------
+//
+// One row per user in golf_records, upsert-on-improve. The DB column shape
+// is documented in schema.sql; here we only read/write it.
+
+interface GolfRecordRow {
+  longest_drive_yards: number | null;
+  longest_drive_hole: number | null;
+  longest_drive_at: number | null;
+  closest_to_pin_yards: number | null;
+  closest_to_pin_hole: number | null;
+  closest_to_pin_at: number | null;
+  longest_putt_yards: number | null;
+  longest_putt_hole: number | null;
+  longest_putt_at: number | null;
+}
+
+interface GolfRecordShape {
+  yards: number;
+  hole: number | null;
+  at: number | null;
+}
+
+// Turn the flat row (or null, when the user has no records yet) into the
+// nested { longestDrive, closestToPin, longestPutt } shape the UI renders.
+function shapeGolfRecords(row: GolfRecordRow | null) {
+  const metric = (
+    yards: number | null,
+    hole: number | null,
+    at: number | null,
+  ): GolfRecordShape | null =>
+    yards == null ? null : { yards, hole: hole ?? null, at: at ?? null };
+  return {
+    longestDrive: metric(
+      row?.longest_drive_yards ?? null,
+      row?.longest_drive_hole ?? null,
+      row?.longest_drive_at ?? null,
+    ),
+    closestToPin: metric(
+      row?.closest_to_pin_yards ?? null,
+      row?.closest_to_pin_hole ?? null,
+      row?.closest_to_pin_at ?? null,
+    ),
+    longestPutt: metric(
+      row?.longest_putt_yards ?? null,
+      row?.longest_putt_hole ?? null,
+      row?.longest_putt_at ?? null,
+    ),
+  };
+}
+
+async function readGolfRecords(
+  db: D1Database,
+  userId: string,
+): Promise<GolfRecordRow | null> {
+  return db
+    .prepare(
+      `SELECT longest_drive_yards, longest_drive_hole, longest_drive_at,
+              closest_to_pin_yards, closest_to_pin_hole, closest_to_pin_at,
+              longest_putt_yards, longest_putt_hole, longest_putt_at
+         FROM golf_records WHERE user_id = ?`,
+    )
+    .bind(userId)
+    .first<GolfRecordRow>();
 }
 
 // ---- Feed surfacing rules -------------------------------------------------
@@ -136,6 +215,151 @@ export function gamesRoutes() {
       mine: r.id === me.id,
     }));
     return c.json({ entries });
+  });
+
+  // GET /game/golf-records — the caller's personal best-shot records, shaped
+  // for the recap UI. Returns nulls for metrics never set yet.
+  app.get('/game/golf-records', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const row = await readGolfRecords(c.env.DB, me.id);
+    return c.json({ records: shapeGolfRecords(row) });
+  });
+
+  // POST /game/golf-records — submit end-of-hole candidate records. Body is
+  // { longestDriveYards?, longestDriveHole?, closestToPinYards?,
+  //   closestToPinHole?, longestPuttYards?, longestPuttHole? } — all optional,
+  // only present metrics are considered. Each metric is upserted on-improve
+  // in its natural direction (drive/putt: bigger wins; closest-to-pin:
+  // smaller wins). Returns which metrics newly improved plus the current
+  // records (read-after-write).
+  app.post('/game/golf-records', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const body = await c.req
+      .json<Record<string, unknown>>()
+      .catch(() => null);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return c.json({ error: 'invalid_records' }, 400);
+    }
+
+    // Parse a distance: absent -> undefined (skip), present-but-bogus ->
+    // 'invalid' (400). allowZero lets closest-to-pin be 0 (holed / gimme).
+    const parseYards = (
+      v: unknown,
+      max: number,
+      allowZero: boolean,
+    ): number | undefined | 'invalid' => {
+      if (v === undefined || v === null) return undefined;
+      if (typeof v !== 'number' || !Number.isFinite(v)) return 'invalid';
+      if (v > max) return 'invalid';
+      if (allowZero ? v < 0 : v <= 0) return 'invalid';
+      return v;
+    };
+
+    // Parse an optional hole number: absent -> null; present must be a small
+    // positive integer.
+    const parseHole = (v: unknown): number | null | 'invalid' => {
+      if (v === undefined || v === null) return null;
+      if (!Number.isInteger(v)) return 'invalid';
+      const n = v as number;
+      if (n < 1 || n > MAX_HOLE) return 'invalid';
+      return n;
+    };
+
+    const driveYards = parseYards(body.longestDriveYards, MAX_DRIVE_YARDS, false);
+    const closestYards = parseYards(body.closestToPinYards, MAX_CLOSEST_YARDS, true);
+    const puttYards = parseYards(body.longestPuttYards, MAX_PUTT_YARDS, false);
+    const driveHole = parseHole(body.longestDriveHole);
+    const closestHole = parseHole(body.closestToPinHole);
+    const puttHole = parseHole(body.longestPuttHole);
+
+    if (
+      driveYards === 'invalid' ||
+      closestYards === 'invalid' ||
+      puttYards === 'invalid' ||
+      driveHole === 'invalid' ||
+      closestHole === 'invalid' ||
+      puttHole === 'invalid'
+    ) {
+      return c.json({ error: 'invalid_records' }, 400);
+    }
+
+    const now = Date.now();
+    // Decide improvement against the current row so we can report it back;
+    // the conditional upserts below re-check the same guard in SQL, which
+    // also settles any concurrent submission.
+    const prev = await readGolfRecords(c.env.DB, me.id);
+    const improved = {
+      longestDrive:
+        driveYards !== undefined &&
+        (prev?.longest_drive_yards == null || driveYards > prev.longest_drive_yards),
+      closestToPin:
+        closestYards !== undefined &&
+        (prev?.closest_to_pin_yards == null || closestYards < prev.closest_to_pin_yards),
+      longestPutt:
+        puttYards !== undefined &&
+        (prev?.longest_putt_yards == null || puttYards > prev.longest_putt_yards),
+    };
+
+    // longest_drive (MAX): update only when strictly greater or unset.
+    if (driveYards !== undefined) {
+      await c.env.DB.prepare(
+        `INSERT INTO golf_records
+           (user_id, longest_drive_yards, longest_drive_hole, longest_drive_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           longest_drive_yards = excluded.longest_drive_yards,
+           longest_drive_hole  = excluded.longest_drive_hole,
+           longest_drive_at    = excluded.longest_drive_at,
+           updated_at          = excluded.updated_at
+         WHERE golf_records.longest_drive_yards IS NULL
+            OR excluded.longest_drive_yards > golf_records.longest_drive_yards`,
+      )
+        .bind(me.id, driveYards, driveHole, now, now, now)
+        .run();
+    }
+
+    // closest_to_pin (MIN): update only when strictly less or unset.
+    if (closestYards !== undefined) {
+      await c.env.DB.prepare(
+        `INSERT INTO golf_records
+           (user_id, closest_to_pin_yards, closest_to_pin_hole, closest_to_pin_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           closest_to_pin_yards = excluded.closest_to_pin_yards,
+           closest_to_pin_hole  = excluded.closest_to_pin_hole,
+           closest_to_pin_at    = excluded.closest_to_pin_at,
+           updated_at           = excluded.updated_at
+         WHERE golf_records.closest_to_pin_yards IS NULL
+            OR excluded.closest_to_pin_yards < golf_records.closest_to_pin_yards`,
+      )
+        .bind(me.id, closestYards, closestHole, now, now, now)
+        .run();
+    }
+
+    // longest_putt (MAX): update only when strictly greater or unset.
+    if (puttYards !== undefined) {
+      await c.env.DB.prepare(
+        `INSERT INTO golf_records
+           (user_id, longest_putt_yards, longest_putt_hole, longest_putt_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           longest_putt_yards = excluded.longest_putt_yards,
+           longest_putt_hole  = excluded.longest_putt_hole,
+           longest_putt_at    = excluded.longest_putt_at,
+           updated_at         = excluded.updated_at
+         WHERE golf_records.longest_putt_yards IS NULL
+            OR excluded.longest_putt_yards > golf_records.longest_putt_yards`,
+      )
+        .bind(me.id, puttYards, puttHole, now, now, now)
+        .run();
+    }
+
+    const row = await readGolfRecords(c.env.DB, me.id);
+    return c.json({ improved, records: shapeGolfRecords(row) });
   });
 
   return app;
