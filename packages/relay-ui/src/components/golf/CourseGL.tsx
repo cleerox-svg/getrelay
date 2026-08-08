@@ -795,54 +795,65 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     // point, plus two faded edge arcs (worst hook ↔ worst slice) for dispersion.
     // Fed by sim.predict() — the SAME integrator as the live shot, on the
     // terrain — so what it draws is where the ball actually goes.
-    const ARC_MAX = 700;
-    // The centre trajectory is drawn as DOTS (constant screen size) so it reads
-    // clearly at any distance — thin GL lines were nearly invisible. The two
-    // dispersion edges stay as faint lines.
+    //
+    // ROOT CAUSE of the long-standing "the arc doesn't appear" bug (fixed here):
+    // these line/points objects reuse a FIXED BufferGeometry whose vertices are
+    // rewritten every drag (fillArc). three.js computes geometry.boundingSphere
+    // LAZILY once, on the first render the object is visible, and NEVER recomputes
+    // it when the buffer changes. So the sphere froze around the FIRST aim's arc
+    // (near the tee); on every later shot the ball + camera moved downrange, the
+    // stale sphere fell outside the frustum, and three CULLED the whole object
+    // before drawing — so predict() and fillArc ran fine but nothing was ever
+    // submitted to the GPU. Every prior "fix" (dots↔lines, depthTest off,
+    // renderOrder) acted AFTER culling, so none could help. The committed
+    // screenshot harness only ever aims ONCE per fresh sim, so it never triggered
+    // it. The fix: these are dynamic UI overlays whose extent changes every frame,
+    // so a cached bounding sphere is meaningless — disable frustum culling
+    // (`frustumCulled = false`, applied by aimAid below) and they always draw.
+    // ARC_MAX comfortably exceeds the longest predicted path for a real shot (a
+    // full carry + long fairway roll samples ~800 points at stride 2), so the
+    // centre line is effectively never truncated; fillArc still caps n at ARC_MAX,
+    // so a pathological creep that sampled more would just clip harmlessly.
+    const ARC_MAX = 2048;
     const arcGeo = track(new THREE.BufferGeometry());
     arcGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ARC_MAX * 3), 3));
     arcGeo.setDrawRange(0, 0);
-    // The aim aids are UI overlays: draw them with depthTest OFF and a high
-    // renderOrder so they're ALWAYS visible, never occluded by the terrain. This
-    // is what broke for short clubs after the terrain started rendering — a low
-    // wedge/approach arc (only ~0.5 yd above the ground) was hidden behind the
-    // mesh; only the high driver arc cleared it.
+    // Aim aids are UI overlays: depthTest OFF + a high renderOrder so a low
+    // wedge/approach arc that hugs the ground isn't occluded by the terrain mesh.
     const overlay = (m: THREE.Material) => {
       m.depthTest = false;
       m.depthWrite = false;
       return m;
     };
     const AIM_ORDER = 10;
+    // Register an aim-aid object: hidden until an aim, drawn on top, and — the
+    // fix above — NEVER frustum-culled (its geometry's extent is rewritten each
+    // drag, so the cached bounding sphere three would cull against is stale).
+    const aimAid = <T extends THREE.Object3D>(o: T): T => {
+      o.visible = false;
+      o.renderOrder = AIM_ORDER;
+      o.frustumCulled = false;
+      scene.add(o);
+      return o;
+    };
+    // The centre trajectory is drawn as DOTS (constant screen size, clear at any
+    // distance) AND a connected line through the same path — the line is the
+    // reliable baseline for every club/GPU; the points add emphasis.
     const arcMat = track(
       overlay(new THREE.PointsMaterial({ color: 0xffffff, size: 7, sizeAttenuation: false, transparent: true, opacity: 0.95 })),
     ) as THREE.PointsMaterial;
-    const arcPts = new THREE.Points(arcGeo, arcMat);
-    arcPts.visible = false;
-    arcPts.renderOrder = AIM_ORDER;
-    scene.add(arcPts);
-    // A connected LINE through the same path, sharing arcGeo. GL point sprites
-    // (arcPts) are unreliable on some mobile GPUs — a low iron/wedge arc rendered
-    // fine in software GL but vanished on-device while the tall driver arc
-    // survived. The line always renders, so the trajectory is guaranteed visible
-    // for every club (and for the putt roll line on the green); the points just
-    // add emphasis where they work.
+    const arcPts = aimAid(new THREE.Points(arcGeo, arcMat));
     const arcLineMat = track(
       overlay(new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 })),
     );
-    const arcLine = new THREE.Line(arcGeo, arcLineMat);
-    arcLine.visible = false;
-    arcLine.renderOrder = AIM_ORDER;
-    scene.add(arcLine);
+    const arcLine = aimAid(new THREE.Line(arcGeo, arcLineMat));
     const arc = { g: arcGeo, l: arcPts, line: arcLine };
     const makeLine = (color: number, opacity: number) => {
       const g = track(new THREE.BufferGeometry());
       g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ARC_MAX * 3), 3));
       g.setDrawRange(0, 0);
       const m = track(overlay(new THREE.LineBasicMaterial({ color, transparent: true, opacity })));
-      const l = new THREE.Line(g, m);
-      l.visible = false;
-      l.renderOrder = AIM_ORDER;
-      scene.add(l);
+      const l = aimAid(new THREE.Line(g, m));
       return { g, l };
     };
     const edgeL = makeLine(0xffe08a, 0.45);
@@ -851,20 +862,14 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       overlay(new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, side: THREE.DoubleSide })),
     );
     const landRingGeo = track(new THREE.RingGeometry(2.4, 3.6, 32));
-    const landRing = new THREE.Mesh(landRingGeo, ringMat);
+    const landRing = aimAid(new THREE.Mesh(landRingGeo, ringMat));
     landRing.rotation.x = -Math.PI / 2;
-    landRing.visible = false;
-    landRing.renderOrder = AIM_ORDER;
-    scene.add(landRing);
     const restRingGeo = track(new THREE.RingGeometry(1.6, 2.4, 28));
     const restRingMat = track(
       overlay(new THREE.MeshBasicMaterial({ color: 0x66e0ff, transparent: true, opacity: 0.85, side: THREE.DoubleSide })),
     );
-    const restRing = new THREE.Mesh(restRingGeo, restRingMat);
+    const restRing = aimAid(new THREE.Mesh(restRingGeo, restRingMat));
     restRing.rotation.x = -Math.PI / 2;
-    restRing.visible = false;
-    restRing.renderOrder = AIM_ORDER;
-    scene.add(restRing);
 
     const fillArc = (
       buf: THREE.BufferGeometry,

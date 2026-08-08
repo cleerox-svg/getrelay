@@ -215,3 +215,35 @@ CREATE TABLE IF NOT EXISTS game_scores (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_game_scores_user_time ON game_scores(user_id, created_at DESC);
+
+-- Per-account personal-best records for the in-app golf Course game.
+-- One row per user (keyed on user_id, like a profile) holding their
+-- current bests across three record types. Each *_yards value is stored
+-- in yards. The three records have different "is this a new best?"
+-- directions, so they live in separate columns rather than rows:
+--   longest_drive   — higher is better (MAX)
+--   closest_to_pin  — LOWER is better  (MIN)
+--   longest_putt    — higher is better (MAX)
+-- Values are REAL to allow fractional yardages. Each record keeps the
+-- hole it was set on (nullable) and when (ms epoch), so the UI can show
+-- "set on hole 7" without a join. Columns are NULL until a first record
+-- of that type is posted; the worker upserts a column only when the new
+-- value beats the stored one. Single-row-per-user makes that a simple
+-- INSERT ... ON CONFLICT(user_id) DO UPDATE ... WHERE excluded beats.
+CREATE TABLE IF NOT EXISTS golf_records (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  -- longest tee/drive shot in yards (higher is better)
+  longest_drive_yards REAL,
+  longest_drive_hole INTEGER,
+  longest_drive_at INTEGER,
+  -- closest an approach shot finished to the pin in yards (LOWER is better)
+  closest_to_pin_yards REAL,
+  closest_to_pin_hole INTEGER,
+  closest_to_pin_at INTEGER,
+  -- longest holed putt in yards (higher is better)
+  longest_putt_yards REAL,
+  longest_putt_hole INTEGER,
+  longest_putt_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);

@@ -86,6 +86,60 @@ describe('course sim — aim prediction', () => {
     expect(Math.abs(pred.rest.x - s2.ball.x)).toBeLessThanOrEqual(1);
     expect(pred.landing).not.toBeNull();
   });
+
+  it('predict() returns a full sampled path for a mid-power drive from the tee', () => {
+    // A ~0.5-power driver flies + rolls a long way; the sampled arc must be a
+    // real trajectory, not a degenerate 1–2 point stub (the "arc is empty" bug).
+    const s = sim();
+    s.power = 0.5;
+    const p = s.predict(0);
+    expect(p.path.length).toBeGreaterThan(50);
+    expect(p.landing).not.toBeNull();
+    // Every sample is finite and moves downrange (no NaN / stuck-at-tee path).
+    for (const pt of p.path) {
+      expect(Number.isFinite(pt.d) && Number.isFinite(pt.x) && Number.isFinite(pt.h)).toBe(true);
+    }
+    expect(p.rest.d).toBeGreaterThan(50);
+  });
+
+  it('predict() rest matches simulateShot for the SAME absolute inputs (shared physics)', () => {
+    // predict aims at bearingToPin + aimRad; with aimRad 0 that is the straight
+    // tee→pin bearing. Firing simulateShot at that SAME absolute bearing + power
+    // must land in the same spot — proof both paths run one integrator.
+    const bearingDeg =
+      (Math.atan2(HOLE_1.pin.x - HOLE_1.tee.x, HOLE_1.pin.d - HOLE_1.tee.d) * 180) / Math.PI;
+    const s1 = sim();
+    s1.power = 0.7;
+    const pred = s1.predict(0);
+    const shot = sim().simulateShot({ clubId: s1.getState().clubId, power: 0.7, aimDeg: bearingDeg });
+    expect(Math.abs(pred.rest.d - shot.restD)).toBeLessThanOrEqual(1);
+    expect(Math.abs(pred.rest.x - shot.restX)).toBeLessThanOrEqual(1);
+  });
+
+  it('snapshot/restore leaves the sim state byte-identical after predict()', () => {
+    // The single-snapshot mechanism must rewind EVERY mutated field. Crucially,
+    // the before/after comparison is taken INDEPENDENTLY of snapshot() — it dumps
+    // ALL own enumerable data props of the sim (ball + trail + every field),
+    // minus the static `hole` — so it can SEE a field that snapshot() forgot. If
+    // predict() mutates such a field, restore() won't rewind it and the dump
+    // diverges → the test fails loudly. (A dump taken through snapshot() itself
+    // would be blind to its own omissions, which is the drift this must catch.)
+    const s = sim();
+    s.power = 0.8;
+    s.setSpin(0.3, -0.2);
+    const fullDump = () => {
+      const rest: Record<string, unknown> = {};
+      const all = s as unknown as Record<string, unknown>;
+      for (const k of Object.keys(all)) if (k !== 'hole') rest[k] = all[k];
+      return JSON.stringify(rest);
+    };
+    const before = fullDump();
+    // Fire the renderer's actual usage: centre + both dispersion edges.
+    s.predict(0);
+    s.predict(-1);
+    s.predict(1);
+    expect(fullDump()).toBe(before);
+  });
 });
 
 describe('course sim — putting on the tilted green', () => {
