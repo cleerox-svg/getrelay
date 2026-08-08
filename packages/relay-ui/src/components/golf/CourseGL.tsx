@@ -454,6 +454,124 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       scene.add(cap);
     }
 
+    // --- Tee box -------------------------------------------------------
+    // A mown, rectangular teeing ground at hole.tee so the opening view reads
+    // like a real tee, not a spot on the fairway. Built like the green cap: a
+    // terrain-FOLLOWING grid (samples heightAt so it hugs the ground) lifted a
+    // hair above the terrain, with flat up-normals to avoid a shading crease,
+    // and a darker/tidier mown green distinct from the fairway. Two blue tee
+    // markers flank the ball, and (only on the tee shot) a subtle peg tees it up.
+    // The pad is built in a local frame aligned to the aim line (tee→pin): u runs
+    // forward down that line, v runs perpendicular. It's set BACK from the ball so
+    // the ball sits on the front third.
+    let teePeg: THREE.Mesh | null = null;
+    {
+      const teeD = hole.tee.d;
+      const teeX = hole.tee.x;
+      // Forward unit (tee→pin) and its right-perpendicular, in (d,x) space.
+      let fd = hole.pin.d - teeD;
+      let fx = hole.pin.x - teeX;
+      const flen = Math.hypot(fd, fx) || 1;
+      fd /= flen;
+      fx /= flen;
+      const rd = fx; // right = perpendicular of forward: (fx, -fd)
+      const rx = -fd;
+      const heading = Math.atan2(fx, fd); // world yaw of the aim line (small here)
+
+      const PAD_HALF_W = 4.5; // ~9 yd wide
+      const PAD_FRONT = 3.5; // yd ahead of the ball
+      const PAD_BACK = 7.5; // yd behind the ball → ball on the front third of ~11 yd
+      const NU = 12;
+      const NV = 10;
+      const LIFT = 0.05;
+      const padDepth = PAD_FRONT + PAD_BACK;
+      const rowV = NV + 1;
+      const vcount = (NU + 1) * rowV;
+      const ppos = new Float32Array(vcount * 3);
+      const puv = new Float32Array(vcount * 2);
+      let pp = 0;
+      let pu = 0;
+      for (let a = 0; a <= NU; a++) {
+        const u = -PAD_BACK + (a / NU) * padDepth;
+        for (let c = 0; c <= NV; c++) {
+          const v = -PAD_HALF_W + (c / NV) * (PAD_HALF_W * 2);
+          const wd = teeD + fd * u + rd * v;
+          const wx = teeX + fx * u + rx * v;
+          ppos[pp] = wx;
+          ppos[pp + 1] = heightAt(hole, wd, wx) + LIFT;
+          ppos[pp + 2] = -wd;
+          puv[pu] = c / NV;
+          puv[pu + 1] = a / NU;
+          pp += 3;
+          pu += 2;
+        }
+      }
+      const pidx: number[] = [];
+      for (let a = 0; a < NU; a++) {
+        for (let c = 0; c < NV; c++) {
+          const base = a * rowV + c;
+          // Wound front-face UP for this aim frame (the right vector flips the
+          // handedness vs the main terrain grid, so the up-facing order is
+          // base → base+row → base+1). Up-normals are set explicitly below, so
+          // this only governs which side survives back-face culling.
+          pidx.push(base, base + rowV, base + 1, base + 1, base + rowV, base + rowV + 1);
+        }
+      }
+      const padGeo = track(new THREE.BufferGeometry());
+      padGeo.setAttribute('position', new THREE.BufferAttribute(ppos, 3));
+      padGeo.setAttribute('uv', new THREE.BufferAttribute(puv, 2));
+      padGeo.setIndex(pidx);
+      // Flat up-normals (like the green cap) so the pad reads as a clean, level
+      // mown surface with no center shading crease.
+      const pnorm = new Float32Array(vcount * 3);
+      for (let i = 0; i < vcount; i++) pnorm[i * 3 + 1] = 1;
+      padGeo.setAttribute('normal', new THREE.BufferAttribute(pnorm, 3));
+      const padNorm = track(makeTurfNormalMap());
+      padNorm.repeat.set(6, 8);
+      const padMat = track(
+        new THREE.MeshStandardMaterial({
+          color: 0x40873a, // darker, tidier mown green — distinct from the fairway
+          roughness: 0.72,
+          metalness: 0,
+          normalMap: padNorm,
+        }),
+      );
+      padMat.normalScale.set(0.3, 0.3);
+      const pad = new THREE.Mesh(padGeo, padMat);
+      pad.receiveShadow = true;
+      scene.add(pad);
+
+      // Two tee markers flanking the ball, perpendicular to the aim line. Low
+      // blue blocks; they cast shadows onto the pad. Geometry/material shared.
+      const markGeo = track(new THREE.BoxGeometry(0.7, 0.5, 1.0));
+      const markMat = track(
+        new THREE.MeshStandardMaterial({ color: 0x2f6fe0, roughness: 0.5, metalness: 0 }),
+      );
+      const markU = 0.4; // just ahead of the ball
+      const markV = 3.7;
+      for (const sgn of [-1, 1]) {
+        const wd = teeD + fd * markU + rd * sgn * markV;
+        const wx = teeX + fx * markU + rx * sgn * markV;
+        const mk = new THREE.Mesh(markGeo, markMat);
+        mk.position.set(wx, heightAt(hole, wd, wx) + 0.25, -wd);
+        mk.rotation.y = heading;
+        mk.castShadow = true;
+        mk.receiveShadow = true;
+        scene.add(mk);
+      }
+
+      // Subtle tee peg under the ball (tee shot only — toggled in the loop by
+      // stroke count). A thin short cylinder rising from the pad to the ball.
+      const pegH = 0.42;
+      const pegGeo = track(new THREE.CylinderGeometry(0.05, 0.07, pegH, 8));
+      const pegMat = track(new THREE.MeshStandardMaterial({ color: 0xf2f2f0, roughness: 0.55 }));
+      teePeg = new THREE.Mesh(pegGeo, pegMat);
+      const pegY = heightAt(hole, teeD, teeX) + LIFT;
+      teePeg.position.set(teeX, pegY + pegH / 2, -teeD);
+      teePeg.castShadow = true;
+      scene.add(teePeg);
+    }
+
     // --- Green-reading heat grid (shown while putting) -----------------
     // A contour grid over the green, HEAT-COLOURED by slope relative to the putt
     // to the hole: warm = uphill toward the cup (putt firmer), cool = downhill
@@ -940,6 +1058,10 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       const onGreen = !st.inFlight && st.lie === 'green';
       if (greenGrid) greenGrid.visible = onGreen && celebrate < 0;
 
+      // Tee peg: only for the tee shot (stroke 0), and hidden once the ball is
+      // away so it doesn't linger under a mid-flight/rolling ball.
+      if (teePeg) teePeg.visible = st.strokes === 0 && !st.inFlight;
+
       // Hole-out celebration: fire once when the ball drops, then animate the
       // ring pulse + confetti for ~1.6 s.
       if (st.holed && celebrate < 0) {
@@ -977,9 +1099,9 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         }
       }
 
-      // Camera: chase the ball in flight, sit behind it toward the pin at rest.
+      // Camera: chase the ball while it's in the AIR along its travel direction.
       ballWorld(tmpB);
-      if (b.inFlight) {
+      if (b.inFlight && !b.grounded) {
         tmpDir.set(b.vx, 0, -b.vd); // horizontal travel dir in world (d→−z)
         if (tmpDir.lengthSq() < 1e-4) tmpDir.subVectors(pinV, tmpB).setY(0);
         tmpDir.setY(0).normalize();
@@ -987,6 +1109,17 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         desiredPos.y = tmpB.y + 13;
         desiredLook.copy(tmpB).addScaledVector(tmpDir, 24);
         desiredLook.y = tmpB.y - 1.5;
+      } else if (b.inFlight) {
+        // Rolling on the ground: follow the ball but keep the camera facing the
+        // PIN. Using the ball's velocity here made the camera swing around and
+        // reverse whenever the ball trickled backward/sideways down a slope.
+        tmpDir.subVectors(pinV, tmpB).setY(0);
+        if (tmpDir.lengthSq() < 1e-4) tmpDir.set(0, 0, -1);
+        tmpDir.normalize();
+        desiredPos.copy(tmpB).addScaledVector(tmpDir, -20);
+        desiredPos.y = tmpB.y + 12;
+        desiredLook.copy(tmpB).addScaledVector(tmpDir, 26);
+        desiredLook.y = tmpB.y - 1;
       } else if (st.lie === 'green' || st.putting || st.distToPin < 28) {
         // Putts + short approaches: zoom IN. Sit low just behind the ball and
         // look toward the cup so the ball AND the hole frame together, instead of

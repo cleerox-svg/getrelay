@@ -35,7 +35,9 @@ const outDir = path.join(pkgDir, '.golf-shots');
 const SCENES = {
   course: { query: 'scene=course', label: 'course-hole1' },
   green: { query: 'scene=course&at=green', label: 'course-green' },
+  approach: { query: 'scene=course&at=approach', label: 'course-approach' },
   aim: { query: 'scene=course&at=fairway', label: 'course-aim-iron', drag: true },
+  played: { query: 'scene=course&at=played', label: 'course-played-aim', drag: true },
   celebrate: { query: 'scene=course&at=holed', label: 'course-celebrate' },
   range: { query: 'scene=range&layout=fairway', label: 'range-fairway' },
 };
@@ -115,6 +117,36 @@ async function main() {
           await page.mouse.down();
           for (let s = 1; s <= 6; s++) await page.mouse.move(cx, y0 - (250 * s) / 6);
           await page.waitForTimeout(300);
+        }
+        if (drag) {
+          const dbg = await page.evaluate(() => {
+            const sim = window.__sim;
+            if (!sim) return { err: 'no __sim' };
+            const st = sim.getState();
+            let pathLen = -1;
+            let landing = null;
+            let err = null;
+            try {
+              const p = sim.predict(0);
+              pathLen = p.path.length;
+              landing = p.landing ? { d: Math.round(p.landing.d), x: Math.round(p.landing.x) } : null;
+            } catch (e) {
+              err = String(e);
+            }
+            return {
+              aiming: st.aiming,
+              power: Math.round(sim.power * 100) / 100,
+              lie: st.lie,
+              dist: st.distToPin,
+              club: st.clubId,
+              putting: st.putting,
+              inFlight: st.inFlight,
+              pathLen,
+              landing,
+              err,
+            };
+          });
+          console.log(`  DBG ${id}: ${JSON.stringify(dbg)}`);
         }
         const file = path.join(outDir, `${label}.png`);
         await page.screenshot({ path: file });
