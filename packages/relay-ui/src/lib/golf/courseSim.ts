@@ -207,6 +207,14 @@ export interface CourseState {
   // On the green → the next stroke is a putt (ground roll), so the HUD can label
   // the club "Putter" and read the power meter as putt strength.
   putting: boolean;
+  // The hole's number (for attributing a record to a hole) and the per-hole best
+  // shots so far, rounded to whole yards (null until produced). The recap reads
+  // these at hole-out to show the drive / closest-approach / holed-putt lengths
+  // and to POST them to /game/golf-records.
+  holeId: number;
+  driveYards: number | null;
+  closestToPinYards: number | null;
+  longestPuttYards: number | null;
 }
 
 const TRAIL_MAX = 64;
@@ -246,6 +254,13 @@ interface CourseSnapshot {
   shotOriginX: number;
   penaltyPending: boolean;
   stepGuard: number;
+  driveYards: number | null;
+  closestToPinYards: number | null;
+  longestPuttYards: number | null;
+  driveRecorded: boolean;
+  shotIsDrive: boolean;
+  shotIsPutt: boolean;
+  puttStartDist: number;
 }
 
 export class CourseSim {
@@ -290,6 +305,26 @@ export class CourseSim {
   private shotOriginX = 0;
   private penaltyPending = false;
   private stepGuard = 0;
+
+  // --- Per-hole best-shot records (surfaced in the recap, posted to
+  // /game/golf-records). Accumulated as shots come to REST via stop(), so both
+  // the live fire path and the simulateShot/simulatePutt harness feed them. All
+  // in yards; null until the hole produces one.
+  //   driveYards       — total played distance of the TEE shot / first full
+  //                       swing (one per hole; a first swing that finds water/OB
+  //                       doesn't count, so its replay becomes the drive).
+  //   closestToPinYards — the nearest ANY non-holing shot RESTED to the pin
+  //                       (the "closest approach"; excludes holed/water/OB).
+  //   longestPuttYards  — the length (origin→cup) of the longest PUTT that
+  //                       HOLED OUT (a stroke played from the green that drops);
+  //                       null if the hole wasn't finished with a putt.
+  driveYards: number | null = null;
+  closestToPinYards: number | null = null;
+  longestPuttYards: number | null = null;
+  private driveRecorded = false; // the drive distance is locked in for the hole
+  private shotIsDrive = false; // the in-flight shot is the (unrecorded) drive
+  private shotIsPutt = false; // the in-flight shot is a putt (ground roll)
+  private puttStartDist = 0; // length of the in-flight putt (origin→pin)
 
   constructor(hole: CourseHole, clubId = DEFAULT_CLUB_ID) {
     this.hole = hole;
@@ -352,6 +387,10 @@ export class CourseSim {
     this.result = 'tee';
     this.trail.length = 0;
     this.stepGuard = 0;
+    // The first full swing of the hole is the drive candidate (recorded at rest,
+    // unless it finds water/OB — then its replay is the drive).
+    this.shotIsDrive = !this.driveRecorded;
+    this.shotIsPutt = false;
   }
 
   // Roll a PUTT from the current lie: no launch angle, no power floor — the drag
@@ -380,6 +419,12 @@ export class CourseSim {
     // Smooth green roll — the green lie's own run, no club bite.
     const mat = TERRAIN.green;
     this.rollDecay = Math.max(0.6, Math.min(0.99, 1 - (1 - 0.985) / mat.runMul));
+    // A putt can hole → remember its length (origin→cup) for the longest-putt
+    // record; it is NOT a drive.
+    this.shotIsDrive = false;
+    this.shotIsPutt = true;
+    const p = this.hole.pin;
+    this.puttStartDist = Math.hypot(b.d - p.d, b.x - p.x);
   }
 
   private pushTrail(): void {
@@ -402,11 +447,47 @@ export class CourseSim {
     this.total = this.origin2D(b.d, b.x);
     this.result = result;
     if (result === 'holed') this.holed = true;
+    this.recordShot(result);
     // Water / OB → the next address replays from the previous spot for a penalty.
     if (result === 'water' || result === 'ob') this.penaltyPending = true;
     // Auto-club the next shot for the new lie/distance (the player can still
     // cycle). A driver-for-a-bunker-chip default is exactly what this avoids.
     else this.clubId = this.recommendedClub();
+  }
+
+  // Fold a shot that has just come to REST into the per-hole best records. Called
+  // from stop() so every terminating path (live fire, simulateShot, simulatePutt,
+  // the safety guard) feeds the same accounting.
+  private recordShot(result: CourseResult): void {
+    const b = this.ball;
+    const p = this.hole.pin;
+    // Closest-to-pin: the nearest an APPROACH (a full swing) finishes to the cup.
+    // Exclude the holed shot (ball in the cup), hazard stops (water/OB are
+    // replayed), AND putts — a stroke played from the green (shotIsPutt) rests
+    // inches from the cup on nearly every completed hole, which would collapse
+    // this to ~0 and make the stat meaningless. So only non-putt rests count.
+    if (result !== 'holed' && result !== 'water' && result !== 'ob' && !this.shotIsPutt) {
+      const dtp = Math.hypot(b.d - p.d, b.x - p.x);
+      if (this.closestToPinYards == null || dtp < this.closestToPinYards) {
+        this.closestToPinYards = dtp;
+      }
+    }
+    // Drive: the first full swing's total distance, locked in once it finishes on
+    // a playable lie. A first swing into water/OB doesn't count — shotIsDrive
+    // clears but driveRecorded stays false, so the replay swing becomes the drive.
+    if (this.shotIsDrive) {
+      this.shotIsDrive = false;
+      if (result !== 'water' && result !== 'ob') {
+        this.driveYards = this.total;
+        this.driveRecorded = true;
+      }
+    }
+    // Longest putt: a putt (green stroke) that HOLES OUT; keep the longest.
+    if (result === 'holed' && this.shotIsPutt) {
+      if (this.longestPuttYards == null || this.puttStartDist > this.longestPuttYards) {
+        this.longestPuttYards = this.puttStartDist;
+      }
+    }
   }
 
   // --- Interactive control surface (CourseGL drives this; CourseGame reads it) --
@@ -571,6 +652,12 @@ export class CourseSim {
       spinSide: this.spinSide,
       penaltyPending: this.penaltyPending,
       putting: this.putting(),
+      holeId: this.hole.id,
+      driveYards: this.driveYards == null ? null : Math.round(this.driveYards),
+      closestToPinYards:
+        this.closestToPinYards == null ? null : Math.round(this.closestToPinYards),
+      longestPuttYards:
+        this.longestPuttYards == null ? null : Math.round(this.longestPuttYards),
     };
   }
 
@@ -760,6 +847,13 @@ export class CourseSim {
       shotOriginX: this.shotOriginX,
       penaltyPending: this.penaltyPending,
       stepGuard: this.stepGuard,
+      driveYards: this.driveYards,
+      closestToPinYards: this.closestToPinYards,
+      longestPuttYards: this.longestPuttYards,
+      driveRecorded: this.driveRecorded,
+      shotIsDrive: this.shotIsDrive,
+      shotIsPutt: this.shotIsPutt,
+      puttStartDist: this.puttStartDist,
     };
   }
 
@@ -794,6 +888,13 @@ export class CourseSim {
     this.shotOriginX = s.shotOriginX;
     this.penaltyPending = s.penaltyPending;
     this.stepGuard = s.stepGuard;
+    this.driveYards = s.driveYards;
+    this.closestToPinYards = s.closestToPinYards;
+    this.longestPuttYards = s.longestPuttYards;
+    this.driveRecorded = s.driveRecorded;
+    this.shotIsDrive = s.shotIsDrive;
+    this.shotIsPutt = s.shotIsPutt;
+    this.puttStartDist = s.puttStartDist;
   }
 
   // Non-committing trajectory PREDICTION for the aim aid — runs the CURRENT
@@ -909,6 +1010,11 @@ export class CourseSim {
     this.carry = 0;
     this.apex = 0;
     this.firstLanding = false;
+    // Mark it a putt so a holed roll feeds the longest-putt record (mirrors
+    // puttLaunch on the live fire path).
+    this.shotIsDrive = false;
+    this.shotIsPutt = true;
+    this.puttStartDist = Math.hypot(b.d - this.hole.pin.d, b.x - this.hole.pin.x);
     // Putting surface friction: use the lie's own material run, no club bite.
     const mat = TERRAIN[terrainFor(this.lieAt(b.d, b.x))];
     this.rollDecay = Math.max(0.6, Math.min(0.99, 1 - (1 - 0.985) / mat.runMul));

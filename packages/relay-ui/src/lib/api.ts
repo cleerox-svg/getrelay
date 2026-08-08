@@ -297,6 +297,26 @@ export const api = {
     request<{ entries: GameLeaderboardEntry[] }>(
       `/game/leaderboard?period=${period}&game=${game}`,
     ),
+  // Golf personal best-shot records (longest drive, closest-to-pin, longest
+  // holed putt), persisted per-account. GET returns the caller's current bests
+  // (401 if unauthed — callers must tolerate that and skip the records UI).
+  getGolfRecords: () => request<{ records: GolfRecords }>('/game/golf-records'),
+  // POST end-of-hole candidates — send ONLY the metrics this hole produced (all
+  // optional). The server upserts-on-improve (MAX drive/putt, MIN closest) and
+  // reports which improved plus the read-after-write records. Do NOT send
+  // timestamps. Values are whole yards.
+  postGolfRecords: (body: {
+    longestDriveYards?: number;
+    longestDriveHole?: number;
+    closestToPinYards?: number;
+    closestToPinHole?: number;
+    longestPuttYards?: number;
+    longestPuttHole?: number;
+  }) =>
+    request<{ improved: GolfRecordsImproved; records: GolfRecords }>('/game/golf-records', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   // Giphy Action Register pingback. Best-effort: failures are swallowed so
   // analytics never interferes with sending a GIF.
   registerGifAction: (url: string | undefined, randomId: string) => {
@@ -368,6 +388,25 @@ export const api = {
     );
   },
 };
+
+// A single golf best-shot record (or null when never set). `hole` is which hole
+// produced it; `at` is the server timestamp (ms). Matches the worker's
+// shapeGolfRecords() output in games.ts.
+export interface GolfRecordMetric {
+  yards: number;
+  hole: number | null;
+  at: number | null;
+}
+export interface GolfRecords {
+  longestDrive: GolfRecordMetric | null;
+  closestToPin: GolfRecordMetric | null;
+  longestPutt: GolfRecordMetric | null;
+}
+export interface GolfRecordsImproved {
+  longestDrive: boolean;
+  closestToPin: boolean;
+  longestPutt: boolean;
+}
 
 export interface HistoryMessage {
   id: string;

@@ -10,6 +10,8 @@ import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { CourseSim, type CourseState } from '../../lib/golf/courseSim';
 import { HOLE_1 } from '../../lib/golf/terrain';
+import { api } from '../../lib/api';
+import type { GolfRecords, GolfRecordsImproved } from '../../lib/api';
 
 // Lazy so `three` (in CourseGL) stays out of the main entry chunk.
 const CourseGL = lazy(() => import('./CourseGL'));
@@ -38,6 +40,24 @@ const lieLabel: Record<string, string> = {
   cartpath: 'Cart path',
   ob: 'Out of bounds',
 };
+
+// One line in a recap card: a label on the left, a value on the right, with an
+// optional "New best!" badge for a metric the server reported as improved.
+function RecapRow({ label, value, badge }: { label: string; value: string; badge?: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="opacity-80">{label}</span>
+      <span className="flex items-center gap-2 font-semibold tabular-nums">
+        {value}
+        {badge && (
+          <span className="rounded-full bg-amber-400 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-black">
+            New best!
+          </span>
+        )}
+      </span>
+    </div>
+  );
+}
 
 function AccuracyBar({ onStop }: { onStop: (e: number) => void }) {
   const markerRef = useRef<HTMLDivElement | null>(null);
@@ -125,11 +145,83 @@ export default function CourseGame({ onExit }: { onExit?: () => void }) {
   const [st, setSt] = useState<CourseState>(() => sim.getState());
   const [resetKey, setResetKey] = useState(0);
 
+  // Personal best-shot records (from POST /game/golf-records on hole-out).
+  // `records` stays null until the round-trip lands; `recordsState` tracks it so
+  // the recap can show "Saving…" then either the bests or (unauthed/offline)
+  // gracefully skip the section.
+  const [records, setRecords] = useState<GolfRecords | null>(null);
+  const [improved, setImproved] = useState<GolfRecordsImproved | null>(null);
+  const [recordsState, setRecordsState] = useState<'idle' | 'saving' | 'done' | 'error'>('idle');
+  const postedRef = useRef(false);
+
   // Poll the sim for HUD readouts.
   useEffect(() => {
     const id = window.setInterval(() => setSt(sim.getState()), 120);
     return () => window.clearInterval(id);
   }, [sim]);
+
+  // Seed the Personal bests once on mount from the player's saved records, so the
+  // recap can show last-known bests immediately (and still show them if the
+  // hole-out POST later fails offline). Unauthed (401) / offline → stays null and
+  // the bests section is simply skipped. Never sets `improved` (no shot to badge
+  // yet); the hole-out POST supplies the read-after-write records + "New best!".
+  useEffect(() => {
+    let live = true;
+    api
+      .getGolfRecords()
+      .then((r) => {
+        if (live) setRecords(r.records);
+      })
+      .catch(() => {
+        /* unauthed / offline — recap simply omits the bests until a POST lands */
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  // On hole-out: POST this hole's best shots, then refresh the player's PERSONAL
+  // bests from the read-after-write records, badging any the server says
+  // improved. Fires once per hole (postedRef one-shot). Unauthed (401) / offline
+  // leaves recordsState 'error' and no badges — the recap then falls back to the
+  // GET-seeded bests (or skips the section if that failed too). Never crashes.
+  useEffect(() => {
+    if (!st.holed || postedRef.current) return;
+    postedRef.current = true;
+    const body: {
+      longestDriveYards?: number;
+      longestDriveHole?: number;
+      closestToPinYards?: number;
+      closestToPinHole?: number;
+      longestPuttYards?: number;
+      longestPuttHole?: number;
+    } = {};
+    if (st.driveYards != null && st.driveYards > 0) {
+      body.longestDriveYards = st.driveYards;
+      body.longestDriveHole = st.holeId;
+    }
+    // NOTE: closest-to-pin is sent when non-null INCLUDING 0 (drive/putt guard
+    // > 0, but 0 is a legitimately great closest approach — a stone-dead shot —
+    // and the server clamps/accepts it). Do NOT "fix" this to > 0: that would
+    // silently drop the best approaches.
+    if (st.closestToPinYards != null) {
+      body.closestToPinYards = st.closestToPinYards;
+      body.closestToPinHole = st.holeId;
+    }
+    if (st.longestPuttYards != null && st.longestPuttYards > 0) {
+      body.longestPuttYards = st.longestPuttYards;
+      body.longestPuttHole = st.holeId;
+    }
+    setRecordsState('saving');
+    api
+      .postGolfRecords(body)
+      .then((r) => {
+        setRecords(r.records);
+        setImproved(r.improved);
+        setRecordsState('done');
+      })
+      .catch(() => setRecordsState('error'));
+  }, [st.holed, st.driveYards, st.closestToPinYards, st.longestPuttYards, st.holeId]);
 
   const fire = (e: number) => {
     setArmed(false);
@@ -141,6 +233,11 @@ export default function CourseGame({ onExit }: { onExit?: () => void }) {
     setArmed(false);
     setResetKey((k) => k + 1);
     setSt(simRef.current.getState());
+    postedRef.current = false;
+    // Keep the known bests (they're a valid fallback for the next hole-out), but
+    // clear the per-hole "New best!" badges and the round-trip state.
+    setImproved(null);
+    setRecordsState('idle');
   };
 
   const club = (dir: 1 | -1) => sim.cycleClub(dir);
@@ -328,9 +425,63 @@ export default function CourseGame({ onExit }: { onExit?: () => void }) {
         >
           <div className="text-white text-center">
             <div className="text-3xl font-extrabold mb-1">{scoreName(st.strokes, st.par)}</div>
-            <div className="text-lg mb-5">
+            <div className="text-lg mb-4">
               Holed in {st.strokes} (par {st.par})
             </div>
+
+            {/* This hole's best shots. */}
+            <div className="mx-auto mb-3 w-[min(84vw,340px)] rounded-2xl bg-white/10 px-4 py-3 text-left text-sm">
+              <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide opacity-70">
+                This hole
+              </div>
+              <div className="space-y-1">
+                <RecapRow
+                  label="Drive"
+                  value={st.driveYards != null ? `${st.driveYards} yd` : '—'}
+                />
+                <RecapRow
+                  label="Closest to pin"
+                  value={st.closestToPinYards != null ? `${st.closestToPinYards} yd` : '—'}
+                />
+                <RecapRow
+                  label="Longest putt"
+                  value={st.longestPuttYards ? `${st.longestPuttYards} yd` : '—'}
+                />
+              </div>
+            </div>
+
+            {/* Personal bests. Seeded from GET on mount, refreshed by the
+                hole-out POST (read-after-write + "New best!" badges). Shows the
+                last-known bests even if the POST fails offline; only when BOTH
+                the GET and POST failed (records still null) is it skipped. */}
+            {recordsState === 'saving' && (
+              <div className="mb-5 text-sm opacity-70">Saving records…</div>
+            )}
+            {recordsState !== 'saving' && records && (
+              <div className="mx-auto mb-5 w-[min(84vw,340px)] rounded-2xl bg-white/10 px-4 py-3 text-left text-sm">
+                <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide opacity-70">
+                  Personal bests
+                </div>
+                <div className="space-y-1">
+                  <RecapRow
+                    label="Longest drive"
+                    value={records.longestDrive ? `${records.longestDrive.yards} yd` : '—'}
+                    badge={improved?.longestDrive}
+                  />
+                  <RecapRow
+                    label="Closest to pin"
+                    value={records.closestToPin ? `${records.closestToPin.yards} yd` : '—'}
+                    badge={improved?.closestToPin}
+                  />
+                  <RecapRow
+                    label="Longest putt"
+                    value={records.longestPutt ? `${records.longestPutt.yards} yd` : '—'}
+                    badge={improved?.longestPutt}
+                  />
+                </div>
+              </div>
+            )}
+
             <div className="flex gap-3 justify-center">
               <button
                 onClick={playAgain}

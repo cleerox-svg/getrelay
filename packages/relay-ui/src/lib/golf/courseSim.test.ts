@@ -322,3 +322,96 @@ describe('course sim — play-test fixes (interactive fire path)', () => {
     expect(s.ball.x).toBeCloseTo(g.x, 0); // and stayed on line (didn't snap sideways)
   });
 });
+
+// --- Per-hole best-shot records (drive / closest-to-pin / holed putt) ---------
+// The recap POSTs these to /game/golf-records. They accumulate as shots come to
+// REST, so simulateShot / simulatePutt / the interactive fire path all feed the
+// same numbers — this pins the attribution: the drive is the FIRST full swing's
+// total, closest-to-pin is the nearest a non-holing shot rested, and the longest
+// putt is the length of a putt that HOLED.
+describe('course sim — per-hole best-shot records', () => {
+  const g = HOLE_1.green;
+
+  it('drive = the first full swing total; later swings do NOT overwrite it', () => {
+    const s = sim();
+    const drv = s.simulateShot({ clubId: 'driver', power: 1 }); // opening tee shot
+    expect(s.driveYards).not.toBeNull();
+    expect(Math.round(s.driveYards!)).toBe(drv.total);
+    const locked = s.driveYards;
+    // A second full swing from up the fairway must not replace the drive.
+    s.simulateShot({ clubId: '7iron', power: 1, from: { d: 300, x: 0 } });
+    expect(s.driveYards).toBe(locked);
+  });
+
+  it('a first swing that goes OB is not the drive — the replay is', () => {
+    const s = sim();
+    const ob = s.simulateShot({ clubId: 'driver', power: 1, aimDeg: -35 });
+    expect(ob.result).toBe('ob');
+    expect(s.driveYards).toBeNull(); // OB doesn't lock a drive
+    const good = s.simulateShot({ clubId: 'driver', power: 1, from: { d: 0, x: 0 } });
+    expect(['fairway', 'rough', 'green', 'fringe', 'bunker', 'cartpath', 'tee']).toContain(
+      good.result,
+    );
+    expect(Math.round(s.driveYards!)).toBe(good.total); // the in-bounds swing is the drive
+  });
+
+  it('closest-to-pin tracks the MINIMUM rest distance across non-holing shots', () => {
+    const s = sim();
+    const drv = s.simulateShot({ clubId: 'driver', power: 1 }); // far from the pin
+    expect(Math.round(s.closestToPinYards!)).toBeLessThanOrEqual(drv.distToPin + 1);
+    // A short approach that finishes near the green must pull the record in.
+    const near = s.simulateShot({
+      clubId: 'pw',
+      power: 1,
+      from: { d: g.d - 120, x: g.x },
+    });
+    const best = Math.min(drv.distToPin, near.distToPin);
+    expect(Math.abs(Math.round(s.closestToPinYards!) - best)).toBeLessThanOrEqual(1);
+  });
+
+  it('a two-putt does NOT record a ~0 closest-to-pin from the tap — the approach wins', () => {
+    const s = sim();
+    // An APPROACH (full swing) that finishes several yards from the pin.
+    const approach = s.simulateShot({ clubId: 'sw', power: 0.7, from: { d: g.d - 80, x: g.x } });
+    expect(approach.result).not.toBe('holed');
+    const closestAfterApproach = s.closestToPinYards!;
+    expect(Math.round(closestAfterApproach)).toBe(approach.distToPin);
+    expect(closestAfterApproach).toBeGreaterThan(2);
+
+    // A lag PUTT (stroke from the green) that trickles up and rests CLOSER to the
+    // cup than the approach did. Because putts are excluded, it must NOT become
+    // the closest-to-pin — otherwise every two-putt would record a ~0.
+    const putt = s.simulatePutt({ d: g.d - 1.5, x: g.x }, 1.5, 0);
+    expect(putt.result).not.toBe('holed');
+    expect(putt.distToPin).toBeLessThan(closestAfterApproach); // the tap finished closer...
+    expect(s.closestToPinYards).toBe(closestAfterApproach); // ...yet closest is unchanged
+  });
+
+  it('longest putt = the length of a putt that HOLES OUT (via the fire path)', () => {
+    // Scan the power band for the holing pace from 6yd below the cup, then assert
+    // the recorded putt length is ~that 6yd putt (not a lofted-shot distance).
+    let holed: CourseSim | null = null;
+    for (let power = 0.3; power <= 0.75; power += 0.01) {
+      const s = sim();
+      s.ball.d = g.d - 6;
+      s.ball.x = g.x;
+      s.ball.h = 0;
+      fireStraight(s, power);
+      if (s.holed) {
+        holed = s;
+        break;
+      }
+    }
+    expect(holed).not.toBeNull();
+    expect(holed!.longestPuttYards).not.toBeNull();
+    // The putt was struck ~6yd from the cup, so its recorded length is ~6yd.
+    expect(holed!.longestPuttYards!).toBeGreaterThan(4);
+    expect(holed!.longestPuttYards!).toBeLessThan(8);
+  });
+
+  it('no putt is recorded before any putt holes', () => {
+    const s = sim();
+    s.simulateShot({ clubId: 'driver', power: 1 });
+    expect(s.longestPuttYards).toBeNull();
+  });
+});
