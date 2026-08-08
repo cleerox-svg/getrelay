@@ -10,7 +10,7 @@ import { CourseSim } from './courseSim';
 import { HOLE_1, type CourseHole } from './terrain';
 import { CLUBS } from './clubs';
 import { GRAVITY } from './rangeSim';
-import { greenRollDecel, rollOutDistance } from './greenPhysics';
+import { BALL_R, CUP_R, greenRollDecel, rollOutDistance } from './greenPhysics';
 
 // A HOLE_1 clone with a DEAD-FLAT green (no tilt, no undulation) — the control
 // for proving the tilt (not noise) is what breaks a putt.
@@ -55,8 +55,10 @@ describe('course sim — full shots on HOLE_1', () => {
   });
 
   it('a ball hit into the pond finds water; a wild pull goes OB', () => {
-    // A short wedge that carries into the pond short-right of the green splashes.
-    const water = sim().simulateShot({ clubId: 'pw', power: 0.5, from: { d: 400, x: 2 } });
+    // A short wedge from the approach line, straight at the pin, that comes up in
+    // the pond guarding the front of the green splashes. (from→pin runs over the
+    // pond centre, so a shot that lands short of the green finds water.)
+    const water = sim().simulateShot({ clubId: 'pw', power: 0.3, from: { d: 427, x: 13 } });
     expect(water.result).toBe('water');
     // A wildly pulled driver off the tee leaves the corridor → out of bounds.
     const ob = sim().simulateShot({ clubId: 'driver', power: 1, aimDeg: -35 });
@@ -283,8 +285,10 @@ describe('course sim — play-test fixes (interactive fire path)', () => {
     // The green breaks and the cup is speed-gated, so only a well-paced putt
     // drops — scan the power band finely to find the holing pace (proving the
     // hole IS holeable through the actual fire path, not that any power works).
+    // This is a 6-yd UPHILL putt, so with the low-end-dense quadratic putt map
+    // the holing pace lives in the upper part of the drag.
     let holed = false;
-    for (let power = 0.3; power <= 0.75; power += 0.01) {
+    for (let power = 0.3; power <= 0.95; power += 0.01) {
       const s = sim();
       s.ball.d = g.d - 6;
       s.ball.x = g.x;
@@ -320,6 +324,99 @@ describe('course sim — play-test fixes (interactive fire path)', () => {
     // bearing snapped sideways/away and could never turn the shot around.
     expect(s.ball.d).toBeLessThan(g.d); // ended up on the pin's side, not behind
     expect(s.ball.x).toBeCloseTo(g.x, 0); // and stayed on line (didn't snap sideways)
+  });
+});
+
+// --- Phase 2: putting scale, holing reliability + short-putt control ----------
+// The user played Hole 1 and took 13-14 strokes because putts would not drop and
+// short putts could not be feathered. These pin the fixes: the ball is ~0.4× the
+// cup (visibly fits), an on-line putt at a normal pace HOLES OUT (via the real
+// fire path AND predict()), a too-fast putt does NOT, and a delicate tap on a
+// 3-ft putt stays near the hole instead of blasting past.
+describe('course sim — putting scale + holing (Phase 2)', () => {
+  const g = HOLE_1.green;
+
+  it('the ball is smaller than the cup, at a realistic ~0.4 ratio (visibly fits)', () => {
+    expect(BALL_R).toBeLessThan(CUP_R);
+    const ratio = BALL_R / CUP_R;
+    expect(ratio).toBeGreaterThan(0.3);
+    expect(ratio).toBeLessThan(0.5);
+  });
+
+  it('an on-line ~6ft putt at a normal pace HOLES OUT (real fire path)', () => {
+    // A 2-yd (6-ft) putt aimed straight at the cup: some normal (mid-drag) pace
+    // must drop it. Scan a sensible pace band — the point is the hole is reliably
+    // makeable, not that one magic number works.
+    let holed = false;
+    for (let power = 0.35; power <= 0.62; power += 0.02) {
+      const s = sim();
+      s.ball.d = g.d;
+      s.ball.x = g.x - 2; // 2 yd from the cup, on the cross line
+      s.ball.h = 0;
+      fireStraight(s, power);
+      if (s.holed) {
+        holed = true;
+        break;
+      }
+    }
+    expect(holed).toBe(true);
+  });
+
+  it('predict() reports HOLED for an on-line putt at a holing pace', () => {
+    // Phase 3 lights the aim line when predict().result === 'holed', so predict
+    // must faithfully report a drop for the same on-line stroke the fire path holes.
+    const s = sim();
+    s.ball.d = g.d;
+    s.ball.x = g.x - 1; // 3 ft below the cup
+    s.ball.h = 0;
+    s.power = 0.3; // a modest holing pace for a short putt
+    expect(s.getState().putting).toBe(true);
+    expect(s.predict(0).result).toBe('holed');
+  });
+
+  it('a putt hit much too hard does NOT hole (lips out / rolls over)', () => {
+    // Full power over the cup from 6 ft: far above the capture limit, so it runs on.
+    const s = sim();
+    s.ball.d = g.d;
+    s.ball.x = g.x - 2;
+    s.ball.h = 0;
+    fireStraight(s, 1); // blast it
+    expect(s.holed).toBe(false);
+  });
+
+  it('a delicate tap on a 3-ft putt stays near the hole (does not blast past)', () => {
+    // The core control complaint: the minimum stroke used to overshoot a short
+    // putt. A soft tap on a 1-yd putt must trickle up short of / near the cup,
+    // never rocket past it.
+    const s = sim();
+    s.ball.d = g.d;
+    s.ball.x = g.x - 1; // 3 ft from the cup
+    s.ball.h = 0;
+    fireStraight(s, 0.1); // barely-there tap
+    // It didn't fly off (still a putt outcome) and it did not overshoot: it rests
+    // no further from the cup than it started (it came up short / dead).
+    expect(['green', 'fringe', 'holed']).toContain(s.getState().lastResult);
+    if (!s.holed) {
+      expect(Math.hypot(s.ball.d - g.d, s.ball.x - g.x)).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('a 3-ft putt is makeable with a controlled (not maxed) stroke', () => {
+    // A modest pace in the lower-middle of the drag holes a 3-ft putt — you are
+    // NOT forced to the top of the power meter to reach a close hole.
+    let holed = false;
+    for (let power = 0.2; power <= 0.45; power += 0.02) {
+      const s = sim();
+      s.ball.d = g.d;
+      s.ball.x = g.x - 1;
+      s.ball.h = 0;
+      fireStraight(s, power);
+      if (s.holed) {
+        holed = true;
+        break;
+      }
+    }
+    expect(holed).toBe(true);
   });
 });
 
@@ -359,10 +456,13 @@ describe('course sim — per-hole best-shot records', () => {
     const s = sim();
     const drv = s.simulateShot({ clubId: 'driver', power: 1 }); // far from the pin
     expect(Math.round(s.closestToPinYards!)).toBeLessThanOrEqual(drv.distToPin + 1);
-    // A short approach that finishes near the green must pull the record in.
+    // A short approach that carries the pond and holds the green must pull the
+    // record in. (Full power here trickles off the front into the pond — a real
+    // consequence of the back-to-front green guarded by water — so it's played at
+    // a controlled pace that finishes on the putting surface.)
     const near = s.simulateShot({
       clubId: 'pw',
-      power: 1,
+      power: 0.85,
       from: { d: g.d - 120, x: g.x },
     });
     const best = Math.min(drv.distToPin, near.distToPin);
@@ -390,8 +490,9 @@ describe('course sim — per-hole best-shot records', () => {
   it('longest putt = the length of a putt that HOLES OUT (via the fire path)', () => {
     // Scan the power band for the holing pace from 6yd below the cup, then assert
     // the recorded putt length is ~that 6yd putt (not a lofted-shot distance).
+    // (Uphill 6-yd putt → the holing pace is high on the quadratic putt map.)
     let holed: CourseSim | null = null;
-    for (let power = 0.3; power <= 0.75; power += 0.01) {
+    for (let power = 0.3; power <= 0.95; power += 0.01) {
       const s = sim();
       s.ball.d = g.d - 6;
       s.ball.x = g.x;

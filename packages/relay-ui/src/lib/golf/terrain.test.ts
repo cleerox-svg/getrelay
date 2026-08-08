@@ -15,6 +15,7 @@ import {
   gradientAt,
   slopeAccel,
   surfaceAt,
+  corridorHalfAt,
   type CourseHole,
 } from './terrain';
 import { GRAVITY, ROLL_FRICTION } from './rangeSim';
@@ -112,11 +113,52 @@ describe('terrain surface classification', () => {
     expect(surfaceAt(HOLE_1, 180, -6 + HOLE_1.roughHalf - 2)).toBe('rough'); // off corridor
     expect(surfaceAt(HOLE_1, 180, 200)).toBe('ob'); // way off
     expect(surfaceAt(HOLE_1, 300, 20)).toBe('bunker'); // fairway bunker centre
-    expect(surfaceAt(HOLE_1, 496, 2)).toBe('water'); // pond
+    expect(surfaceAt(HOLE_1, 478, 16)).toBe('water'); // pond guarding the approach
     expect(surfaceAt(HOLE_1, 20, -30)).toBe('cartpath'); // cart path
     expect(surfaceAt(HOLE_1, 0, 0)).toBe('tee'); // tee box
   });
+
+  it('the fringe collar always separates the green from a green-side hazard', () => {
+    // Sweep a ray from the green centre out through the front-right greenside
+    // bunker. Between the green and the sand there MUST be a fringe band and the
+    // green must never touch the bunker directly (the crispness guarantee).
+    const g = HOLE_1.green;
+    const bunker = HOLE_1.hazards.find((h) => h.kind === 'bunker' && h.d > 480)!;
+    const dirD = (bunker.d - g.d) / dist(g, bunker);
+    const dirX = (bunker.x - g.x) / dist(g, bunker);
+    let prev = 'green';
+    const seen: string[] = ['green'];
+    for (let r = 0; r <= dist(g, bunker) + bunker.r; r += 0.25) {
+      const s = surfaceAt(HOLE_1, g.d + dirD * r, g.x + dirX * r);
+      if (s !== prev) {
+        seen.push(s);
+        prev = s;
+      }
+    }
+    // The lie sequence outward is green → fringe → (rough/fairway/...) → bunker,
+    // and green is NEVER immediately followed by bunker.
+    expect(seen[0]).toBe('green');
+    expect(seen[1]).toBe('fringe');
+    expect(seen).toContain('bunker');
+    for (let i = 1; i < seen.length; i++) {
+      if (seen[i] === 'bunker') expect(seen[i - 1]).not.toBe('green');
+    }
+  });
+
+  it('the fairway corridor tapers narrower toward the green (fairwayTaper)', () => {
+    // Half-width shrinks from tee (t=0) to green (t=1).
+    expect(corridorHalfAt(HOLE_1, 0)).toBeCloseTo(16, 6);
+    expect(corridorHalfAt(HOLE_1, 1)).toBeCloseTo(13, 6);
+    // A point 14.5 yd off the spine is fairway near the tee but rough near the
+    // green — the SAME offset flips because the corridor pinches.
+    expect(surfaceAt(HOLE_1, 60, -2 + 14.5)).toBe('fairway'); // spine ~x=-2 near tee
+    expect(surfaceAt(HOLE_1, 455, 15.57 + 14.5)).toBe('rough'); // spine ~x=15.6 near green
+  });
 });
+
+function dist(a: { d: number; x: number }, b: { d: number; x: number }): number {
+  return Math.hypot(a.d - b.d, a.x - b.x);
+}
 
 describe('slope-coupled roll (the point of physics-coupled terrain)', () => {
   it('a putt across a tilted green BREAKS toward the low side', () => {

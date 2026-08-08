@@ -11,8 +11,8 @@ import * as THREE from 'three';
 import { FIXED_MS } from '../../lib/golf/tuning';
 import {
   heightAt,
-  gradientAt,
   surfaceAt,
+  greenPadRadius,
   type CourseHole,
   type Surface,
 } from '../../lib/golf/terrain';
@@ -31,6 +31,7 @@ import {
   makeTurfNormalMap,
 } from '../../lib/golf/scenery';
 import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
+import { BALL_R, CUP_R } from '../../lib/golf/greenPhysics';
 import type { CourseSim } from '../../lib/golf/courseSim';
 
 interface Props {
@@ -41,22 +42,141 @@ interface Props {
   paused?: boolean;
 }
 
+// Base albedo per lie, painted into the top-down surface map below. Fairway and
+// rough are deliberately far apart in hue+value (rough is darker, more olive) so
+// the corridor edge reads as a hard material change, not a shade of the same
+// grass. Green/fringe/tee/bunker/water are refined by their own overlay meshes;
+// these are the values that show if an overlay ever leaves a sliver.
 const SURFACE_RGB: Record<Surface, [number, number, number]> = {
-  fairway: [0.38, 0.63, 0.28],
-  green: [0.6, 0.88, 0.44],
-  fringe: [0.5, 0.75, 0.36],
-  rough: [0.22, 0.46, 0.22],
+  fairway: [0.40, 0.66, 0.28],
+  green: [0.49, 0.79, 0.38],
+  fringe: [0.45, 0.72, 0.33],
+  rough: [0.19, 0.37, 0.16], // darker + more olive → clearly not fairway
   bunker: [0.9, 0.82, 0.6],
   water: [0.14, 0.42, 0.66],
-  cartpath: [0.76, 0.73, 0.68],
-  tee: [0.46, 0.68, 0.36],
-  ob: [0.16, 0.36, 0.18],
+  cartpath: [0.74, 0.71, 0.66],
+  tee: [0.34, 0.55, 0.26],
+  ob: [0.13, 0.28, 0.12],
 };
 
-function jitter(d: number, x: number): number {
-  let h = (Math.floor(d) * 73856093) ^ (Math.floor(x) * 19349663);
+// Cheap deterministic hash noise in [0,1) for the baked surface texture.
+function hashNoise(ix: number, iy: number): number {
+  let h = (Math.floor(ix) * 73856093) ^ (Math.floor(iy) * 19349663);
   h = (h ^ (h >>> 13)) * 1274126177;
-  return (((h ^ (h >>> 16)) >>> 0) / 4294967296 - 0.5) * 0.08;
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+// Bake a TOP-DOWN albedo map of the whole hole from the surface model. Every
+// texel is classified with surfaceAt() (which itself reads corridorHalfAt /
+// greenPadRadius / the hazards) so the material boundaries are the SAME lines the
+// ball plays and they scale to any hole with no code change. Seams are crisp at
+// texel resolution (far finer than the mesh vertices the old per-vertex colour
+// multiply was limited to). Fairway gets bold alternating MOW STRIPES down the
+// hole; rough gets a coarse, darker, un-manicured speckle; the rest carry their
+// base tint (their overlay meshes add the fine texture). Mapped planar over the
+// mesh's (x,d) domain via the mesh UVs, so it lines up with the physics exactly.
+function makeSurfaceMap(
+  hole: CourseHole,
+  xHalf: number,
+  dMin: number,
+  dMax: number,
+): THREE.Texture {
+  // ONE-TIME cost: this is a synchronous ~W×H (=524k) texel classify+paint loop
+  // run ONCE at scene mount (tens of ms), never per frame. H is larger than W
+  // because the hole is long; 512×1024 keeps the corridor seams crisp — drop H if
+  // a future profile shows mount jank, at the cost of seam sharpness downrange.
+  const W = 512; // across x
+  const H = 1024; // along d (the hole is long)
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  const g = c.getContext('2d')!;
+  const img = g.createImageData(W, H);
+  const data = img.data;
+  const STRIPE_YD = 7; // mow band period downrange
+  for (let py = 0; py < H; py++) {
+    // Canvas row 0 is the TOP; CanvasTexture samples with flipY, so V=1 (d=dMax)
+    // maps to the top row — invert to recover the world d for this row.
+    const d = dMin + (1 - py / (H - 1)) * (dMax - dMin);
+    for (let px = 0; px < W; px++) {
+      const x = -xHalf + (px / (W - 1)) * (xHalf * 2);
+      const surf = surfaceAt(hole, d, x);
+      let [r, gg, b] = SURFACE_RGB[surf];
+      if (surf === 'fairway') {
+        // Bold mow stripes: alternate light/dark bands with strong contrast so
+        // the "fairway lines" clearly read (user: they weren't dark enough).
+        const band = Math.floor(d / STRIPE_YD) % 2 === 0 ? 1.16 : 0.82;
+        const blade = 0.94 + hashNoise(x * 3.1, d * 3.1) * 0.12;
+        r *= band * blade;
+        gg *= band * blade;
+        b *= band * blade;
+      } else if (surf === 'rough' || surf === 'ob') {
+        // Coarse, patchy, un-mown: big low-frequency clumps + fine speckle.
+        const clump = 0.82 + hashNoise(Math.floor(x / 2.5), Math.floor(d / 2.5)) * 0.34;
+        const fleck = 0.9 + hashNoise(x * 5.7, d * 5.7) * 0.2;
+        r *= clump * fleck;
+        gg *= clump * fleck;
+        b *= clump * fleck;
+      } else if (surf === 'cartpath') {
+        const spec = 0.92 + hashNoise(x * 4, d * 4) * 0.16;
+        r *= spec;
+        gg *= spec;
+        b *= spec;
+      }
+      const o = (py * W + px) * 4;
+      data[o] = Math.min(255, r * 255);
+      data[o + 1] = Math.min(255, gg * 255);
+      data[o + 2] = Math.min(255, b * 255);
+      data[o + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+
+// Fine putting-green grain: a subtle light/dark mow so the green reads as a real
+// textured surface, not flat paint — but far gentler than the fairway stripes.
+function makeGreenGrain(): THREE.Texture {
+  const S = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#ffffff';
+  g.fillRect(0, 0, S, S);
+  const bands = 14; // finer than the fairway → a smoother, more manicured mow
+  const bw = S / bands;
+  for (let i = 0; i < bands; i++) {
+    g.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,1)' : 'rgba(232,238,228,1)';
+    g.fillRect(i * bw, 0, bw, S);
+  }
+  // Seeded PRNG (mulberry32) instead of Math.random so the grain is IDENTICAL
+  // across mounts — the screenshot harness stays reproducible and determinism is
+  // preserved (GOLF.md). Fixed seed → same grain every load.
+  let seed = 0x9e3779b9;
+  const rnd = () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  for (let i = 0; i < 4000; i++) {
+    const a = 0.05 + rnd() * 0.06;
+    g.strokeStyle = rnd() < 0.5 ? `rgba(120,150,110,${a})` : `rgba(255,255,255,${a})`;
+    g.lineWidth = 1;
+    const x = rnd() * S;
+    const y = rnd() * S;
+    g.beginPath();
+    g.moveTo(x, y);
+    g.lineTo(x + (rnd() - 0.5) * 2, y - 2 - rnd() * 3);
+    g.stroke();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
 }
 
 // Sand: warm base with fine grain speckle + soft rake arcs.
@@ -123,9 +243,9 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     if (!host) return;
     const hole: CourseHole = sim.hole;
 
-    // Visible ball radius (yards). Small enough not to dominate the frame, big
-    // enough to read when the camera follows it downrange.
-    const BALL_R = 0.4;
+    // Visible ball + cup radii (yards) come from the sim's single source of
+    // truth (greenPhysics.BALL_R / CUP_R): the ball is drawn at the SAME radius
+    // the sim plays and at ~0.4× the cup, so it visibly fits the hole and drops.
 
     const disposables: { dispose: () => void }[] = [];
     const track = <T extends { dispose: () => void }>(o: T): T => {
@@ -180,11 +300,30 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     scene.add(sun.target);
 
     // --- Terrain mesh --------------------------------------------------
-    const dMin = -20;
-    const dMax = hole.pin.d + 110;
-    const xHalf = 120;
-    const nd = 224;
-    const nx = 128;
+    // Frame the ground/surface-map to the HOLE, not fixed HOLE_1 numbers, so any
+    // future hole (a wider corridor, a dogleg swinging far off centre, a tee not
+    // at d≈0) renders fully with no code change. The lateral half-width covers the
+    // widest point of the centreline plus the full rough band (roughHalf) plus a
+    // margin; the downrange span runs from behind the tee to past the pin. If a
+    // hole's playable area still exceeded this frame it would clip at the edges,
+    // but deriving from the model means it fits by construction.
+    const MARGIN = 30; // yд of grass beyond the OB line / behind tee / past pin
+    let clMaxX = 0;
+    let clMinD = hole.tee.d;
+    let clMaxD = hole.pin.d;
+    for (const p of hole.centerline) {
+      clMaxX = Math.max(clMaxX, Math.abs(p.x));
+      clMinD = Math.min(clMinD, p.d);
+      clMaxD = Math.max(clMaxD, p.d);
+    }
+    const dMin = Math.min(hole.tee.d, clMinD) - MARGIN;
+    const dMax = Math.max(hole.pin.d, clMaxD) + MARGIN + 80;
+    const xHalf = clMaxX + hole.roughHalf + MARGIN;
+    // Vertex counts scale with the framed span so seam crispness / triangle
+    // density stay roughly constant regardless of hole size (~2.9 yd downrange,
+    // ~1.9 yd lateral cells on HOLE_1), clamped so a tiny or huge hole stays sane.
+    const nd = Math.max(160, Math.min(320, Math.round((dMax - dMin) / 2.9)));
+    const nx = Math.max(96, Math.min(192, Math.round((xHalf * 2) / 1.9)));
     // The ground is a segmented plane DISPLACED from a HeightField (the Course
     // data layer, lib/golf/courseData.ts). The field's nodes are laid at exactly
     // this mesh's (nx+1)×(nd+1) vertices, sampling the hole's heightAt. With this
@@ -204,7 +343,6 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     );
     const geo = track(new THREE.BufferGeometry());
     const verts = new Float32Array((nd + 1) * (nx + 1) * 3);
-    const cols = new Float32Array((nd + 1) * (nx + 1) * 3);
     const uvs = new Float32Array((nd + 1) * (nx + 1) * 2);
     let vi = 0;
     let ui = 0;
@@ -218,12 +356,8 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         verts[vi] = x;
         verts[vi + 1] = y;
         verts[vi + 2] = -d;
-        const surf = surfaceAt(hole, d, x);
-        const [r, g, b] = SURFACE_RGB[surf];
-        const jt = surf === 'water' || surf === 'cartpath' || surf === 'bunker' ? 0 : jitter(d, x);
-        cols[vi] = Math.max(0, r + jt);
-        cols[vi + 1] = Math.max(0, g + jt);
-        cols[vi + 2] = Math.max(0, b + jt);
+        // UVs span the mesh's (x,d) domain 0..1 so the baked top-down surface map
+        // (makeSurfaceMap, same domain) registers pixel-for-pixel with the model.
         uvs[ui] = i / nx;
         uvs[ui + 1] = j / nd;
         vi += 3;
@@ -242,31 +376,27 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         idx.push(a, a + 1, a + row, a + 1, a + row + 1, a + row);
       }
     geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
     geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
     geo.setIndex(idx);
     geo.computeVertexNormals();
-    // Turf: the range's rich blade/mow/mottle detail, shared from scenery.ts. The
-    // 'neutral' mode is a near-white luminance map that MULTIPLIES the per-lie
-    // vertex colour, so fairway/green/rough keep their hue but gain mown texture
-    // instead of the old flat paint. Roughness drops to the range's 0.82 so the
-    // blade normal map catches a soft sun sheen.
-    const turfTex = track(makeTurfColor('neutral'));
-    // Mow-stripe tiling: ~4 tiles across the 240 yd width → ~7.5 yd stripes
-    // running downrange, which read cleanly at the tee camera's grazing angle.
-    turfTex.repeat.set(4, 12);
+    // Ground albedo is the BAKED top-down surface map — one crisp texture painted
+    // straight from surfaceAt (fairway mow stripes / dark olive rough / cart path
+    // / OB), so distinct lies read as distinct materials with clean seams that
+    // scale to any hole. The green/fringe/tee/bunker/water each get a dedicated
+    // overlay mesh on top. The shared blade normal map (scenery.ts) still rakes a
+    // soft sun sheen across all of it; roughness stays at the range's 0.85.
+    const turfTex = track(makeSurfaceMap(hole, xHalf, dMin, dMax));
     const turfNorm = track(makeTurfNormalMap());
-    turfNorm.repeat.set(64, 180); // finer than the colour tile so blades read
+    turfNorm.repeat.set(64, 180); // fine blade relief across the whole ground
     const groundMat = track(
       new THREE.MeshStandardMaterial({
-        vertexColors: true,
         map: turfTex,
         normalMap: turfNorm,
-        roughness: 0.82,
+        roughness: 0.85,
         metalness: 0,
       }),
     );
-    groundMat.normalScale.set(0.5, 0.5);
+    groundMat.normalScale.set(0.45, 0.45);
     const ground = new THREE.Mesh(geo, groundMat);
     ground.receiveShadow = true;
     scene.add(ground);
@@ -381,23 +511,85 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       }
     }
 
-    // --- Green cap -----------------------------------------------------
-    // A distinct, smoother PUTTING SURFACE laid over the green: a terrain-
-    // FOLLOWING grid (samples heightAt so it hugs the green's tilt + undulation)
-    // with REAL computed normals, so the contour actually SHADES — the tilt and
-    // rolls read as a sculpted green from any angle, not flat paint. Built as a
-    // circle-clipped grid (not a centre fan) precisely so computeVertexNormals
-    // has no degenerate hub to crease into a dark ring round the hole. A bright,
-    // uniform putting-green colour with only a fine blade relief (no mow stripes)
-    // marks it off from the fairway. Lifted a hair above the terrain and drawn a
-    // touch inside the collar so the fringe still shows.
+    // --- Fringe collar + green cap -------------------------------------
+    // Two concentric, terrain-FOLLOWING pads sized straight from the model
+    // (greenPadRadius = green.r + fringeW) so they scale to any hole:
+    //   • the FRINGE COLLAR — an annulus from green.r out to the pad radius,
+    //     a distinct duller/darker collar band. It ALWAYS rings the green, so the
+    //     putting surface never visually bleeds into the bordering sand/water —
+    //     there is always a fringe edge (the "green mixes with sand/water" fix).
+    //   • the GREEN CAP — the putting surface out to green.r, a brighter, finely
+    //     grained mown material distinct from both the fringe and the fairway.
+    // Both hug heightAt (tilt + undulation) with REAL computed normals so the
+    // contour shades as a sculpted green from any angle, not flat paint.
     {
       const gDef = hole.green;
-      const capR = gDef.r + hole.fringeW * 0.5;
+      const padR = greenPadRadius(hole); // green.r + fringeW
+      const grain = track(makeGreenGrain());
+
+      // Fringe collar: a polar annulus (rings × segments — no degenerate hub) so
+      // its normals stay clean. Sits a hair BELOW the cap so the cap wins on the
+      // tiny inward overlap that guarantees no seam gap.
+      const RINGS = 5;
+      const SEG = 56;
+      const rIn = gDef.r - 0.25; // slight inward overlap under the cap
+      const fLift = 0.035;
+      const fcount = (RINGS + 1) * SEG;
+      const fpos = new Float32Array(fcount * 3);
+      const fuv = new Float32Array(fcount * 2);
+      let fp = 0;
+      let fu = 0;
+      for (let ri = 0; ri <= RINGS; ri++) {
+        const rad = rIn + (ri / RINGS) * (padR - rIn);
+        for (let s = 0; s < SEG; s++) {
+          const ang = (s / SEG) * Math.PI * 2;
+          const wx = gDef.x + Math.cos(ang) * rad;
+          const wd = gDef.d + Math.sin(ang) * rad;
+          fpos[fp] = wx;
+          fpos[fp + 1] = heightAt(hole, wd, wx) + fLift;
+          fpos[fp + 2] = -wd;
+          fuv[fu] = 0.5 + Math.cos(ang) * (ri / RINGS) * 0.5;
+          fuv[fu + 1] = 0.5 + Math.sin(ang) * (ri / RINGS) * 0.5;
+          fp += 3;
+          fu += 2;
+        }
+      }
+      const fidx: number[] = [];
+      for (let ri = 0; ri < RINGS; ri++) {
+        const b0 = ri * SEG;
+        const b1 = (ri + 1) * SEG;
+        for (let s = 0; s < SEG; s++) {
+          const s1 = (s + 1) % SEG;
+          fidx.push(b0 + s, b1 + s, b0 + s1, b0 + s1, b1 + s, b1 + s1);
+        }
+      }
+      const fGeo = track(new THREE.BufferGeometry());
+      fGeo.setAttribute('position', new THREE.BufferAttribute(fpos, 3));
+      fGeo.setAttribute('uv', new THREE.BufferAttribute(fuv, 2));
+      fGeo.setIndex(fidx);
+      fGeo.computeVertexNormals();
+      const fNorm = track(makeTurfNormalMap());
+      fNorm.repeat.set(10, 10);
+      const fMat = track(
+        new THREE.MeshStandardMaterial({
+          color: 0x5aa24a, // duller, slightly darker collar — distinct from green
+          roughness: 0.82,
+          metalness: 0,
+          normalMap: fNorm,
+          side: THREE.DoubleSide,
+        }),
+      );
+      fMat.normalScale.set(0.4, 0.4);
+      const fringe = new THREE.Mesh(fGeo, fMat);
+      fringe.receiveShadow = true;
+      scene.add(fringe);
+
+      // Green cap: circle-clipped square grid (no centre fan → no dark hub ring).
+      const capR = gDef.r;
       const N = 30; // grid cells across the diameter → smooth contour shading
       const step = (2 * capR) / N;
       const vxn = N + 1;
-      const LIFT = 0.04;
+      const LIFT = 0.05;
       const cpos: number[] = [];
       const cuv: number[] = [];
       const idxOf: number[] = new Array(vxn * vxn).fill(-1);
@@ -408,7 +600,8 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
           const d = gDef.d - capR + j * step;
           if (Math.hypot(x - gDef.x, d - gDef.d) > capR) continue; // clip to disc
           cpos.push(x, heightAt(hole, d, x) + LIFT, -d);
-          cuv.push(i / N, j / N);
+          // Grain UV in world yards / 6 → ~6 yd grain tile, gentle and even.
+          cuv.push(x / 6, d / 6);
           idxOf[j * vxn + i] = vc++;
         }
       }
@@ -433,13 +626,14 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       capNorm.repeat.set(16, 16);
       const capMat = track(
         new THREE.MeshStandardMaterial({
-          color: 0x7ec96a, // bright, uniform putting green — distinct from fairway
-          roughness: 0.68,
+          color: 0x86d06f, // bright putting green — distinct from fringe + fairway
+          roughness: 0.6,
           metalness: 0,
+          map: grain, // fine mow grain → textured, not flat paint
           normalMap: capNorm,
         }),
       );
-      capMat.normalScale.set(0.25, 0.25);
+      capMat.normalScale.set(0.22, 0.22);
       const cap = new THREE.Mesh(capGeo, capMat);
       cap.receiveShadow = true;
       scene.add(cap);
@@ -563,170 +757,11 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       scene.add(teePeg);
     }
 
-    // --- Green-reading overlay (shown while putting) -------------------
-    // A PGA-style putt read over the green, in three layers, ALL sampled from the
-    // SAME gradientAt the ball physically breaks on — so what you read is what
-    // rolls: (1) a HEAT fill coloured by slope toward the cup (warm = uphill,
-    // putt firmer; cool = downhill, dies quick; neutral where flat), (2) a white
-    // contour grid, and (3) navy FALL-LINE ARROWS pointing downhill (the break
-    // direction, longer where steeper). Toggled visible only on the green.
-    let greenGrid: THREE.Object3D | null = null;
-    {
-      const gDef = hole.green;
-      const R = gDef.r;
-      const N = 24; // cells across the green diameter (~1.25 yd cells)
-      const step = (2 * R) / N;
-      const vx = N + 1;
-      const gpos: number[] = [];
-      const gcol: number[] = [];
-      const idxOf: number[] = new Array(vx * vx).fill(-1);
-      // Heat ramp: slope-toward-hole s (rise/run, +uphill) → a BOLD, PGA-style
-      // slope colouring over a green base — vivid warm-amber where the putt is
-      // uphill (hit it firmer), vivid cool-blue where downhill (it'll run),
-      // green only right along the flat contour through the hole. The green base
-      // lerps to a saturated endpoint by |slope|, and SMAX is LOW so even a
-      // gentle green slope saturates fully — the up/down zones dominate the green
-      // and read the break instantly. The contour grid + fall-line arrows still
-      // layer the direction on top (their own render order, above the fill).
-      const SMAX = 0.025;
-      const heat = (s: number): [number, number, number] => {
-        const t = Math.max(-1, Math.min(1, s / SMAX));
-        const up = Math.max(0, t);
-        const dn = Math.max(0, -t);
-        const nr = 0.4;
-        const ng = 0.72;
-        const nb = 0.4;
-        return [
-          nr + up * (1.0 - nr) + dn * (0.1 - nr), // amber R uphill
-          ng + up * (0.48 - ng) + dn * (0.42 - ng),
-          nb + up * (0.1 - nb) + dn * (1.0 - nb), // blue B downhill
-        ];
-      };
-      let vcount = 0;
-      for (let j = 0; j <= N; j++) {
-        for (let i = 0; i <= N; i++) {
-          const x = gDef.x - R + i * step;
-          const d = gDef.d - R + j * step;
-          if (Math.hypot(x - gDef.x, d - gDef.d) > R + 0.01) continue;
-          const g = gradientAt(hole, d, x);
-          const dnx = gDef.x - x;
-          const dnd = gDef.d - d;
-          const len = Math.hypot(dnx, dnd) || 1;
-          const sTo = (g.gx * dnx + g.gd * dnd) / len; // slope toward hole
-          const [cr, cg, cb] = heat(sTo);
-          gpos.push(x, heightAt(hole, d, x) + 0.07, -d);
-          gcol.push(cr, cg, cb);
-          idxOf[j * vx + i] = vcount++;
-        }
-      }
-      const gi: number[] = [];
-      for (let j = 0; j < N; j++) {
-        for (let i = 0; i < N; i++) {
-          const a = idxOf[j * vx + i]!;
-          const b = idxOf[j * vx + i + 1]!;
-          const c = idxOf[(j + 1) * vx + i]!;
-          const e = idxOf[(j + 1) * vx + i + 1]!;
-          if (a < 0 || b < 0 || c < 0 || e < 0) continue; // keep cells fully inside
-          gi.push(a, b, c, b, e, c);
-        }
-      }
-      if (gi.length) {
-        const group = new THREE.Group();
-        // Heat fill: the slope colours, translucent, over the green.
-        const gGeo = track(new THREE.BufferGeometry());
-        gGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(gpos), 3));
-        gGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(gcol), 3));
-        gGeo.setIndex(gi);
-        const gMat = track(
-          new THREE.MeshBasicMaterial({
-            vertexColors: true,
-            transparent: true,
-            opacity: 0.72,
-            depthWrite: false,
-          }),
-        );
-        const fill = new THREE.Mesh(gGeo, gMat);
-        fill.renderOrder = 6;
-        group.add(fill);
-        // Grid LINES: connect in-disc neighbours (drawn as their own layer so the
-        // lines read crisp white instead of being tinted/clipped by the fill).
-        const lp: number[] = [];
-        const at3 = (vi: number) => [gpos[vi * 3]!, gpos[vi * 3 + 1]!, gpos[vi * 3 + 2]!] as const;
-        for (let j = 0; j <= N; j++) {
-          for (let i = 0; i <= N; i++) {
-            const a = idxOf[j * vx + i]!;
-            if (a < 0) continue;
-            const r = i < N ? idxOf[j * vx + i + 1]! : -1;
-            const d2 = j < N ? idxOf[(j + 1) * vx + i]! : -1;
-            if (r >= 0) lp.push(...at3(a), ...at3(r));
-            if (d2 >= 0) lp.push(...at3(a), ...at3(d2));
-          }
-        }
-        const lGeo = track(new THREE.BufferGeometry());
-        lGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(lp), 3));
-        const lMat = track(
-          new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, depthWrite: false }),
-        );
-        const lines = new THREE.LineSegments(lGeo, lMat);
-        lines.renderOrder = 7;
-        group.add(lines);
-
-        // Fall-line ARROWS: on a coarse grid, a short arrow points DOWNHILL
-        // (along −∇h — the way a putt breaks) at each node, its length growing
-        // with slope steepness. Read from the SAME gradientAt the ball rolls on,
-        // so the arrows show exactly where the break pulls. Deep navy so they pop
-        // over the warm/cool heat fill (the PGA-style "blue break grid" read).
-        const ap: number[] = [];
-        const AN = 8; // arrows across the diameter
-        const astep = (2 * R) / AN;
-        const yAt = (d: number, x: number) => heightAt(hole, d, x) + 0.09;
-        for (let j = 0; j <= AN; j++) {
-          for (let i = 0; i <= AN; i++) {
-            const x = gDef.x - R + i * astep;
-            const d = gDef.d - R + j * astep;
-            if (Math.hypot(x - gDef.x, d - gDef.d) > R - 0.6) continue;
-            const gr = gradientAt(hole, d, x);
-            const mag = Math.hypot(gr.gd, gr.gx);
-            if (mag < 1e-4) continue;
-            const ux = -gr.gx / mag; // downhill unit (world x)
-            const ud = -gr.gd / mag; // downhill unit (world d)
-            const L = Math.min(1.9, 0.7 + mag * 34); // longer where steeper
-            const x2 = x + ux * L;
-            const d2 = d + ud * L;
-            // Shaft.
-            ap.push(x, yAt(d, x), -d, x2, yAt(d2, x2), -d2);
-            // Two arrowhead barbs at the tip (perp = rotate the downhill dir 90°).
-            const bl = Math.min(0.7, L * 0.42);
-            const px = -ud;
-            const pd = ux;
-            for (const sgn of [-1, 1]) {
-              const bx = x2 - ux * bl + px * sgn * bl * 0.6;
-              const bd = d2 - ud * bl + pd * sgn * bl * 0.6;
-              ap.push(x2, yAt(d2, x2), -d2, bx, yAt(bd, bx), -bd);
-            }
-          }
-        }
-        if (ap.length) {
-          const aGeo = track(new THREE.BufferGeometry());
-          aGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ap), 3));
-          const aMat = track(
-            new THREE.LineBasicMaterial({
-              color: 0x0b2a6b,
-              transparent: true,
-              opacity: 0.85,
-              depthWrite: false,
-            }),
-          );
-          const arrows = new THREE.LineSegments(aGeo, aMat);
-          arrows.renderOrder = 8;
-          group.add(arrows);
-        }
-
-        group.visible = false;
-        greenGrid = group;
-        scene.add(group);
-      }
-    }
+    // NOTE: the in-scene green-reading overlay (slope heat tint + contour grid +
+    // fall-line arrows) was REMOVED here by design (locked with the user) — the
+    // green now renders as a clean putting surface. The concise "downhill · breaks
+    // left" read still lives in the CourseGame HUD, driven by sim.slopeUnder() /
+    // getState(), which are untouched.
 
     // Flagstick — normalized to the REGULATION height (2.13 m) from the Course
     // data layer. The scene is yard-space, so the metric constants convert with
@@ -752,10 +787,10 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     // The cup. The regulation hole (HOLE_DIAMETER_M = 0.108 m ≈ 0.06 yd radius,
     // the data-model truth) is sub-pixel to look at, so — like the ball — it's
     // drawn OVERSIZED for readability: a dark hole with a white rim ring so you
-    // can actually see where to putt. The visible hole+rim is sized to span the
-    // sim's speed-dependent capture radius (courseSim CUP_R ≈ 0.6 yd), so what
-    // you aim at is roughly what drops.
-    const cupR = 0.42;
+    // can actually see where to putt. The visible hole is drawn at the sim's
+    // speed-dependent capture radius (greenPhysics.CUP_R), so what you aim at is
+    // exactly what drops, and the ball (BALL_R ≈ 0.4× CUP_R) visibly fits it.
+    const cupR = CUP_R;
     const cupGeo = track(new THREE.CircleGeometry(cupR, 24));
     const cupMat = track(new THREE.MeshBasicMaterial({ color: 0x0a0f0a }));
     const cup = new THREE.Mesh(cupGeo, cupMat);
@@ -837,6 +872,43 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     const ball = new THREE.Mesh(ballGeo, ballMat);
     ball.castShadow = true;
     scene.add(ball);
+
+    // Contact shadow: a soft dark disc that ALWAYS sits on the ground directly
+    // under the ball (at heightAt beneath it, whatever lie it's on), so the ball
+    // reads as SEATED on the turf rather than floating. It complements the sun's
+    // cast shadow (which the grazing camera + low-contrast turf can wash out) and
+    // fades/grows with the ball's altitude while it's in the air. The ball's
+    // centre is drawn at b.h + BALL_R, i.e. its underside exactly on b.h — the
+    // same heightAt the physics rests on — so seated, this disc kisses the base
+    // of the ball.
+    const shadowTex = (() => {
+      const S = 64;
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = S;
+      const gx = cv.getContext('2d')!;
+      const rg = gx.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+      rg.addColorStop(0, 'rgba(0,0,0,0.5)');
+      rg.addColorStop(0.6, 'rgba(0,0,0,0.28)');
+      rg.addColorStop(1, 'rgba(0,0,0,0)');
+      gx.fillStyle = rg;
+      gx.fillRect(0, 0, S, S);
+      const t = new THREE.CanvasTexture(cv);
+      return t;
+    })();
+    track(shadowTex);
+    const ballShadowMat = track(
+      new THREE.MeshBasicMaterial({
+        map: shadowTex,
+        transparent: true,
+        depthWrite: false,
+        opacity: 0.9,
+      }),
+    );
+    const ballShadowGeo = track(new THREE.PlaneGeometry(BALL_R * 3.2, BALL_R * 3.2));
+    const ballShadow = new THREE.Mesh(ballShadowGeo, ballShadowMat);
+    ballShadow.rotation.x = -Math.PI / 2;
+    ballShadow.renderOrder = 2;
+    scene.add(ballShadow);
 
     // Tracer (ball flight/roll trail).
     const tracerMat = track(new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 }));
@@ -944,6 +1016,12 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       buf.setDrawRange(0, n);
       attr.needsUpdate = true;
     };
+    // "Bang on target" feedback: when the predicted shot will actually HOLE OUT
+    // (sim.predict(0).result === 'holed' — the real integrator, break included, so
+    // it's true for a dead-centre putt or a holing chip), the aim line + reticle
+    // light up gold/green and pulse. Otherwise the normal white aim. Set here, run
+    // in the frame loop so the pulse animates.
+    let aimHoling = false;
     const showAim = (on: boolean) => {
       arc.l.visible = on;
       arc.line.visible = on;
@@ -954,6 +1032,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     };
     const updateAim = () => {
       const c = sim.predict(0);
+      aimHoling = c.result === 'holed';
       fillArc(arc.g, c.path);
       fillArc(edgeL.g, sim.predict(-1).path);
       fillArc(edgeR.g, sim.predict(1).path);
@@ -965,6 +1044,40 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       }
       restRing.position.set(c.rest.x, c.rest.h + 0.12, -c.rest.d);
       arc.l.visible = arc.line.visible = edgeL.l.visible = edgeR.l.visible = restRing.visible = true;
+    };
+    // Default (not-holing) aim colours, restored whenever the on-target pulse ends.
+    const AIM_WHITE = 0xffffff;
+    const REST_CYAN = 0x66e0ff;
+    const gold = new THREE.Color(0xffd23f);
+    const holeGreen = new THREE.Color(0x53ff8a);
+    const pulseCol = new THREE.Color();
+    const arcLineM = arcLineMat as THREE.LineBasicMaterial;
+    const restRingM = restRingMat as THREE.MeshBasicMaterial;
+    const landRingM = ringMat as THREE.MeshBasicMaterial;
+    // Animate the aim colours each frame while an aim is showing.
+    const applyAimColor = (now: number) => {
+      if (!arc.line.visible) return;
+      if (aimHoling) {
+        const t = 0.5 + 0.5 * Math.sin(now * 0.007);
+        pulseCol.copy(gold).lerp(holeGreen, t);
+        arcMat.color.copy(pulseCol);
+        arcLineM.color.copy(pulseCol);
+        restRingM.color.copy(pulseCol);
+        landRingM.color.copy(pulseCol);
+        arcMat.opacity = 1;
+        arcLineM.opacity = 1;
+        restRingM.opacity = 0.7 + 0.3 * t;
+        landRingM.opacity = 0.7 + 0.3 * t;
+      } else {
+        arcMat.color.setHex(AIM_WHITE);
+        arcLineM.color.setHex(AIM_WHITE);
+        restRingM.color.setHex(REST_CYAN);
+        landRingM.color.setHex(AIM_WHITE);
+        arcMat.opacity = 0.95;
+        arcLineM.opacity = 0.85;
+        restRingM.opacity = 0.85;
+        landRingM.opacity = 0.9;
+      }
     };
 
 
@@ -1093,6 +1206,17 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       const b = sim.ball;
       ball.position.set(b.x, b.h + BALL_R, -b.d);
 
+      // Contact shadow: pin it to the GROUND under the ball (heightAt), and fade +
+      // grow it with the ball's altitude so it reads as a seated ball at rest and
+      // a rising blob in flight. groundY is the same height the physics rests on,
+      // so a resting ball's shadow sits exactly at its base.
+      const groundY = heightAt(hole, b.d, b.x);
+      const alt = Math.max(0, b.h - groundY);
+      ballShadow.position.set(b.x, groundY + 0.03, -b.d);
+      const shScale = 1 + Math.min(2.5, alt * 0.12);
+      ballShadow.scale.set(shScale, shScale, shScale);
+      ballShadowMat.opacity = 0.9 * Math.max(0.12, 1 - alt / 8);
+
       // Water shimmer: drift the ripple normal map.
       waterNormal.offset.x += dt * 0.014;
       waterNormal.offset.y += dt * 0.009;
@@ -1110,15 +1234,11 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       (tracerGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
 
       // The predicted aim arc is refreshed in the pointer handlers (on drag /
-      // arm); here we only hide it once the shot is away or the address ends.
+      // arm); here we only hide it once the shot is away or the address ends, and
+      // animate its colour (gold/green pulse when the shot will hole out).
       const st = sim.getState();
       if (st.inFlight || (!st.aiming && !st.armed)) showAim(false);
-
-      // On the green (reading a putt): show the slope heat grid. It hides once
-      // the putt is rolling or the ball is off the green. (The old chunky break-
-      // arrow cone is gone — the heat grid + predicted roll line read the break.)
-      const onGreen = !st.inFlight && st.lie === 'green';
-      if (greenGrid) greenGrid.visible = onGreen && celebrate < 0;
+      applyAimColor(now);
 
       // Tee peg: only for the tee shot (stroke 0), and hidden once the ball is
       // away so it doesn't linger under a mid-flight/rolling ball.

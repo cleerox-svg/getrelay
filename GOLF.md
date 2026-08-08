@@ -22,8 +22,12 @@ Three modes behind the "Golf" chiclet in the Games hub:
   documented follow-up.
 - **Course · Hole 1 (beta)** — a full terrain-aware hole (tee → fairway → green
   → cup) on `courseSim.ts` + `CourseGL.tsx`; slingshot aim/power, tap-timing,
-  camera-follow, a predicted aim arc, a real Coulomb-friction putting green with
-  a PGA-style slope read, and persisted best-shot records. See roadmap step 3.
+  camera-follow, a predicted aim arc, and a real Coulomb-friction putting green
+  that reliably HOLES an on-line putt (elliptic cup capture, no pin collision).
+  The green is clean (no on-turf slope overlay); the aim line + cup reticle pulse
+  gold/green when the current putt will drop. Persisted best-shot records. The
+  hole is fully DATA-driven (`CourseHole`) so holes 2–9 are pure data — see the
+  "HOW TO AUTHOR A HOLE" contract header in `terrain.ts`. See roadmap step 3.
 - **Driving Range** — down-range 3D; **Practice** (open, unlimited) and
   **Target Challenge** (8 balls, proximity scoring). Full-screen immersive.
 
@@ -114,10 +118,10 @@ A data-driven **Range layout** picker (persisted, default `fairway`):
 | Range HUD + controls + telemetry + layout picker | `packages/relay-ui/src/components/golf/RangeGame.tsx` |
 | Layouts, pins, `surfaceAt` | `packages/relay-ui/src/lib/golf/rangeTargets.ts` |
 | Club ladder | `packages/relay-ui/src/lib/golf/clubs.ts` |
-| Course terrain data (`heightAt`/`gradientAt`/`surfaceAt`) | `packages/relay-ui/src/lib/golf/terrain.ts`, `courseData.ts` |
-| Course sim (terrain-aware; `snapshot`/`restore`/`predict`; records) | `packages/relay-ui/src/lib/golf/courseSim.ts` |
-| Green + putting physics (Stimp → μ, roll-out, cup capture) | `packages/relay-ui/src/lib/golf/greenPhysics.ts` |
-| Course 3D scene (Three.js) + putt-read overlay | `packages/relay-ui/src/components/golf/CourseGL.tsx` |
+| Course terrain data + "HOW TO AUTHOR A HOLE" contract (`heightAt`/`gradientAt`/`surfaceAt`; `TEE_R`/`corridorHalfAt`/`greenPadRadius`) | `packages/relay-ui/src/lib/golf/terrain.ts`, `courseData.ts` |
+| Course sim (terrain-aware; `snapshot`/`restore`/`predict`; putt power/speed; records) | `packages/relay-ui/src/lib/golf/courseSim.ts` |
+| Green + putting physics (Stimp → μ, roll-out, elliptic cup capture, BALL_R/CUP_R scale) | `packages/relay-ui/src/lib/golf/greenPhysics.ts` |
+| Course 3D scene (Three.js) — baked surface map, fringe collar, textured green cap, aim-holing pulse | `packages/relay-ui/src/components/golf/CourseGL.tsx` |
 | Course HUD + records recap | `packages/relay-ui/src/components/golf/CourseGame.tsx` |
 | Putting sim / scene / round | `src/lib/golf/puttSim.ts`, `components/golf/PuttGL.tsx`, `GolfGame.tsx` |
 | Ball material (dimple normal map) | `packages/relay-ui/src/lib/golf/ballTexture.ts` |
@@ -263,7 +267,8 @@ Gameplay clean first, then the look, then the course — each step reuses the la
    bright centre trajectory to a **landing reticle** + a **roll-out marker**, and
    two faded **dispersion** edges (worst hook ↔ slice), refreshed on drag/arm.
    Added a **vertical power meter** to the HUD (fills as you pull, reddens near
-   max), a **putt-read break arrow** on the green (fall line from `slopeUnder()`),
+   max), a putt-read break arrow on the green (fall line from `slopeUnder()` —
+   later REMOVED in the green overhaul below; the HUD break text stays),
    and **textures**: a mow-stripe turf map on the ground, sand-grain caps on the
    bunkers, and a drifting ripple normal on the water. The strike/accuracy bar
    was kept (the user likes it); verified headless
@@ -283,22 +288,49 @@ Gameplay clean first, then the look, then the course — each step reuses the la
    `predict()`, so it fails loudly if a new field is forgotten.
    **⚠ RULE:** any new MUTABLE `CourseSim` field MUST be added to `CourseSnapshot`
    + `snapshot()` + `restore()`, or the guard test fails.
-   **→ Also done — green + putting engine:** new shared pure-math module
+   **→ Also done — green + putting engine (v1):** new shared pure-math module
    `lib/golf/greenPhysics.ts` (no `three`, no sim state): Stimpmeter green speed →
    friction (μ = 0.611/stimp, `GREEN_STIMP=10`), roll-out `d=v²/(2a)`, and
-   speed-dependent cup capture (holes only if slow enough within a radius that
-   shrinks with speed; too-fast putts lip out). `courseSim` green/fringe roll now
-   uses this Coulomb model (constant decel → a putt BREAKS more as it slows,
-   emergent); off-green surfaces keep the tuned run-out so the club ladder is
-   unchanged. `CourseGL`: green cap rebuilt with real `computeVertexNormals` (flat
-   up-normals were hiding all tilt — a main reason it "didn't look like a green");
-   a BOLD PGA-style putt read shown ONLY on the green — amber-uphill /
-   blue-downhill slope heat (fill opacity ~0.72, saturates even on a gentle
-   slope), a white contour grid, and navy fall-line arrows, all sampled from the
-   same `gradientAt` the ball breaks on. `terrain.ts` `HOLE_1` green flattened so
-   the designed tilt dominates and the break reads.
+   speed-dependent cup capture. `courseSim` green/fringe roll uses this Coulomb
+   model (constant decel → a putt BREAKS more as it slows, emergent); off-green
+   surfaces keep the tuned run-out so the club ladder is unchanged.
    **⚠ GREEN DESIGN GUARD:** a resting putt can only hold where slope ≲ μ (~6.1%
    at stimp 10) — keep future green tilt under that, or raise stimp/μ in lockstep.
+   **→ Also done — course/green OVERHAUL (3 phases; the earlier bold slope-read
+   overlay was REMOVED):**
+   • **Phase 1 — scalable surface model (`terrain.ts`).** A hole is now fully
+     data-driven via `CourseHole` with a documented "HOW TO AUTHOR A HOLE"
+     contract header IN `terrain.ts` (centerline, `fairwayHalf` + optional
+     `fairwayTaper`, `roughHalf`/OB, `green{r,raise,tiltPct,tiltDir,undulation}`,
+     `fringeW` collar, `hazards[]`, `cartPath`, `terrain`, `wind`). `surfaceAt()`
+     precedence is strict — green > fringe > bunker/water > cartpath > tee >
+     fairway > rough > ob — so a hazard never touches the putting surface;
+     `heightAt()` makes the green plateau span green+fringe (flush collar). New
+     exports `TEE_R`, `corridorHalfAt`, `greenPadRadius`. Invariants (pin inside
+     green; hazards outside `greenPadRadius`; green slope ≲ μ) are stated in the
+     header — treat THAT as the source of truth for authoring holes 2–9 / new
+     courses as pure data.
+   • **Phase 2 — putting physics + scale (`courseSim.ts`, `greenPhysics.ts`).**
+     Ball/cup scale is one source of truth: `BALL_R=0.2`, `CUP_R=0.5` (ratio 0.4,
+     a real ball/cup). Cup capture uses an ELLIPTIC effective-radius falloff
+     (`r_eff = cupR·√(1−(speed/limit)²)`) so an on-line putt at holing pace
+     reliably DROPS — the old "bounces off the pin" was actually capture failing
+     (there is NO pin collision). A putt-specific power model `puttSpeedForPower`
+     maps drag QUADRATICALLY (`speed = MIN + (MAX−MIN)·power²`) with a low
+     `PUTT_MIN_SPEED` so short putts are controllable (a dead tap rolls ~1.5 ft).
+     `predict()` reports `result==='holed'` for an on-line putt.
+   • **Phase 3 — rendering (`CourseGL.tsx`).** A baked top-down albedo surface map
+     (`makeSurfaceMap` via `surfaceAt`) drives distinct materials: bold-contrast
+     fairway mow stripes, darker/coarser rough at the edges, a cart path; a
+     distinct terrain-following FRINGE collar annulus (`green.r`→`greenPadRadius`)
+     so the green never abuts sand/water; a textured (seeded, deterministic grain)
+     green cap; and the ball SEATED at `b.h+BALL_R` with a contact-shadow disc (no
+     float). The on-green fall-line arrows + contour grid + slope heat tint were
+     REMOVED (clean green; the HUD "downhill · breaks left" text stays). New aim
+     cue: the predicted aim line + cup reticle PULSE gold/green when
+     `predict(0).result==='holed'` (replacing the arrows). The scene frame is
+     DERIVED from the hole (centerline + roughHalf + tee/pin extent) so ANY hole
+     renders fully — part of the scalability story.
    **→ Also done — best-shot records:** `golf_records` D1 table (migration
    `0007`) + `GET`/`POST /game/golf-records` in `games.ts`, tracked by
    `CourseSim.recordShot()` and shown in the `CourseGame` recap. See "Best-shot
@@ -307,12 +339,12 @@ Gameplay clean first, then the look, then the course — each step reuses the la
    `scripts/shoot-golf.mjs` drives TWO real rendered aims with a fire between them
    — the only sequence that reproduces the frustum-cull class (the old single-aim
    harness couldn't). Run: `pnpm --filter @relay/ui shoot:golf secondAim`.
-   67 UI golf tests pass across 5 files (range 15, courseData 14, courseSim 25,
-   terrain 7, greenPhysics 6); worker `games.test.ts` grew golf-records coverage.
-   **Next:** build out the nine holes as data (+ optional: dial mow-stripe
-   strength, tighten the tee camera framing), and consolidate Mini-Golf
-   (`puttSim`/`PuttGL`) onto a real heightfield so it can share `greenPhysics`
-   (today it stays a separate flat engine) — pending on-device feel feedback.
+   76 UI golf tests pass across 5 files (range 15, courseData 14, courseSim 31,
+   terrain 9, greenPhysics 7); worker `games.test.ts` grew golf-records coverage.
+   **Next:** author the remaining holes 2–9 as pure data per the `terrain.ts`
+   contract header, and consolidate Mini-Golf (`puttSim`/`PuttGL`) onto a real
+   heightfield so it can share `greenPhysics` (today it stays a separate flat
+   engine) — pending on-device feel feedback.
 
 **Working principle going forward:** tune against the **harness** and **device
 telemetry**, not guesses — that's why both exist.
@@ -366,19 +398,23 @@ screenshots won't catch it.
 ## Continuing in a new session
 Steps 1 (aim/shot control) and 2 (visual first pass) are **done**, and **step 3
 (hole engine)** has a PLAYABLE Hole 1 — terrain-aware sim, predicted aim arc
-(frustum-cull bug fixed), a real Coulomb putting green with a PGA-style slope
-read, and persisted best-shot records. See the roadmap markers above. Next up:
+(frustum-cull bug fixed), a real Coulomb putting green (elliptic cup capture that
+reliably holes an on-line putt), a clean textured green with an aim-holing pulse
+cue, a data-driven scalable surface model, and persisted best-shot records. See
+the roadmap markers above. Next up:
 
-1. **Build out the nine holes as data** (`terrain.ts`/`courseData.ts`) — the
-   engine, shaders and HUD are hole-agnostic, so this is mostly hole data +
-   terrain tuning. Keep each green's tilt ≲ μ (~6.1% at stimp 10) or a resting
-   putt won't hold (see the green design guard in step 3).
+1. **Author holes 2–9 as pure data** per the "HOW TO AUTHOR A HOLE" contract
+   header in `terrain.ts` (`terrain.ts`/`courseData.ts`) — the engine, shaders,
+   HUD and scene frame are all hole-agnostic and derive from the `CourseHole`, so
+   this is data only, no per-hole code. Respect the header invariants: pin inside
+   the green, hazards outside `greenPadRadius`, and each green's tilt ≲ μ (~6.1%
+   at stimp 10) or a resting putt won't hold (green design guard, step 3).
 2. **Consolidate Mini-Golf onto a real heightfield** so `puttSim`/`PuttGL` can
    share `greenPhysics` instead of its own flat engine.
-3. **On-device GPU check** (swiftshader/headless won't catch these): the new
-   green slope-read overlay (extra transparent fill + contour grid + arrows) and
-   the 2048² shadow map both need verifying on a low-end Android device before the
-   release AAB ships; 1536² / a lighter overlay are the first dials to turn down.
+3. **On-device GPU check** (swiftshader/headless won't catch it): the 2048²
+   shadow map needs verifying on a low-end Android device before the release AAB
+   ships; 1536² is the first dial to turn down. (The transparent slope-read
+   overlay that was an earlier GPU concern is gone — the green is clean now.)
 
 **Regressions:** if you ever touch `CourseSim` state, remember any new mutable
 field MUST join `CourseSnapshot`/`snapshot()`/`restore()` (guard test enforces

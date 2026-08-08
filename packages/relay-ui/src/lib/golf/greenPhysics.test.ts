@@ -56,4 +56,26 @@ describe('green physics — speed-dependent cup capture', () => {
     // A quicker ball can still drop, but only if it is nearly dead-centre.
     expect(cupCaptured(0.05, 1.2, cupR)).toBe(true);
   });
+
+  it('the ELLIPTIC falloff captures mid-pace putts the old LINEAR shrink rejected', () => {
+    // This is the headline reliability fix: an on-pace putt on line must drop.
+    // The old model shrank the effective radius LINEARLY, r_lin = cupR·(1−s/limit),
+    // which pinched the window so tight that on-pace putts skimmed the rim. The
+    // new model uses an ELLIPTIC falloff, r_ell = cupR·√(1−(s/limit)²), which stays
+    // near the full radius through the slow/normal pace band. Because √(1−r²) ≥
+    // (1−r) for 0≤r≤1, there is always a ring where the new model captures and the
+    // old one wouldn't — pin a concrete case in that ring so a regression to the
+    // linear shrink fails loudly.
+    const speed = 0.8; // mid-pace: ratio = 0.5 of the 1.6 capture limit
+    const ratio = speed / CUP_CAPTURE_SPEED;
+    const rElliptic = cupR * Math.sqrt(1 - ratio * ratio); // ≈ 0.433
+    const rLinearOld = cupR * (1 - ratio); // ≈ 0.25
+    // A distance strictly BETWEEN the two radii: the elliptic model holes it, the
+    // old linear model would have rejected it.
+    const dist = (rLinearOld + rElliptic) / 2; // ≈ 0.342
+    expect(dist).toBeGreaterThan(rLinearOld);
+    expect(dist).toBeLessThan(rElliptic);
+    expect(cupCaptured(dist, speed, cupR)).toBe(true); // new: drops
+    expect(dist > rLinearOld).toBe(true); // old linear model: would have rejected
+  });
 });

@@ -186,8 +186,8 @@ describe('buildCourseData (yard hole → metric layer)', () => {
       cd.getSurfaceAt(xYd * M_PER_YD, dYd * M_PER_YD).surface;
     expect(at(HOLE_1.tee.d, HOLE_1.tee.x)).toBe(Surface.TEE);
     expect(at(HOLE_1.pin.d, HOLE_1.pin.x)).toBe(Surface.GREEN);
-    // Pond short-right of the green (hazard[2]) and the fairway bunker (hazard[0]).
-    expect(at(496, 2)).toBe(Surface.WATER);
+    // Pond guarding the approach (hazard[2]) and the fairway bunker (hazard[0]).
+    expect(at(478, 16)).toBe(Surface.WATER);
     expect(at(300, 20)).toBe(Surface.BUNKER);
     // Off the corridor is rough/OB → ROUGH on the mask.
     expect(at(180, 90)).toBe(Surface.ROUGH);
