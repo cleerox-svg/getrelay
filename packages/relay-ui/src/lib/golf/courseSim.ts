@@ -43,12 +43,37 @@ import type { CourseHole, Surface } from './terrain';
 // a slope the per-substep slopeAccel keeps feeding it, so it only rests where
 // the ground is shallow enough that friction wins — exactly like a real green.
 const ROLL_REST = 2.0;
-// A near-stopped ball only RESTS where the slope under it is gentle enough that
-// friction can hold it; on anything steeper it keeps trickling downhill (a putt
-// that dies above the hole feeds back down the tilt) instead of freezing on a
-// visibly tilted lie. In yd/s² of downhill pull (GRAVITY·gradient): a 4% green
-// (~0.64) holds, a steeper mound rolls on.
-const STOP_SLOPE_ACC = 1.4;
+// Grass friction (Coulomb) — the missing piece that stops a slow ball. Below
+// LOW_ROLL_SPEED a constant decel of frictionFor(lie) yd/s² opposes motion, so a
+// near-stopped ball actually STOPS and HOLDS on a slope up to that decel instead
+// of trickling/oscillating downhill for tens of seconds (the real "ball rolls
+// backward for 30s" bug). It's per-surface: greens are near-frictionless so a
+// putt still rolls far and breaks (and a putt dying on the tilt still feeds back
+// downhill, since the tilt's ~0.64 accel exceeds the green's 0.5 friction);
+// fairway/rough/sand bite hard so approach shots settle in a second or two. The
+// same value is the rest slope-threshold, so the ball rests exactly where its
+// friction can hold it.
+const LOW_ROLL_SPEED = 8;
+function frictionFor(surf: Surface): number {
+  switch (surf) {
+    case 'green':
+      // Just above the green's slope accel (~0.6–1.3 on HOLE_1's tilt +
+      // undulation) so a putt still BREAKS as it rolls but STOPS when it dies
+      // instead of trickling back down into a hazard. Greens are still the
+      // lowest-friction surface (putts roll far and true).
+      return 1.5;
+    case 'fringe':
+      return 2.4;
+    case 'rough':
+      return 6.5; // thick grass grabs
+    case 'bunker':
+      return 9; // sand kills it
+    case 'cartpath':
+      return 1.2; // firm — runs a bit
+    default:
+      return 4.5; // fairway / tee
+  }
+}
 // The course allows genuine FINESSE: a much lower effective power floor than the
 // range (0.35), so a soft pitch can fly a few yards instead of a forced ~40. Full
 // power (sPow=1) is unchanged, so the club ladder off the tee is untouched.
@@ -516,6 +541,17 @@ export class CourseSim {
       const decay = Math.pow(this.rollDecay, dt * 60);
       b.vd *= decay;
       b.vx *= decay;
+      // Grass Coulomb friction at low speed: bleed a fixed decel off the velocity
+      // (capped so it never reverses the ball). This is what finally STOPS a slow
+      // ball on a slope instead of leaving it to creep. Only below LOW_ROLL_SPEED,
+      // so the fast roll-out that sets total distance is untouched.
+      const fric = frictionFor(this.lieAt(b.d, b.x));
+      const sp0 = Math.hypot(b.vd, b.vx);
+      if (sp0 > 1e-5 && sp0 < LOW_ROLL_SPEED) {
+        const k = Math.max(0, (sp0 - fric * dt) / sp0);
+        b.vd *= k;
+        b.vx *= k;
+      }
       b.d += b.vd * dt;
       b.x += b.vx * dt;
       b.h = this.ground(b.d, b.x);
@@ -525,10 +561,9 @@ export class CourseSim {
       if (surf === 'ob') return this.stop('ob');
       const speed = Math.hypot(b.vd, b.vx);
       if (this.holedOut(speed)) return this.stop('holed');
-      // Rest ONLY where the slope is gentle enough that friction holds the ball;
-      // on a steeper lie a near-stopped ball keeps trickling downhill instead of
-      // freezing mid-tilt (ad/ax are the downhill pull computed just above).
-      if (speed <= ROLL_REST && Math.hypot(ad, ax) <= STOP_SLOPE_ACC) return this.stop(surf);
+      // Rest once slow AND the slope is within what this surface's friction can
+      // hold — so the ball settles where it physically would, not creep on.
+      if (speed <= ROLL_REST && Math.hypot(ad, ax) <= frictionFor(surf)) return this.stop(surf);
       this.pushTrail();
       return;
     }
