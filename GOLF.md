@@ -13,10 +13,17 @@ first when picking up golf work.
 
 ## What exists today
 
-Two modes behind the "Golf" chiclet in the Games hub:
+Three modes behind the "Golf" chiclet in the Games hub:
 
 - **Mini-Golf (putting)** — top-down/angled 3D hole; drag-to-putt; 6 holes;
-  sink the cup; par/stroke scoring. Cohesive 3D (Three.js).
+  sink the cup; par/stroke scoring. Cohesive 3D (Three.js). NOTE: this is a
+  SEPARATE flat, no-heightfield engine (`puttSim.ts`/`PuttGL.tsx`) and does NOT
+  yet use `greenPhysics.ts` — consolidating it onto a real heightfield green is a
+  documented follow-up.
+- **Course · Hole 1 (beta)** — a full terrain-aware hole (tee → fairway → green
+  → cup) on `courseSim.ts` + `CourseGL.tsx`; slingshot aim/power, tap-timing,
+  camera-follow, a predicted aim arc, a real Coulomb-friction putting green with
+  a PGA-style slope read, and persisted best-shot records. See roadmap step 3.
 - **Driving Range** — down-range 3D; **Practice** (open, unlimited) and
   **Target Challenge** (8 balls, proximity scoring). Full-screen immersive.
 
@@ -83,6 +90,18 @@ A data-driven **Range layout** picker (persisted, default `fairway`):
   and `golfrange` (range challenge). Worker: `packages/relay-worker/src/games.ts`
   (`GAME_IDS`, `POST /game/score`, `GET /game/leaderboard`). Clamps: ≤8 rounds,
   ≤2000 pts each. No migration needed to add a game id.
+- **Best-shot records (course).** A per-user `golf_records` table (migration
+  `0007_golf_records.sql`, in both `schema.sql` and the numbered file) backs
+  `GET`/`POST /game/golf-records` — upsert-on-improve (MAX longest drive, MAX
+  longest holed putt, MIN closest-to-pin). `CourseSim` computes the per-hole
+  metrics via a single `recordShot()` off `stop()` (shared by live fire,
+  `simulateShot`, `simulatePutt`): longest drive = the first full swing's total
+  (an OB/water opener doesn't lock it — the replay does); closest-to-pin = min
+  rest `distToPin` among non-holing, non-water/OB, NON-PUTT shots; longest putt =
+  a putt that holes out. `CourseGame.tsx` shows this hole's numbers plus
+  persisted bests with a "New best!" badge; the `api.ts` client
+  (`getGolfRecords`/`postGolfRecords`) is seeded on mount and refreshed from the
+  POST read-after-write (survives offline/401).
 
 ### Key files
 | Area | Path |
@@ -95,10 +114,16 @@ A data-driven **Range layout** picker (persisted, default `fairway`):
 | Range HUD + controls + telemetry + layout picker | `packages/relay-ui/src/components/golf/RangeGame.tsx` |
 | Layouts, pins, `surfaceAt` | `packages/relay-ui/src/lib/golf/rangeTargets.ts` |
 | Club ladder | `packages/relay-ui/src/lib/golf/clubs.ts` |
+| Course terrain data (`heightAt`/`gradientAt`/`surfaceAt`) | `packages/relay-ui/src/lib/golf/terrain.ts`, `courseData.ts` |
+| Course sim (terrain-aware; `snapshot`/`restore`/`predict`; records) | `packages/relay-ui/src/lib/golf/courseSim.ts` |
+| Green + putting physics (Stimp → μ, roll-out, cup capture) | `packages/relay-ui/src/lib/golf/greenPhysics.ts` |
+| Course 3D scene (Three.js) + putt-read overlay | `packages/relay-ui/src/components/golf/CourseGL.tsx` |
+| Course HUD + records recap | `packages/relay-ui/src/components/golf/CourseGame.tsx` |
 | Putting sim / scene / round | `src/lib/golf/puttSim.ts`, `components/golf/PuttGL.tsx`, `GolfGame.tsx` |
 | Ball material (dimple normal map) | `packages/relay-ui/src/lib/golf/ballTexture.ts` |
 | Hub wiring | `packages/relay-ui/src/routes/Fog.tsx`, `components/golf/GolfMenu.tsx` |
-| Worker leaderboard | `packages/relay-worker/src/games.ts` |
+| Worker leaderboard + best-shot records | `packages/relay-worker/src/games.ts` (migration `0007_golf_records.sql`) |
+| Best-shot records API client | `packages/relay-ui/src/lib/api.ts` (`getGolfRecords`/`postGolfRecords`) |
 
 ### Commands
 - `pnpm --filter @relay/ui test` — the golf sim harness (dynamics tables).
@@ -241,10 +266,53 @@ Gameplay clean first, then the look, then the course — each step reuses the la
    max), a **putt-read break arrow** on the green (fall line from `slopeUnder()`),
    and **textures**: a mow-stripe turf map on the ground, sand-grain caps on the
    bunkers, and a drifting ripple normal on the water. The strike/accuracy bar
-   was kept (the user likes it). 29/29 golf tests pass; verified headless
-   (aiming shows the arc + dispersion + power meter). **Next:** build out the
-   nine holes as data (+ optional: dial mow-stripe strength, tighten the tee
-   camera framing) — pending on-device feel feedback.
+   was kept (the user likes it); verified headless
+   (aiming shows the arc + dispersion + power meter).
+   **→ Also done — arc fix + shared-physics refactor:** the predicted aim arc was
+   invisible on the SECOND+ aim — the aim-aid BufferGeometry's cached
+   `boundingSphere` went stale and three.js frustum-culled the arc BEFORE drawing
+   (that's why the earlier dots-vs-lines, depthTest and renderOrder patches all
+   failed — they act AFTER culling). Fix: `frustumCulled = false` on all six
+   aim-aid objects in `CourseGL` (parity with `RangeGL`, which already did this —
+   why the Range never hit the bug), and `ARC_MAX` raised 700→2048 (long shots
+   were being truncated). Refactor: `CourseSim.predict()` no longer hand-copies 13
+   fields — it uses a `snapshot()`/`restore()` pair over a full `CourseSnapshot`
+   plain-data struct and dry-runs the REAL swing/substep pipeline, so prediction
+   and the live shot are one integrator over one state. A guard test dumps ALL own
+   data props independently of `snapshot()` and asserts byte-identical state after
+   `predict()`, so it fails loudly if a new field is forgotten.
+   **⚠ RULE:** any new MUTABLE `CourseSim` field MUST be added to `CourseSnapshot`
+   + `snapshot()` + `restore()`, or the guard test fails.
+   **→ Also done — green + putting engine:** new shared pure-math module
+   `lib/golf/greenPhysics.ts` (no `three`, no sim state): Stimpmeter green speed →
+   friction (μ = 0.611/stimp, `GREEN_STIMP=10`), roll-out `d=v²/(2a)`, and
+   speed-dependent cup capture (holes only if slow enough within a radius that
+   shrinks with speed; too-fast putts lip out). `courseSim` green/fringe roll now
+   uses this Coulomb model (constant decel → a putt BREAKS more as it slows,
+   emergent); off-green surfaces keep the tuned run-out so the club ladder is
+   unchanged. `CourseGL`: green cap rebuilt with real `computeVertexNormals` (flat
+   up-normals were hiding all tilt — a main reason it "didn't look like a green");
+   a BOLD PGA-style putt read shown ONLY on the green — amber-uphill /
+   blue-downhill slope heat (fill opacity ~0.72, saturates even on a gentle
+   slope), a white contour grid, and navy fall-line arrows, all sampled from the
+   same `gradientAt` the ball breaks on. `terrain.ts` `HOLE_1` green flattened so
+   the designed tilt dominates and the break reads.
+   **⚠ GREEN DESIGN GUARD:** a resting putt can only hold where slope ≲ μ (~6.1%
+   at stimp 10) — keep future green tilt under that, or raise stimp/μ in lockstep.
+   **→ Also done — best-shot records:** `golf_records` D1 table (migration
+   `0007`) + `GET`/`POST /game/golf-records` in `games.ts`, tracked by
+   `CourseSim.recordShot()` and shown in the `CourseGame` recap. See "Best-shot
+   records (course)" above.
+   **→ Also done — regression harness:** a permanent `secondAim` scene in
+   `scripts/shoot-golf.mjs` drives TWO real rendered aims with a fire between them
+   — the only sequence that reproduces the frustum-cull class (the old single-aim
+   harness couldn't). Run: `pnpm --filter @relay/ui shoot:golf secondAim`.
+   67 UI golf tests pass across 5 files (range 15, courseData 14, courseSim 25,
+   terrain 7, greenPhysics 6); worker `games.test.ts` grew golf-records coverage.
+   **Next:** build out the nine holes as data (+ optional: dial mow-stripe
+   strength, tighten the tee camera framing), and consolidate Mini-Golf
+   (`puttSim`/`PuttGL`) onto a real heightfield so it can share `greenPhysics`
+   (today it stays a separate flat engine) — pending on-device feel feedback.
 
 **Working principle going forward:** tune against the **harness** and **device
 telemetry**, not guesses — that's why both exist.
@@ -262,6 +330,13 @@ look change happens once. The Course terrain is multi-surface (per-vertex
 detail that MULTIPLIES the vertex colour (keeping each lie's hue while adding
 mown texture); the Range bakes `'green'`. `three` stays lazy: `scenery.ts` is
 only imported by the already `lazy()`-loaded `*GL.tsx`.
+
+**Shared putting physics.** `lib/golf/greenPhysics.ts` is the pure-math
+counterpart for greens (Stimp → μ, roll-out, cup capture; no `three`, no sim
+state), used by `courseSim`'s green/fringe roll. **Consolidation status:**
+Mini-Golf (`puttSim.ts`/`PuttGL.tsx`) is still a SEPARATE flat, no-heightfield
+engine and does NOT yet share `greenPhysics` — moving it onto a real heightfield
+green is a documented follow-up.
 
 **Seeing the game (committed harness).** `pnpm --filter @relay/ui shoot:golf`
 renders each scene headlessly (Vite + pre-installed Chromium with
@@ -289,10 +364,26 @@ screenshots won't catch it.
 ---
 
 ## Continuing in a new session
-Steps 1 (aim/shot control) and 2 (visual first pass) are **done** — see the
-roadmap markers above. Next up is **step 3 (hole engine → 9-hole par-5
-course)**, unless the user wants to keep polishing the look (device-tuned
-exposure/lighting, bloom, tree sprites, bunkers) first.
+Steps 1 (aim/shot control) and 2 (visual first pass) are **done**, and **step 3
+(hole engine)** has a PLAYABLE Hole 1 — terrain-aware sim, predicted aim arc
+(frustum-cull bug fixed), a real Coulomb putting green with a PGA-style slope
+read, and persisted best-shot records. See the roadmap markers above. Next up:
+
+1. **Build out the nine holes as data** (`terrain.ts`/`courseData.ts`) — the
+   engine, shaders and HUD are hole-agnostic, so this is mostly hole data +
+   terrain tuning. Keep each green's tilt ≲ μ (~6.1% at stimp 10) or a resting
+   putt won't hold (see the green design guard in step 3).
+2. **Consolidate Mini-Golf onto a real heightfield** so `puttSim`/`PuttGL` can
+   share `greenPhysics` instead of its own flat engine.
+3. **On-device GPU check** (swiftshader/headless won't catch these): the new
+   green slope-read overlay (extra transparent fill + contour grid + arrows) and
+   the 2048² shadow map both need verifying on a low-end Android device before the
+   release AAB ships; 1536² / a lighter overlay are the first dials to turn down.
+
+**Regressions:** if you ever touch `CourseSim` state, remember any new mutable
+field MUST join `CourseSnapshot`/`snapshot()`/`restore()` (guard test enforces
+it), and re-run `pnpm --filter @relay/ui shoot:golf secondAim` — the two-aim
+sequence is the only thing that catches the aim-arc frustum-cull class.
 
 Tip for visual work: a throwaway `golfpreview.html` + `src/golfpreview.tsx` that
 mounts only `<RangeGL>` (no app shell/auth) lets you screenshot the range with

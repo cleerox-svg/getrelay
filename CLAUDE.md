@@ -33,16 +33,28 @@ code); `wrangler.toml` + deploy/CI → `devops-release`.
 - `pnpm --filter @relay/worker build` — dry-run deploy; `pnpm --filter @relay/ui build`.
 - `pnpm dev` — run worker (:8787) and UI (:5173) locally.
 
-## Ship a mobile build with every merge
-After a PR merges to `main`, always cut a new Android build as part of the
-merge process — run the **Build Android APK / AAB** workflow against `main`
+## Cut a mobile build only when the native app changes
+After a PR merges to `main`, cut a new Android build **only if the merge
+includes native / Android-impacting changes** — otherwise skip it. The
+Capacitor WebView loads from `server_url` (default `https://relay.averrow.com`),
+so **web-only** changes (routes, components, worker endpoints, D1 schema,
+styling) reach Android users the moment `deploy-ui` finishes — no new AAB, no
+Play review. Cutting an AAB for those churns Play review for a binary that
+delivers nothing new.
+
+Cut a new AAB when the merge touches something that ships **inside** the app:
+- a Capacitor plugin added/removed/upgraded (camera, biometrics, push, etc.);
+- a new Android permission or `AndroidManifest.xml` change;
+- native push / FCM wiring, deep-link, or `capacitor.config.ts` changes;
+- app icon / splash, `targetSdkVersion`, `applicationId`, or signing config;
+- a `server_url` change or a cosmetic version bump for the store listing.
+
+When it applies, run the **Build Android APK / AAB** workflow against `main`
 with `build_type=release-aab` and `publish=true`, so the AAB rolls out to the
-Play **Internal testing** track. Do this even for web-only changes: the
-WebView loads from `server_url`, so the store build is not what delivers them,
-but the project wants the mobile build kept in lockstep with `main` regardless.
-Each upload starts its own Play review, so batch merges where you reasonably
-can rather than firing several builds minutes apart. `build-android.yml` uses
-`cancel-in-progress`, so a new run supersedes one still building.
+Play **Internal testing** track. Each upload starts its own Play review, so
+batch native changes and don't fire several builds minutes apart.
+`build-android.yml` uses `cancel-in-progress`, so a new run supersedes one
+still building.
 
 ## Conventions that bite
 - **D1 migrations must be idempotent and use NO explicit transactions**
