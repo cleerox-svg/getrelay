@@ -8,8 +8,8 @@
 // bounce and run. One source of truth (the CourseHole) drives both this and the
 // coming terrain mesh, so the look and the play can't disagree.
 //
-// World space matches the range/terrain: d downrange yд, x lateral yд (+right),
-// h ABSOLUTE elevation yд (the range treats ground as h=0; here the ground is
+// World space matches the range/terrain: d downrange yd, x lateral yd (+right),
+// h ABSOLUTE elevation yd (the range treats ground as h=0; here the ground is
 // heightAt(d,x)). The course renderer will drive this on the same fixed step.
 
 import { CLUBS, clubById, DEFAULT_CLUB_ID } from './clubs';
@@ -38,32 +38,25 @@ import {
 } from './rangeSim';
 import { gradientAt, heightAt, slopeAccel, surfaceAt } from './terrain';
 import type { CourseHole, Surface } from './terrain';
+import { cupCaptured, greenRollDecel, launchSpeedForRoll } from './greenPhysics';
 
 // Below this ground speed a rolling ball on ~flat ground is snapped to rest. On
 // a slope the per-substep slopeAccel keeps feeding it, so it only rests where
-// the ground is shallow enough that friction wins — exactly like a real green.
+// the ground is shallow enough that friction wins.
 const ROLL_REST = 2.0;
-// Grass friction (Coulomb) — the missing piece that stops a slow ball. Below
+// On the GREEN a putt must roll its last inch, so it rests at a much finer speed
+// than a settling fairway shot (a coarse 2.0 threshold would strand a dying putt
+// a couple of yards short of the cup).
+const GREEN_REST = 0.3;
+// Off-green grass friction (Coulomb) — the piece that stops a slow ball. Below
 // LOW_ROLL_SPEED a constant decel of frictionFor(lie) yd/s² opposes motion, so a
-// near-stopped ball actually STOPS and HOLDS on a slope up to that decel instead
-// of trickling/oscillating downhill for tens of seconds (the real "ball rolls
-// backward for 30s" bug). It's per-surface: greens have the LOWEST friction (1.5)
-// so a putt still rolls far and breaks as it dies, yet — sitting just above the
-// tilt's slope accel (~0.6–1.3 on HOLE_1) — it settles instead of trickling back
-// into a hazard; fairway/rough/sand bite harder so approach shots stop in a
-// second or two. The same value is the rest slope-threshold, so the ball rests
-// exactly where its friction can hold it.
+// near-stopped ball STOPS and HOLDS on a slope up to that decel instead of
+// trickling/oscillating downhill for tens of seconds. fairway/rough/sand bite
+// harder so approach shots settle in a second or two. The green/fringe do NOT
+// use this — they run the calibrated Stimpmeter model below.
 const LOW_ROLL_SPEED = 8;
 function frictionFor(surf: Surface): number {
   switch (surf) {
-    case 'green':
-      // Just above the green's slope accel (~0.6–1.3 on HOLE_1's tilt +
-      // undulation) so a putt still BREAKS as it rolls but STOPS when it dies
-      // instead of trickling back down into a hazard. Greens are still the
-      // lowest-friction surface (putts roll far and true).
-      return 1.5;
-    case 'fringe':
-      return 2.4;
     case 'rough':
       return 6.5; // thick grass grabs
     case 'bunker':
@@ -74,19 +67,47 @@ function frictionFor(surf: Surface): number {
       return 4.5; // fairway / tee
   }
 }
+
+// --- Green speed (Stimpmeter) → putting physics ----------------------------
+// The green/fringe roll on a CALIBRATED Coulomb friction from the shared
+// greenPhysics module (μ ≈ 0.611/stimp; a = g·μ), so a putt's flat roll-out is
+// exactly v²/(2a). A_GREEN is the deceleration on the putting surface; the
+// fringe/collar grabs ~2× harder. Because this decel is CONSTANT while the
+// ball's speed shrinks, the slope-break (slopeAccel) bends a putt MORE the
+// slower it rolls — the "a slow ball breaks more" behaviour emerges, unscripted.
+//
+// DESIGN GUARD when authoring greens: A_GREEN is also the max slope a resting
+// putt can HOLD (see the rest-hold gate in substep). slopeAccel = GRAVITY·grad,
+// so a ball can only settle where grad ≲ μ = 0.611/stimp — at stimp 10 that's a
+// ~6.1% slope. A green whose tiltPct (plus undulation) exceeds ~0.061 would let
+// NO putt come to rest anywhere on it (it trickles forever); keep a hole's
+// green slope under that, or raise the stimp/μ in lockstep.
+const A_GREEN = greenRollDecel(GRAVITY);
+const A_FRINGE = A_GREEN * 2;
+function greenDecel(surf: Surface): number {
+  return surf === 'fringe' ? A_FRINGE : A_GREEN;
+}
 // The course allows genuine FINESSE: a much lower effective power floor than the
 // range (0.35), so a soft pitch can fly a few yards instead of a forced ~40. Full
 // power (sPow=1) is unchanged, so the club ladder off the tee is untouched.
 const COURSE_POWER_FLOOR = 0.06;
-// Putt: on the green a stroke ROLLS along the ground (no loft, no floor) instead
-// of a lofted swing. Drag power maps to an initial ground speed in this band —
-// full power comfortably crosses the green; a touch still trickles.
-const PUTT_MIN_SPEED = 2.5;
-const PUTT_MAX_SPEED = 18;
-// Cup capture: a grounded ball within this radius of the pin and slower than
-// CUP_SPEED drops. Faster or wider and it rolls on (lips out).
+// Putt: on the green a stroke ROLLS along the ground (no loft, no floor). Drag
+// power maps to an initial ground speed calibrated (via the Stimpmeter roll-out)
+// so a FULL-power putt rolls ~22 yd on the flat (comfortably crosses a green and
+// lags a long one) and a MINIMUM tap trickles ~1.4 yd.
+//
+// NOTE PUTT_MIN_SPEED (~1.65) sits just ABOVE CUP_CAPTURE_SPEED (1.6) — that is
+// deliberate and harmless: a min-power tap started right at the lip is only
+// over the capture limit for a fraction of a yard, bleeding under 1.6 well
+// before it reaches the cup, so a dead-lip tap still drops rather than lipping
+// out on its own launch speed.
+const PUTT_MAX_SPEED = launchSpeedForRoll(22, A_GREEN);
+const PUTT_MIN_SPEED = launchSpeedForRoll(1.4, A_GREEN);
+// Cup capture radius (yd). The regulation cup is sub-pixel; this is the play/
+// visual radius the speed-dependent capture (greenPhysics.cupCaptured) tests a
+// grounded ball against — a dead-weight ball drops from within CUP_R, a quick
+// one only if near dead-centre, a fast one rolls over.
 const CUP_R = 0.6;
-const CUP_SPEED = 7;
 
 // Where a shot ended up. The solid lies double as the resting-lie readout; the
 // terminal ones end the shot.
@@ -186,6 +207,14 @@ export interface CourseState {
   // On the green → the next stroke is a putt (ground roll), so the HUD can label
   // the club "Putter" and read the power meter as putt strength.
   putting: boolean;
+  // The hole's number (for attributing a record to a hole) and the per-hole best
+  // shots so far, rounded to whole yards (null until produced). The recap reads
+  // these at hole-out to show the drive / closest-approach / holed-putt lengths
+  // and to POST them to /game/golf-records.
+  holeId: number;
+  driveYards: number | null;
+  closestToPinYards: number | null;
+  longestPuttYards: number | null;
 }
 
 const TRAIL_MAX = 64;
@@ -225,6 +254,13 @@ interface CourseSnapshot {
   shotOriginX: number;
   penaltyPending: boolean;
   stepGuard: number;
+  driveYards: number | null;
+  closestToPinYards: number | null;
+  longestPuttYards: number | null;
+  driveRecorded: boolean;
+  shotIsDrive: boolean;
+  shotIsPutt: boolean;
+  puttStartDist: number;
 }
 
 export class CourseSim {
@@ -269,6 +305,26 @@ export class CourseSim {
   private shotOriginX = 0;
   private penaltyPending = false;
   private stepGuard = 0;
+
+  // --- Per-hole best-shot records (surfaced in the recap, posted to
+  // /game/golf-records). Accumulated as shots come to REST via stop(), so both
+  // the live fire path and the simulateShot/simulatePutt harness feed them. All
+  // in yards; null until the hole produces one.
+  //   driveYards       — total played distance of the TEE shot / first full
+  //                       swing (one per hole; a first swing that finds water/OB
+  //                       doesn't count, so its replay becomes the drive).
+  //   closestToPinYards — the nearest ANY non-holing shot RESTED to the pin
+  //                       (the "closest approach"; excludes holed/water/OB).
+  //   longestPuttYards  — the length (origin→cup) of the longest PUTT that
+  //                       HOLED OUT (a stroke played from the green that drops);
+  //                       null if the hole wasn't finished with a putt.
+  driveYards: number | null = null;
+  closestToPinYards: number | null = null;
+  longestPuttYards: number | null = null;
+  private driveRecorded = false; // the drive distance is locked in for the hole
+  private shotIsDrive = false; // the in-flight shot is the (unrecorded) drive
+  private shotIsPutt = false; // the in-flight shot is a putt (ground roll)
+  private puttStartDist = 0; // length of the in-flight putt (origin→pin)
 
   constructor(hole: CourseHole, clubId = DEFAULT_CLUB_ID) {
     this.hole = hole;
@@ -331,6 +387,10 @@ export class CourseSim {
     this.result = 'tee';
     this.trail.length = 0;
     this.stepGuard = 0;
+    // The first full swing of the hole is the drive candidate (recorded at rest,
+    // unless it finds water/OB — then its replay is the drive).
+    this.shotIsDrive = !this.driveRecorded;
+    this.shotIsPutt = false;
   }
 
   // Roll a PUTT from the current lie: no launch angle, no power floor — the drag
@@ -359,6 +419,12 @@ export class CourseSim {
     // Smooth green roll — the green lie's own run, no club bite.
     const mat = TERRAIN.green;
     this.rollDecay = Math.max(0.6, Math.min(0.99, 1 - (1 - 0.985) / mat.runMul));
+    // A putt can hole → remember its length (origin→cup) for the longest-putt
+    // record; it is NOT a drive.
+    this.shotIsDrive = false;
+    this.shotIsPutt = true;
+    const p = this.hole.pin;
+    this.puttStartDist = Math.hypot(b.d - p.d, b.x - p.x);
   }
 
   private pushTrail(): void {
@@ -381,11 +447,47 @@ export class CourseSim {
     this.total = this.origin2D(b.d, b.x);
     this.result = result;
     if (result === 'holed') this.holed = true;
+    this.recordShot(result);
     // Water / OB → the next address replays from the previous spot for a penalty.
     if (result === 'water' || result === 'ob') this.penaltyPending = true;
     // Auto-club the next shot for the new lie/distance (the player can still
     // cycle). A driver-for-a-bunker-chip default is exactly what this avoids.
     else this.clubId = this.recommendedClub();
+  }
+
+  // Fold a shot that has just come to REST into the per-hole best records. Called
+  // from stop() so every terminating path (live fire, simulateShot, simulatePutt,
+  // the safety guard) feeds the same accounting.
+  private recordShot(result: CourseResult): void {
+    const b = this.ball;
+    const p = this.hole.pin;
+    // Closest-to-pin: the nearest an APPROACH (a full swing) finishes to the cup.
+    // Exclude the holed shot (ball in the cup), hazard stops (water/OB are
+    // replayed), AND putts — a stroke played from the green (shotIsPutt) rests
+    // inches from the cup on nearly every completed hole, which would collapse
+    // this to ~0 and make the stat meaningless. So only non-putt rests count.
+    if (result !== 'holed' && result !== 'water' && result !== 'ob' && !this.shotIsPutt) {
+      const dtp = Math.hypot(b.d - p.d, b.x - p.x);
+      if (this.closestToPinYards == null || dtp < this.closestToPinYards) {
+        this.closestToPinYards = dtp;
+      }
+    }
+    // Drive: the first full swing's total distance, locked in once it finishes on
+    // a playable lie. A first swing into water/OB doesn't count — shotIsDrive
+    // clears but driveRecorded stays false, so the replay swing becomes the drive.
+    if (this.shotIsDrive) {
+      this.shotIsDrive = false;
+      if (result !== 'water' && result !== 'ob') {
+        this.driveYards = this.total;
+        this.driveRecorded = true;
+      }
+    }
+    // Longest putt: a putt (green stroke) that HOLES OUT; keep the longest.
+    if (result === 'holed' && this.shotIsPutt) {
+      if (this.longestPuttYards == null || this.puttStartDist > this.longestPuttYards) {
+        this.longestPuttYards = this.puttStartDist;
+      }
+    }
   }
 
   // --- Interactive control surface (CourseGL drives this; CourseGame reads it) --
@@ -550,6 +652,12 @@ export class CourseSim {
       spinSide: this.spinSide,
       penaltyPending: this.penaltyPending,
       putting: this.putting(),
+      holeId: this.hole.id,
+      driveYards: this.driveYards == null ? null : Math.round(this.driveYards),
+      closestToPinYards:
+        this.closestToPinYards == null ? null : Math.round(this.closestToPinYards),
+      longestPuttYards:
+        this.longestPuttYards == null ? null : Math.round(this.longestPuttYards),
     };
   }
 
@@ -575,22 +683,33 @@ export class CourseSim {
       const { ad, ax } = slopeAccel(this.hole, b.d, b.x, GRAVITY);
       b.vd += ad * dt;
       b.vx += ax * dt;
-      const decay = Math.pow(this.rollDecay, dt * 60);
-      b.vd *= decay;
-      b.vx *= decay;
-      // Grass Coulomb friction at low speed: bleed a fixed decel off the velocity
-      // (capped so it never reverses the ball). This is what finally STOPS a slow
-      // ball on a slope instead of leaving it to creep. Only below LOW_ROLL_SPEED,
-      // so the fast roll-out that sets total distance is untouched. Sampled at the
-      // pre-move lie (the surface the ball is rolling ON this substep); the rest
-      // test below re-samples post-move — at sub-ROLL_REST speed the ball travels
-      // <0.02 yd/substep, so any surface-boundary mismatch is immaterial.
-      const fric = frictionFor(this.lieAt(b.d, b.x));
-      const sp0 = Math.hypot(b.vd, b.vx);
-      if (sp0 > 1e-5 && sp0 < LOW_ROLL_SPEED) {
-        const k = Math.max(0, (sp0 - fric * dt) / sp0);
-        b.vd *= k;
-        b.vx *= k;
+      // Friction, sampled at the pre-move lie (the surface being rolled ON this
+      // substep). GREEN/FRINGE run the calibrated Stimpmeter Coulomb model — a
+      // CONSTANT rolling decel a = g·μ at ALL speeds, so roll-out is exactly
+      // v²/(2a) and (decel constant while speed shrinks) the ball breaks more as
+      // it dies. Everywhere else keeps the club-tuned exponential run-out plus a
+      // low-speed Coulomb bleed to settle it.
+      const surf0 = this.lieAt(b.d, b.x);
+      const greenRoll = surf0 === 'green' || surf0 === 'fringe';
+      if (greenRoll) {
+        const a = greenDecel(surf0);
+        const sp = Math.hypot(b.vd, b.vx);
+        if (sp > 1e-5) {
+          const k = Math.max(0, (sp - a * dt) / sp);
+          b.vd *= k;
+          b.vx *= k;
+        }
+      } else {
+        const decay = Math.pow(this.rollDecay, dt * 60);
+        b.vd *= decay;
+        b.vx *= decay;
+        const fric = frictionFor(surf0);
+        const sp0 = Math.hypot(b.vd, b.vx);
+        if (sp0 > 1e-5 && sp0 < LOW_ROLL_SPEED) {
+          const k = Math.max(0, (sp0 - fric * dt) / sp0);
+          b.vd *= k;
+          b.vx *= k;
+        }
       }
       b.d += b.vd * dt;
       b.x += b.vx * dt;
@@ -602,8 +721,13 @@ export class CourseSim {
       const speed = Math.hypot(b.vd, b.vx);
       if (this.holedOut(speed)) return this.stop('holed');
       // Rest once slow AND the slope is within what this surface's friction can
-      // hold — so the ball settles where it physically would, not creep on.
-      if (speed <= ROLL_REST && Math.hypot(ad, ax) <= frictionFor(surf)) return this.stop(surf);
+      // hold — so the ball settles where it physically would, not creep on. The
+      // green rests at a finer speed (a putt must roll its last inch) and holds
+      // against its own Stimpmeter decel.
+      const onGreen = surf === 'green' || surf === 'fringe';
+      const restSpeed = onGreen ? GREEN_REST : ROLL_REST;
+      const holdAccel = onGreen ? greenDecel(surf) : frictionFor(surf);
+      if (speed <= restSpeed && Math.hypot(ad, ax) <= holdAccel) return this.stop(surf);
       this.pushTrail();
       return;
     }
@@ -669,10 +793,15 @@ export class CourseSim {
     }
   }
 
+  // Speed-dependent cup capture (shared greenPhysics.cupCaptured): the ball
+  // drops only if slow AND within an effective radius that shrinks with speed —
+  // a dead-weight ball holes from within CUP_R, a quick one only near dead-
+  // centre, a fast one lips out / rolls over. Replaces the old pure "within
+  // radius AND under a fixed speed" test.
   private holedOut(speed: number): boolean {
     const b = this.ball;
     const p = this.hole.pin;
-    return speed <= CUP_SPEED && Math.hypot(b.d - p.d, b.x - p.x) <= CUP_R;
+    return cupCaptured(Math.hypot(b.d - p.d, b.x - p.x), speed, CUP_R);
   }
 
   // Capture / restore the FULL mutable simulation state in ONE place. predict()
@@ -718,6 +847,13 @@ export class CourseSim {
       shotOriginX: this.shotOriginX,
       penaltyPending: this.penaltyPending,
       stepGuard: this.stepGuard,
+      driveYards: this.driveYards,
+      closestToPinYards: this.closestToPinYards,
+      longestPuttYards: this.longestPuttYards,
+      driveRecorded: this.driveRecorded,
+      shotIsDrive: this.shotIsDrive,
+      shotIsPutt: this.shotIsPutt,
+      puttStartDist: this.puttStartDist,
     };
   }
 
@@ -752,6 +888,13 @@ export class CourseSim {
     this.shotOriginX = s.shotOriginX;
     this.penaltyPending = s.penaltyPending;
     this.stepGuard = s.stepGuard;
+    this.driveYards = s.driveYards;
+    this.closestToPinYards = s.closestToPinYards;
+    this.longestPuttYards = s.longestPuttYards;
+    this.driveRecorded = s.driveRecorded;
+    this.shotIsDrive = s.shotIsDrive;
+    this.shotIsPutt = s.shotIsPutt;
+    this.puttStartDist = s.puttStartDist;
   }
 
   // Non-committing trajectory PREDICTION for the aim aid — runs the CURRENT
@@ -867,6 +1010,11 @@ export class CourseSim {
     this.carry = 0;
     this.apex = 0;
     this.firstLanding = false;
+    // Mark it a putt so a holed roll feeds the longest-putt record (mirrors
+    // puttLaunch on the live fire path).
+    this.shotIsDrive = false;
+    this.shotIsPutt = true;
+    this.puttStartDist = Math.hypot(b.d - this.hole.pin.d, b.x - this.hole.pin.x);
     // Putting surface friction: use the lie's own material run, no club bite.
     const mat = TERRAIN[terrainFor(this.lieAt(b.d, b.x))];
     this.rollDecay = Math.max(0.6, Math.min(0.99, 1 - (1 - 0.985) / mat.runMul));

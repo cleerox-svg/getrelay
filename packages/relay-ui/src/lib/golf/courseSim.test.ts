@@ -9,12 +9,23 @@ import { describe, it, expect } from 'vitest';
 import { CourseSim } from './courseSim';
 import { HOLE_1, type CourseHole } from './terrain';
 import { CLUBS } from './clubs';
+import { GRAVITY } from './rangeSim';
+import { greenRollDecel, rollOutDistance } from './greenPhysics';
 
 // A HOLE_1 clone with a DEAD-FLAT green (no tilt, no undulation) — the control
 // for proving the tilt (not noise) is what breaks a putt.
 const FLAT_GREEN: CourseHole = {
   ...HOLE_1,
   green: { ...HOLE_1.green, tiltPct: 0, undulation: 0 },
+};
+
+// A fully FLAT hole (level everywhere) — the control for the Stimpmeter roll-out
+// calibration: with no slope, a putt's distance must be v²/(2·g·μ) to the yard.
+const FLAT: CourseHole = {
+  ...HOLE_1,
+  green: { ...HOLE_1.green, raise: 0, tiltPct: 0, undulation: 0 },
+  hazards: [],
+  terrain: { seed: 1, hilliness: 0, hillScale: 40, teeElev: 5, greenElev: 5 },
 };
 
 const pad = (s: string | number, n: number) => String(s).padStart(n);
@@ -150,25 +161,27 @@ describe('course sim — putting on the tilted green', () => {
     // dead-flat control: the tilt pulls the roll toward the front (−d), so the
     // tilted ball finishes measurably further front than the flat one. Proves
     // the break comes from the slope, not from noise.
-    const tilted = sim().simulatePutt({ d: g.d, x: g.x - 9 }, 11, 90);
-    const flat = new CourseSim(FLAT_GREEN).simulatePutt({ d: g.d, x: g.x - 9 }, 11, 90);
+    const tilted = sim().simulatePutt({ d: g.d, x: g.x - 9 }, 5, 90);
+    const flat = new CourseSim(FLAT_GREEN).simulatePutt({ d: g.d, x: g.x - 9 }, 5, 90);
     expect(tilted.restD).toBeLessThan(flat.restD - 0.15);
   });
 
   it('a downhill putt runs further than the same putt uphill', () => {
     // Downhill = toward the front (−d, bearing 180°); uphill = toward the back
     // (+d, bearing 0°). Same start + speed, compare distance rolled.
-    const down = sim().simulatePutt({ d: g.d + 6, x: g.x }, 8, 180);
-    const up = sim().simulatePutt({ d: g.d - 6, x: g.x }, 8, 0);
+    const down = sim().simulatePutt({ d: g.d + 6, x: g.x }, 4, 180);
+    const up = sim().simulatePutt({ d: g.d - 6, x: g.x }, 4, 0);
     const downDist = Math.hypot(down.restD - (g.d + 6), down.restX - g.x);
     const upDist = Math.hypot(up.restD - (g.d - 6), up.restX - g.x);
     expect(downDist).toBeGreaterThan(upDist);
   });
 
   it('a well-judged putt straight at the cup is HOLED', () => {
-    // From just below the hole, up the fall line at a gentle pace, it drops.
+    // From just below the hole, up the fall line at a well-judged (dead-weight)
+    // pace, it drops. Too soft leaves it short; too firm lips out — only the
+    // right band holes, which is the point of speed-dependent capture.
     let holed = false;
-    for (const speed of [9, 10, 11, 11.5, 12, 12.5, 13]) {
+    for (const speed of [4.0, 4.4, 4.8, 5.2, 5.6]) {
       const m = sim().simulatePutt({ d: g.d - 7, x: g.x }, speed, 0);
       if (m.result === 'holed') {
         holed = true;
@@ -176,6 +189,30 @@ describe('course sim — putting on the tilted green', () => {
       }
     }
     expect(holed).toBe(true);
+  });
+
+  it('a putt hit much too hard LIPS OUT / rolls over the cup (speed-capture)', () => {
+    // Straight over the cup but far too fast: the effective capture radius has
+    // shrunk to nothing, so it does NOT drop — it runs on off the green.
+    const m = sim().simulatePutt({ d: g.d - 7, x: g.x }, 10, 0);
+    expect(m.result).not.toBe('holed');
+  });
+});
+
+describe('course sim — green speed (Stimpmeter roll-out)', () => {
+  it("a flat-green putt rolls the Stimpmeter distance v²/(2·g·μ) for its speed", () => {
+    // On a level green the integrated roll-out must match the calibrated Coulomb
+    // model to within a small margin (semi-implicit integration + the fine rest
+    // cutoff) — this is what makes putt power predictable, not guessed. (The pure
+    // stimp→friction→distance math itself is covered in greenPhysics.test.ts;
+    // this exercises it THROUGH the real CourseSim roll integrator.)
+    const a = greenRollDecel(GRAVITY);
+    const g = FLAT.green;
+    for (const v of [3, 4, 5]) {
+      const m = new CourseSim(FLAT).simulatePutt({ d: g.d, x: g.x }, v, 90);
+      const predicted = rollOutDistance(v, a);
+      expect(Math.abs(m.total - predicted)).toBeLessThan(0.6);
+    }
   });
 });
 
@@ -243,8 +280,11 @@ describe('course sim — play-test fixes (interactive fire path)', () => {
   });
 
   it('a putt through the real pipeline can be HOLED', () => {
+    // The green breaks and the cup is speed-gated, so only a well-paced putt
+    // drops — scan the power band finely to find the holing pace (proving the
+    // hole IS holeable through the actual fire path, not that any power works).
     let holed = false;
-    for (const power of [0.3, 0.4, 0.5, 0.6, 0.7, 0.8]) {
+    for (let power = 0.3; power <= 0.75; power += 0.01) {
       const s = sim();
       s.ball.d = g.d - 6;
       s.ball.x = g.x;
@@ -280,5 +320,98 @@ describe('course sim — play-test fixes (interactive fire path)', () => {
     // bearing snapped sideways/away and could never turn the shot around.
     expect(s.ball.d).toBeLessThan(g.d); // ended up on the pin's side, not behind
     expect(s.ball.x).toBeCloseTo(g.x, 0); // and stayed on line (didn't snap sideways)
+  });
+});
+
+// --- Per-hole best-shot records (drive / closest-to-pin / holed putt) ---------
+// The recap POSTs these to /game/golf-records. They accumulate as shots come to
+// REST, so simulateShot / simulatePutt / the interactive fire path all feed the
+// same numbers — this pins the attribution: the drive is the FIRST full swing's
+// total, closest-to-pin is the nearest a non-holing shot rested, and the longest
+// putt is the length of a putt that HOLED.
+describe('course sim — per-hole best-shot records', () => {
+  const g = HOLE_1.green;
+
+  it('drive = the first full swing total; later swings do NOT overwrite it', () => {
+    const s = sim();
+    const drv = s.simulateShot({ clubId: 'driver', power: 1 }); // opening tee shot
+    expect(s.driveYards).not.toBeNull();
+    expect(Math.round(s.driveYards!)).toBe(drv.total);
+    const locked = s.driveYards;
+    // A second full swing from up the fairway must not replace the drive.
+    s.simulateShot({ clubId: '7iron', power: 1, from: { d: 300, x: 0 } });
+    expect(s.driveYards).toBe(locked);
+  });
+
+  it('a first swing that goes OB is not the drive — the replay is', () => {
+    const s = sim();
+    const ob = s.simulateShot({ clubId: 'driver', power: 1, aimDeg: -35 });
+    expect(ob.result).toBe('ob');
+    expect(s.driveYards).toBeNull(); // OB doesn't lock a drive
+    const good = s.simulateShot({ clubId: 'driver', power: 1, from: { d: 0, x: 0 } });
+    expect(['fairway', 'rough', 'green', 'fringe', 'bunker', 'cartpath', 'tee']).toContain(
+      good.result,
+    );
+    expect(Math.round(s.driveYards!)).toBe(good.total); // the in-bounds swing is the drive
+  });
+
+  it('closest-to-pin tracks the MINIMUM rest distance across non-holing shots', () => {
+    const s = sim();
+    const drv = s.simulateShot({ clubId: 'driver', power: 1 }); // far from the pin
+    expect(Math.round(s.closestToPinYards!)).toBeLessThanOrEqual(drv.distToPin + 1);
+    // A short approach that finishes near the green must pull the record in.
+    const near = s.simulateShot({
+      clubId: 'pw',
+      power: 1,
+      from: { d: g.d - 120, x: g.x },
+    });
+    const best = Math.min(drv.distToPin, near.distToPin);
+    expect(Math.abs(Math.round(s.closestToPinYards!) - best)).toBeLessThanOrEqual(1);
+  });
+
+  it('a two-putt does NOT record a ~0 closest-to-pin from the tap — the approach wins', () => {
+    const s = sim();
+    // An APPROACH (full swing) that finishes several yards from the pin.
+    const approach = s.simulateShot({ clubId: 'sw', power: 0.7, from: { d: g.d - 80, x: g.x } });
+    expect(approach.result).not.toBe('holed');
+    const closestAfterApproach = s.closestToPinYards!;
+    expect(Math.round(closestAfterApproach)).toBe(approach.distToPin);
+    expect(closestAfterApproach).toBeGreaterThan(2);
+
+    // A lag PUTT (stroke from the green) that trickles up and rests CLOSER to the
+    // cup than the approach did. Because putts are excluded, it must NOT become
+    // the closest-to-pin — otherwise every two-putt would record a ~0.
+    const putt = s.simulatePutt({ d: g.d - 1.5, x: g.x }, 1.5, 0);
+    expect(putt.result).not.toBe('holed');
+    expect(putt.distToPin).toBeLessThan(closestAfterApproach); // the tap finished closer...
+    expect(s.closestToPinYards).toBe(closestAfterApproach); // ...yet closest is unchanged
+  });
+
+  it('longest putt = the length of a putt that HOLES OUT (via the fire path)', () => {
+    // Scan the power band for the holing pace from 6yd below the cup, then assert
+    // the recorded putt length is ~that 6yd putt (not a lofted-shot distance).
+    let holed: CourseSim | null = null;
+    for (let power = 0.3; power <= 0.75; power += 0.01) {
+      const s = sim();
+      s.ball.d = g.d - 6;
+      s.ball.x = g.x;
+      s.ball.h = 0;
+      fireStraight(s, power);
+      if (s.holed) {
+        holed = s;
+        break;
+      }
+    }
+    expect(holed).not.toBeNull();
+    expect(holed!.longestPuttYards).not.toBeNull();
+    // The putt was struck ~6yd from the cup, so its recorded length is ~6yd.
+    expect(holed!.longestPuttYards!).toBeGreaterThan(4);
+    expect(holed!.longestPuttYards!).toBeLessThan(8);
+  });
+
+  it('no putt is recorded before any putt holes', () => {
+    const s = sim();
+    s.simulateShot({ clubId: 'driver', power: 1 });
+    expect(s.longestPuttYards).toBeNull();
   });
 });

@@ -383,61 +383,52 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
 
     // --- Green cap -----------------------------------------------------
     // A distinct, smoother PUTTING SURFACE laid over the green: a terrain-
-    // following disc (samples heightAt so it hugs the green's tilt/undulation),
-    // a uniform brighter green with only a fine relief — no mow stripes — so it
-    // reads as a manicured green, not more fairway. Lifted a hair above the
-    // terrain and drawn a touch inside the collar so the fringe still shows.
+    // FOLLOWING grid (samples heightAt so it hugs the green's tilt + undulation)
+    // with REAL computed normals, so the contour actually SHADES — the tilt and
+    // rolls read as a sculpted green from any angle, not flat paint. Built as a
+    // circle-clipped grid (not a centre fan) precisely so computeVertexNormals
+    // has no degenerate hub to crease into a dark ring round the hole. A bright,
+    // uniform putting-green colour with only a fine blade relief (no mow stripes)
+    // marks it off from the fairway. Lifted a hair above the terrain and drawn a
+    // touch inside the collar so the fringe still shows.
     {
       const gDef = hole.green;
       const capR = gDef.r + hole.fringeW * 0.5;
-      const RINGS = 10;
-      const SEG = 56;
+      const N = 30; // grid cells across the diameter → smooth contour shading
+      const step = (2 * capR) / N;
+      const vxn = N + 1;
       const LIFT = 0.04;
-      const vcount = 1 + RINGS * SEG;
-      const gpos = new Float32Array(vcount * 3);
-      const guv = new Float32Array(vcount * 2);
-      gpos[0] = gDef.x;
-      gpos[1] = heightAt(hole, gDef.d, gDef.x) + LIFT;
-      gpos[2] = -gDef.d;
-      guv[0] = guv[1] = 0.5;
-      let gp = 3;
-      let gu = 2;
-      for (let ri = 1; ri <= RINGS; ri++) {
-        const frac = ri / RINGS;
-        const rad = capR * frac;
-        for (let s = 0; s < SEG; s++) {
-          const ang = (s / SEG) * Math.PI * 2;
-          const wx = gDef.x + Math.cos(ang) * rad;
-          const wd = gDef.d + Math.sin(ang) * rad;
-          gpos[gp] = wx;
-          gpos[gp + 1] = heightAt(hole, wd, wx) + LIFT;
-          gpos[gp + 2] = -wd;
-          guv[gu] = 0.5 + Math.cos(ang) * frac * 0.5;
-          guv[gu + 1] = 0.5 + Math.sin(ang) * frac * 0.5;
-          gp += 3;
-          gu += 2;
+      const cpos: number[] = [];
+      const cuv: number[] = [];
+      const idxOf: number[] = new Array(vxn * vxn).fill(-1);
+      let vc = 0;
+      for (let j = 0; j <= N; j++) {
+        for (let i = 0; i <= N; i++) {
+          const x = gDef.x - capR + i * step;
+          const d = gDef.d - capR + j * step;
+          if (Math.hypot(x - gDef.x, d - gDef.d) > capR) continue; // clip to disc
+          cpos.push(x, heightAt(hole, d, x) + LIFT, -d);
+          cuv.push(i / N, j / N);
+          idxOf[j * vxn + i] = vc++;
         }
       }
-      const gidx: number[] = [];
-      for (let s = 0; s < SEG; s++) gidx.push(0, 1 + s, 1 + ((s + 1) % SEG));
-      for (let ri = 1; ri < RINGS; ri++) {
-        const b0 = 1 + (ri - 1) * SEG;
-        const b1 = 1 + ri * SEG;
-        for (let s = 0; s < SEG; s++) {
-          const s1 = (s + 1) % SEG;
-          gidx.push(b0 + s, b0 + s1, b1 + s, b0 + s1, b1 + s1, b1 + s);
+      const cidx: number[] = [];
+      for (let j = 0; j < N; j++) {
+        for (let i = 0; i < N; i++) {
+          const a = idxOf[j * vxn + i]!;
+          const b = idxOf[j * vxn + i + 1]!;
+          const c = idxOf[(j + 1) * vxn + i]!;
+          const e = idxOf[(j + 1) * vxn + i + 1]!;
+          if (a < 0 || b < 0 || c < 0 || e < 0) continue; // whole cells only
+          // Same winding as the main terrain grid → top surface front-faces up.
+          cidx.push(a, b, c, b, e, c);
         }
       }
       const capGeo = track(new THREE.BufferGeometry());
-      capGeo.setAttribute('position', new THREE.BufferAttribute(gpos, 3));
-      capGeo.setAttribute('uv', new THREE.BufferAttribute(guv, 2));
-      capGeo.setIndex(gidx);
-      // Uniform up-normals rather than computeVertexNormals: the center vertex
-      // fan otherwise creases into a dark ring around the hole, and a putting
-      // green is near-flat so flat-up shading reads clean.
-      const cnorm = new Float32Array(vcount * 3);
-      for (let i = 0; i < vcount; i++) cnorm[i * 3 + 1] = 1;
-      capGeo.setAttribute('normal', new THREE.BufferAttribute(cnorm, 3));
+      capGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(cpos), 3));
+      capGeo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(cuv), 2));
+      capGeo.setIndex(cidx);
+      capGeo.computeVertexNormals(); // real normals → the contour shades
       const capNorm = track(makeTurfNormalMap());
       capNorm.repeat.set(16, 16);
       const capMat = track(
@@ -572,12 +563,13 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       scene.add(teePeg);
     }
 
-    // --- Green-reading heat grid (shown while putting) -----------------
-    // A contour grid over the green, HEAT-COLOURED by slope relative to the putt
-    // to the hole: warm = uphill toward the cup (putt firmer), cool = downhill
-    // (putt dies quick), neutral where it's flat. Built from gradientAt — the
-    // same slope the ball physically breaks on — so what you read is what rolls.
-    // Toggled visible only on the green (see the frame loop).
+    // --- Green-reading overlay (shown while putting) -------------------
+    // A PGA-style putt read over the green, in three layers, ALL sampled from the
+    // SAME gradientAt the ball physically breaks on — so what you read is what
+    // rolls: (1) a HEAT fill coloured by slope toward the cup (warm = uphill,
+    // putt firmer; cool = downhill, dies quick; neutral where flat), (2) a white
+    // contour grid, and (3) navy FALL-LINE ARROWS pointing downhill (the break
+    // direction, longer where steeper). Toggled visible only on the green.
     let greenGrid: THREE.Object3D | null = null;
     {
       const gDef = hole.green;
@@ -588,16 +580,27 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       const gpos: number[] = [];
       const gcol: number[] = [];
       const idxOf: number[] = new Array(vx * vx).fill(-1);
-      // Heat ramp: slope-toward-hole s (rise/run, +uphill) → colour. SMAX is low
-      // so even a gentle break reads strongly (greens are subtly sloped); the
-      // endpoints are punchy red (uphill) / blue (downhill) with a neutral green
-      // at flat, so the grid POPS.
-      const SMAX = 0.028;
+      // Heat ramp: slope-toward-hole s (rise/run, +uphill) → a BOLD, PGA-style
+      // slope colouring over a green base — vivid warm-amber where the putt is
+      // uphill (hit it firmer), vivid cool-blue where downhill (it'll run),
+      // green only right along the flat contour through the hole. The green base
+      // lerps to a saturated endpoint by |slope|, and SMAX is LOW so even a
+      // gentle green slope saturates fully — the up/down zones dominate the green
+      // and read the break instantly. The contour grid + fall-line arrows still
+      // layer the direction on top (their own render order, above the fill).
+      const SMAX = 0.025;
       const heat = (s: number): [number, number, number] => {
         const t = Math.max(-1, Math.min(1, s / SMAX));
-        if (t >= 0) return [0.95 * t + 0.3 * (1 - t), 0.85 - 0.6 * t, 0.35 - 0.2 * t]; // green→red
-        const u = -t;
-        return [0.3 - 0.15 * u, 0.85 - 0.35 * u, 0.35 + 0.6 * u]; // green→blue
+        const up = Math.max(0, t);
+        const dn = Math.max(0, -t);
+        const nr = 0.4;
+        const ng = 0.72;
+        const nb = 0.4;
+        return [
+          nr + up * (1.0 - nr) + dn * (0.1 - nr), // amber R uphill
+          ng + up * (0.48 - ng) + dn * (0.42 - ng),
+          nb + up * (0.1 - nb) + dn * (1.0 - nb), // blue B downhill
+        ];
       };
       let vcount = 0;
       for (let j = 0; j <= N; j++) {
@@ -662,11 +665,63 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         const lGeo = track(new THREE.BufferGeometry());
         lGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(lp), 3));
         const lMat = track(
-          new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35, depthWrite: false }),
+          new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, depthWrite: false }),
         );
         const lines = new THREE.LineSegments(lGeo, lMat);
         lines.renderOrder = 7;
         group.add(lines);
+
+        // Fall-line ARROWS: on a coarse grid, a short arrow points DOWNHILL
+        // (along −∇h — the way a putt breaks) at each node, its length growing
+        // with slope steepness. Read from the SAME gradientAt the ball rolls on,
+        // so the arrows show exactly where the break pulls. Deep navy so they pop
+        // over the warm/cool heat fill (the PGA-style "blue break grid" read).
+        const ap: number[] = [];
+        const AN = 8; // arrows across the diameter
+        const astep = (2 * R) / AN;
+        const yAt = (d: number, x: number) => heightAt(hole, d, x) + 0.09;
+        for (let j = 0; j <= AN; j++) {
+          for (let i = 0; i <= AN; i++) {
+            const x = gDef.x - R + i * astep;
+            const d = gDef.d - R + j * astep;
+            if (Math.hypot(x - gDef.x, d - gDef.d) > R - 0.6) continue;
+            const gr = gradientAt(hole, d, x);
+            const mag = Math.hypot(gr.gd, gr.gx);
+            if (mag < 1e-4) continue;
+            const ux = -gr.gx / mag; // downhill unit (world x)
+            const ud = -gr.gd / mag; // downhill unit (world d)
+            const L = Math.min(1.9, 0.7 + mag * 34); // longer where steeper
+            const x2 = x + ux * L;
+            const d2 = d + ud * L;
+            // Shaft.
+            ap.push(x, yAt(d, x), -d, x2, yAt(d2, x2), -d2);
+            // Two arrowhead barbs at the tip (perp = rotate the downhill dir 90°).
+            const bl = Math.min(0.7, L * 0.42);
+            const px = -ud;
+            const pd = ux;
+            for (const sgn of [-1, 1]) {
+              const bx = x2 - ux * bl + px * sgn * bl * 0.6;
+              const bd = d2 - ud * bl + pd * sgn * bl * 0.6;
+              ap.push(x2, yAt(d2, x2), -d2, bx, yAt(bd, bx), -bd);
+            }
+          }
+        }
+        if (ap.length) {
+          const aGeo = track(new THREE.BufferGeometry());
+          aGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ap), 3));
+          const aMat = track(
+            new THREE.LineBasicMaterial({
+              color: 0x0b2a6b,
+              transparent: true,
+              opacity: 0.85,
+              depthWrite: false,
+            }),
+          );
+          const arrows = new THREE.LineSegments(aGeo, aMat);
+          arrows.renderOrder = 8;
+          group.add(arrows);
+        }
+
         group.visible = false;
         greenGrid = group;
         scene.add(group);
@@ -675,9 +730,9 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
 
     // Flagstick — normalized to the REGULATION height (2.13 m) from the Course
     // data layer. The scene is yard-space, so the metric constants convert with
-    // YD_PER_M; the old pole was a hard-coded 8 yд (24 ft), 3.4× too tall.
+    // YD_PER_M; the old pole was a hard-coded 8 yd (24 ft), 3.4× too tall.
     const pinY = heightAt(hole, hole.pin.d, hole.pin.x);
-    const poleH = FLAGSTICK_HEIGHT_M * YD_PER_M; // 2.13 m ≈ 2.33 yд
+    const poleH = FLAGSTICK_HEIGHT_M * YD_PER_M; // 2.13 m ≈ 2.33 yd
     const poleGeo = track(new THREE.CylinderGeometry(0.06, 0.06, poleH, 6));
     const poleMat = track(new THREE.MeshStandardMaterial({ color: 0xf4f4f4, roughness: 0.6 }));
     const pole = new THREE.Mesh(poleGeo, poleMat);
@@ -695,17 +750,19 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     flag.castShadow = true;
     scene.add(flag);
     // The cup. The regulation hole (HOLE_DIAMETER_M = 0.108 m ≈ 0.06 yd radius,
-    // the data-model truth used by the physics capture) is sub-pixel to look at,
-    // so — like the ball — it's drawn OVERSIZED for readability: a dark hole with
-    // a white rim ring so you can actually see where to putt.
-    const cupR = 0.32;
+    // the data-model truth) is sub-pixel to look at, so — like the ball — it's
+    // drawn OVERSIZED for readability: a dark hole with a white rim ring so you
+    // can actually see where to putt. The visible hole+rim is sized to span the
+    // sim's speed-dependent capture radius (courseSim CUP_R ≈ 0.6 yd), so what
+    // you aim at is roughly what drops.
+    const cupR = 0.42;
     const cupGeo = track(new THREE.CircleGeometry(cupR, 24));
     const cupMat = track(new THREE.MeshBasicMaterial({ color: 0x0a0f0a }));
     const cup = new THREE.Mesh(cupGeo, cupMat);
     cup.rotation.x = -Math.PI / 2;
     cup.position.set(hole.pin.x, pinY + 0.09, -hole.pin.d);
     scene.add(cup);
-    const rimGeo = track(new THREE.RingGeometry(cupR, cupR + 0.12, 24));
+    const rimGeo = track(new THREE.RingGeometry(cupR, cupR + 0.16, 24));
     const rimMat = track(new THREE.MeshBasicMaterial({ color: 0xf4faf4, side: THREE.DoubleSide }));
     const rim = new THREE.Mesh(rimGeo, rimMat);
     rim.rotation.x = -Math.PI / 2;
@@ -768,7 +825,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     let celebrate = -1; // seconds since hole-out; <0 = not celebrating
 
     // Ball. BALL_R is a VISUAL radius: the regulation ball (BALL_DIAMETER_M =
-    // 0.0427 m ≈ 0.023 yд radius) is sub-pixel under the yard-tuned follow camera,
+    // 0.0427 m ≈ 0.023 yd radius) is sub-pixel under the yard-tuned follow camera,
     // so it's drawn oversized for readability. True-metric ball sizing lands when
     // the scene converts to meters (that phase also owns the camera). Referenced
     // so the intent is explicit and the constant is a single source of truth.

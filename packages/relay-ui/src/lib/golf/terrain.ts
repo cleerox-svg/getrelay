@@ -7,7 +7,7 @@
 // and roll against (lib/golf/rangeSim.ts). Nothing here draws or imports three.
 //
 // World space matches rangeSim: d = downrange yards, x = lateral yards (+right).
-// Elevation is in yards too, small (hills ±a few yд, greens raised a little), so
+// Elevation is in yards too, small (hills ±a few yd, greens raised a little), so
 // it composes with the existing yard-space ballistics without rescaling.
 
 // The lies a course point can be. 'ob' = out of bounds (past the corridor).
@@ -163,8 +163,13 @@ export function heightAt(hole: CourseHole, d: number, x: number): number {
   const gBlend =
     dg <= g.r ? 1 : dg < g.r + skirt ? 0.5 + 0.5 * Math.cos(((dg - g.r) / skirt) * Math.PI) : 0;
 
-  // Rolling hills, largely erased under the green pad.
-  h += t.hilliness * valueNoise(d / t.hillScale, x / t.hillScale, t.seed) * (1 - 0.9 * gBlend);
+  // Rolling hills, almost entirely erased under the green pad: a real green is
+  // graded far smoother than the fairway mounds, so its own planar tilt (not the
+  // surrounding noise) is the slope a putt breaks on. Leaving even 10% of the
+  // hills here gave the putting surface a ~0.5yd-per-6yd lateral wander that made
+  // reading a break impossible; 3% keeps a whisper of movement without polluting
+  // the designed tilt.
+  h += t.hilliness * valueNoise(d / t.hillScale, x / t.hillScale, t.seed) * (1 - 0.97 * gBlend);
 
   if (gBlend > 0) {
     // Flat-topped raise + planar tilt (fall toward tiltDir) + gentle interior
@@ -265,7 +270,7 @@ export const HOLE_1: CourseHole = {
   ],
   fairwayHalf: 20,
   roughHalf: 46,
-  green: { d: 512, x: 18, r: 15, raise: 3.2, tiltPct: 0.04, tiltDir: Math.PI, undulation: 0.15 },
+  green: { d: 512, x: 18, r: 15, raise: 3.2, tiltPct: 0.04, tiltDir: Math.PI, undulation: 0.08 },
   fringeW: 3,
   hazards: [
     { kind: 'bunker', d: 300, x: 20, r: 12, depth: -1.6 }, // fairway bunker, inside the dogleg
