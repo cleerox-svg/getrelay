@@ -47,12 +47,12 @@ const ROLL_REST = 2.0;
 // LOW_ROLL_SPEED a constant decel of frictionFor(lie) yd/s² opposes motion, so a
 // near-stopped ball actually STOPS and HOLDS on a slope up to that decel instead
 // of trickling/oscillating downhill for tens of seconds (the real "ball rolls
-// backward for 30s" bug). It's per-surface: greens are near-frictionless so a
-// putt still rolls far and breaks (and a putt dying on the tilt still feeds back
-// downhill, since the tilt's ~0.64 accel exceeds the green's 0.5 friction);
-// fairway/rough/sand bite hard so approach shots settle in a second or two. The
-// same value is the rest slope-threshold, so the ball rests exactly where its
-// friction can hold it.
+// backward for 30s" bug). It's per-surface: greens have the LOWEST friction (1.5)
+// so a putt still rolls far and breaks as it dies, yet — sitting just above the
+// tilt's slope accel (~0.6–1.3 on HOLE_1) — it settles instead of trickling back
+// into a hazard; fairway/rough/sand bite harder so approach shots stop in a
+// second or two. The same value is the rest slope-threshold, so the ball rests
+// exactly where its friction can hold it.
 const LOW_ROLL_SPEED = 8;
 function frictionFor(surf: Surface): number {
   switch (surf) {
@@ -544,7 +544,10 @@ export class CourseSim {
       // Grass Coulomb friction at low speed: bleed a fixed decel off the velocity
       // (capped so it never reverses the ball). This is what finally STOPS a slow
       // ball on a slope instead of leaving it to creep. Only below LOW_ROLL_SPEED,
-      // so the fast roll-out that sets total distance is untouched.
+      // so the fast roll-out that sets total distance is untouched. Sampled at the
+      // pre-move lie (the surface the ball is rolling ON this substep); the rest
+      // test below re-samples post-move — at sub-ROLL_REST speed the ball travels
+      // <0.02 yd/substep, so any surface-boundary mismatch is immaterial.
       const fric = frictionFor(this.lieAt(b.d, b.x));
       const sp0 = Math.hypot(b.vd, b.vx);
       if (sp0 > 1e-5 && sp0 < LOW_ROLL_SPEED) {
