@@ -9,12 +9,23 @@ import { describe, it, expect } from 'vitest';
 import { CourseSim } from './courseSim';
 import { HOLE_1, type CourseHole } from './terrain';
 import { CLUBS } from './clubs';
+import { GRAVITY } from './rangeSim';
+import { greenRollDecel, rollOutDistance } from './greenPhysics';
 
 // A HOLE_1 clone with a DEAD-FLAT green (no tilt, no undulation) — the control
 // for proving the tilt (not noise) is what breaks a putt.
 const FLAT_GREEN: CourseHole = {
   ...HOLE_1,
   green: { ...HOLE_1.green, tiltPct: 0, undulation: 0 },
+};
+
+// A fully FLAT hole (level everywhere) — the control for the Stimpmeter roll-out
+// calibration: with no slope, a putt's distance must be v²/(2·g·μ) to the yard.
+const FLAT: CourseHole = {
+  ...HOLE_1,
+  green: { ...HOLE_1.green, raise: 0, tiltPct: 0, undulation: 0 },
+  hazards: [],
+  terrain: { seed: 1, hilliness: 0, hillScale: 40, teeElev: 5, greenElev: 5 },
 };
 
 const pad = (s: string | number, n: number) => String(s).padStart(n);
@@ -150,25 +161,27 @@ describe('course sim — putting on the tilted green', () => {
     // dead-flat control: the tilt pulls the roll toward the front (−d), so the
     // tilted ball finishes measurably further front than the flat one. Proves
     // the break comes from the slope, not from noise.
-    const tilted = sim().simulatePutt({ d: g.d, x: g.x - 9 }, 11, 90);
-    const flat = new CourseSim(FLAT_GREEN).simulatePutt({ d: g.d, x: g.x - 9 }, 11, 90);
+    const tilted = sim().simulatePutt({ d: g.d, x: g.x - 9 }, 5, 90);
+    const flat = new CourseSim(FLAT_GREEN).simulatePutt({ d: g.d, x: g.x - 9 }, 5, 90);
     expect(tilted.restD).toBeLessThan(flat.restD - 0.15);
   });
 
   it('a downhill putt runs further than the same putt uphill', () => {
     // Downhill = toward the front (−d, bearing 180°); uphill = toward the back
     // (+d, bearing 0°). Same start + speed, compare distance rolled.
-    const down = sim().simulatePutt({ d: g.d + 6, x: g.x }, 8, 180);
-    const up = sim().simulatePutt({ d: g.d - 6, x: g.x }, 8, 0);
+    const down = sim().simulatePutt({ d: g.d + 6, x: g.x }, 4, 180);
+    const up = sim().simulatePutt({ d: g.d - 6, x: g.x }, 4, 0);
     const downDist = Math.hypot(down.restD - (g.d + 6), down.restX - g.x);
     const upDist = Math.hypot(up.restD - (g.d - 6), up.restX - g.x);
     expect(downDist).toBeGreaterThan(upDist);
   });
 
   it('a well-judged putt straight at the cup is HOLED', () => {
-    // From just below the hole, up the fall line at a gentle pace, it drops.
+    // From just below the hole, up the fall line at a well-judged (dead-weight)
+    // pace, it drops. Too soft leaves it short; too firm lips out — only the
+    // right band holes, which is the point of speed-dependent capture.
     let holed = false;
-    for (const speed of [9, 10, 11, 11.5, 12, 12.5, 13]) {
+    for (const speed of [4.0, 4.4, 4.8, 5.2, 5.6]) {
       const m = sim().simulatePutt({ d: g.d - 7, x: g.x }, speed, 0);
       if (m.result === 'holed') {
         holed = true;
@@ -176,6 +189,30 @@ describe('course sim — putting on the tilted green', () => {
       }
     }
     expect(holed).toBe(true);
+  });
+
+  it('a putt hit much too hard LIPS OUT / rolls over the cup (speed-capture)', () => {
+    // Straight over the cup but far too fast: the effective capture radius has
+    // shrunk to nothing, so it does NOT drop — it runs on off the green.
+    const m = sim().simulatePutt({ d: g.d - 7, x: g.x }, 10, 0);
+    expect(m.result).not.toBe('holed');
+  });
+});
+
+describe('course sim — green speed (Stimpmeter roll-out)', () => {
+  it("a flat-green putt rolls the Stimpmeter distance v²/(2·g·μ) for its speed", () => {
+    // On a level green the integrated roll-out must match the calibrated Coulomb
+    // model to within a small margin (semi-implicit integration + the fine rest
+    // cutoff) — this is what makes putt power predictable, not guessed. (The pure
+    // stimp→friction→distance math itself is covered in greenPhysics.test.ts;
+    // this exercises it THROUGH the real CourseSim roll integrator.)
+    const a = greenRollDecel(GRAVITY);
+    const g = FLAT.green;
+    for (const v of [3, 4, 5]) {
+      const m = new CourseSim(FLAT).simulatePutt({ d: g.d, x: g.x }, v, 90);
+      const predicted = rollOutDistance(v, a);
+      expect(Math.abs(m.total - predicted)).toBeLessThan(0.6);
+    }
   });
 });
 
@@ -243,8 +280,11 @@ describe('course sim — play-test fixes (interactive fire path)', () => {
   });
 
   it('a putt through the real pipeline can be HOLED', () => {
+    // The green breaks and the cup is speed-gated, so only a well-paced putt
+    // drops — scan the power band finely to find the holing pace (proving the
+    // hole IS holeable through the actual fire path, not that any power works).
     let holed = false;
-    for (const power of [0.3, 0.4, 0.5, 0.6, 0.7, 0.8]) {
+    for (let power = 0.3; power <= 0.75; power += 0.01) {
       const s = sim();
       s.ball.d = g.d - 6;
       s.ball.x = g.x;
