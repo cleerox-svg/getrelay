@@ -47,22 +47,40 @@ export function launchSpeedForRoll(dist: number, decel: number): number {
   return Math.sqrt(2 * decel * Math.max(0, dist));
 }
 
+// --- Ball & cup scale (world units = yards) --------------------------------
+//
+// The play-scale radii of the golf ball and the hole — the SINGLE SOURCE OF
+// TRUTH for both the physics (the sim captures a grounded ball against CUP_R)
+// and the render (Phase 3 draws the ball at BALL_R and the cup at CUP_R, so what
+// you see is what drops). A regulation ball is ~21.3 mm radius and a cup ~54 mm
+// (ball ≈ 0.4× cup); at TRUE scale both are sub-pixel on a yard-space green, so
+// these are INFLATED for readability while keeping that same ~0.4 ratio — the
+// ball visibly fits INSIDE the cup and can fall in. Keep BALL_R < CUP_R.
+export const CUP_R = 0.5;
+export const BALL_R = 0.2;
+
 // --- Speed-dependent cup capture -------------------------------------------
 //
 // A ball does NOT simply "hole if it is within the cup". It holes only if it is
 // (a) slower than a capture limit AND (b) within an EFFECTIVE radius that
 // SHRINKS as speed rises: a dead-weight ball drops from anywhere over the cup, a
-// quicker one only if it is nearly dead-centre, and anything at/over the limit
+// quicker one only if it is nearer dead-centre, and anything at/over the limit
 // lips out or rolls straight over. Research puts the real capture limit near
 // 1.3–1.6 m/s for a regulation 108 mm cup; in the sim's yard-space that is
 // ~1.6 yd/s (≈1.46 m/s).
 export const CUP_CAPTURE_SPEED = 1.6;
 
 // True if a ball `distToCup` from the pin, travelling at `speed`, is captured by
-// a cup of radius `cupR`. Replaces the old pure within-radius test.
+// a cup of radius `cupR`. The effective radius follows an ELLIPTIC falloff
+// r_eff = cupR·√(1 − (speed/limit)²): it stays near the full cup radius through
+// the slow/normal pace band (so an on-line putt at holing pace RELIABLY drops —
+// the locked design rule) and only collapses toward zero as the speed nears the
+// capture limit (a genuinely too-fast putt lips out / rolls over). Softer than
+// the old linear shrink, which pinched the window so tight that on-pace putts
+// skimmed the rim without dropping.
 export function cupCaptured(distToCup: number, speed: number, cupR: number): boolean {
   if (speed >= CUP_CAPTURE_SPEED) return false;
-  // frac: 1 at a standstill → 0 at the capture limit.
-  const frac = 1 - speed / CUP_CAPTURE_SPEED;
-  return distToCup <= cupR * frac;
+  const ratio = speed / CUP_CAPTURE_SPEED;
+  const rEff = cupR * Math.sqrt(1 - ratio * ratio);
+  return distToCup <= rEff;
 }

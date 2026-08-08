@@ -31,6 +31,7 @@ import {
   makeTurfNormalMap,
 } from '../../lib/golf/scenery';
 import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
+import { BALL_R, CUP_R } from '../../lib/golf/greenPhysics';
 import type { CourseSim } from '../../lib/golf/courseSim';
 
 interface Props {
@@ -123,9 +124,9 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     if (!host) return;
     const hole: CourseHole = sim.hole;
 
-    // Visible ball radius (yards). Small enough not to dominate the frame, big
-    // enough to read when the camera follows it downrange.
-    const BALL_R = 0.4;
+    // Visible ball + cup radii (yards) come from the sim's single source of
+    // truth (greenPhysics.BALL_R / CUP_R): the ball is drawn at the SAME radius
+    // the sim plays and at ~0.4× the cup, so it visibly fits the hole and drops.
 
     const disposables: { dispose: () => void }[] = [];
     const track = <T extends { dispose: () => void }>(o: T): T => {
@@ -752,10 +753,10 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     // The cup. The regulation hole (HOLE_DIAMETER_M = 0.108 m ≈ 0.06 yd radius,
     // the data-model truth) is sub-pixel to look at, so — like the ball — it's
     // drawn OVERSIZED for readability: a dark hole with a white rim ring so you
-    // can actually see where to putt. The visible hole+rim is sized to span the
-    // sim's speed-dependent capture radius (courseSim CUP_R ≈ 0.6 yd), so what
-    // you aim at is roughly what drops.
-    const cupR = 0.42;
+    // can actually see where to putt. The visible hole is drawn at the sim's
+    // speed-dependent capture radius (greenPhysics.CUP_R), so what you aim at is
+    // exactly what drops, and the ball (BALL_R ≈ 0.4× CUP_R) visibly fits it.
+    const cupR = CUP_R;
     const cupGeo = track(new THREE.CircleGeometry(cupR, 24));
     const cupMat = track(new THREE.MeshBasicMaterial({ color: 0x0a0f0a }));
     const cup = new THREE.Mesh(cupGeo, cupMat);

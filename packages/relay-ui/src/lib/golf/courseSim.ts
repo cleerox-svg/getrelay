@@ -38,7 +38,7 @@ import {
 } from './rangeSim';
 import { gradientAt, heightAt, slopeAccel, surfaceAt } from './terrain';
 import type { CourseHole, Surface } from './terrain';
-import { cupCaptured, greenRollDecel, launchSpeedForRoll } from './greenPhysics';
+import { CUP_R, cupCaptured, greenRollDecel, launchSpeedForRoll } from './greenPhysics';
 
 // Below this ground speed a rolling ball on ~flat ground is snapped to rest. On
 // a slope the per-substep slopeAccel keeps feeding it, so it only rests where
@@ -91,23 +91,27 @@ function greenDecel(surf: Surface): number {
 // range (0.35), so a soft pitch can fly a few yards instead of a forced ~40. Full
 // power (sPow=1) is unchanged, so the club ladder off the tee is untouched.
 const COURSE_POWER_FLOOR = 0.06;
-// Putt: on the green a stroke ROLLS along the ground (no loft, no floor). Drag
-// power maps to an initial ground speed calibrated (via the Stimpmeter roll-out)
-// so a FULL-power putt rolls ~22 yd on the flat (comfortably crosses a green and
-// lags a long one) and a MINIMUM tap trickles ~1.4 yd.
-//
-// NOTE PUTT_MIN_SPEED (~1.65) sits just ABOVE CUP_CAPTURE_SPEED (1.6) — that is
-// deliberate and harmless: a min-power tap started right at the lip is only
-// over the capture limit for a fraction of a yard, bleeding under 1.6 well
-// before it reaches the cup, so a dead-lip tap still drops rather than lipping
-// out on its own launch speed.
+// Putt power model (its own map, DISTINCT from the full-swing power floor). On
+// the green a stroke ROLLS along the ground (no loft, no floor); drag power maps
+// to an initial ground speed calibrated via the Stimpmeter roll-out so:
+//   • MIN (a dead-soft tap) trickles ~0.5 yd (1.5 ft) — a genuine delicate tap,
+//     so a 3-ft putt is controllable instead of being blasted past;
+//   • FULL power rolls ~22 yd on the flat (comfortably crosses a green / lags a
+//     long one).
+// The map is QUADRATIC in the drag (speed = MIN + (MAX−MIN)·power²), which packs
+// FINE resolution into the low end: a short putt lives in the lower half of the
+// drag range with plenty of travel to feather, rather than in an unusable sliver
+// just above the floor (the old linear map + a ~1.4-yd floor overshot every
+// short putt). PUTT_MIN_SPEED now sits comfortably BELOW CUP_CAPTURE_SPEED, so a
+// dead-soft tap started right at the lip still drops.
 const PUTT_MAX_SPEED = launchSpeedForRoll(22, A_GREEN);
-const PUTT_MIN_SPEED = launchSpeedForRoll(1.4, A_GREEN);
-// Cup capture radius (yd). The regulation cup is sub-pixel; this is the play/
-// visual radius the speed-dependent capture (greenPhysics.cupCaptured) tests a
-// grounded ball against — a dead-weight ball drops from within CUP_R, a quick
-// one only if near dead-centre, a fast one rolls over.
-const CUP_R = 0.6;
+const PUTT_MIN_SPEED = launchSpeedForRoll(0.5, A_GREEN);
+// Convert a drag power (0..1) to a putt launch speed with the low-end-dense
+// quadratic curve above. Shared by the live fire path and predict().
+function puttSpeedForPower(power: number): number {
+  const p = Math.max(0, Math.min(1, power));
+  return PUTT_MIN_SPEED + p * p * (PUTT_MAX_SPEED - PUTT_MIN_SPEED);
+}
 
 // Where a shot ended up. The solid lies double as the resting-lie readout; the
 // terminal ones end the shot.
@@ -399,7 +403,7 @@ export class CourseSim {
   // settled shot, so a well-judged putt trickles into the cup.
   private puttLaunch(power: number, dirRad: number): void {
     const b = this.ball;
-    const speed = PUTT_MIN_SPEED + Math.max(0, Math.min(1, power)) * (PUTT_MAX_SPEED - PUTT_MIN_SPEED);
+    const speed = puttSpeedForPower(power);
     b.h = this.ground(b.d, b.x);
     b.vh = 0;
     b.vd = speed * Math.cos(dirRad);
