@@ -11,6 +11,7 @@ itself lives in `../src/schema.sql` and is applied on every worker deploy.
 | `0004_clean_defunct_sports_subs.sql` | DELETE `user_sports_subs` rows for teams not in the current active 32-NHL / 30-MLB set. Cleans up orphan subs left behind by the pre-PR-#81 picker bug. Idempotent. | Same as above, with `file: 0004_clean_defunct_sports_subs.sql` |
 | `0005_native_push_tokens.sql` | Create `native_push_tokens` for FCM device tokens registered by the Capacitor Android/iOS apps (no Web Push in a WebView). Idempotent. | Same as above, with `file: 0005_native_push_tokens.sql` |
 | `0006_game_scores.sql` | Create `game_scores` for the Fog mini game (one row per completed game; contact-scoped leaderboards computed as MAX(score) per user over a time window). Idempotent. | Same as above, with `file: 0006_game_scores.sql` |
+| `0007_golf_records.sql` | Create `golf_records` for the in-app golf Course game (one row per user holding personal-best longest drive / closest-to-pin / longest putt; worker upserts a column only when the new value beats the stored one). Idempotent. | Same as above, with `file: 0007_golf_records.sql` |
 
 ## Columns are added by the deploy probe, not by a numbered file
 
