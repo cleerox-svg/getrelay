@@ -190,6 +190,43 @@ export interface CourseState {
 
 const TRAIL_MAX = 64;
 
+// A complete capture of every MUTABLE field of a CourseSim — the one source of
+// truth for predict()'s snapshot/restore (see CourseSim.snapshot). Kept as a
+// plain data struct with no reference to any render object, so it clones cheaply
+// and a dry-run prediction can never touch the scene. If you add mutable state
+// to CourseSim, add it here too; the round-trip test enforces completeness.
+interface CourseSnapshot {
+  ball: CourseBall;
+  trail: CourseTrailPt[];
+  clubId: string;
+  spinBack: number;
+  spinSide: number;
+  launchSpinSide: number;
+  windAlong: number;
+  windCross: number;
+  carry: number;
+  total: number;
+  apex: number;
+  ballSpeed: number;
+  firstLanding: boolean;
+  rollDecay: number;
+  result: CourseResult;
+  originD: number;
+  originX: number;
+  aiming: boolean;
+  power: number;
+  aimRad: number;
+  armed: boolean;
+  strokes: number;
+  holed: boolean;
+  dragStart: { x: number; y: number };
+  maxPull: number;
+  shotOriginD: number;
+  shotOriginX: number;
+  penaltyPending: boolean;
+  stepGuard: number;
+}
+
 export class CourseSim {
   readonly hole: CourseHole;
   readonly ball: CourseBall;
@@ -638,22 +675,28 @@ export class CourseSim {
     return speed <= CUP_SPEED && Math.hypot(b.d - p.d, b.x - p.x) <= CUP_R;
   }
 
-  // Non-committing trajectory PREDICTION for the aim aid — runs the CURRENT
-  // address inputs (club/power/steer/spin) through the SAME launch+flight+roll
-  // pipeline the live shot uses and captures the path, WITHOUT disturbing any
-  // live state (every mutated field + the ball/trail is snapshotted and
-  // restored). Because it reuses the real integrator ON THE TERRAIN, the drawn
-  // arc, landing reticle and roll-out marker are true to the yard. `accuracy`
-  // bakes in a tap-timing miss so the dispersion edges can be drawn. Read-only —
-  // the renderer calls it several times per address (centre + both edges).
-  predict(accuracy = 0): CoursePrediction {
-    const fixedS = FIXED_MS / 1000;
-    const stride = 2;
-    const b = this.ball;
-    const savedBall: CourseBall = { ...b };
-    const savedTrail = this.trail.slice();
-    const saved = {
+  // Capture / restore the FULL mutable simulation state in ONE place. predict()
+  // dry-runs the REAL swing/substep/roll pipeline on live state, then rewinds to
+  // byte-identical with restore() — so there is no parallel "prediction physics"
+  // to hand-sync, and no per-field snapshot list to silently drift out of date
+  // (the old predict() hand-copied only 13 fields, which is exactly the class of
+  // bug this closes). snapshot() takes EVERY mutable field; adding new sim state
+  // means adding it here, next to the fields. The round-trip test in
+  // courseSim.test.ts dumps ALL own data props of the sim INDEPENDENTLY of
+  // snapshot() (so it can see fields snapshot() omits) and fails loudly if
+  // predict() mutates something snapshot()/restore() forgot. The physics itself
+  // is shared BY CONSTRUCTION: predict, fireArmed and simulateShot all call the
+  // same swing()/puttLaunch()/substep().
+  private snapshot(): CourseSnapshot {
+    return {
+      ball: { ...this.ball },
+      trail: this.trail.slice(),
+      clubId: this.clubId,
+      spinBack: this.spinBack,
+      spinSide: this.spinSide,
       launchSpinSide: this.launchSpinSide,
+      windAlong: this.windAlong,
+      windCross: this.windCross,
       carry: this.carry,
       total: this.total,
       apex: this.apex,
@@ -663,10 +706,67 @@ export class CourseSim {
       result: this.result,
       originD: this.originD,
       originX: this.originX,
+      aiming: this.aiming,
+      power: this.power,
+      aimRad: this.aimRad,
+      armed: this.armed,
+      strokes: this.strokes,
       holed: this.holed,
+      dragStart: { ...this.dragStart },
+      maxPull: this.maxPull,
+      shotOriginD: this.shotOriginD,
+      shotOriginX: this.shotOriginX,
       penaltyPending: this.penaltyPending,
-      clubId: this.clubId, // stop() auto-clubs; predict must not leak that
+      stepGuard: this.stepGuard,
     };
+  }
+
+  private restore(s: CourseSnapshot): void {
+    Object.assign(this.ball, s.ball);
+    this.trail.length = 0;
+    for (const p of s.trail) this.trail.push(p);
+    this.clubId = s.clubId;
+    this.spinBack = s.spinBack;
+    this.spinSide = s.spinSide;
+    this.launchSpinSide = s.launchSpinSide;
+    this.windAlong = s.windAlong;
+    this.windCross = s.windCross;
+    this.carry = s.carry;
+    this.total = s.total;
+    this.apex = s.apex;
+    this.ballSpeed = s.ballSpeed;
+    this.firstLanding = s.firstLanding;
+    this.rollDecay = s.rollDecay;
+    this.result = s.result;
+    this.originD = s.originD;
+    this.originX = s.originX;
+    this.aiming = s.aiming;
+    this.power = s.power;
+    this.aimRad = s.aimRad;
+    this.armed = s.armed;
+    this.strokes = s.strokes;
+    this.holed = s.holed;
+    this.dragStart = { ...s.dragStart };
+    this.maxPull = s.maxPull;
+    this.shotOriginD = s.shotOriginD;
+    this.shotOriginX = s.shotOriginX;
+    this.penaltyPending = s.penaltyPending;
+    this.stepGuard = s.stepGuard;
+  }
+
+  // Non-committing trajectory PREDICTION for the aim aid — runs the CURRENT
+  // address inputs (club/power/steer/spin) through the SAME launch+flight+roll
+  // pipeline the live shot uses and captures the path, WITHOUT disturbing any
+  // live state (snapshot() before, restore() after — see above). Because it
+  // reuses the real integrator ON THE TERRAIN, the drawn arc, landing reticle
+  // and roll-out marker are true to the yard. `accuracy` bakes in a tap-timing
+  // miss so the dispersion edges can be drawn. Read-only — the renderer calls it
+  // several times per address (centre + both edges).
+  predict(accuracy = 0): CoursePrediction {
+    const fixedS = FIXED_MS / 1000;
+    const stride = 2;
+    const b = this.ball;
+    const snap = this.snapshot();
 
     const e = Math.max(-1, Math.min(1, accuracy));
     const powerW = ACCURACY_POWER_FLOOR + (1 - ACCURACY_POWER_FLOOR) * this.power;
@@ -704,23 +804,7 @@ export class CourseSim {
       result: this.result,
     };
 
-    // Restore.
-    this.launchSpinSide = saved.launchSpinSide;
-    this.carry = saved.carry;
-    this.total = saved.total;
-    this.apex = saved.apex;
-    this.ballSpeed = saved.ballSpeed;
-    this.firstLanding = saved.firstLanding;
-    this.rollDecay = saved.rollDecay;
-    this.result = saved.result;
-    this.originD = saved.originD;
-    this.originX = saved.originX;
-    this.holed = saved.holed;
-    this.penaltyPending = saved.penaltyPending;
-    this.clubId = saved.clubId;
-    Object.assign(b, savedBall);
-    this.trail.length = 0;
-    for (const p of savedTrail) this.trail.push(p);
+    this.restore(snap);
     return out;
   }
 
