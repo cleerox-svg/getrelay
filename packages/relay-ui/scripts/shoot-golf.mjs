@@ -32,6 +32,8 @@ const outDir = path.join(pkgDir, '.golf-shots');
 // `drag` scenes perform a pointer pull-back (down near the ball, move up) and
 // screenshot the AIMING state — the only way to capture the aim arc/reticles,
 // which pointer events drive.
+// `sequence` scenes need a bespoke multi-step driver (see runSequence): the
+// generic single-drag path can't express "aim, fire, roll to rest, aim again".
 const SCENES = {
   course: { query: 'scene=course', label: 'course-hole1' },
   green: { query: 'scene=course&at=green', label: 'course-green' },
@@ -40,9 +42,17 @@ const SCENES = {
   played: { query: 'scene=course&at=played', label: 'course-played-aim', drag: true },
   celebrate: { query: 'scene=course&at=holed', label: 'course-celebrate' },
   range: { query: 'scene=range&layout=fairway', label: 'range-fairway' },
+  // Regression guard for the frustum-cull second-aim bug: the aim arc/reticles
+  // were culled on the SECOND rendered aim (stale cached boundingSphere from the
+  // tee) and the shot rendered blank. Only reproducible by driving TWO real
+  // rendered aims with a real fire between them — see runSecondAim().
+  secondAim: { query: 'scene=course', label: 'course-second-aim', sequence: 'secondAim' },
 };
 const VIEWPORT = { width: 900, height: 1600 };
 const READY_TIMEOUT_MS = 15000;
+// Sim fixed timestep (mirror of tuning.ts FIXED_MS) — used to step a fired shot
+// to true rest deterministically, since headless rAF is throttled.
+const FIXED_MS = 1000 / 120;
 
 const requested = process.argv.slice(2);
 const ids = requested.length ? requested : Object.keys(SCENES);
@@ -73,6 +83,75 @@ async function loadPlaywright() {
   );
 }
 
+// Multi-aim regression driver. Renders a REAL first aim at the tee (a genuine
+// pointer drag so CourseGL renders the aim aids and CACHES the aim-aid
+// boundingSphere near the tee), fires it through the sim's own pipeline, rolls
+// the ball to true rest in the fairway, then renders a REAL second aim from
+// that rest position and screenshots it. The second aim's predicted arc +
+// landing reticle + dispersion edges MUST be visible; before the frustum-cull
+// fix they were culled against the stale tee-cached sphere and the shot was
+// blank. This is the only sequence that reproduces the class — the `played`
+// scene fires the tee shot programmatically, so no first aim ever renders.
+async function runSecondAim(page, label) {
+  const cx = VIEWPORT.width / 2;
+  const y0 = VIEWPORT.height * 0.8;
+
+  // FIRST aim (real, near the tee). Moderate pull so the tee shot rests in the
+  // fairway (not on the green). Hold long enough that several frames render the
+  // aim aids VISIBLE at the tee — this is what caches the soon-stale sphere.
+  const pull1 = 165;
+  await page.mouse.move(cx, y0);
+  await page.mouse.down();
+  for (let s = 1; s <= 6; s++) await page.mouse.move(cx, y0 - (pull1 * s) / 6);
+  await page.waitForTimeout(600);
+  await page.mouse.up(); // arm
+
+  // FIRE + roll to true rest downrange. Deterministic stepping (headless rAF is
+  // throttled, so the live loop would still be rolling when we drag again —
+  // exactly the device situation the fix targets). CourseGL's loop then no-ops.
+  const rested = await page.evaluate((fixedMs) => {
+    const s = window.__sim;
+    if (!s) return { err: 'no __sim' };
+    s.fireArmed(0);
+    const dt = fixedMs / 1000;
+    let g = 0;
+    while (s.ball.inFlight && g++ < 300000) s.substep(dt);
+    const st = s.getState();
+    return { lie: st.lie, dist: st.distToPin, d: Math.round(s.ball.d), strokes: st.strokes, resting: st.resting };
+  }, FIXED_MS);
+  // Let the render loop hide the (now stale-sphere) aim aids and settle the
+  // camera downrange before we re-aim.
+  await page.waitForTimeout(500);
+
+  // SECOND aim (real, from the fairway) — the shot that would have been blank.
+  const pull2 = 220;
+  await page.mouse.move(cx, y0);
+  await page.mouse.down();
+  for (let s = 1; s <= 6; s++) await page.mouse.move(cx, y0 - (pull2 * s) / 6);
+  await page.waitForTimeout(600);
+  const secondAim = await page.evaluate(() => {
+    const s = window.__sim;
+    if (!s) return { err: 'no __sim' };
+    const st = s.getState();
+    const p = s.predict(0);
+    return {
+      aiming: st.aiming,
+      power: Math.round(s.power * 100) / 100,
+      lie: st.lie,
+      dist: st.distToPin,
+      putting: st.putting,
+      pathLen: p.path.length,
+      landing: p.landing ? { d: Math.round(p.landing.d), x: Math.round(p.landing.x) } : null,
+    };
+  });
+  const file = path.join(outDir, `${label}.png`);
+  await page.screenshot({ path: file });
+  await page.mouse.up();
+  console.log(`  DBG secondAim rested: ${JSON.stringify(rested)}`);
+  console.log(`  DBG secondAim aim   : ${JSON.stringify(secondAim)}`);
+  return file;
+}
+
 async function main() {
   mkdirSync(outDir, { recursive: true });
 
@@ -98,7 +177,7 @@ async function main() {
       args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
     });
     for (const id of ids) {
-      const { query, label, drag } = SCENES[id];
+      const { query, label, drag, sequence } = SCENES[id];
       const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1 });
       const errors = [];
       page.on('pageerror', (e) => errors.push(String(e)));
@@ -108,6 +187,13 @@ async function main() {
         await page.waitForFunction('window.__golfReady === true', { timeout: READY_TIMEOUT_MS });
         // Let one more frame land after the ready beacon.
         await page.waitForTimeout(150);
+        if (sequence === 'secondAim') {
+          const file = await runSecondAim(page, label);
+          saved.push(file);
+          console.log(`✓ ${id.padEnd(7)} → ${path.relative(pkgDir, file)}`);
+          if (errors.length) console.log(`  (page errors: ${errors.slice(0, 3).join(' | ')})`);
+          continue;
+        }
         if (drag) {
           // Pull back from near the ball (lower-middle) to load power + aim, and
           // hold — the aim arc/reticles render only while aiming.
