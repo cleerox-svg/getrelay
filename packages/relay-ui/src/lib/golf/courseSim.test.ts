@@ -55,8 +55,10 @@ describe('course sim — full shots on HOLE_1', () => {
   });
 
   it('a ball hit into the pond finds water; a wild pull goes OB', () => {
-    // A short wedge that carries into the pond short-right of the green splashes.
-    const water = sim().simulateShot({ clubId: 'pw', power: 0.5, from: { d: 400, x: 2 } });
+    // A short wedge from the approach line, straight at the pin, that comes up in
+    // the pond guarding the front of the green splashes. (from→pin runs over the
+    // pond centre, so a shot that lands short of the green finds water.)
+    const water = sim().simulateShot({ clubId: 'pw', power: 0.3, from: { d: 427, x: 13 } });
     expect(water.result).toBe('water');
     // A wildly pulled driver off the tee leaves the corridor → out of bounds.
     const ob = sim().simulateShot({ clubId: 'driver', power: 1, aimDeg: -35 });
@@ -359,10 +361,13 @@ describe('course sim — per-hole best-shot records', () => {
     const s = sim();
     const drv = s.simulateShot({ clubId: 'driver', power: 1 }); // far from the pin
     expect(Math.round(s.closestToPinYards!)).toBeLessThanOrEqual(drv.distToPin + 1);
-    // A short approach that finishes near the green must pull the record in.
+    // A short approach that carries the pond and holds the green must pull the
+    // record in. (Full power here trickles off the front into the pond — a real
+    // consequence of the back-to-front green guarded by water — so it's played at
+    // a controlled pace that finishes on the putting surface.)
     const near = s.simulateShot({
       clubId: 'pw',
-      power: 1,
+      power: 0.85,
       from: { d: g.d - 120, x: g.x },
     });
     const best = Math.min(drv.distToPin, near.distToPin);
