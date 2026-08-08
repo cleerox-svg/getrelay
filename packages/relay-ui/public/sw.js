@@ -9,7 +9,7 @@
 // Bump this on any caching-logic change: activate() purges every cache whose
 // name isn't the current one, so bumping also clears a previously poisoned shell
 // (e.g. an error page cached as /index.html) from every device on next load.
-const SHELL_CACHE = 'relay-shell-v4';
+const SHELL_CACHE = 'relay-shell-v5';
 const SHELL_URLS = ['/', '/index.html', '/manifest.webmanifest', '/favicon.svg', '/icon.svg'];
 
 self.addEventListener('install', (event) => {
@@ -66,7 +66,20 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Never intercept the SW script itself — it must always be managed by the
+  // browser's own update mechanism (byte-compared on navigation), never served
+  // stale from Cache Storage, or the SW could pin its own old logic forever.
+  if (url.pathname === '/sw.js') return;
+
   // Static assets (Vite-hashed under /assets/): stale-while-revalidate.
+  //
+  // INVARIANT: /assets/ chunks are content-hashed and therefore immutable — a
+  // given URL never changes content, so serving the cached copy first is safe
+  // and fast. Because a new deploy PRUNES old hashes, a request for a pruned
+  // chunk must SURFACE its failure (404/non-ok) rather than be masked: we only
+  // cache res.ok responses, and a non-ok network result propagates unchanged so
+  // the app's chunk-load recovery (vite:preloadError / ErrorBoundary) can fire
+  // and hardRecover() the client onto the current asset set. Never cache a 404.
   if (url.pathname.startsWith('/assets/') || url.pathname.match(/\.(svg|webmanifest|js|css|woff2?)$/)) {
     event.respondWith(
       (async () => {

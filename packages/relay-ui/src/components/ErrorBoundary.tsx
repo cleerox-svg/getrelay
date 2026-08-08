@@ -1,5 +1,6 @@
 import { Component } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
+import { CHUNK_RECOVER_KEY, hardRecover, isChunkLoadError } from '../lib/recover';
 
 // Top-level error boundary. Without one, a single throw during render in ANY
 // screen unmounts the whole React tree and leaves a blank (black, in dark mode)
@@ -12,10 +13,11 @@ import type { ErrorInfo, ReactNode } from 'react';
 interface State {
   error: Error | null;
   info: ErrorInfo | null;
+  recovering: boolean;
 }
 
 export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
-  override state: State = { error: null, info: null };
+  override state: State = { error: null, info: null, recovering: false };
 
   static getDerivedStateFromError(error: Error): Partial<State> {
     return { error };
@@ -26,10 +28,39 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
     // eslint-disable-next-line no-console
     console.error('[Relay] uncaught render error', error, info);
     this.setState({ info });
+
+    // A dynamic-import / chunk-load failure (React.lazy's import() rejection
+    // surfaces here, NOT via vite:preloadError) almost always means a poisoned
+    // SW cache is serving a stale asset set whose chunk hash was pruned by a
+    // newer deploy. Auto-run hardRecover() ONCE per session to wipe caches +
+    // unregister the SW and reload onto the fresh asset set. The shared
+    // sessionStorage one-shot guard (CHUNK_RECOVER_KEY, also set by main.tsx's
+    // preloadError handler) survives the reload so we can't loop: if recovery
+    // already ran this session — via either path — fall through to the error UI
+    // (its Reload button still runs hardRecover, but that's now user-initiated).
+    if (isChunkLoadError(error)) {
+      let alreadyTried = false;
+      try {
+        alreadyTried = sessionStorage.getItem(CHUNK_RECOVER_KEY) === '1';
+        sessionStorage.setItem(CHUNK_RECOVER_KEY, '1');
+      } catch {
+        // Storage blocked — don't risk a reload loop; show the error UI.
+        return;
+      }
+      if (!alreadyTried) {
+        this.setState({ recovering: true });
+        void hardRecover();
+      }
+    }
   }
 
+  private handleReload = (): void => {
+    this.setState({ recovering: true });
+    void hardRecover();
+  };
+
   override render(): ReactNode {
-    const { error, info } = this.state;
+    const { error, info, recovering } = this.state;
     if (!error) return this.props.children;
 
     const stack = (error.stack ?? String(error)).split('\n').slice(0, 12).join('\n');
@@ -71,7 +102,8 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
         ) : null}
         <button
           type="button"
-          onClick={() => window.location.reload()}
+          onClick={this.handleReload}
+          disabled={recovering}
           style={{
             marginTop: 16,
             padding: '10px 18px',
@@ -81,9 +113,10 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
             color: '#fff',
             fontSize: 14,
             fontWeight: 700,
+            opacity: recovering ? 0.7 : 1,
           }}
         >
-          Reload
+          {recovering ? 'Clearing cache…' : 'Reload'}
         </button>
       </div>
     );
