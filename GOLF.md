@@ -118,10 +118,10 @@ A data-driven **Range layout** picker (persisted, default `fairway`):
 | Range HUD + controls + telemetry + layout picker | `packages/relay-ui/src/components/golf/RangeGame.tsx` |
 | Layouts, pins, `surfaceAt` | `packages/relay-ui/src/lib/golf/rangeTargets.ts` |
 | Club ladder | `packages/relay-ui/src/lib/golf/clubs.ts` |
-| Course terrain data + "HOW TO AUTHOR A HOLE" contract (`heightAt`/`gradientAt`/`surfaceAt`; `TEE_R`/`corridorHalfAt`/`greenPadRadius`) | `packages/relay-ui/src/lib/golf/terrain.ts`, `courseData.ts` |
+| Course terrain data + "HOW TO AUTHOR A HOLE" contract (`heightAt`/`gradientAt`/`surfaceAt`; `TEE_R`/`corridorHalfAt`/`greenPadRadius`; organic edges `edgeNoise`/`edgeRadius`/`featureSeed` + `EDGE_WOBBLE`/`maxGreenPadRadius`; render-only `corridorEdgeDist` first-cut helper) | `packages/relay-ui/src/lib/golf/terrain.ts`, `courseData.ts` |
 | Course sim (terrain-aware; `snapshot`/`restore`/`predict`; putt power/speed; records) | `packages/relay-ui/src/lib/golf/courseSim.ts` |
 | Green + putting physics (Stimp → μ, roll-out, elliptic cup capture, BALL_R/CUP_R scale) | `packages/relay-ui/src/lib/golf/greenPhysics.ts` |
-| Course 3D scene (Three.js) — baked surface map, fringe collar, textured green cap, aim-holing pulse | `packages/relay-ui/src/components/golf/CourseGL.tsx` |
+| Course 3D scene (Three.js) — baked surface map, aim-holing pulse; `buildOrganicDisc`/`buildOrganicAnnulus` draw the green cap, fringe collar, bunkers and terrain-following water from the model's `edgeRadius`+`featureSeed`; long-grass rough, `corridorEdgeDist` first-cut albedo blend, textured tee (`makeTeeTurf`); all textures seeded (`mulberry32`) | `packages/relay-ui/src/components/golf/CourseGL.tsx` |
 | Course HUD + records recap | `packages/relay-ui/src/components/golf/CourseGame.tsx` |
 | Putting sim / scene / round | `src/lib/golf/puttSim.ts`, `components/golf/PuttGL.tsx`, `GolfGame.tsx` |
 | Ball material (dimple normal map) | `packages/relay-ui/src/lib/golf/ballTexture.ts` |
@@ -331,6 +331,35 @@ Gameplay clean first, then the look, then the course — each step reuses the la
      `predict(0).result==='holed'` (replacing the arrows). The scene frame is
      DERIVED from the hole (centerline + roughHalf + tee/pin extent) so ANY hole
      renders fully — part of the scalability story.
+   **→ Also done — natural terrain (organic outlines + first cut + long-grass
+   rough + tee texture; 2 phases):**
+   • **Phase 1 — organic feature outlines (model, `terrain.ts`).** Bunkers,
+     ponds, the green and its fringe collar no longer have circular outlines: a
+     shared deterministic edge-noise `edgeNoise(seed, angle)` +
+     `edgeRadius(seed, angle, baseR)` (default ±`EDGE_WOBBLE`=15%) perturbs each
+     feature's radius by a smooth, seeded, 2π-periodic wobble, with a per-feature
+     `featureSeed(d, x)` (green + fringe SHARE the green's seed so the collar
+     nests). `surfaceAt()` and `heightAt()` both call it, so the classified/played
+     AND the baked-rendered outlines are organic for ANY hole — the green interior
+     (tilt/undulation → break) is unchanged; only the EDGES wobble. The authoring
+     invariants gained a matching `(1+EDGE_WOBBLE)` margin: the pin sits inside the
+     MIN (wobbled-in) green radius, and a hazard clears the green's MAX wobbled
+     fringe pad (`maxGreenPadRadius`; new export). The `terrain.ts` contract header
+     is the source of truth and now documents organic edges.
+   • **Phase 2 — rendering (`CourseGL.tsx`).** `buildOrganicDisc`/
+     `buildOrganicAnnulus` draw the green cap, fringe collar, bunkers and water
+     from the SAME `edgeRadius`+`featureSeed`+angle convention as the model, so
+     drawn == played == baked (see-what-you-play), all model-driven (scales to any
+     hole). Water is now a terrain-FOLLOWING organic disc (`heightAt` per vertex)
+     that covers its full footprint — fixing a dark-crescent/faceted-seam bug where
+     a flat water plane let the higher downrange basin rim poke through. Rough is
+     retextured to read as long grass (stretched/warped streak noise); a smooth
+     "first cut" fairway↔rough albedo blend spans ±4 yd via the new read-only
+     `corridorEdgeDist` helper (render-only — physics classification is UNCHANGED);
+     the tee box is textured (`makeTeeTurf`). All scene textures are seeded
+     (`mulberry32`, no `Math.random`) for deterministic screenshots.
+   • **Terminology:** the fairway↔rough intermediate is the "first cut"; the
+     "fringe" is the collar around the green.
    **→ Also done — best-shot records:** `golf_records` D1 table (migration
    `0007`) + `GET`/`POST /game/golf-records` in `games.ts`, tracked by
    `CourseSim.recordShot()` and shown in the `CourseGame` recap. See "Best-shot
@@ -339,8 +368,8 @@ Gameplay clean first, then the look, then the course — each step reuses the la
    `scripts/shoot-golf.mjs` drives TWO real rendered aims with a fire between them
    — the only sequence that reproduces the frustum-cull class (the old single-aim
    harness couldn't). Run: `pnpm --filter @relay/ui shoot:golf secondAim`.
-   76 UI golf tests pass across 5 files (range 15, courseData 14, courseSim 31,
-   terrain 9, greenPhysics 7); worker `games.test.ts` grew golf-records coverage.
+   80 UI golf tests pass across 5 files (range 15, courseData 14, courseSim 31,
+   terrain 13, greenPhysics 7); worker `games.test.ts` grew golf-records coverage.
    **Next:** author the remaining holes 2–9 as pure data per the `terrain.ts`
    contract header, and consolidate Mini-Golf (`puttSim`/`PuttGL`) onto a real
    heightfield so it can share `greenPhysics` (today it stays a separate flat
@@ -406,15 +435,18 @@ the roadmap markers above. Next up:
 1. **Author holes 2–9 as pure data** per the "HOW TO AUTHOR A HOLE" contract
    header in `terrain.ts` (`terrain.ts`/`courseData.ts`) — the engine, shaders,
    HUD and scene frame are all hole-agnostic and derive from the `CourseHole`, so
-   this is data only, no per-hole code. Respect the header invariants: pin inside
-   the green, hazards outside `greenPadRadius`, and each green's tilt ≲ μ (~6.1%
-   at stimp 10) or a resting putt won't hold (green design guard, step 3).
+   this is data only, no per-hole code (and every new hole gets organic feature
+   outlines for free). Respect the header invariants: pin inside the MIN wobbled
+   green, hazards outside `maxGreenPadRadius` (the wobble-safe clearance), and each
+   green's tilt ≲ μ (~6.1% at stimp 10) or a resting putt won't hold (green design
+   guard, step 3).
 2. **Consolidate Mini-Golf onto a real heightfield** so `puttSim`/`PuttGL` can
    share `greenPhysics` instead of its own flat engine.
 3. **On-device GPU check** (swiftshader/headless won't catch it): the 2048²
-   shadow map needs verifying on a low-end Android device before the release AAB
-   ships; 1536² is the first dial to turn down. (The transparent slope-read
-   overlay that was an earlier GPU concern is gone — the green is clean now.)
+   shadow map — plus the added terrain-following water/shoreline geometry — needs
+   verifying on a low-end Android device before the release AAB ships; 1536² is the
+   first dial to turn down. (The transparent slope-read overlay that was an earlier
+   GPU concern is gone — the green is clean now.)
 
 **Regressions:** if you ever touch `CourseSim` state, remember any new mutable
 field MUST join `CourseSnapshot`/`snapshot()`/`restore()` (guard test enforces

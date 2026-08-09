@@ -16,6 +16,12 @@ import {
   slopeAccel,
   surfaceAt,
   corridorHalfAt,
+  edgeRadius,
+  edgeNoise,
+  featureSeed,
+  greenPadRadius,
+  maxGreenPadRadius,
+  EDGE_WOBBLE,
   type CourseHole,
 } from './terrain';
 import { GRAVITY, ROLL_FRICTION } from './rangeSim';
@@ -107,8 +113,15 @@ describe('terrain elevation + slope', () => {
 describe('terrain surface classification', () => {
   it('classifies each lie of the showcase hole', () => {
     const g = HOLE_1.green;
+    // Green + fringe edges are ORGANIC, so probe against the ACTUAL wobbled radii
+    // at +x (angle 0): inside the green, in the collar band, then beyond it.
+    const seed = featureSeed(g.d, g.x);
+    const gR0 = edgeRadius(seed, 0, g.r);
+    const fR0 = edgeRadius(seed, 0, g.r + HOLE_1.fringeW);
     expect(surfaceAt(HOLE_1, g.d, g.x)).toBe('green');
-    expect(surfaceAt(HOLE_1, g.d, g.x + g.r + 1.5)).toBe('fringe'); // collar
+    expect(surfaceAt(HOLE_1, g.d, g.x + gR0 * 0.5)).toBe('green'); // well inside
+    expect(surfaceAt(HOLE_1, g.d, g.x + (gR0 + fR0) / 2)).toBe('fringe'); // collar band
+    expect(surfaceAt(HOLE_1, g.d, g.x + fR0 + 3)).toBe('rough'); // beyond the collar
     expect(surfaceAt(HOLE_1, 180, -6)).toBe('fairway'); // on the centerline
     expect(surfaceAt(HOLE_1, 180, -6 + HOLE_1.roughHalf - 2)).toBe('rough'); // off corridor
     expect(surfaceAt(HOLE_1, 180, 200)).toBe('ob'); // way off
@@ -159,6 +172,69 @@ describe('terrain surface classification', () => {
 function dist(a: { d: number; x: number }, b: { d: number; x: number }): number {
   return Math.hypot(a.d - b.d, a.x - b.x);
 }
+
+describe('organic feature edges (irregular outlines)', () => {
+  it('edgeRadius varies with angle — the outline is NOT a circle', () => {
+    const seed = featureSeed(100, 25);
+    const radii: number[] = [];
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 12) radii.push(edgeRadius(seed, a, 10));
+    const min = Math.min(...radii);
+    const max = Math.max(...radii);
+    // A real wobble: the radius spans a meaningful range around the base (not a
+    // flat circle), yet stays within the ±EDGE_WOBBLE envelope.
+    expect(max - min).toBeGreaterThan(0.5); // clearly non-circular
+    expect(min).toBeGreaterThanOrEqual(10 * (1 - EDGE_WOBBLE) - 1e-9);
+    expect(max).toBeLessThanOrEqual(10 * (1 + EDGE_WOBBLE) + 1e-9);
+  });
+
+  it('is deterministic and continuous/periodic (no seam at 0/2π)', () => {
+    const seed = featureSeed(42, -13);
+    // Same seed + angle → identical (reproducible for screenshots/tests).
+    expect(edgeRadius(seed, 1.234, 8)).toBe(edgeRadius(seed, 1.234, 8));
+    // Periodic: angle 0 and 2π land on the same radius (no discontinuity/seam).
+    expect(edgeNoise(seed, 0)).toBeCloseTo(edgeNoise(seed, Math.PI * 2), 10);
+    expect(edgeRadius(seed, 0.3, 9)).toBeCloseTo(edgeRadius(seed, 0.3 + Math.PI * 2, 9), 10);
+    // Different features get different wobble (distinct seeds).
+    expect(edgeNoise(featureSeed(300, 20), 0.7)).not.toBeCloseTo(
+      edgeNoise(featureSeed(476, 15), 0.7),
+      6,
+    );
+  });
+
+  it('the green never touches a hazard even at the WORST-case wobble (margin)', () => {
+    // Each green-side hazard's centre must clear the wobbled fringe by its own
+    // wobbled radius: dist ≥ (greenPadRadius + hazard.r)·(1+EDGE_WOBBLE).
+    const g = HOLE_1.green;
+    for (const hz of HOLE_1.hazards) {
+      const gap = Math.hypot(hz.d - g.d, hz.x - g.x);
+      const required = maxGreenPadRadius(HOLE_1) + hz.r * (1 + EDGE_WOBBLE);
+      // Fairway hazards are far; greenside ones must still clear with margin.
+      if (gap < required + 50) {
+        expect(gap).toBeGreaterThanOrEqual(required);
+      }
+    }
+    // Sanity: the classifier confirms it — sweeping the whole green edge, the
+    // first non-green/fringe lie encountered outward is NEVER a hazard.
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 90) {
+      const dirD = Math.sin(a);
+      const dirX = Math.cos(a);
+      let prev: string = 'green';
+      for (let r = 0; r <= greenPadRadius(HOLE_1) * (1 + EDGE_WOBBLE) + 6; r += 0.25) {
+        const s = surfaceAt(HOLE_1, g.d + dirD * r, g.x + dirX * r);
+        if ((s === 'bunker' || s === 'water') && prev === 'green') {
+          throw new Error(`green abuts ${s} at angle ${a}`);
+        }
+        prev = s;
+      }
+    }
+  });
+
+  it('the pin sits inside the MIN (wobbled-in) green radius', () => {
+    const g = HOLE_1.green;
+    const gap = Math.hypot(HOLE_1.pin.d - g.d, HOLE_1.pin.x - g.x);
+    expect(gap).toBeLessThan(g.r * (1 - EDGE_WOBBLE));
+  });
+});
 
 describe('slope-coupled roll (the point of physics-coupled terrain)', () => {
   it('a putt across a tilted green BREAKS toward the low side', () => {
