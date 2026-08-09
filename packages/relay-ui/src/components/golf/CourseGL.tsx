@@ -13,6 +13,9 @@ import {
   heightAt,
   surfaceAt,
   greenPadRadius,
+  corridorEdgeDist,
+  edgeRadius,
+  featureSeed,
   type CourseHole,
   type Surface,
 } from '../../lib/golf/terrain';
@@ -66,15 +69,50 @@ function hashNoise(ix: number, iy: number): number {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
+// Smoothstep-interpolated value noise built on hashNoise → coherent, non-blocky
+// (the raw hash gives hard cells; the rough/long-grass look needs continuous
+// gradients). Deterministic in (x,y) so screenshots reproduce.
+function smoothNoise(x: number, y: number): number {
+  const ix = Math.floor(x);
+  const iy = Math.floor(y);
+  const fx = x - ix;
+  const fy = y - iy;
+  const sx = fx * fx * (3 - 2 * fx);
+  const sy = fy * fy * (3 - 2 * fy);
+  const a = hashNoise(ix, iy);
+  const b = hashNoise(ix + 1, iy);
+  const c = hashNoise(ix, iy + 1);
+  const e = hashNoise(ix + 1, iy + 1);
+  const top = a + (b - a) * sx;
+  const bot = c + (e - c) * sx;
+  return top + (bot - top) * sy;
+}
+
+// A seeded PRNG (mulberry32) — one generator, shared by every canvas texture so
+// their grain/speckle is IDENTICAL across mounts (no Math.random anywhere in the
+// scene → the screenshot harness stays reproducible; determinism is a hard
+// requirement, GOLF.md).
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 // Bake a TOP-DOWN albedo map of the whole hole from the surface model. Every
 // texel is classified with surfaceAt() (which itself reads corridorHalfAt /
 // greenPadRadius / the hazards) so the material boundaries are the SAME lines the
 // ball plays and they scale to any hole with no code change. Seams are crisp at
 // texel resolution (far finer than the mesh vertices the old per-vertex colour
 // multiply was limited to). Fairway gets bold alternating MOW STRIPES down the
-// hole; rough gets a coarse, darker, un-manicured speckle; the rest carry their
-// base tint (their overlay meshes add the fine texture). Mapped planar over the
-// mesh's (x,d) domain via the mesh UVs, so it lines up with the physics exactly.
+// hole; rough gets darker, wispy LONG-GRASS streaks (coherent, elongated
+// downrange — not blocky patches); a smooth "first cut" blends the two across a
+// short band at the corridor edge; the rest carry their base tint (their overlay
+// meshes add the fine texture). Mapped planar over the mesh's (x,d) domain via
+// the mesh UVs, so it lines up with the physics exactly.
 function makeSurfaceMap(
   hole: CourseHole,
   xHalf: number,
@@ -94,6 +132,42 @@ function makeSurfaceMap(
   const img = g.createImageData(W, H);
   const data = img.data;
   const STRIPE_YD = 7; // mow band period downrange
+  // Half-width (yd) of the fairway↔rough "first cut": a short transition band
+  // straddling the corridor edge where the fairway albedo blends into the rough,
+  // so the seam reads as a smooth gradient of intermediate-height grass, not a
+  // hard classification line. Derived only from corridorEdgeDist, so it scales
+  // to any hole; this is a RENDERING treatment (surfaceAt is unchanged).
+  const FIRST_CUT = 4;
+  const FAIR = SURFACE_RGB.fairway;
+  const ROUGH = SURFACE_RGB.rough;
+  const fair: [number, number, number] = [0, 0, 0];
+  const rgh: [number, number, number] = [0, 0, 0];
+  // Fairway albedo at (x,d): bold alternating mow stripes + a whisper of blade
+  // speckle. Strong band contrast so the "fairway lines" read clearly.
+  const fairwayRGB = (x: number, d: number, out: [number, number, number]) => {
+    const band = Math.floor(d / STRIPE_YD) % 2 === 0 ? 1.16 : 0.82;
+    const blade = 0.94 + hashNoise(x * 3.1, d * 3.1) * 0.12;
+    const m = band * blade;
+    out[0] = FAIR[0] * m;
+    out[1] = FAIR[1] * m;
+    out[2] = FAIR[2] * m;
+  };
+  // Rough albedo: LONG, wispy grass. Coherent smooth-noise streaks STRETCHED
+  // down the hole (the d axis is sampled ~5× finer than x) read as tall blades
+  // leaning downrange, tufted by a coarse clump octave and warped off-axis so it
+  // never looks like blocky patches or a stripe. A dark floor + wide light/dark
+  // swing keeps it clearly longer & less manicured than the fairway. `base` lets
+  // OB reuse the same treatment on its darker tint.
+  const roughRGB = (x: number, d: number, base: readonly [number, number, number], out: [number, number, number]) => {
+    const warp = smoothNoise(x * 0.2, d * 0.05) * 2.0;
+    const clump = smoothNoise(x * 0.68 + warp, d * 0.11); // long elongated tufts
+    const wisp = smoothNoise(x * 2.0 + warp, d * 0.48); // longer leaning blades
+    const streak = 0.6 * clump + 0.4 * wisp; // 0..1
+    const m = 0.56 + streak * 0.86; // ~0.56..1.42 → clearer LONG-grass contrast
+    out[0] = base[0] * m;
+    out[1] = base[1] * m;
+    out[2] = base[2] * m;
+  };
   for (let py = 0; py < H; py++) {
     // Canvas row 0 is the TOP; CanvasTexture samples with flipY, so V=1 (d=dMax)
     // maps to the top row — invert to recover the world d for this row.
@@ -101,27 +175,33 @@ function makeSurfaceMap(
     for (let px = 0; px < W; px++) {
       const x = -xHalf + (px / (W - 1)) * (xHalf * 2);
       const surf = surfaceAt(hole, d, x);
-      let [r, gg, b] = SURFACE_RGB[surf];
-      if (surf === 'fairway') {
-        // Bold mow stripes: alternate light/dark bands with strong contrast so
-        // the "fairway lines" clearly read (user: they weren't dark enough).
-        const band = Math.floor(d / STRIPE_YD) % 2 === 0 ? 1.16 : 0.82;
-        const blade = 0.94 + hashNoise(x * 3.1, d * 3.1) * 0.12;
-        r *= band * blade;
-        gg *= band * blade;
-        b *= band * blade;
-      } else if (surf === 'rough' || surf === 'ob') {
-        // Coarse, patchy, un-mown: big low-frequency clumps + fine speckle.
-        const clump = 0.82 + hashNoise(Math.floor(x / 2.5), Math.floor(d / 2.5)) * 0.34;
-        const fleck = 0.9 + hashNoise(x * 5.7, d * 5.7) * 0.2;
-        r *= clump * fleck;
-        gg *= clump * fleck;
-        b *= clump * fleck;
+      let r: number;
+      let gg: number;
+      let b: number;
+      if (surf === 'fairway' || surf === 'rough') {
+        fairwayRGB(x, d, fair);
+        roughRGB(x, d, ROUGH, rgh);
+        // First cut: smoothstep-blend fairway→rough across ±FIRST_CUT of the
+        // corridor edge (ed<0 inside the fairway, >0 in the rough).
+        const ed = corridorEdgeDist(hole, d, x);
+        let t = (ed + FIRST_CUT) / (2 * FIRST_CUT);
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const s = t * t * (3 - 2 * t);
+        r = fair[0] + (rgh[0] - fair[0]) * s;
+        gg = fair[1] + (rgh[1] - fair[1]) * s;
+        b = fair[2] + (rgh[2] - fair[2]) * s;
+      } else if (surf === 'ob') {
+        roughRGB(x, d, SURFACE_RGB.ob, rgh);
+        r = rgh[0];
+        gg = rgh[1];
+        b = rgh[2];
       } else if (surf === 'cartpath') {
         const spec = 0.92 + hashNoise(x * 4, d * 4) * 0.16;
-        r *= spec;
-        gg *= spec;
-        b *= spec;
+        r = SURFACE_RGB.cartpath[0] * spec;
+        gg = SURFACE_RGB.cartpath[1] * spec;
+        b = SURFACE_RGB.cartpath[2] * spec;
+      } else {
+        [r, gg, b] = SURFACE_RGB[surf];
       }
       const o = (py * W + px) * 4;
       data[o] = Math.min(255, r * 255);
@@ -179,18 +259,20 @@ function makeGreenGrain(): THREE.Texture {
   return t;
 }
 
-// Sand: warm base with fine grain speckle + soft rake arcs.
+// Sand: warm base with fine grain speckle + soft rake arcs. Seeded PRNG (not
+// Math.random) so the grain is identical every load (screenshot reproducibility).
 function makeSand(): THREE.Texture {
   const S = 256;
   const c = document.createElement('canvas');
   c.width = c.height = S;
   const g = c.getContext('2d')!;
+  const rnd = mulberry32(0x5a2d1e);
   g.fillStyle = '#e6d6a8';
   g.fillRect(0, 0, S, S);
   for (let i = 0; i < 9000; i++) {
-    const a = 0.06 + Math.random() * 0.08;
-    g.fillStyle = Math.random() < 0.5 ? `rgba(150,130,90,${a})` : `rgba(255,250,230,${a})`;
-    g.fillRect(Math.random() * S, Math.random() * S, 1.4, 1.4);
+    const a = 0.06 + rnd() * 0.08;
+    g.fillStyle = rnd() < 0.5 ? `rgba(150,130,90,${a})` : `rgba(255,250,230,${a})`;
+    g.fillRect(rnd() * S, rnd() * S, 1.4, 1.4);
   }
   g.strokeStyle = 'rgba(160,140,100,0.18)';
   g.lineWidth = 1.5;
@@ -205,18 +287,70 @@ function makeSand(): THREE.Texture {
   return t;
 }
 
+// Tightly-mown TEE turf: a fine mow-band grass map (its colour is baked in so
+// the pad reads as grass, not flat paint). Deliberately a hair coarser + darker
+// than the green grain and finer than the fairway stripes — a distinct
+// tee-turf look. Seeded PRNG → identical every load.
+function makeTeeTurf(): THREE.Texture {
+  const S = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d')!;
+  const rnd = mulberry32(0x7ee1a5);
+  // Base + alternating vertical mow bands (tight, tidy — a teeing ground).
+  const bands = 10;
+  const bw = S / bands;
+  for (let i = 0; i < bands; i++) {
+    g.fillStyle = i % 2 === 0 ? '#3f7f39' : '#377231';
+    g.fillRect(i * bw, 0, bw, S);
+  }
+  // Fine blade streaks (light + dark passes) for a mown, textured surface.
+  for (let i = 0; i < 5200; i++) {
+    const light = rnd() < 0.5;
+    const a = 0.06 + rnd() * 0.08;
+    g.strokeStyle = light ? `rgba(150,196,120,${a})` : `rgba(28,58,24,${a})`;
+    g.lineWidth = 1;
+    const x = rnd() * S;
+    const y = rnd() * S;
+    g.beginPath();
+    g.moveTo(x, y);
+    g.lineTo(x + (rnd() - 0.5) * 1.6, y - 2 - rnd() * 3);
+    g.stroke();
+  }
+  // Broad soft mottle so the pad isn't uniform.
+  for (let i = 0; i < 40; i++) {
+    const x = rnd() * S;
+    const y = rnd() * S;
+    const r = 16 + rnd() * 48;
+    const rg = g.createRadialGradient(x, y, 0, x, y, r);
+    rg.addColorStop(0, rnd() < 0.5 ? 'rgba(30,60,25,0.10)' : 'rgba(150,200,120,0.08)');
+    rg.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = rg;
+    g.beginPath();
+    g.arc(x, y, r, 0, Math.PI * 2);
+    g.fill();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 8;
+  return t;
+}
+
 // Water ripple normal-ish map (animated by offsetting in the loop) for shimmer.
+// Seeded PRNG so the ripple layout is reproducible.
 function makeWaterNormal(): THREE.Texture {
   const S = 128;
   const c = document.createElement('canvas');
   c.width = c.height = S;
   const g = c.getContext('2d')!;
+  const rnd = mulberry32(0x2c0ffee);
   g.fillStyle = '#8080ff';
   g.fillRect(0, 0, S, S);
   for (let i = 0; i < 60; i++) {
-    const x = Math.random() * S;
-    const y = Math.random() * S;
-    const r = 6 + Math.random() * 18;
+    const x = rnd() * S;
+    const y = rnd() * S;
+    const r = 6 + rnd() * 18;
     const rg = g.createRadialGradient(x, y, 0, x, y, r);
     rg.addColorStop(0, 'rgba(150,150,255,0.9)');
     rg.addColorStop(1, 'rgba(128,128,255,0)');
@@ -229,6 +363,132 @@ function makeWaterNormal(): THREE.Texture {
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.repeat.set(3, 3);
   return t;
+}
+
+// --- Organic feature meshes (see-what-you-play) ----------------------------
+// A feature's outline is the SAME wavy edge terrain.ts classifies + dishes: a
+// seeded, angle-periodic wobble via edgeRadius(seed, angle, baseR). These polar
+// builders step that exact convention (angle where cos→+x, sin→+d) so the drawn
+// outline == the played/baked outline, for ANY hole. Ring/fan quads are wound so
+// the top surface FRONT-faces up (proven against the terrain grid winding).
+type UVFn = (wx: number, wd: number, ang: number, frac: number) => [number, number];
+
+// A filled organic disc (centre + concentric rings) out to edgeRadius(seed,
+// angle, baseR); interior rings scale that same wavy radius inward (frac), so the
+// shape stays coherent. `yAt` seats every vertex on the terrain (flush); pass a
+// constant for a flat surface (water). Used for the green cap + bunker sand cap.
+function buildOrganicDisc(
+  seed: number,
+  cd: number,
+  cx: number,
+  baseR: number,
+  yAt: (d: number, x: number) => number,
+  lift: number,
+  uv: UVFn,
+  rings: number,
+  seg: number,
+): THREE.BufferGeometry {
+  const vcount = 1 + rings * seg;
+  const pos = new Float32Array(vcount * 3);
+  const uvs = new Float32Array(vcount * 2);
+  pos[0] = cx;
+  pos[1] = yAt(cd, cx) + lift;
+  pos[2] = -cd;
+  const cuv = uv(cx, cd, 0, 0);
+  uvs[0] = cuv[0];
+  uvs[1] = cuv[1];
+  let p = 3;
+  let u = 2;
+  for (let ri = 1; ri <= rings; ri++) {
+    const frac = ri / rings;
+    for (let s = 0; s < seg; s++) {
+      const ang = (s / seg) * Math.PI * 2;
+      const rad = edgeRadius(seed, ang, baseR) * frac;
+      const wx = cx + Math.cos(ang) * rad;
+      const wd = cd + Math.sin(ang) * rad;
+      pos[p] = wx;
+      pos[p + 1] = yAt(wd, wx) + lift;
+      pos[p + 2] = -wd;
+      const vv = uv(wx, wd, ang, frac);
+      uvs[u] = vv[0];
+      uvs[u + 1] = vv[1];
+      p += 3;
+      u += 2;
+    }
+  }
+  const idx: number[] = [];
+  for (let s = 0; s < seg; s++) idx.push(0, 1 + s, 1 + ((s + 1) % seg));
+  for (let ri = 1; ri < rings; ri++) {
+    const b0 = 1 + (ri - 1) * seg;
+    const b1 = 1 + ri * seg;
+    for (let s = 0; s < seg; s++) {
+      const s1 = (s + 1) % seg;
+      idx.push(b0 + s, b1 + s, b0 + s1, b0 + s1, b1 + s, b1 + s1);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// An organic annulus from edgeRadius(seed, angle, rInBase) to edgeRadius(seed,
+// angle, rOutBase). edgeRadius is linear in baseR, so interpolating the base per
+// ring is exactly interpolating the two wavy edges — and sharing `seed` with the
+// green cap makes the fringe's inner edge nest perfectly against the cap's outer
+// edge. Used for the fringe collar + the water shoreline. Flat if yAt is const.
+function buildOrganicAnnulus(
+  seed: number,
+  cd: number,
+  cx: number,
+  rInBase: number,
+  rOutBase: number,
+  yAt: (d: number, x: number) => number,
+  lift: number,
+  uv: UVFn,
+  rings: number,
+  seg: number,
+): THREE.BufferGeometry {
+  const vcount = (rings + 1) * seg;
+  const pos = new Float32Array(vcount * 3);
+  const uvs = new Float32Array(vcount * 2);
+  let p = 0;
+  let u = 0;
+  for (let ri = 0; ri <= rings; ri++) {
+    const frac = ri / rings;
+    const base = rInBase + frac * (rOutBase - rInBase);
+    for (let s = 0; s < seg; s++) {
+      const ang = (s / seg) * Math.PI * 2;
+      const rad = edgeRadius(seed, ang, base);
+      const wx = cx + Math.cos(ang) * rad;
+      const wd = cd + Math.sin(ang) * rad;
+      pos[p] = wx;
+      pos[p + 1] = yAt(wd, wx) + lift;
+      pos[p + 2] = -wd;
+      const vv = uv(wx, wd, ang, frac);
+      uvs[u] = vv[0];
+      uvs[u + 1] = vv[1];
+      p += 3;
+      u += 2;
+    }
+  }
+  const idx: number[] = [];
+  for (let ri = 0; ri < rings; ri++) {
+    const b0 = ri * seg;
+    const b1 = (ri + 1) * seg;
+    for (let s = 0; s < seg; s++) {
+      const s1 = (s + 1) % seg;
+      idx.push(b0 + s, b1 + s, b0 + s1, b0 + s1, b1 + s, b1 + s1);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  return geo;
 }
 
 export default function CourseGL({ sim, onArm, paused }: Props) {
@@ -419,13 +679,38 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     scene.add(fill);
 
     // Water discs (shimmer via an animated ripple normal map) + sand bunkers.
+    // Both follow the ORGANIC feature outline (edgeRadius + the feature's own
+    // featureSeed, the SAME wobble surfaceAt/heightAt use), so the drawn sand/
+    // water edge is exactly the wavy shape the ball plays and the baked map
+    // classifies — no more circle-vs-organic mismatch. Radial UV for the disc
+    // textures. Ground-height (heightAt) sampled per vertex so a bunker cap sits
+    // ON the basin bowl; water is a flat surface at its rim height.
     const waterNormal = track(makeWaterNormal());
     const sandTex = track(makeSand());
     sandTex.repeat.set(3, 3);
+    const radialUV: UVFn = (_wx, _wd, ang, frac) => [
+      0.5 + Math.cos(ang) * frac * 0.5,
+      0.5 + Math.sin(ang) * frac * 0.5,
+    ];
     for (const hz of hole.hazards) {
+      const hzSeed = featureSeed(hz.d, hz.x);
       if (hz.kind === 'water') {
-        const rimY = heightAt(hole, hz.d + hz.r, hz.x) + 0.06;
-        const wGeo = track(new THREE.CircleGeometry(hz.r, 48));
+        // The water surface must COVER the ENTIRE baked-water footprint (which
+        // surfaceAt classifies out to edgeRadius(hzSeed, angle, hz.r)) with no
+        // exposed baked crescent. A single flat plane at one rim height failed:
+        // the rolling hills are NOT erased under a hazard, so the basin rim rides
+        // several yards higher on the far side than a lone rimY sample — the baked
+        // water there poked ABOVE the flat plane, leaving the dark crescent under
+        // a hard seam. Fix: sample heightAt PER VERTEX (like the sand cap) so the
+        // water skin sits a hair proud of the ground at every point it covers, and
+        // OVERFILL the wobbled radius slightly (WATER_OVER) so the sub-segment
+        // chord + the wave both fully reach the classified edge on ALL sides. 72
+        // segments kill the faceting. The shoreline then just laps the edge.
+        const groundY = (d: number, x: number) => heightAt(hole, d, x);
+        const WATER_OVER = 1.03;
+        const wGeo = track(
+          buildOrganicDisc(hzSeed, hz.d, hz.x, hz.r * WATER_OVER, groundY, 0.12, radialUV, 8, 72),
+        );
         const wMat = track(
           new THREE.MeshStandardMaterial({
             // A brighter sky-teal with LOW metalness reads as sunlit water; the
@@ -441,66 +726,42 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         );
         wMat.normalScale.set(0.5, 0.5);
         const water = new THREE.Mesh(wGeo, wMat);
-        water.rotation.x = -Math.PI / 2;
-        water.position.set(hz.x, rimY, -hz.d);
         scene.add(water);
-        // A soft pale shoreline so the edge isn't a hard oval cut-out.
-        const shoreGeo = track(new THREE.RingGeometry(hz.r * 0.9, hz.r * 1.08, 48));
+        // A thin pale shoreline (organic annulus, SAME seed → hugs the water's
+        // wave) that laps JUST outside the water edge. Its inner base sits under
+        // the water overfill (so no gap) and it lifts a hair LESS than the water,
+        // so the water wins the overlap; the narrow 0.98→1.06·r band keeps it from
+        // spilling deep into the fringe/rough (old 1.08 base bulged to ~1.24·r).
+        const shoreGeo = track(
+          buildOrganicAnnulus(hzSeed, hz.d, hz.x, hz.r * 0.98, hz.r * 1.06, groundY, 0.07, radialUV, 2, 72),
+        );
         const shoreMat = track(
-          new THREE.MeshBasicMaterial({ color: 0xdaf0f2, transparent: true, opacity: 0.55 }),
+          new THREE.MeshBasicMaterial({
+            color: 0xdaf0f2,
+            transparent: true,
+            opacity: 0.55,
+            side: THREE.DoubleSide,
+          }),
         );
         const shore = new THREE.Mesh(shoreGeo, shoreMat);
-        shore.rotation.x = -Math.PI / 2;
-        shore.position.set(hz.x, rimY - 0.02, -hz.d);
         scene.add(shore);
       } else if (hz.kind === 'bunker') {
-        // A DISHED sand mesh that samples the heightfield (the basin bowl), so a
-        // ball — which rests on the terrain height — sits ON the sand instead of
-        // floating above a flat disc laid at the basin's low centre.
-        const RINGS = 6;
-        const SEG = 40;
-        const LIFT = 0.05;
-        const vcount = 1 + RINGS * SEG;
-        const spos = new Float32Array(vcount * 3);
-        const suv = new Float32Array(vcount * 2);
-        spos[0] = hz.x;
-        spos[1] = heightAt(hole, hz.d, hz.x) + LIFT;
-        spos[2] = -hz.d;
-        suv[0] = 0.5;
-        suv[1] = 0.5;
-        let sp = 3;
-        let su = 2;
-        for (let ri = 1; ri <= RINGS; ri++) {
-          const frac = ri / RINGS;
-          const rad = hz.r * frac;
-          for (let s = 0; s < SEG; s++) {
-            const ang = (s / SEG) * Math.PI * 2;
-            const wx = hz.x + Math.cos(ang) * rad;
-            const wd = hz.d + Math.sin(ang) * rad;
-            spos[sp] = wx;
-            spos[sp + 1] = heightAt(hole, wd, wx) + LIFT;
-            spos[sp + 2] = -wd;
-            suv[su] = 0.5 + Math.cos(ang) * frac * 0.5;
-            suv[su + 1] = 0.5 + Math.sin(ang) * frac * 0.5;
-            sp += 3;
-            su += 2;
-          }
-        }
-        const sidx: number[] = [];
-        for (let s = 0; s < SEG; s++) sidx.push(0, 1 + s, 1 + ((s + 1) % SEG));
-        for (let ri = 1; ri < RINGS; ri++) {
-          const b0 = 1 + (ri - 1) * SEG;
-          const b1 = 1 + ri * SEG;
-          for (let s = 0; s < SEG; s++) {
-            const s1 = (s + 1) % SEG;
-            sidx.push(b0 + s, b1 + s, b0 + s1, b0 + s1, b1 + s, b1 + s1);
-          }
-        }
-        const sGeo = track(new THREE.BufferGeometry());
-        sGeo.setAttribute('position', new THREE.BufferAttribute(spos, 3));
-        sGeo.setAttribute('uv', new THREE.BufferAttribute(suv, 2));
-        sGeo.setIndex(sidx);
-        sGeo.computeVertexNormals();
+        // A DISHED sand cap that samples the heightfield (the basin bowl) along
+        // the ORGANIC outline, so a ball — which rests on the terrain height —
+        // sits ON the sand, and the sand's wavy edge matches the played bunker.
+        const sGeo = track(
+          buildOrganicDisc(
+            hzSeed,
+            hz.d,
+            hz.x,
+            hz.r,
+            (d, x) => heightAt(hole, d, x),
+            0.05,
+            radialUV,
+            6,
+            48,
+          ),
+        );
         // DoubleSide so a downward-facing fan normal can't cull the sand away.
         const sMat = track(
           new THREE.MeshStandardMaterial({ map: sandTex, roughness: 1, side: THREE.DoubleSide }),
@@ -512,62 +773,37 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     }
 
     // --- Fringe collar + green cap -------------------------------------
-    // Two concentric, terrain-FOLLOWING pads sized straight from the model
-    // (greenPadRadius = green.r + fringeW) so they scale to any hole:
-    //   • the FRINGE COLLAR — an annulus from green.r out to the pad radius,
-    //     a distinct duller/darker collar band. It ALWAYS rings the green, so the
-    //     putting surface never visually bleeds into the bordering sand/water —
-    //     there is always a fringe edge (the "green mixes with sand/water" fix).
-    //   • the GREEN CAP — the putting surface out to green.r, a brighter, finely
-    //     grained mown material distinct from both the fringe and the fairway.
+    // Two concentric, terrain-FOLLOWING pads with ORGANIC (wavy) outlines sized
+    // straight from the model (greenPadRadius = green.r + fringeW) so they scale
+    // to any hole. Both step edgeRadius(gSeed, angle, ·) — the SAME seeded wobble
+    // surfaceAt/heightAt use — so the drawn edge is exactly the played/baked edge:
+    //   • the FRINGE COLLAR — an organic annulus from green.r out to the pad
+    //     radius, a distinct duller/darker collar band. It ALWAYS rings the green,
+    //     so the putting surface never visually bleeds into the bordering sand/
+    //     water — there is always a fringe edge (the "green mixes with sand" fix).
+    //   • the GREEN CAP — the putting surface out to edgeRadius(gSeed,angle,
+    //     green.r), a brighter, finely grained mown material distinct from both the
+    //     fringe and the fairway.
     // Both hug heightAt (tilt + undulation) with REAL computed normals so the
     // contour shades as a sculpted green from any angle, not flat paint.
     {
       const gDef = hole.green;
-      const padR = greenPadRadius(hole); // green.r + fringeW
+      const padR = greenPadRadius(hole); // green.r + fringeW (BASE pad radius)
+      // The green + fringe SHARE the green's featureSeed (terrain.ts convention),
+      // so the cap's outer wavy edge and the fringe's inner wavy edge are the SAME
+      // curve — the collar nests perfectly and the whole organic pad matches the
+      // baked map + physics exactly.
+      const gSeed = featureSeed(gDef.d, gDef.x);
       const grain = track(makeGreenGrain());
+      const SEG = 64; // enough segments for a smooth wavy edge
+      const groundY = (d: number, x: number) => heightAt(hole, d, x);
 
-      // Fringe collar: a polar annulus (rings × segments — no degenerate hub) so
-      // its normals stay clean. Sits a hair BELOW the cap so the cap wins on the
-      // tiny inward overlap that guarantees no seam gap.
-      const RINGS = 5;
-      const SEG = 56;
-      const rIn = gDef.r - 0.25; // slight inward overlap under the cap
-      const fLift = 0.035;
-      const fcount = (RINGS + 1) * SEG;
-      const fpos = new Float32Array(fcount * 3);
-      const fuv = new Float32Array(fcount * 2);
-      let fp = 0;
-      let fu = 0;
-      for (let ri = 0; ri <= RINGS; ri++) {
-        const rad = rIn + (ri / RINGS) * (padR - rIn);
-        for (let s = 0; s < SEG; s++) {
-          const ang = (s / SEG) * Math.PI * 2;
-          const wx = gDef.x + Math.cos(ang) * rad;
-          const wd = gDef.d + Math.sin(ang) * rad;
-          fpos[fp] = wx;
-          fpos[fp + 1] = heightAt(hole, wd, wx) + fLift;
-          fpos[fp + 2] = -wd;
-          fuv[fu] = 0.5 + Math.cos(ang) * (ri / RINGS) * 0.5;
-          fuv[fu + 1] = 0.5 + Math.sin(ang) * (ri / RINGS) * 0.5;
-          fp += 3;
-          fu += 2;
-        }
-      }
-      const fidx: number[] = [];
-      for (let ri = 0; ri < RINGS; ri++) {
-        const b0 = ri * SEG;
-        const b1 = (ri + 1) * SEG;
-        for (let s = 0; s < SEG; s++) {
-          const s1 = (s + 1) % SEG;
-          fidx.push(b0 + s, b1 + s, b0 + s1, b0 + s1, b1 + s, b1 + s1);
-        }
-      }
-      const fGeo = track(new THREE.BufferGeometry());
-      fGeo.setAttribute('position', new THREE.BufferAttribute(fpos, 3));
-      fGeo.setAttribute('uv', new THREE.BufferAttribute(fuv, 2));
-      fGeo.setIndex(fidx);
-      fGeo.computeVertexNormals();
+      // Fringe collar: an ORGANIC annulus from the green edge (green.r, pulled in
+      // 0.25 yd so the cap overlaps it → no seam gap) out to the pad radius. Sits
+      // a hair BELOW the cap (fLift < LIFT) so the cap wins the overlap.
+      const fGeo = track(
+        buildOrganicAnnulus(gSeed, gDef.d, gDef.x, gDef.r - 0.25, padR, groundY, 0.035, radialUV, 5, SEG),
+      );
       const fNorm = track(makeTurfNormalMap());
       fNorm.repeat.set(10, 10);
       const fMat = track(
@@ -584,44 +820,15 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       fringe.receiveShadow = true;
       scene.add(fringe);
 
-      // Green cap: circle-clipped square grid (no centre fan → no dark hub ring).
-      const capR = gDef.r;
-      const N = 30; // grid cells across the diameter → smooth contour shading
-      const step = (2 * capR) / N;
-      const vxn = N + 1;
-      const LIFT = 0.05;
-      const cpos: number[] = [];
-      const cuv: number[] = [];
-      const idxOf: number[] = new Array(vxn * vxn).fill(-1);
-      let vc = 0;
-      for (let j = 0; j <= N; j++) {
-        for (let i = 0; i <= N; i++) {
-          const x = gDef.x - capR + i * step;
-          const d = gDef.d - capR + j * step;
-          if (Math.hypot(x - gDef.x, d - gDef.d) > capR) continue; // clip to disc
-          cpos.push(x, heightAt(hole, d, x) + LIFT, -d);
-          // Grain UV in world yards / 6 → ~6 yd grain tile, gentle and even.
-          cuv.push(x / 6, d / 6);
-          idxOf[j * vxn + i] = vc++;
-        }
-      }
-      const cidx: number[] = [];
-      for (let j = 0; j < N; j++) {
-        for (let i = 0; i < N; i++) {
-          const a = idxOf[j * vxn + i]!;
-          const b = idxOf[j * vxn + i + 1]!;
-          const c = idxOf[(j + 1) * vxn + i]!;
-          const e = idxOf[(j + 1) * vxn + i + 1]!;
-          if (a < 0 || b < 0 || c < 0 || e < 0) continue; // whole cells only
-          // Same winding as the main terrain grid → top surface front-faces up.
-          cidx.push(a, b, c, b, e, c);
-        }
-      }
-      const capGeo = track(new THREE.BufferGeometry());
-      capGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(cpos), 3));
-      capGeo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(cuv), 2));
-      capGeo.setIndex(cidx);
-      capGeo.computeVertexNormals(); // real normals → the contour shades
+      // Green cap: an ORGANIC filled disc out to edgeRadius(gSeed, angle, green.r)
+      // — the SAME wavy putting-surface outline surfaceAt classifies. Every vertex
+      // samples heightAt (tilt + undulation) with real computed normals, so the
+      // contour still shades as a sculpted green. World-scaled grain UV (~6 yd
+      // tile) for an even mow.
+      const grainUV: UVFn = (wx, wd) => [wx / 6, wd / 6];
+      const capGeo = track(
+        buildOrganicDisc(gSeed, gDef.d, gDef.x, gDef.r, groundY, 0.05, grainUV, 10, SEG),
+      );
       const capNorm = track(makeTurfNormalMap());
       capNorm.repeat.set(16, 16);
       const capMat = track(
@@ -713,9 +920,16 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       padGeo.setAttribute('normal', new THREE.BufferAttribute(pnorm, 3));
       const padNorm = track(makeTurfNormalMap());
       padNorm.repeat.set(6, 8);
+      // Tightly-mown tee turf (colour baked into the map, so the pad reads as
+      // grass — not flat paint). Colour left white so the map shows through; the
+      // blade normal map still rakes a soft sun sheen. A distinct, tidier mow
+      // than the fairway stripes, consistent with the green/fairway grass kit.
+      const teeTex = track(makeTeeTurf());
+      teeTex.repeat.set(3, 5);
       const padMat = track(
         new THREE.MeshStandardMaterial({
-          color: 0x40873a, // darker, tidier mown green — distinct from the fairway
+          color: 0xffffff,
+          map: teeTex,
           roughness: 0.72,
           metalness: 0,
           normalMap: padNorm,

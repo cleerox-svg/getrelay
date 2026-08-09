@@ -341,6 +341,18 @@ export function corridorHalfAt(hole: CourseHole, t: number): number {
   return hole.fairwayHalf + (hole.fairwayTaper ?? 0) * t;
 }
 
+// Signed distance (yd) from a point to the FAIRWAY edge: NEGATIVE inside the
+// mown corridor, 0 exactly on the edge, POSITIVE out in the rough — measured to
+// the taper-aware corridor half-width at the nearest centreline point. This is a
+// pure read helper (surfaceAt's hard classification is UNCHANGED); renderers use
+// it to paint a smooth "first cut" transition band across the corridor edge so
+// the fairway→rough seam reads as a gradient, not a hard line. Scales to any
+// hole via corridorHalfAt.
+export function corridorEdgeDist(hole: CourseHole, d: number, x: number): number {
+  const near = nearestOnPolyline(hole.centerline, d, x);
+  return near.dist - corridorHalfAt(hole, near.t);
+}
+
 // Radius (yd) of the mown pad = putting surface + fringe collar, at its BASE
 // (un-wobbled) size. The organic green + fringe edges wobble around this.
 export function greenPadRadius(hole: CourseHole): number {
