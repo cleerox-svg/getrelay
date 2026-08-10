@@ -251,6 +251,10 @@ jobs:
             --command "CREATE INDEX IF NOT EXISTS idx_participants_pinned ON chat_participants(user_id, pinned_at);"
           pnpm exec wrangler d1 execute relay-db --remote \
             --command "CREATE INDEX IF NOT EXISTS idx_uss_team ON user_sports_subs(league, team_key);"
+          # Per-course leaderboard index — depends on game_scores.course added
+          # by the probe above, so it must run here, not in schema.sql.
+          pnpm exec wrangler d1 execute relay-db --remote \
+            --command "CREATE INDEX IF NOT EXISTS idx_game_scores_user_game_course ON game_scores(user_id, game, course);"
 
       - name: Ensure DNS record (relay-api.averrow.com → proxied placeholder)
         env:
