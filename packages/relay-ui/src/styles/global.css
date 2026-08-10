@@ -1586,6 +1586,69 @@ html.beta .composer-capsule {
   font-size: 13px;
   color: var(--text-dim);
 }
+/* Challenge length toggle (Full round / Single hole). */
+.challenge-len {
+  display: flex;
+  gap: 8px;
+  padding-bottom: 8px;
+}
+.challenge-len-chip {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--separator);
+  background: var(--card-bg);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
+}
+.challenge-len-chip.is-on {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+}
+.challenge-len-chip:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+/* Hole picker chips (single-hole challenge). */
+.challenge-holes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 10px;
+}
+.challenge-hole-chip {
+  border: 1px solid var(--separator);
+  background: var(--card-bg);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
+}
+.challenge-hole-chip.is-on {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+}
+.challenge-hole-chip:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.challenge-hole-name {
+  opacity: 0.6;
+}
 .challenge-picker-list {
   overflow-y: auto;
   display: flex;
@@ -1646,7 +1709,9 @@ html.beta .composer-capsule {
   }
   .challenge-play,
   .golf-challenge-cta,
-  .challenge-picker-row {
+  .challenge-picker-row,
+  .challenge-len-chip,
+  .challenge-hole-chip {
     transition: none;
   }
 }

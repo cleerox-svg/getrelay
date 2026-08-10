@@ -53,6 +53,22 @@ export function ChallengeCard({ id }: { id: string }) {
     ch[ch.mine === 'challenger' ? 'opponent' : 'challenger'];
   const course = getCourse(ch.course ?? undefined);
 
+  // Single-hole challenge when a hole index is present. Label uses the hole's
+  // display id/name when available, else a 1-based fallback.
+  const isSingleHole = ch.hole != null;
+  const holeMeta = isSingleHole ? course.holes[ch.hole!] : undefined;
+  const holeLabel = isSingleHole
+    ? `${course.name} · Hole ${holeMeta?.id ?? ch.hole! + 1}`
+    : course.name;
+
+  // A single-hole challenge whose hole this client's course data doesn't have
+  // (crafted payload, or course-data drift between independently-deployed UIs)
+  // can't be played safely — CourseGame would build a sim from an undefined
+  // hole and crash the card. Refuse it instead.
+  if (isSingleHole && !holeMeta) {
+    return <span className="challenge-chip">Challenge unavailable</span>;
+  }
+
   const myTurn = mySide.toPar == null;
   const waiting = mySide.toPar != null && otherSide.toPar == null && ch.status !== 'complete';
   const complete = ch.status === 'complete';
@@ -63,6 +79,44 @@ export function ChallengeCard({ id }: { id: string }) {
   const lost = complete && !won && !tied;
 
   const outcomeClass = won ? 'is-win' : lost ? 'is-loss' : 'is-tie';
+
+  // Shared one-shot submit for both the full-round (onRoundComplete) and the
+  // single-hole (onHoleComplete) callbacks: record the challenge to-par,
+  // optimistically clear "your turn", count the play on the golfcourse board,
+  // then refetch. `rounds` is the completed round's holes, or 1 for a hole.
+  function submitResult(courseId: string, toPar: number, rounds: number) {
+    if (submittedRef.current) return;
+    submittedRef.current = true;
+    // Optimistically record my to-par so the card leaves "your turn" even if
+    // the refetch below fails.
+    setCh((prev) =>
+      prev
+        ? ({ ...prev, [prev.mine]: { ...prev[prev.mine], toPar } } as Challenge)
+        : prev,
+    );
+    // Always settle the challenge. Only a FULL round also counts on the shared
+    // golfcourse board/profile — a single challenge hole's to-par isn't
+    // comparable to a full round (it would outrank real rounds and inflate
+    // rounds-played), so single-hole challenges settle the head-to-head only.
+    const tasks: Promise<unknown>[] = [api.submitChallengeResult(id, toPar)];
+    if (rounds > 1) {
+      tasks.push(
+        api.submitGameScore({
+          game: 'golfcourse',
+          course: courseId,
+          toPar,
+          rounds,
+          bestStreak: 0,
+          score: 0,
+        }),
+      );
+    }
+    Promise.allSettled(tasks)
+      .then(() => api.getChallenge(id))
+      .then((res) => setCh(res.challenge))
+      .catch(() => undefined)
+      .finally(() => setPlaying(false));
+  }
 
   function renderPlayer(p: ChallengeParticipant, label: string) {
     return (
@@ -92,7 +146,7 @@ export function ChallengeCard({ id }: { id: string }) {
           </span>
           <div className="challenge-card-titles">
             <span className="challenge-card-eyebrow">Golf challenge</span>
-            <span className="challenge-card-course">{course.name}</span>
+            <span className="challenge-card-course">{holeLabel}</span>
           </div>
         </div>
 
@@ -130,38 +184,21 @@ export function ChallengeCard({ id }: { id: string }) {
         ? createPortal(
         <CourseGame
           course={course}
-          // Challenges are always full-round (created without a hole). Ignore
-          // any hole so the round can complete — single-hole mode never fires
-          // onRoundComplete, which would strand the challenge on "your turn".
+          // Single-hole challenge: play just the chosen hole and submit on
+          // onHoleComplete. Full-round challenge: play the whole course and
+          // submit on onRoundComplete. Both funnel to the same one-shot submit.
+          {...(isSingleHole ? { startHole: ch.hole! } : {})}
           seed={ch.seed}
-          onRoundComplete={(r) => {
-            if (submittedRef.current) return;
-            submittedRef.current = true;
-            // Optimistically record my to-par so the card leaves "your turn"
-            // even if the refetch below fails.
-            setCh((prev) =>
-              prev
-                ? ({ ...prev, [prev.mine]: { ...prev[prev.mine], toPar: r.toPar } } as Challenge)
-                : prev,
-            );
-            // Record the challenge result AND count the round on the golfcourse
-            // board/profile (matches GolfScreen's course-mode submit shape).
-            Promise.allSettled([
-              api.submitChallengeResult(id, r.toPar),
-              api.submitGameScore({
-                game: 'golfcourse',
-                course: r.courseId,
-                toPar: r.toPar,
-                rounds: r.holes,
-                bestStreak: 0,
-                score: 0,
-              }),
-            ])
-              .then(() => api.getChallenge(id))
-              .then((res) => setCh(res.challenge))
-              .catch(() => undefined)
-              .finally(() => setPlaying(false));
-          }}
+          onRoundComplete={
+            isSingleHole
+              ? undefined
+              : (r) => submitResult(r.courseId, r.toPar, r.holes)
+          }
+          onHoleComplete={
+            isSingleHole
+              ? (r) => submitResult(r.courseId, r.toPar, 1)
+              : undefined
+          }
           onExit={() => setPlaying(false)}
         />,
             document.body,
