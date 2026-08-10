@@ -4,6 +4,7 @@ import type { GolfGameResult } from './GolfGame';
 import { GolfLeaderboard } from './GolfLeaderboard';
 import { GolfMenu } from './GolfMenu';
 import type { GolfSubMode } from './GolfMenu';
+import { GolfProfile } from './GolfProfile';
 import { RangeGame } from './RangeGame';
 import type { RangeGameResult } from './RangeGame';
 import CourseGame from './CourseGame';
@@ -32,6 +33,9 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
   const [golfRangeResult, setGolfRangeResult] = useState<RangeGameResult | null>(null);
   const [serverBest, setServerBest] = useState<number | null>(null);
   const [lbKey, setLbKey] = useState(0);
+  // Golf hub sub-tab (Play / Profile / Ranks) and the Ranks board selector.
+  const [subTab, setSubTab] = useState<'play' | 'profile' | 'ranks'>('play');
+  const [board, setBoard] = useState<'golf' | 'golfcourse' | 'golfrange'>('golfcourse');
   const submittedGolfRef = useRef<GolfGameResult | null>(null);
   const submittedGolfRangeRef = useRef<RangeGameResult | null>(null);
 
@@ -62,12 +66,18 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
       return;
     submittedGolfRef.current = golfResult;
     recordGolfGame(golfResult.score, golfResult.bestStreak);
+    // Mini-golf submits its to-par as board metadata on the 'golf' board
+    // (course stays undefined → the server's null / mini-golf bucket). The
+    // Profile card reads the 'golfcourse' board, so this figure isn't shown
+    // there today; it's stored for future per-board breakdowns.
+    const toPar = golfResult.perHole.reduce((s, h) => s + (h.strokes - h.par), 0);
     api
       .submitGameScore({
         score: golfResult.score,
         rounds: golfResult.roundsPlayed,
         bestStreak: golfResult.bestStreak,
         game: 'golf',
+        toPar,
       })
       .then((r) => {
         setServerBest(r.best);
@@ -186,6 +196,22 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
       <CourseGame
         course={getCourse(golfCourseId)}
         startHole={golfHoleIdx}
+        // Full-round completion → submit to the golfcourse board. The server
+        // derives the golfcourse score from toPar (we send score:0). The
+        // callback fires exactly once per round, so no extra guard is needed.
+        onRoundComplete={(r) => {
+          api
+            .submitGameScore({
+              game: 'golfcourse',
+              course: r.courseId,
+              toPar: r.toPar,
+              rounds: r.holes,
+              bestStreak: 0,
+              score: 0,
+            })
+            .then(() => setLbKey((k) => k + 1))
+            .catch(() => undefined);
+        }}
         onExit={() => {
           setScreen('menu');
           consumeHistoryEntry('free');
@@ -358,22 +384,71 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
     );
   }
 
-  // menu
+  // menu — the golf hub, scoped under .golf-hub so the games-only visual
+  // layer (green accent, gold records, painted hero) never touches messenger
+  // theming. Three sub-tabs: Play / Profile / Ranks.
   return (
-    <div className="px-4 flex flex-col gap-4">
+    <div className="px-4 golf-hub">
       {/* Back to the chiclet grid. Pure state — hub↔menu doesn't
           touch history; the in-game back gesture is handled by the
           marker choreography in useGameFlow. */}
       <button
         type="button"
         className="self-start text-sm font-semibold"
-        style={{ color: 'var(--accent)', background: 'transparent', border: 0, padding: 0 }}
+        style={{ color: 'var(--golf-accent)', background: 'transparent', border: 0, padding: 0 }}
         onClick={onExitToHub}
       >
         ‹ Games
       </button>
 
-      <GolfMenu onStart={startGolf} refreshKey={lbKey} />
+      {/* Sub-tab bar (Play / Profile / Ranks). */}
+      <div className="golf-subtabs" role="tablist" aria-label="Golf">
+        {(
+          [
+            ['play', 'Play'],
+            ['profile', 'Profile'],
+            ['ranks', 'Ranks'],
+          ] as const
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={subTab === key}
+            onClick={() => setSubTab(key)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {subTab === 'play' ? <GolfMenu onStart={startGolf} refreshKey={lbKey} /> : null}
+
+      {subTab === 'profile' ? <GolfProfile /> : null}
+
+      {subTab === 'ranks' ? (
+        <div className="flex flex-col gap-4">
+          <div className="golf-seg" role="group" aria-label="Board">
+            {(
+              [
+                ['golf', 'Mini-Golf'],
+                ['golfcourse', 'Course'],
+                ['golfrange', 'Range'],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                aria-pressed={board === key}
+                onClick={() => setBoard(key)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <GolfLeaderboard game={board} refreshKey={lbKey} />
+        </div>
+      ) : null}
     </div>
   );
 }

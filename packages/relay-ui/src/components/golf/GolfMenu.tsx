@@ -1,8 +1,12 @@
-import { useState } from 'react';
-import { GolfLeaderboard } from './GolfLeaderboard';
-import { getGolfStats, getRangeStats, getLastCourseId, setLastCourseId } from '../../lib/golf/stats';
+import { useMemo, useState } from 'react';
+import {
+  getGolfStats,
+  getRangeStats,
+  getLastCourseId,
+  setLastCourseId,
+} from '../../lib/golf/stats';
 import { CLUBS, DEFAULT_CLUB_ID } from '../../lib/golf/clubs';
-import { GOLF_COURSES } from '../../lib/golf/courses';
+import { GOLF_COURSES, getCourse } from '../../lib/golf/courses';
 import type { GolfCourse } from '../../lib/golf/courses';
 
 // The two flows behind the single "Golf" chiclet: Phase-1 putting and the
@@ -11,20 +15,28 @@ export type GolfSubMode = 'putt' | 'range-practice' | 'range-challenge' | 'cours
 
 interface Props {
   onStart: (mode: GolfSubMode, clubId?: string) => void;
-  // Bump to refetch the leaderboard after a submit.
+  // Bump to re-read local personal bests after a submit lands.
   refreshKey: number;
 }
 
-// The Golf mode picker, lifted out of routes/Fog.tsx to keep the route
-// lean. Two cards — Mini-Golf and Driving Range; the range expands to a
-// Practice / Target Challenge choice plus a starting club. Below sits a
-// board toggle (putting vs range) with the matching personal-best line and
-// leaderboard. Styling reuses the CSS-var chip/card idiom from Fog.
+// Small play triangle used on the hero CTA.
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M8 5v14l11-7z" />
+    </svg>
+  );
+}
+
+// The Play tab of the golf hub, rebuilt "broadcast"-style: a painted course
+// hero for the selected course with a big PLAY ROUND CTA and a Change-course
+// affordance (the existing full course picker), a compact local-bests strip,
+// and a mode strip (Mini-Golf / Driving Range / Course). All onStart(...)
+// call contracts and the club/course selection logic are preserved from the
+// original menu — this is a visual/layout rebuild, not a behavior change.
 export function GolfMenu({ onStart, refreshKey }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [clubId, setClubId] = useState(DEFAULT_CLUB_ID);
-  // Which board the personal-best line + leaderboard show.
-  const [board, setBoard] = useState<'golf' | 'golfrange'>('golf');
 
   // Course picker: expand toggle, the highlighted course (seeded from the last
   // played), and — when "Single hole" is chosen — which course's hole chips show.
@@ -35,9 +47,13 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
   });
   const [pickHoleFor, setPickHoleFor] = useState<string | null>(null);
 
-  const puttStats = getGolfStats();
-  const rangeStats = getRangeStats();
-  const stats = board === 'golf' ? puttStats : rangeStats;
+  // Local personal bests for the stat strip. Re-read on refreshKey so a fresh
+  // submit updates the strip without a network round-trip (works offline too).
+  const puttStats = useMemo(() => getGolfStats(), [refreshKey]);
+  const rangeStats = useMemo(() => getRangeStats(), [refreshKey]);
+  const hasLocalStats = puttStats.gamesPlayed > 0 || rangeStats.gamesPlayed > 0;
+
+  const heroCourse = getCourse(selectedCourseId);
 
   // Course-start handlers. The course choice is threaded through onStart's
   // existing optional string arg using the encoding contract the Fog pass
@@ -52,69 +68,70 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
     onStart('course', `${c.id}#${idx}`);
   };
 
-  const card = (opts: {
-    title: string;
-    subtitle: string;
-    onClick: () => void;
-    active?: boolean;
-  }) => (
-    <button
-      type="button"
-      onClick={opts.onClick}
-      className="flex flex-col text-left"
-      style={{
-        background: 'var(--card-bg)',
-        border: `1px solid ${opts.active ? 'var(--accent)' : 'var(--separator)'}`,
-        borderRadius: 16,
-        padding: 14,
-      }}
-    >
-      <div className="text-[15px] font-bold" style={{ color: 'var(--text)' }}>
-        {opts.title}
-      </div>
-      <div className="text-[12px] leading-snug pt-0.5" style={{ color: 'var(--text-dim)' }}>
-        {opts.subtitle}
-      </div>
-    </button>
-  );
+  const toggleCoursePicker = () => setCourseExpanded((e) => !e);
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
-        Two ways to play. Putt the mini-golf course, or step onto the driving
-        range and bomb it downrange.
+      {/* ---- Broadcast course hero for the selected course ---- */}
+      <div className="golf-hero">
+        <div className="golf-hero-art" aria-hidden="true">
+          <span className="g-sun" />
+          <span className="g-fairway" />
+          <span className="g-bunker" />
+          <span className="g-water" />
+          <span className="g-green" />
+          <span className="g-flag" />
+        </div>
+        <div className="golf-hero-grad" aria-hidden="true" />
+        <div className="golf-hero-tag">
+          <span>Featured course</span>
+          <span className="g-par">
+            PAR {heroCourse.par} · {heroCourse.yards.toLocaleString()} YD
+          </span>
+        </div>
+        <div className="golf-hero-body">
+          {heroCourse.location ? <p className="golf-hero-loc">{heroCourse.location}</p> : null}
+          <h2 className="golf-hero-title">{heroCourse.name}</h2>
+          <div className="golf-hero-meta">
+            <span>
+              <b>{heroCourse.holes.length}</b> holes
+            </span>
+            <span>
+              par <b>{heroCourse.par}</b>
+            </span>
+            <span>
+              <b>{heroCourse.yards.toLocaleString()}</b> yd
+            </span>
+          </div>
+          <div className="golf-play-row">
+            <button
+              type="button"
+              className="golf-play"
+              onClick={() => startFullRound(heroCourse)}
+            >
+              <span className="g-sheen" aria-hidden="true" />
+              <PlayIcon />
+              Play round
+            </button>
+            <button
+              type="button"
+              className="golf-change"
+              aria-expanded={courseExpanded}
+              onClick={toggleCoursePicker}
+            >
+              {courseExpanded ? 'Close' : 'Change course'}
+            </button>
+          </div>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-3">
-        {card({
-          title: 'Mini-Golf',
-          subtitle: 'Six top-down holes. Drag back to aim, release to putt — under par pays the most.',
-          onClick: () => onStart('putt'),
-        })}
-        {card({
-          title: 'Driving Range',
-          subtitle: 'Real 3D. Pick a club, carry the water, land on the island targets.',
-          onClick: () => setExpanded((e) => !e),
-          active: expanded,
-        })}
-        {card({
-          title: 'Course · Play a round',
-          subtitle:
-            'Real 3D courses — Augusta National + Listowel. Play a full round with a scorecard, or a single hole.',
-          onClick: () => setCourseExpanded((e) => !e),
-          active: courseExpanded,
-        })}
-      </div>
-
+      {/* ---- Course picker (revealed by Change course / the Course mode) ---- */}
       {courseExpanded ? (
         <div
           className="flex flex-col gap-3 rounded-2xl p-3"
           style={{ background: 'var(--bubble-them)' }}
         >
-          <div
-            className="text-[10px] font-bold tracking-wider"
-            style={{ color: 'var(--text-dim)' }}
-          >
+          <div className="text-[10px] font-bold tracking-wider" style={{ color: 'var(--text-dim)' }}>
             CHOOSE A COURSE
           </div>
           <div className="flex flex-col gap-2">
@@ -192,9 +209,7 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
                               }}
                             >
                               {h.id}
-                              {h.name ? (
-                                <span style={{ opacity: 0.6 }}> · {h.name}</span>
-                              ) : null}
+                              {h.name ? <span style={{ opacity: 0.6 }}> · {h.name}</span> : null}
                             </button>
                           ))}
                         </div>
@@ -208,11 +223,91 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
         </div>
       ) : null}
 
+      {/* ---- Local personal-bests strip ---- */}
+      {hasLocalStats ? (
+        <div className="golf-statstrip">
+          <div className="golf-stat">
+            <span>Mini-golf best</span>
+            <b className="under">{puttStats.bestScore.toLocaleString()}</b>
+            <small>
+              {puttStats.gamesPlayed} game{puttStats.gamesPlayed === 1 ? '' : 's'}
+            </small>
+          </div>
+          <div className="golf-stat">
+            <span>Range best</span>
+            <b className="under">{rangeStats.bestScore.toLocaleString()}</b>
+            <small>
+              {rangeStats.gamesPlayed} game{rangeStats.gamesPlayed === 1 ? '' : 's'}
+            </small>
+          </div>
+          <div className="golf-stat">
+            <span>Best streak</span>
+            <b>×{Math.max(puttStats.bestStreak, rangeStats.bestStreak)}</b>
+            <small>on this device</small>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ---- Mode strip ---- */}
+      <div className="golf-sec-h">
+        <h3>Ways to play</h3>
+      </div>
+      <div className="golf-modes">
+        <button type="button" className="golf-mode mini" onClick={() => onStart('putt')}>
+          <span className="g-cap" aria-hidden="true">
+            <span className="g-pin" />
+            <span className="g-ball" />
+          </span>
+          <span className="g-mbody">
+            <b>Mini-Golf</b>
+            <p>Six top-down holes. Drag back to aim, release to putt.</p>
+          </span>
+        </button>
+
+        <button
+          type="button"
+          className="golf-mode range"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((e) => !e)}
+        >
+          <span className="g-cap" aria-hidden="true">
+            <span className="g-ball" />
+          </span>
+          <span className="g-mbody">
+            <b>Driving Range</b>
+            <p>Real 3D. Carry the water, land the island targets.</p>
+          </span>
+        </button>
+
+        <button
+          type="button"
+          className="golf-mode course"
+          aria-expanded={courseExpanded}
+          onClick={toggleCoursePicker}
+        >
+          <span className="g-cap" aria-hidden="true">
+            <span className="g-pin" />
+            <span className="g-ball" />
+          </span>
+          <span className="g-mbody">
+            <b>Course</b>
+            <p>Full 3D round with a scorecard, or a single hole.</p>
+          </span>
+        </button>
+      </div>
+
+      {/* ---- Driving-range expansion: starting club + Practice / Challenge ---- */}
       {expanded ? (
-        <div className="flex flex-col gap-3 rounded-2xl p-3" style={{ background: 'var(--bubble-them)' }}>
+        <div
+          className="flex flex-col gap-3 rounded-2xl p-3"
+          style={{ background: 'var(--bubble-them)' }}
+        >
           {/* Starting club (changeable in-game too). */}
           <div>
-            <div className="text-[10px] font-bold tracking-wider pb-1.5" style={{ color: 'var(--text-dim)' }}>
+            <div
+              className="text-[10px] font-bold tracking-wider pb-1.5"
+              style={{ color: 'var(--text-dim)' }}
+            >
               STARTING CLUB
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -252,54 +347,22 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
             <button
               type="button"
               className="flex-1 rounded-xl py-3 text-[15px] font-bold"
-              style={{ background: 'var(--card-bg)', color: 'var(--text)', border: '1px solid var(--separator)' }}
+              style={{
+                background: 'var(--card-bg)',
+                color: 'var(--text)',
+                border: '1px solid var(--separator)',
+              }}
               onClick={() => onStart('range-practice', clubId)}
             >
               Practice
             </button>
           </div>
           <div className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
-            Target Challenge: 8 balls at random island pins — closest to the flag
-            scores. Practice: unlimited balls, no scoring.
+            Target Challenge: 8 balls at random island pins — closest to the flag scores. Practice:
+            unlimited balls, no scoring.
           </div>
         </div>
       ) : null}
-
-      {/* Board toggle + personal best + leaderboard for the selected board. */}
-      <div className="flex rounded-[10px] p-[3px] gap-[3px]" style={{ background: 'var(--bubble-them)' }}>
-        {(
-          [
-            ['golf', 'Mini-Golf'],
-            ['golfrange', 'Driving Range'],
-          ] as const
-        ).map(([key, label]) => {
-          const active = board === key;
-          return (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setBoard(key)}
-              className="flex-1 rounded-lg py-[6px] text-[13px] font-bold"
-              style={{
-                border: 'none',
-                background: active ? 'var(--accent)' : 'transparent',
-                color: active ? '#FFFFFF' : 'var(--text)',
-              }}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
-
-      {stats.gamesPlayed > 0 ? (
-        <div className="text-xs text-center" style={{ color: 'var(--text-dim)' }}>
-          Personal best {stats.bestScore.toLocaleString()} · streak x{stats.bestStreak} ·{' '}
-          {stats.gamesPlayed} game{stats.gamesPlayed === 1 ? '' : 's'}
-        </div>
-      ) : null}
-
-      <GolfLeaderboard refreshKey={refreshKey} game={board} />
     </div>
   );
 }
