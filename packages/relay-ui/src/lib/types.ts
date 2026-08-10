@@ -360,6 +360,43 @@ export interface GameLeaderboardEntry {
   mine: boolean;
 }
 
+// One per-course row from GET /game/golf-stats. `course` is null for the
+// uncategorized / mini-golf bucket. The to-par aggregates are null when no
+// round in the bucket recorded a to-par (lower bestToPar is better).
+export interface GolfCourseStat {
+  course: string | null;
+  games: number;
+  bestScore: number;
+  avgScore: number;
+  bestToPar: number | null;
+  avgToPar: number | null;
+}
+
+// One recent round from GET /game/golf-stats, newest first. `toPar` is null
+// when the round didn't record one; `createdAt` is epoch ms.
+export interface GolfRecentRound {
+  course: string | null;
+  score: number;
+  rounds: number;
+  toPar: number | null;
+  createdAt: number;
+}
+
+// The caller's personal golf profile from GET /game/golf-stats. All summary
+// figures are null until there is data. `handicap` is an APPROXIMATION —
+// the average to-par of recent scored rounds, not an official handicap.
+export interface GolfStats {
+  game: 'fog' | 'tune' | 'golf' | 'golfrange' | 'golfcourse';
+  gamesPlayed: number;
+  best: number | null;
+  average: number | null;
+  bestStreak: number | null;
+  lastPlayed: number | null;
+  handicap: number | null;
+  perCourse: GolfCourseStat[];
+  recent: GolfRecentRound[];
+}
+
 export interface ReplyPreview {
   id: string;
   from: string;

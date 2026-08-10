@@ -84,10 +84,22 @@ export default function CourseGame({
   course,
   startHole,
   onExit,
+  onRoundComplete,
 }: {
   course: GolfCourse;
   startHole?: number;
   onExit?: () => void;
+  // Fired EXACTLY ONCE per completed full round, when the end-of-round
+  // scorecard is revealed (full-round mode only — never in single-hole mode).
+  // Lets the parent record the round to the leaderboard. Optional: when
+  // omitted, nothing changes.
+  onRoundComplete?: (r: {
+    courseId: string;
+    holes: number;
+    strokes: number;
+    par: number;
+    toPar: number;
+  }) => void;
 }) {
   // startHole provided → single-hole play (no round progression / scorecard);
   // omitted → full round starting at hole 1.
@@ -136,6 +148,7 @@ export default function CourseGame({
   const [card, setCard] = useState<HoleScore[]>([]);
   const [showScorecard, setShowScorecard] = useState(false);
   const cardedRef = useRef(false); // one-shot: this hole appended to `card`.
+  const roundReportedRef = useRef(false); // one-shot: onRoundComplete fired.
 
   // Running score across the holes carded so far (full-round HUD readout).
   const scoreToPar = card.reduce((a, h) => a + (h.strokes - h.par), 0);
@@ -305,6 +318,26 @@ export default function CourseGame({
     resetHoleBookkeeping();
   };
 
+  // Full-round: reveal the end-of-round scorecard and report the completed round
+  // to the parent (leaderboard) EXACTLY ONCE, computed from the local card.
+  // Guarded by roundReportedRef so it fires once even if the scorecard
+  // re-renders; playRoundAgain resets the ref so a second round reports too.
+  const revealScorecard = () => {
+    setShowScorecard(true);
+    if (!roundReportedRef.current) {
+      roundReportedRef.current = true;
+      const strokes = card.reduce((a, h) => a + h.strokes, 0);
+      const par = card.reduce((a, h) => a + h.par, 0);
+      onRoundComplete?.({
+        courseId: course.id,
+        holes: card.length,
+        strokes,
+        par,
+        toPar: strokes - par,
+      });
+    }
+  };
+
   // Full-round: restart the whole round from hole 1 with a fresh scorecard AND a
   // freshly rolled round wind.
   const playRoundAgain = () => {
@@ -317,6 +350,7 @@ export default function CourseGame({
     setHoleIdx(0);
     setCard([]);
     setShowScorecard(false);
+    roundReportedRef.current = false;
     setResetKey((k) => k + 1);
     setSt(simRef.current.getState());
     resetHoleBookkeeping();
@@ -564,7 +598,7 @@ export default function CourseGame({
                 </button>
               ) : isLastHole ? (
                 <button
-                  onClick={() => setShowScorecard(true)}
+                  onClick={revealScorecard}
                   className="rounded-full bg-emerald-500 px-5 py-2 font-bold text-white"
                 >
                   See scorecard
