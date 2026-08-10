@@ -7,6 +7,9 @@ import { FogScreen } from '../components/fog/FogScreen';
 import { TuneScreen } from '../components/tune/TuneScreen';
 import { GolfScreen } from '../components/golf/GolfScreen';
 import { useStore } from '../lib/store';
+import { getFogStats } from '../lib/fog/stats';
+import { getTuneStats } from '../lib/tune/stats';
+import { getGolfStats } from '../lib/golf/stats';
 
 // /discover is the Games tab: a grid of game chiclets (the "hub").
 // Picking one routes into that game's standalone screen (menu → guess →
@@ -40,8 +43,18 @@ const GAMES: { id: 'fog' | 'tune' | 'golf'; title: string; subtitle: string; ico
   },
 ];
 
+// Flat SVG icon path for a game id, sourced from the GAMES data above so the
+// hub landing and any future chiclet consumers share one asset map.
+const iconOf = (id: 'fog' | 'tune' | 'golf'): string =>
+  GAMES.find((g) => g.id === id)?.icon ?? '';
+
 export function Fog() {
   const me = useStore((s) => s.me);
+  // Personal bests for the hub cards. Read from localStorage (offline-safe)
+  // once per landing mount; omit the "Best" line until a game's been played.
+  const fogStats = getFogStats();
+  const tuneStats = getTuneStats();
+  const golfStats = getGolfStats();
   // Which mini game the Games hub is showing. null = the chiclet grid
   // (hub). Each game's standalone screen owns its own menu/game/results
   // flow and the back-gesture choreography (via useGameFlow).
@@ -64,45 +77,90 @@ export function Fog() {
           classic-mode .legacy-tabbar (same treatment as /sports). */}
       <div style={{ paddingBottom: 'calc(96px + env(safe-area-inset-bottom, 0px))' }}>
         {selected === null ? (
-          <div className="px-4">
-            <div className="text-sm pb-3" style={{ color: 'var(--text-dim)' }}>
-              Pick a game.
+          <div className="games-hub px-4">
+            <div className="games-head">
+              <p className="games-eyebrow">Relay Arcade</p>
+              <h2 className="games-hub-title">Games</h2>
+              <p className="games-sub">Three games, each its own world. Pick one to play.</p>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              {GAMES.map((g) => (
-                <button
-                  key={g.id}
-                  type="button"
-                  onClick={() => setSelected(g.id)}
-                  className="flex flex-col overflow-hidden text-left"
-                  style={{
-                    background: 'var(--card-bg)',
-                    border: '1px solid var(--separator)',
-                    borderRadius: 18,
-                    padding: 0,
-                  }}
-                >
-                  <div
-                    className="flex items-center justify-center"
-                    style={{ aspectRatio: '1 / 1', background: 'var(--bubble-them)' }}
-                  >
-                    <img
-                      src={g.icon}
-                      alt=""
-                      style={{ width: '68%', height: '68%', objectFit: 'contain' }}
-                    />
-                  </div>
-                  <div className="px-3 py-2.5">
-                    <div className="text-[15px] font-bold" style={{ color: 'var(--text)' }}>
-                      {g.title}
+
+            {/* Featured Golf — the flagship: a painted CSS "broadcast" hero
+                (same technique as .golf-hero) with a Featured badge + play
+                affordance. Clicking mounts the decoupled GolfScreen. */}
+            <button type="button" className="games-feat" onClick={() => setSelected('golf')}>
+              <div className="games-feat-art">
+                <span className="g-sun" />
+                <span className="g-fairway" />
+                <span className="g-green" />
+                <span className="g-flag" />
+                <img className="games-feat-emblem" src={iconOf('golf')} alt="" />
+                <span className="games-feat-grad" />
+                <span className="games-feat-badge">Featured</span>
+              </div>
+              <div className="games-feat-ft">
+                <div className="games-feat-txt">
+                  <b>Golf</b>
+                  <span>3D courses · mini-golf · driving range</span>
+                  {golfStats.gamesPlayed > 0 && (
+                    <span className="games-feat-best">
+                      Best <b>{golfStats.bestScore.toLocaleString()}</b>
+                    </span>
+                  )}
+                </div>
+                <span className="games-feat-go" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M8 5v14l11-7z" />
+                  </svg>
+                </span>
+              </div>
+            </button>
+
+            {/* Secondary tiles — each tinted to its own world. */}
+            <div className="games-grid">
+              <button
+                type="button"
+                className="games-card games-card--fog"
+                onClick={() => setSelected('fog')}
+              >
+                <div className="games-card-cap">
+                  <img className="games-card-icon" src={iconOf('fog')} alt="" />
+                </div>
+                <div className="games-card-b">
+                  <b>Fog</b>
+                  <span>Guess through the mist</span>
+                  {fogStats.gamesPlayed > 0 && (
+                    <div className="games-card-best">
+                      <span>Best</span>
+                      <b>{fogStats.bestScore.toLocaleString()}</b>
                     </div>
-                    <div className="text-[12px] leading-snug pt-0.5" style={{ color: 'var(--text-dim)' }}>
-                      {g.subtitle}
+                  )}
+                </div>
+              </button>
+
+              <button
+                type="button"
+                className="games-card games-card--tune"
+                onClick={() => setSelected('tune')}
+              >
+                <div className="games-card-cap">
+                  <img className="games-card-icon" src={iconOf('tune')} alt="" />
+                </div>
+                <div className="games-card-b">
+                  <b>Tune</b>
+                  <span>Name the track</span>
+                  {tuneStats.gamesPlayed > 0 && (
+                    <div className="games-card-best">
+                      <span>Best</span>
+                      <b>{tuneStats.bestScore.toLocaleString()}</b>
                     </div>
-                  </div>
-                </button>
-              ))}
+                  )}
+                </div>
+              </button>
             </div>
+
+            <p className="games-note">
+              Each game keeps its own modes, stats &amp; leaderboard.
+            </p>
           </div>
         ) : selected === 'fog' ? (
           <FogScreen onExitToHub={() => setSelected(null)} />
