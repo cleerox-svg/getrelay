@@ -19,6 +19,7 @@
 //   node scripts/shoot-golf.mjs                 # all scenes
 //   node scripts/shoot-golf.mjs course          # one or more scene ids
 //   node scripts/shoot-golf.mjs course range
+//   node scripts/shoot-golf.mjs augusta12       # a named real-course hole shot
 
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -47,6 +48,17 @@ const SCENES = {
   // tee) and the shot rendered blank. Only reproducible by driving TWO real
   // rendered aims with a real fire between them — see runSecondAim().
   secondAim: { query: 'scene=course', label: 'course-second-aim', sequence: 'secondAim' },
+  // Named REAL-COURSE shots for QA of the authored holes (hole is a 0-based
+  // index into the course's holes[]). These exercise the signature features and
+  // scene framing at extremes — the plain `course`/`secondAim` scenes above stay
+  // on HOLE_1 and are unaffected.
+  augusta12: { query: 'scene=course&course=augusta&hole=11', label: 'augusta-12-golden-bell' },
+  augusta13: { query: 'scene=course&course=augusta&hole=12', label: 'augusta-13-azalea' },
+  augusta2: { query: 'scene=course&course=augusta&hole=1', label: 'augusta-2-pink-dogwood' },
+  listowelHeritage3: {
+    query: 'scene=course&course=listowel-heritage&hole=2',
+    label: 'listowel-heritage-3',
+  },
 };
 const VIEWPORT = { width: 900, height: 1600 };
 const READY_TIMEOUT_MS = 15000;

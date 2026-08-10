@@ -155,6 +155,10 @@ export interface CourseHole {
   id: number;
   par: number;
   yards: number;
+  // OPTIONAL human name for the hole (e.g. Augusta's "Tea Olive"). Additive and
+  // read-only on the `hole` object, so it is safe against the CourseSnapshot
+  // guard (which excludes the static `hole`). HOLE_1 leaves it undefined.
+  name?: string;
   tee: Pt;
   pin: Pt;
   centerline: Pt[];

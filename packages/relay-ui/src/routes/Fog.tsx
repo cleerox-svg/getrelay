@@ -32,6 +32,7 @@ import type { GolfSubMode } from '../components/golf/GolfMenu';
 import { RangeGame } from '../components/golf/RangeGame';
 import type { RangeGameResult } from '../components/golf/RangeGame';
 import CourseGame from '../components/golf/CourseGame';
+import { getCourse } from '../lib/golf/courses';
 import { getGolfStats, recordGolfGame, recordRangeGame } from '../lib/golf/stats';
 import { HOLES as GOLF_HOLES, RANGE_BALLS } from '../lib/golf/tuning';
 import { TUNE_GENRES, tuneAvailable } from '../lib/tune/sources';
@@ -125,6 +126,11 @@ export function Fog() {
   // changed from the golf menu, frozen once a game is running.
   const [golfMode, setGolfMode] = useState<GolfSubMode>('putt');
   const [golfClub, setGolfClub] = useState<string | undefined>(undefined);
+  // Which course is loaded in Course mode, and (single-hole play) which hole
+  // index to start on. Set from the golf menu's encoded course arg; undefined
+  // holeIdx means play the full round from hole 1.
+  const [golfCourseId, setGolfCourseId] = useState<string | undefined>(undefined);
+  const [golfHoleIdx, setGolfHoleIdx] = useState<number | undefined>(undefined);
   const [result, setResult] = useState<GameResult | null>(null);
   const [tuneResult, setTuneResult] = useState<TuneGameResult | null>(null);
   const [golfResult, setGolfResult] = useState<GolfGameResult | null>(null);
@@ -409,9 +415,22 @@ export function Fog() {
   // Golf mode picker → the right flow. Putting and the range Target
   // Challenge both run through the scored guess screen; range Practice is an
   // open, unscored session on the free screen (like Fog's free play).
-  function startGolf(mode: GolfSubMode, clubId?: string) {
+  function startGolf(mode: GolfSubMode, arg?: string) {
     setGolfMode(mode);
-    setGolfClub(clubId);
+    if (mode === 'course') {
+      // arg encodes the course choice: "<courseId>" for a full round, or
+      // "<courseId>#<holeIdx>" (0-based) for single-hole play.
+      const [courseId, holeStr] = (arg ?? '').split('#');
+      setGolfCourseId(courseId || undefined);
+      // Only accept an in-range integer hole index; anything else falls back to a
+      // full round (undefined) so CourseGame never builds a sim from a missing hole.
+      const idx = holeStr != null && holeStr !== '' ? Number(holeStr) : NaN;
+      const holeCount = getCourse(courseId || undefined).holes.length;
+      const validIdx = Number.isInteger(idx) && idx >= 0 && idx < holeCount;
+      setGolfHoleIdx(validIdx ? idx : undefined);
+    } else {
+      setGolfClub(arg);
+    }
     if (mode === 'range-practice' || mode === 'course') {
       setScreen('free');
       nav(location.pathname, { state: { fog: 'free' } });
@@ -580,6 +599,8 @@ export function Fog() {
             // so the in-HUD back button takes the place of the boxed back link.
             golfMode === 'course' ? (
               <CourseGame
+                course={getCourse(golfCourseId)}
+                startHole={golfHoleIdx}
                 onExit={() => {
                   setScreen('menu');
                   consumeHistoryEntry('free');
