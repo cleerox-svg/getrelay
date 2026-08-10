@@ -6,8 +6,14 @@ import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTextur
 import {
   addSkyDome,
   createTreeKit,
-  makeTurfColor,
+  makeContactShadowTexture,
+  makeFairwayTurf,
+  makeFog,
   makeTurfNormalMap,
+  makeWater,
+  GREEN_COLOR,
+  TURF_NORMAL_SCALE,
+  TURF_ROUGHNESS,
 } from '../../lib/golf/scenery';
 import {
   FAIRWAY_HALF_W,
@@ -62,87 +68,8 @@ interface Props {
 }
 
 // --- Procedural canvas textures (no binary assets) ------------------------
-
-
-function makeWaterTexture(): THREE.Texture {
-  const c = document.createElement('canvas');
-  c.width = 256;
-  c.height = 256;
-  const g = c.getContext('2d')!;
-  const grad = g.createLinearGradient(0, 0, 0, c.height);
-  grad.addColorStop(0, '#2183c2');
-  grad.addColorStop(1, '#14608f');
-  g.fillStyle = grad;
-  g.fillRect(0, 0, c.width, c.height);
-  // Soft mottled light patches instead of hard sine lines — the ripple movement
-  // now comes from the animated normal map, so the colour map stays gentle.
-  for (let i = 0; i < 90; i++) {
-    const x = Math.random() * c.width;
-    const y = Math.random() * c.height;
-    const r = 8 + Math.random() * 26;
-    const rg = g.createRadialGradient(x, y, 0, x, y, r);
-    const light = Math.random() < 0.6;
-    rg.addColorStop(0, light ? 'rgba(180,220,240,0.10)' : 'rgba(10,40,70,0.10)');
-    rg.addColorStop(1, 'rgba(0,0,0,0)');
-    g.fillStyle = rg;
-    g.beginPath();
-    g.arc(x, y, r, 0, Math.PI * 2);
-    g.fill();
-  }
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(6, 26);
-  return tex;
-}
-
-// Tileable ripple normal map: two crossing wave trains baked into a normal
-// field. Scrolling its offset each frame makes the water visibly move, and the
-// low roughness on the material turns the moving normals into a shifting sun
-// glint. Frequencies are integer cycles across the tile so it wraps seamlessly.
-function makeWaterNormalMap(): THREE.Texture {
-  const S = 256;
-  const c = document.createElement('canvas');
-  c.width = S;
-  c.height = S;
-  const g = c.getContext('2d')!;
-  const img = g.createImageData(S, S);
-  const data = img.data;
-  const TAU = Math.PI * 2;
-  const wave = (x: number, y: number) => {
-    const u = (x / S) * TAU;
-    const v = (y / S) * TAU;
-    return (
-      Math.sin(u * 3 + v * 1) * 0.5 +
-      Math.sin(u * 1 - v * 4) * 0.35 +
-      Math.sin((u + v) * 5) * 0.2
-    );
-  };
-  for (let y = 0; y < S; y++) {
-    for (let x = 0; x < S; x++) {
-      const hx = wave(x + 1, y) - wave(x - 1, y);
-      const hy = wave(x, y + 1) - wave(x, y - 1);
-      let nx = -hx * 2.2;
-      let ny = -hy * 2.2;
-      let nz = 1;
-      const inv = 1 / Math.hypot(nx, ny, nz);
-      nx *= inv;
-      ny *= inv;
-      nz *= inv;
-      const idx = (y * S + x) * 4;
-      data[idx] = (nx * 0.5 + 0.5) * 255;
-      data[idx + 1] = (ny * 0.5 + 0.5) * 255;
-      data[idx + 2] = (nz * 0.5 + 0.5) * 255;
-      data[idx + 3] = 255;
-    }
-  }
-  g.putImageData(img, 0, 0);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.NoColorSpace;
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(5, 12);
-  return tex;
-}
+// (Water + turf now come from the shared scenery.ts kit; only range-specific
+// props — net, yardage labels, splash dots — stay local.)
 
 function makeNetTexture(): THREE.Texture {
   const c = document.createElement('canvas');
@@ -267,11 +194,11 @@ export default function RangeGL({
     host.appendChild(canvas);
 
     const scene = new THREE.Scene();
-    // Warm, slightly denser distance haze so flags/trees/greens fade into the
-    // horizon instead of ending on a hard line — reads as depth on a sunny day.
-    scene.fog = new THREE.Fog(0xd6ecf4, 130, 500);
+    // Warm distance haze from the shared kit (makeFog) — one near/far reconciled
+    // with the Course so flags/trees/greens fade the same in both scenes.
+    scene.fog = makeFog();
 
-    const camera = new THREE.PerspectiveCamera(56, w / h, 0.5, 1400);
+    const camera = new THREE.PerspectiveCamera(60, w / h, 0.5, 1400);
     // Sit a touch lower and aim a touch higher than dead-level so the teed
     // ball (near the camera, low to the ground) frames in the lower-MIDDLE of
     // the now full-screen viewport with open turf below it for the drag-back
@@ -315,8 +242,12 @@ export default function RangeGL({
     // --- Sky dome (shared kit) -----------------------------------------
     addSkyDome(scene, track);
 
-    // --- Ground (mowing stripes, shared kit) ---------------------------
-    const turfTex = track(makeTurfColor('green'));
+    // --- Ground (bold fairway mow stripes, shared kit) -----------------
+    // Shared makeFairwayTurf: the SAME bold world-locked STRIPE_HI/LO stripes on
+    // the SURFACE_RGB.fairway hue the Course bakes, so the range fairway reads
+    // like the course fairway. Two bands per tile × repeat.y 60 over 820 yd ≈
+    // 6.8 yd bands (≈ STRIPE_YD), crossing the fairway.
+    const turfTex = track(makeFairwayTurf());
     turfTex.repeat.set(10, 60);
     const turfNorm = track(makeTurfNormalMap());
     turfNorm.repeat.set(64, 180);
@@ -324,13 +255,10 @@ export default function RangeGL({
     const groundMat = track(
       new THREE.MeshStandardMaterial({
         map: turfTex,
-        // A touch glossier so the sun rakes a soft directional sheen across the
-        // fairway (the blade normal map now catches a highlight) instead of the
-        // old dead-matte look. Stronger normals give the turf more relief.
-        roughness: 0.82,
+        roughness: TURF_ROUGHNESS,
         metalness: 0,
         normalMap: turfNorm,
-        normalScale: new THREE.Vector2(0.5, 0.5),
+        normalScale: new THREE.Vector2(TURF_NORMAL_SCALE, TURF_NORMAL_SCALE),
       }),
     );
     const ground = new THREE.Mesh(groundGeo, groundMat);
@@ -353,24 +281,11 @@ export default function RangeGL({
     const waterNear = isFairway ? FAIRWAY_WATER_START : GRASS_END;
     const waterFar = isFairway ? FAIRWAY_WATER_END : WATER_END;
     const WATER_Y = 0.06;
-    const waterTex = track(makeWaterTexture());
-    const waterNorm = track(makeWaterNormalMap());
+    // Shared animated water (scenery.makeWater): dual-wave scrolling normal + sun
+    // glint. The Course uses the SAME material on its organic water disc.
+    const waterKit = makeWater(track);
     const waterGeo = track(new THREE.PlaneGeometry(150, waterFar - waterNear));
-    const waterMat = track(
-      new THREE.MeshStandardMaterial({
-        map: waterTex,
-        color: 0x2a86c4,
-        // Low roughness + a little metalness so the moving normal map produces a
-        // shifting specular sun glint and a faint reflective sheen.
-        roughness: 0.14,
-        metalness: 0.2,
-        normalMap: waterNorm,
-        normalScale: new THREE.Vector2(0.55, 0.55),
-        transparent: true,
-        opacity: 0.9,
-      }),
-    );
-    const water = new THREE.Mesh(waterGeo, waterMat);
+    const water = new THREE.Mesh(waterGeo, waterKit.material);
     water.rotation.x = -Math.PI / 2;
     water.position.set(0, WATER_Y, -(waterNear + waterFar) / 2);
     scene.add(water);
@@ -383,8 +298,11 @@ export default function RangeGL({
     // (full water), so it isn't drawn. 'fairway' has no causeway at all.
     const drawCauseway = layout === 'lane' || (layout === 'practiceLane' && !isChallenge);
     if (drawCauseway) {
-      const fairwayTex = track(makeTurfColor('green'));
-      fairwayTex.repeat.set(2, 44);
+      // Same bold shared fairway stripes as the main ground; repeat.y 21 over the
+      // 290 yd causeway ≈ 6.9 yd bands (≈ STRIPE_YD), so its stripes line up in
+      // scale with the ground it lies over.
+      const fairwayTex = track(makeFairwayTurf());
+      fairwayTex.repeat.set(2, 21);
       const fairwayNorm = track(makeTurfNormalMap());
       fairwayNorm.repeat.set(6, 140);
       const fairwayGeo = track(
@@ -393,11 +311,9 @@ export default function RangeGL({
       const fairwayMat = track(
         new THREE.MeshStandardMaterial({
           map: fairwayTex,
-          // Match the main ground's PBR so the causeway reads as the same lit
-          // turf under the new sun (not a flatter, matte lane through the water).
-          roughness: 0.82,
+          roughness: TURF_ROUGHNESS,
           normalMap: fairwayNorm,
-          normalScale: new THREE.Vector2(0.5, 0.5),
+          normalScale: new THREE.Vector2(TURF_NORMAL_SCALE, TURF_NORMAL_SCALE),
         }),
       );
       const fairway = new THREE.Mesh(fairwayGeo, fairwayMat);
@@ -413,7 +329,7 @@ export default function RangeGL({
     const targetRings: { id: string; ring: THREE.Mesh }[] = [];
     const flagMats: { id: string; mat: THREE.MeshStandardMaterial }[] = [];
     const dirtMat = track(new THREE.MeshStandardMaterial({ color: 0x7a6a4a, roughness: 1 }));
-    const greenMat = track(new THREE.MeshStandardMaterial({ color: 0x57ab4a, roughness: 1 }));
+    const greenMat = track(new THREE.MeshStandardMaterial({ color: GREEN_COLOR, roughness: 1 }));
     const poleMat = track(new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.6 }));
 
     for (const pin of pins) {
@@ -551,6 +467,18 @@ export default function RangeGL({
     const ball = new THREE.Mesh(ballGeo, ballMat);
     ball.castShadow = true;
     scene.add(ball);
+    // Ball contact shadow (shared kit) — a soft dark disc on the turf under the
+    // ball so it reads as SEATED, matching the Course. The range ground is flat
+    // (~y 0), so it pins to a fixed y and fades/grows with the ball's altitude.
+    const ballShadowTex = track(makeContactShadowTexture());
+    const ballShadowMat = track(
+      new THREE.MeshBasicMaterial({ map: ballShadowTex, transparent: true, depthWrite: false, opacity: 0.9 }),
+    );
+    const ballShadowGeo = track(new THREE.PlaneGeometry(BALL_R * 3.2, BALL_R * 3.2));
+    const ballShadow = new THREE.Mesh(ballShadowGeo, ballShadowMat);
+    ballShadow.rotation.x = -Math.PI / 2;
+    ballShadow.renderOrder = 2;
+    scene.add(ballShadow);
     // Preallocated temporaries for per-frame ball-spin rotation (no allocs in
     // the render loop). spinAxis holds the world-space angular-velocity vector;
     // spinQuat the incremental rotation applied to ball.quaternion each frame.
@@ -1112,6 +1040,16 @@ export default function RangeGL({
         }
       }
 
+      // Ball contact shadow: pin under the ball on the flat turf, fade + grow
+      // with altitude so it reads as a seated ball at rest and a soft blob aloft.
+      // Hidden once the ball has sunk (over water there's no turf to shadow).
+      const shAlt = Math.max(0, b.h);
+      ballShadow.position.set(b.x, 0.04, -b.d);
+      const shScale = 1 + Math.min(2.5, shAlt * 0.12);
+      ballShadow.scale.set(shScale, shScale, shScale);
+      ballShadowMat.opacity = 0.9 * Math.max(0.1, 1 - shAlt / 8);
+      ballShadow.visible = ball.visible && !sinking;
+
       // Aim guide: visible only at the tee. Steer with aimRad, grow with power,
       // ramp toward red near max, and pulse gently when idle to invite a drag.
       aimGuide.visible = teed;
@@ -1222,11 +1160,9 @@ export default function RangeGL({
         f.mesh.rotation.z = Math.sin(t * 2 + i) * 0.12;
         f.mesh.position.x = f.base + Math.sin(t * 3 + i) * 0.12;
       }
-      // Water: scroll the colour map and the ripple normal map in different
-      // directions so the surface visibly moves and the sun glint shimmers.
-      waterTex.offset.y = (t * 0.03) % 1;
-      waterNorm.offset.x = (t * 0.035) % 1;
-      waterNorm.offset.y = (t * 0.06) % 1;
+      // Water: shared per-frame hook scrolls the colour + ripple normal maps so
+      // the surface visibly moves and the sun glint shimmers.
+      waterKit.update(t);
 
       // Camera: chase the ball down-range in flight, then ease back to the tee.
       if (following && revertAt !== 0 && now >= revertAt) following = false;

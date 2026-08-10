@@ -18,6 +18,7 @@
 // across modes, so the two scenes can't diverge on grass detail again.
 
 import * as THREE from 'three';
+import type { Surface } from './terrain';
 
 export interface Disposable {
   dispose: () => void;
@@ -25,14 +26,53 @@ export interface Disposable {
 export type Track = <T extends Disposable>(o: T) => T;
 
 // --- Fog -------------------------------------------------------------------
-// Denser, warm distance haze (aerial perspective). The range uses the near/far
-// directly; the long course corridor passes a larger `far` but the same feel.
+// Denser, warm distance haze (aerial perspective). ONE shared near/far so the
+// two scenes can't drift: reconciled to the Course's wider values (the long
+// corridor's green sits ~512 yd out), which read fine on the shorter range too.
+// Both scenes call makeFog() with no args.
 export const FOG_COLOR = 0xd6ecf4;
-export const FOG_NEAR = 130;
-export const FOG_FAR = 500;
+export const FOG_NEAR = 170;
+export const FOG_FAR = 780;
 export function makeFog(near = FOG_NEAR, far = FOG_FAR): THREE.Fog {
   return new THREE.Fog(FOG_COLOR, near, far);
 }
+
+// --- Shared grass palette + stripe/turf constants --------------------------
+// The Course terrain is multi-surface: each lie has a base albedo. This table
+// (0..1 linear-ish RGB, authored in sRGB) is the SINGLE source of truth for the
+// per-lie colours — the Course's baked makeSurfaceMap keys off it and the Range
+// pulls the fairway hue + green from it, so the two scenes render the same grass.
+// (NOTE: distinct from courseData.ts's SURFACE_RGB, which is a 0..255 mask
+// encoding keyed by the CourseSurface ENUM — this one is keyed by the terrain
+// `Surface` string union and is a render albedo.)
+export const SURFACE_RGB: Record<Surface, [number, number, number]> = {
+  fairway: [0.4, 0.66, 0.28],
+  green: [0.49, 0.79, 0.38],
+  fringe: [0.298, 0.561, 0.243], // rich, dark collar green (0x4c8f3e) — matches the overlay
+  rough: [0.19, 0.37, 0.16], // darker + more olive → clearly not fairway
+  bunker: [0.9, 0.82, 0.6],
+  water: [0.14, 0.42, 0.66],
+  cartpath: [0.74, 0.71, 0.66],
+  tee: [0.34, 0.55, 0.26],
+  ob: [0.13, 0.28, 0.12],
+};
+
+// Bold world-locked fairway mow stripes: the band period is STRIPE_YD yards
+// downrange, alternating a brighter (STRIPE_HI) and darker (STRIPE_LO) multiply
+// of the fairway hue. Shared so the Course's baked map and the Range's tiled
+// fairway texture cut the SAME stripes.
+export const STRIPE_YD = 7;
+export const STRIPE_HI = 1.16;
+export const STRIPE_LO = 0.82;
+// Half-width (yd) of the fairway↔rough "first cut" feather (a render-only band).
+export const FIRST_CUT = 4;
+// Shared turf material tuning so both scenes catch the same sun sheen.
+export const TURF_ROUGHNESS = 0.85;
+export const TURF_NORMAL_SCALE = 0.45;
+
+// One putting-green colour so the Course putting green and the Range island
+// green read the same. Leans to the brighter Course green.
+export const GREEN_COLOR = 0x86d06f;
 
 // --- Sky -------------------------------------------------------------------
 // Deep-blue → hazy-horizon gradient with puffy cumulus clusters and two layers
@@ -113,47 +153,60 @@ export function addSkyDome(scene: THREE.Scene, track: Track): void {
 
 // --- Turf ------------------------------------------------------------------
 
-export type TurfMode = 'green' | 'neutral';
+// Shared blade-streak + sun/shade-mottle detail painted over an existing turf
+// base (used by both makeTurfColor and makeFairwayTurf so the grass grain can't
+// diverge). `S` is the canvas edge in px.
+function paintTurfDetail(g: CanvasRenderingContext2D, S: number): void {
+  const blade = (n: number, alpha: number, light: boolean) => {
+    for (let i = 0; i < n; i++) {
+      const x = Math.random() * S;
+      const y = Math.random() * S;
+      const len = 3 + Math.random() * 7;
+      const lean = (Math.random() - 0.5) * 2.2;
+      const hue = 95 + Math.random() * 30;
+      const lum = light ? 46 + Math.random() * 20 : 22 + Math.random() * 12;
+      g.strokeStyle = `hsla(${hue},46%,${lum}%,${alpha})`;
+      g.lineWidth = Math.random() < 0.25 ? 1.5 : 1;
+      g.beginPath();
+      g.moveTo(x, y);
+      g.lineTo(x + lean, y - len);
+      g.stroke();
+    }
+  };
+  blade(5200, 0.16, false);
+  blade(4200, 0.16, true);
+  for (let i = 0; i < 120; i++) {
+    const x = Math.random() * S;
+    const y = Math.random() * S;
+    const r = 20 + Math.random() * 70;
+    const rg = g.createRadialGradient(x, y, 0, x, y, r);
+    const dark = Math.random() < 0.5;
+    rg.addColorStop(0, dark ? 'rgba(30,60,25,0.06)' : 'rgba(150,200,120,0.06)');
+    rg.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = rg;
+    g.beginPath();
+    g.arc(x, y, r, 0, Math.PI * 2);
+    g.fill();
+  }
+}
 
 /**
- * Mown-turf colour map. 'green' (range) bakes the fairway green directly. 'neutral'
- * (course) is a near-white luminance detail designed to MULTIPLY per-surface
- * vertex colours — same stripe/blade/mottle geometry, but drawn as light/dark
- * luminance around white so it reads as mown grass over ANY lie tint without
- * pushing the hue. Drop material roughness to ~0.82 in both scenes so the blade
- * normal map (makeTurfNormalMap) catches a soft sun sheen.
+ * Plain mown-turf colour map (fairway green + blade/mottle grain). Used for the
+ * distant fill/backdrop plane where the bold fairway stripes aren't wanted. Drop
+ * material roughness to ~TURF_ROUGHNESS so the blade normal map catches sun.
  */
-export function makeTurfColor(mode: TurfMode = 'green'): THREE.Texture {
+export function makeTurfColor(): THREE.Texture {
   const S = 512;
   const c = document.createElement('canvas');
   c.width = S;
   c.height = S;
   const g = c.getContext('2d')!;
-  const neutral = mode === 'neutral';
-
-  // Mow stripes down the width. Green mode uses real greens; neutral uses a
-  // gentle light/near-white delta so the multiply only lightly darkens alternate
-  // bands (the stripe still reads, the surface hue is preserved).
   const stripes = 8;
   const sw = S / stripes;
   for (let i = 0; i < stripes; i++) {
     const up = i % 2 === 0;
     const grad = g.createLinearGradient(i * sw, 0, (i + 1) * sw, 0);
-    if (neutral) {
-      // A near-white "up" band and a clearly darker "down" band. Because this
-      // MULTIPLIES the surface vertex colour, only values below white add detail,
-      // so the mow read comes from the darker alternate band — it needs real
-      // contrast (~20%) to show through, not a whisper.
-      if (up) {
-        grad.addColorStop(0, '#f2f2f2');
-        grad.addColorStop(0.5, '#ffffff');
-        grad.addColorStop(1, '#f2f2f2');
-      } else {
-        grad.addColorStop(0, '#9aa890');
-        grad.addColorStop(0.5, '#a6b39c');
-        grad.addColorStop(1, '#9aa890');
-      }
-    } else if (up) {
+    if (up) {
       grad.addColorStop(0, '#5db152');
       grad.addColorStop(0.5, '#66ba5a');
       grad.addColorStop(1, '#5db152');
@@ -165,55 +218,41 @@ export function makeTurfColor(mode: TurfMode = 'green'): THREE.Texture {
     g.fillStyle = grad;
     g.fillRect(i * sw, 0, sw, S);
   }
+  paintTurfDetail(g, S);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 8;
+  return tex;
+}
 
-  // Directional blade streaks (dark + light passes). Neutral draws them as grey
-  // luminance so they read on any tint; green uses hue-varied greens.
-  const blade = (n: number, alpha: number, light: boolean) => {
-    for (let i = 0; i < n; i++) {
-      const x = Math.random() * S;
-      const y = Math.random() * S;
-      const len = 3 + Math.random() * 7;
-      const lean = (Math.random() - 0.5) * 2.2;
-      if (neutral) {
-        // Multiply detail: light blades ride near white (near no-op), dark blades
-        // dip enough to texture the surface. Only the darkening reads, so make it
-        // count.
-        const lum = light ? 92 + Math.random() * 6 : 48 + Math.random() * 20;
-        g.strokeStyle = `hsla(100,12%,${lum}%,${alpha})`;
-      } else {
-        const hue = 95 + Math.random() * 30;
-        const lum = light ? 46 + Math.random() * 20 : 22 + Math.random() * 12;
-        g.strokeStyle = `hsla(${hue},46%,${lum}%,${alpha})`;
-      }
-      g.lineWidth = Math.random() < 0.25 ? 1.5 : 1;
-      g.beginPath();
-      g.moveTo(x, y);
-      g.lineTo(x + lean, y - len);
-      g.stroke();
-    }
+/**
+ * Bold world-locked fairway mow stripes on the shared fairway hue. Two CROSSING
+ * bands per tile (STRIPE_HI then STRIPE_LO multiply of SURFACE_RGB.fairway) so
+ * the caller sets the texture repeat to land the band period near STRIPE_YD; the
+ * bands vary down the canvas V axis, which the scenes map to downrange, so they
+ * read as crossing mow stripes. Blade streaks + mottle add the lit-grass grain.
+ * This is the RANGE counterpart to the Course's baked makeSurfaceMap fairway —
+ * both cut the same STRIPE_HI/LO stripes on the same hue.
+ */
+export function makeFairwayTurf(): THREE.Texture {
+  const S = 512;
+  const c = document.createElement('canvas');
+  c.width = S;
+  c.height = S;
+  const g = c.getContext('2d')!;
+  const [fr, fg, fb] = SURFACE_RGB.fairway;
+  const band = (m: number) => {
+    const r = Math.min(255, Math.round(fr * 255 * m));
+    const gg = Math.min(255, Math.round(fg * 255 * m));
+    const b = Math.min(255, Math.round(fb * 255 * m));
+    return `rgb(${r},${gg},${b})`;
   };
-  blade(5200, 0.16, false);
-  blade(4200, 0.16, true);
-
-  // Broad sun/shade mottling.
-  for (let i = 0; i < 120; i++) {
-    const x = Math.random() * S;
-    const y = Math.random() * S;
-    const r = 20 + Math.random() * 70;
-    const rg = g.createRadialGradient(x, y, 0, x, y, r);
-    const dark = Math.random() < 0.5;
-    if (neutral) {
-      rg.addColorStop(0, dark ? 'rgba(55,65,50,0.1)' : 'rgba(255,255,255,0.05)');
-    } else {
-      rg.addColorStop(0, dark ? 'rgba(30,60,25,0.06)' : 'rgba(150,200,120,0.06)');
-    }
-    rg.addColorStop(1, 'rgba(0,0,0,0)');
-    g.fillStyle = rg;
-    g.beginPath();
-    g.arc(x, y, r, 0, Math.PI * 2);
-    g.fill();
-  }
-
+  g.fillStyle = band(STRIPE_HI);
+  g.fillRect(0, 0, S, S / 2);
+  g.fillStyle = band(STRIPE_LO);
+  g.fillRect(0, S / 2, S, S / 2);
+  paintTurfDetail(g, S);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
@@ -361,4 +400,147 @@ export function createTreeKit(scene: THREE.Scene, track: Track): TreeKit {
   };
 
   return { addBroadleaf, addPine };
+}
+
+// --- Water -----------------------------------------------------------------
+// Gentle mottled colour base; the ripple movement + sun glint come from the
+// animated normal map below, so this stays soft. Repeat is baked so the caller
+// only supplies geometry (a flat plane on the range, an organic disc on the
+// course — both map UVs the material can tile over).
+function makeWaterTexture(): THREE.Texture {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 256;
+  const g = c.getContext('2d')!;
+  const grad = g.createLinearGradient(0, 0, 0, c.height);
+  grad.addColorStop(0, '#2183c2');
+  grad.addColorStop(1, '#14608f');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, c.width, c.height);
+  for (let i = 0; i < 90; i++) {
+    const x = Math.random() * c.width;
+    const y = Math.random() * c.height;
+    const r = 8 + Math.random() * 26;
+    const rg = g.createRadialGradient(x, y, 0, x, y, r);
+    const light = Math.random() < 0.6;
+    rg.addColorStop(0, light ? 'rgba(180,220,240,0.10)' : 'rgba(10,40,70,0.10)');
+    rg.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = rg;
+    g.beginPath();
+    g.arc(x, y, r, 0, Math.PI * 2);
+    g.fill();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(6, 26);
+  return tex;
+}
+
+// Tileable ripple normal map: two crossing wave trains baked into a normal
+// field. Scrolling its offset each frame makes the water visibly move, and the
+// low roughness on the material turns the moving normals into a shifting sun
+// glint. Frequencies are integer cycles across the tile so it wraps seamlessly.
+function makeWaterNormalMap(): THREE.Texture {
+  const S = 256;
+  const c = document.createElement('canvas');
+  c.width = S;
+  c.height = S;
+  const g = c.getContext('2d')!;
+  const img = g.createImageData(S, S);
+  const data = img.data;
+  const TAU = Math.PI * 2;
+  const wave = (x: number, y: number) => {
+    const u = (x / S) * TAU;
+    const v = (y / S) * TAU;
+    return (
+      Math.sin(u * 3 + v * 1) * 0.5 +
+      Math.sin(u * 1 - v * 4) * 0.35 +
+      Math.sin((u + v) * 5) * 0.2
+    );
+  };
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const hx = wave(x + 1, y) - wave(x - 1, y);
+      const hy = wave(x, y + 1) - wave(x, y - 1);
+      let nx = -hx * 2.2;
+      let ny = -hy * 2.2;
+      let nz = 1;
+      const inv = 1 / Math.hypot(nx, ny, nz);
+      nx *= inv;
+      ny *= inv;
+      nz *= inv;
+      const idx = (y * S + x) * 4;
+      data[idx] = (nx * 0.5 + 0.5) * 255;
+      data[idx + 1] = (ny * 0.5 + 0.5) * 255;
+      data[idx + 2] = (nz * 0.5 + 0.5) * 255;
+      data[idx + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(5, 12);
+  return tex;
+}
+
+export interface WaterKit {
+  /** Shared animated water material (dual-wave scrolling normal + sun glint). */
+  material: THREE.MeshStandardMaterial;
+  /** Per-frame hook: scroll the colour + normal offsets. Call with elapsed seconds. */
+  update: (t: number) => void;
+}
+
+/**
+ * Shared animated water (promoted from the Range). Bakes the colour + ripple
+ * normal maps, builds the material (sky-blue, low roughness so the moving normal
+ * throws a shifting sun glint, semi-transparent), and returns a per-frame update
+ * hook that scrolls both maps. Both scenes attach `material` to their own water
+ * geometry (Range: a flat plane; Course: a terrain-following organic disc). All
+ * three GPU resources are registered via the passed track() for disposal.
+ */
+export function makeWater(track: Track): WaterKit {
+  const colorMap = track(makeWaterTexture());
+  const normalMap = track(makeWaterNormalMap());
+  const material = track(
+    new THREE.MeshStandardMaterial({
+      map: colorMap,
+      color: 0x2a86c4,
+      roughness: 0.14,
+      metalness: 0.2,
+      normalMap,
+      normalScale: new THREE.Vector2(0.55, 0.55),
+      transparent: true,
+      opacity: 0.9,
+    }),
+  );
+  const update = (t: number) => {
+    colorMap.offset.y = (t * 0.03) % 1;
+    normalMap.offset.x = (t * 0.035) % 1;
+    normalMap.offset.y = (t * 0.06) % 1;
+  };
+  return { material, update };
+}
+
+// --- Ball contact shadow ---------------------------------------------------
+/**
+ * Soft radial-gradient disc texture for the ball's contact shadow — a dark blob
+ * that sits on the ground directly under the ball so it reads as SEATED, not
+ * floating (complements the sun's cast shadow, which the grazing camera can wash
+ * out). Each scene builds its own plane (sized to its BALL_R) and fades/scales it
+ * with the ball's altitude; this only supplies the shared texture.
+ */
+export function makeContactShadowTexture(): THREE.Texture {
+  const S = 64;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = S;
+  const gx = cv.getContext('2d')!;
+  const rg = gx.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  rg.addColorStop(0, 'rgba(0,0,0,0.5)');
+  rg.addColorStop(0.6, 'rgba(0,0,0,0.28)');
+  rg.addColorStop(1, 'rgba(0,0,0,0)');
+  gx.fillStyle = rg;
+  gx.fillRect(0, 0, S, S);
+  return new THREE.CanvasTexture(cv);
 }

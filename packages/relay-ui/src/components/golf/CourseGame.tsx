@@ -7,11 +7,17 @@
 // the main bundle.
 
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
-import type { PointerEvent as ReactPointerEvent } from 'react';
 import { CourseSim, type CourseState } from '../../lib/golf/courseSim';
 import type { GolfCourse } from '../../lib/golf/courses';
 import { api } from '../../lib/api';
 import type { GolfRecords, GolfRecordsImproved } from '../../lib/api';
+import { makeWind } from '../../lib/golf/wind';
+import { WindChip } from './shared/WindChip';
+import { PowerMeter } from './shared/PowerMeter';
+import { SpinPuck } from './shared/SpinPuck';
+import { AccuracyBar } from './shared/AccuracyBar';
+import { ClubSelector } from './shared/ClubSelector';
+import { TelemetryPanel, type ShotTelemetry } from './shared/TelemetryPanel';
 
 // Lazy so `three` (in CourseGL) stays out of the main entry chunk.
 const CourseGL = lazy(() => import('./CourseGL'));
@@ -74,83 +80,6 @@ function RecapRow({ label, value, badge }: { label: string; value: string; badge
   );
 }
 
-function AccuracyBar({ onStop }: { onStop: (e: number) => void }) {
-  const markerRef = useRef<HTMLDivElement | null>(null);
-  const phaseRef = useRef(0);
-  const firedRef = useRef(false);
-  const SWEEP_MS = 950;
-  useEffect(() => {
-    let raf = 0;
-    let last = performance.now();
-    const loop = (now: number) => {
-      const dt = now - last;
-      last = now;
-      let ph = (phaseRef.current + dt / SWEEP_MS) % 2;
-      phaseRef.current = ph;
-      const p = ph < 1 ? ph : 2 - ph;
-      if (markerRef.current) markerRef.current.style.left = `${p * 100}%`;
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, []);
-  const stop = (ev: ReactPointerEvent<HTMLDivElement>) => {
-    ev.preventDefault();
-    ev.stopPropagation();
-    if (firedRef.current) return;
-    firedRef.current = true;
-    const ph = phaseRef.current;
-    const p = ph < 1 ? ph : 2 - ph;
-    onStop((p - 0.5) * 2);
-  };
-  return (
-    <div
-      onPointerDown={stop}
-      style={{
-        position: 'absolute',
-        inset: 0,
-        zIndex: 45,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'flex-end',
-        paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 110px)',
-        touchAction: 'none',
-      }}
-    >
-      <div style={{ width: 'min(78vw, 340px)' }}>
-        <div className="text-[12px] font-bold text-center text-white mb-1 drop-shadow">
-          Tap to strike
-        </div>
-        <div
-          style={{
-            position: 'relative',
-            height: 18,
-            borderRadius: 9,
-            background: 'linear-gradient(90deg,#ef4444,#f59e0b,#22c55e,#f59e0b,#ef4444)',
-            boxShadow: '0 1px 6px rgba(0,0,0,.4)',
-          }}
-        >
-          <div
-            ref={markerRef}
-            style={{
-              position: 'absolute',
-              top: -3,
-              left: '50%',
-              width: 4,
-              height: 24,
-              marginLeft: -2,
-              borderRadius: 2,
-              background: '#fff',
-              boxShadow: '0 0 4px rgba(0,0,0,.6)',
-            }}
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function CourseGame({
   course,
   startHole,
@@ -163,13 +92,42 @@ export default function CourseGame({
   // startHole provided → single-hole play (no round progression / scorecard);
   // omitted → full round starting at hole 1.
   const single = startHole != null;
+
+  // One wind for the whole round (the Range makes one per round too, via the
+  // SAME makeWind). It's applied to every hole so the round plays in a
+  // consistent breeze; "Play round again" re-rolls it. Airborne-only in the sim.
+  const [wind, setWindState] = useState(makeWind);
+  const windRef = useRef(wind);
+  windRef.current = wind;
+
   const simRef = useRef<CourseSim | null>(null);
-  if (!simRef.current) simRef.current = new CourseSim(course.holes[single ? startHole : 0]!);
+  if (!simRef.current) {
+    simRef.current = new CourseSim(course.holes[single ? startHole : 0]!);
+    simRef.current.setWind(wind.along, wind.cross);
+  }
   const sim = simRef.current;
 
   const [armed, setArmed] = useState(false);
   const [st, setSt] = useState<CourseState>(() => sim.getState());
   const [resetKey, setResetKey] = useState(0);
+
+  // Spin (contact point), wired to sim.setSpin like the Range. Persists across
+  // shots within the round.
+  const [spin, setSpin] = useState({ back: 0, side: 0 });
+  const changeSpin = (back: number, side: number) => {
+    sim.setSpin(back, side);
+    setSpin({ back, side });
+  };
+
+  // Telemetry log for the shared debug panel (mirrors RangeGame). We capture a
+  // record when a shot transitions from in-flight to rest; power + tap error at
+  // the instant of firing are snapshotted here since the sim clears power on
+  // launch.
+  const [lastShot, setLastShot] = useState<ShotTelemetry | null>(null);
+  const telemetryRef = useRef<ShotTelemetry[]>([]);
+  const launchPowerRef = useRef(0);
+  const launchAccRef = useRef(0);
+  const wasInFlightRef = useRef(false);
 
   // Round state — all LOCAL to CourseGame (never added to CourseSim). holeIdx is
   // the 0-based index into course.holes; card accumulates one HoleScore per hole
@@ -192,10 +150,41 @@ export default function CourseGame({
   const [recordsState, setRecordsState] = useState<'idle' | 'saving' | 'done' | 'error'>('idle');
   const postedRef = useRef(false);
 
-  // Poll the sim for HUD readouts.
+  // Capture a completed shot into the rolling telemetry log (+ the debug panel).
+  // Called on the in-flight → rest transition detected by the poll below.
+  const recordTelemetry = (s: CourseState) => {
+    const rec: ShotTelemetry = {
+      club: s.clubName,
+      powerPct: Math.round(launchPowerRef.current * 100),
+      aimDeg: Math.round(s.aimDeg * 10) / 10,
+      spinBack: Math.round(s.spinBack * 100) / 100,
+      spinSide: Math.round(s.spinSide * 100) / 100,
+      accuracy: Math.round(launchAccRef.current * 100) / 100,
+      carry: s.carry,
+      total: s.total,
+      apex: s.apex,
+      ballSpeed: s.ballSpeed,
+      lateral: Math.round(sim.ball.x * 10) / 10,
+      result: s.lastResult,
+      ts: Date.now(),
+    };
+    const log = telemetryRef.current;
+    log.push(rec);
+    if (log.length > 30) log.shift();
+    setLastShot(rec);
+  };
+
+  // Poll the sim for HUD readouts, and bank a telemetry record when a shot comes
+  // to rest (mirrors how RangeGame captures last-shot telemetry off its events).
   useEffect(() => {
-    const id = window.setInterval(() => setSt(sim.getState()), 120);
+    const id = window.setInterval(() => {
+      const next = sim.getState();
+      setSt(next);
+      if (wasInFlightRef.current && !next.inFlight) recordTelemetry(next);
+      wasInFlightRef.current = next.inFlight;
+    }, 120);
     return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sim]);
 
   // Seed the Personal bests once on mount from the player's saved records, so the
@@ -271,6 +260,10 @@ export default function CourseGame({
 
   const fire = (e: number) => {
     setArmed(false);
+    // Snapshot the locked power + tap error before fireArmed() clears power, so
+    // the telemetry record (banked when the shot rests) has the launch inputs.
+    launchPowerRef.current = sim.power;
+    launchAccRef.current = e;
     sim.fireArmed(e);
   };
 
@@ -285,9 +278,17 @@ export default function CourseGame({
     setRecordsState('idle');
   };
 
+  // Apply the round's wind + the current spin to a freshly built hole sim, so
+  // every hole plays in the same breeze and the spin puck stays truthful.
+  const applyRoundState = (s: CourseSim) => {
+    s.setWind(windRef.current.along, windRef.current.cross);
+    s.setSpin(spin.back, spin.side);
+  };
+
   // Single-hole mode: replay the same chosen hole (today's "Play again").
   const playAgain = () => {
     simRef.current = new CourseSim(course.holes[single ? startHole : holeIdx]!);
+    applyRoundState(simRef.current);
     setResetKey((k) => k + 1);
     setSt(simRef.current.getState());
     resetHoleBookkeeping();
@@ -297,15 +298,22 @@ export default function CourseGame({
   const nextHole = () => {
     const ni = holeIdx + 1;
     simRef.current = new CourseSim(course.holes[ni]!);
+    applyRoundState(simRef.current);
     setHoleIdx(ni);
     setResetKey((k) => k + 1);
     setSt(simRef.current.getState());
     resetHoleBookkeeping();
   };
 
-  // Full-round: restart the whole round from hole 1 with a fresh scorecard.
+  // Full-round: restart the whole round from hole 1 with a fresh scorecard AND a
+  // freshly rolled round wind.
   const playRoundAgain = () => {
+    const w = makeWind();
+    setWindState(w);
+    windRef.current = w;
     simRef.current = new CourseSim(course.holes[0]!);
+    simRef.current.setWind(w.along, w.cross);
+    simRef.current.setSpin(spin.back, spin.side);
     setHoleIdx(0);
     setCard([]);
     setShowScorecard(false);
@@ -363,13 +371,17 @@ export default function CourseGame({
           pointerEvents: 'none',
         }}
       >
-        <button
-          onClick={onExit}
-          className="rounded-full bg-black/45 px-3 py-1 text-sm font-semibold"
-          style={{ pointerEvents: 'auto' }}
-        >
-          ‹ Back
-        </button>
+        {/* Equal-width flanking slots keep the center hole card truly centered
+            regardless of the WindChip's variable width. */}
+        <div className="flex-1 flex justify-start">
+          <button
+            onClick={onExit}
+            className="rounded-full bg-black/45 px-3 py-1 text-sm font-semibold"
+            style={{ pointerEvents: 'auto' }}
+          >
+            ‹ Back
+          </button>
+        </div>
         <div className="rounded-2xl bg-black/45 px-3 py-1.5 text-center">
           <div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">
             {course.name}
@@ -395,7 +407,10 @@ export default function CourseGame({
             </div>
           )}
         </div>
-        <div className="w-[52px]" />
+        {/* Round wind compass — same chip the Range shows, read from the sim. */}
+        <div className="flex-1 flex justify-end">
+          <WindChip along={st.windAlong} cross={st.windCross} />
+        </div>
       </div>
 
       {/* Club selector + power (bottom) */}
@@ -413,86 +428,52 @@ export default function CourseGame({
             pointerEvents: 'none',
           }}
         >
-          <div className="flex items-center gap-1" style={{ pointerEvents: 'auto' }}>
-            {st.putting ? (
-              // On the green the stroke is a putt — no club choice, so just label it.
-              <div className="rounded-xl bg-black/45 px-3 py-1 text-white text-sm font-bold min-w-[92px] text-center">
-                Putter
-              </div>
-            ) : (
-              <>
-                <button
-                  onClick={() => club(-1)}
-                  className="rounded-full bg-black/45 text-white w-8 h-8 text-lg font-bold"
-                >
-                  ‹
-                </button>
-                <div className="rounded-xl bg-black/45 px-3 py-1 text-white text-sm font-bold min-w-[92px] text-center">
-                  {st.clubName}
-                </div>
-                <button
-                  onClick={() => club(1)}
-                  className="rounded-full bg-black/45 text-white w-8 h-8 text-lg font-bold"
-                >
-                  ›
-                </button>
-              </>
-            )}
-          </div>
-          <div className="rounded-xl bg-black/45 px-3 py-1 text-white text-xs">
+          <ClubSelector
+            variant="cycle"
+            clubName={st.clubName}
+            putting={st.putting}
+            onCycle={club}
+          />
+          <div
+            className="text-xs"
+            style={{
+              pointerEvents: 'auto',
+              background: 'var(--card-bg)',
+              border: '1px solid var(--separator)',
+              borderRadius: 12,
+              padding: '6px 12px',
+              color: 'var(--text)',
+              fontWeight: 700,
+              boxShadow: '0 2px 8px rgba(0,0,0,0.14)',
+            }}
+          >
             {st.aiming || st.armed ? `${Math.round(st.power * 100)}%` : 'Drag to aim'}
           </div>
         </div>
       )}
 
-      {/* Vertical power meter (fills as you pull back), like the range. */}
-      {(st.aiming || st.armed) && !st.holed && (
+      {/* Vertical power meter (fills as you pull back), shared with the range. */}
+      <PowerMeter power={st.power} visible={(st.aiming || st.armed) && !st.holed} />
+
+      {/* Spin selector, bottom-left (mirrors the range). Hidden once holed. */}
+      {!st.holed && (
         <div
           style={{
             position: 'absolute',
-            left: 14,
-            top: '50%',
-            transform: 'translateY(-50%)',
+            left: 'calc(env(safe-area-inset-left, 0px) + 12px)',
+            bottom: 'calc(env(safe-area-inset-bottom, 0px) + 72px)',
             zIndex: 42,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: 6,
             pointerEvents: 'none',
           }}
         >
-          <div
-            style={{
-              width: 16,
-              height: 190,
-              borderRadius: 10,
-              background: 'rgba(0,0,0,.4)',
-              border: '1px solid rgba(255,255,255,.35)',
-              overflow: 'hidden',
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'flex-end',
-            }}
-          >
-            <div
-              style={{
-                width: '100%',
-                height: `${Math.round(st.power * 100)}%`,
-                background:
-                  st.power > 0.9
-                    ? 'linear-gradient(#fca5a5,#ef4444)'
-                    : 'linear-gradient(#bbf7d0,#22c55e)',
-                transition: 'height 40ms linear',
-              }}
-            />
-          </div>
-          <div className="text-white text-[11px] font-bold drop-shadow">
-            {Math.round(st.power * 100)}%
-          </div>
+          <SpinPuck value={spin} onChange={changeSpin} />
         </div>
       )}
 
-      {armed && !st.holed && <AccuracyBar onStop={fire} />}
+      {/* Telemetry debug panel + copy export, shared with the range. */}
+      <TelemetryPanel lastShot={lastShot} log={telemetryRef.current} />
+
+      {armed && !st.holed && <AccuracyBar onStop={fire} label="Tap to strike" />}
 
       {/* Hole-out banner */}
       {st.holed && !showScorecard && (
