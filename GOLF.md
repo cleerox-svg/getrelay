@@ -296,6 +296,22 @@ Gameplay clean first, then the look, then the course — each step reuses the la
    surfaces keep the tuned run-out so the club ladder is unchanged.
    **⚠ GREEN DESIGN GUARD:** a resting putt can only hold where slope ≲ μ (~6.1%
    at stimp 10) — keep future green tilt under that, or raise stimp/μ in lockstep.
+   **→ Also done — ONE static-friction rest rule (fixes "ball rolls slowly forever
+   on a hill"):** a slow ball on a slope used to sit on the KINETIC angle-of-repose
+   contour (where `slopeAccel == frictionFor(surf)`) and creep downhill forever,
+   re-accelerated each grounded substep, because the rest gate compared the slope
+   against the KINETIC hold (so a slope a hair steeper never let it settle — only
+   the 100000-step safety guard, ~833 s, ever stopped it). `courseSim.substep` now
+   rests on EVERY grounded surface (green/fringe/fairway/rough/bunker/tee/cartpath)
+   by ONE rule: `speed ≤ restSpeed(surf) AND |slopeAccel| ≤ staticHold(surf)`. The
+   hold is STATIC friction — `frictionFor(surf)·STATIC_HOLD_FACTOR` (1.3) off the
+   green — so a ball rolls to the kinetic-repose contour and STATIC friction then
+   HOLDS it (rest is set, play advances); only a genuinely steep slope (slopeAccel
+   above the static hold) keeps rolling. On the green/fringe the static hold IS the
+   Stimpmeter μ·g (`greenDecel`, static == kinetic BY the green design guard above),
+   so the putt-rest and the fairway/rough-rest are now the SAME rule — break/holing
+   unchanged. All module consts (no new mutable `CourseSim` field → snapshot guard
+   untouched); tuned/proved against the vitest harness (`courseSim.test.ts`).
    **→ Also done — course/green OVERHAUL (3 phases; the earlier bold slope-read
    overlay was REMOVED):**
    • **Phase 1 — scalable surface model (`terrain.ts`).** A hole is now fully

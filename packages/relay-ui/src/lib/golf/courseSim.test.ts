@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { CourseSim } from './courseSim';
-import { HOLE_1, type CourseHole } from './terrain';
+import { HOLE_1, surfaceAt, type CourseHole } from './terrain';
 import { CLUBS } from './clubs';
 import { GRAVITY } from './rangeSim';
 import { BALL_R, CUP_R, greenRollDecel, rollOutDistance } from './greenPhysics';
@@ -27,6 +27,47 @@ const FLAT: CourseHole = {
   hazards: [],
   terrain: { seed: 1, hilliness: 0, hillScale: 40, teeElev: 5, greenElev: 5 },
 };
+
+// A hole with a UNIFORM planar grade and no hills/hazards/green tilt — a clean
+// controlled slope for the static-friction rest tests. The tee→green elevation
+// ramp is linear over the centerline span, so ∂h/∂d = gradient everywhere (the
+// green pad is flattened but irrelevant off it). downhill is toward −d.
+function gradedHole(gradient: number): CourseHole {
+  const span = 512;
+  return {
+    ...HOLE_1,
+    hazards: [],
+    green: { ...HOLE_1.green, raise: 0, tiltPct: 0, undulation: 0 },
+    terrain: { seed: 1, hilliness: 0, hillScale: 40, teeElev: 0, greenElev: gradient * span },
+  };
+}
+
+// Roll a grounded ball from a lie with an initial ground velocity and integrate
+// to rest (or a step cap). The direct-injection analogue of simulatePutt for
+// off-green lies, used to exercise the grounded-roll rest rule.
+function rollGrounded(
+  hole: CourseHole,
+  start: { d: number; x: number },
+  vel: { vd: number; vx: number },
+  maxSteps = 100002,
+) {
+  const s = new CourseSim(hole);
+  const b = s.ball;
+  b.d = start.d;
+  b.x = start.x;
+  b.h = 0;
+  b.vd = vel.vd;
+  b.vx = vel.vx;
+  b.inFlight = true;
+  b.grounded = true;
+  b.resting = false;
+  let steps = 0;
+  while (b.inFlight && steps < maxSteps) {
+    s.substep(1 / 120);
+    steps++;
+  }
+  return { steps, ball: b, result: s.getState().lastResult };
+}
 
 const pad = (s: string | number, n: number) => String(s).padStart(n);
 
@@ -215,6 +256,60 @@ describe('course sim — green speed (Stimpmeter roll-out)', () => {
       const predicted = rollOutDistance(v, a);
       expect(Math.abs(m.total - predicted)).toBeLessThan(0.6);
     }
+  });
+});
+
+// --- Static-friction rest on grounded slopes (the "rolls slowly forever" fix) -
+// A ball on a slope in the rough/fairway must come to a DEFINITE stop where the
+// slope is gentle enough that STATIC friction holds it — it must not creep
+// downhill forever re-accelerated by slopeAccel each substep. This is ONE rest
+// rule for every grounded surface: slow AND slope ≤ the surface's static hold →
+// rest. Only a genuinely STEEP slope (slopeAccel > static hold) keeps it rolling.
+describe('course sim — static-friction rest on grounded slopes', () => {
+  it('a ball rolling on a MODEST fairway slope comes to REST (velocity → 0)', () => {
+    // grad 0.15 → slopeAccel 2.4 yd/s², well under the fairway static hold, so
+    // friction wins: the ball rolls a bounded distance and STOPS (does not creep).
+    const r = rollGrounded(gradedHole(0.15), { d: 200, x: 0 }, { vd: -6, vx: 0 });
+    expect(r.ball.resting).toBe(true);
+    expect(Math.hypot(r.ball.vd, r.ball.vx)).toBe(0);
+    expect(r.result).toBe('fairway');
+    // It settled promptly and travelled a bounded distance — NOT indefinitely.
+    expect(r.steps).toBeLessThan(2000); // ≪ the 100000-step safety guard
+    expect(Math.abs(200 - r.ball.d)).toBeLessThan(30);
+  });
+
+  it('a ball rolling on a MODEST rough slope comes to REST', () => {
+    // grad 0.20 in the rough band (x=30): slopeAccel 3.2 < rough static hold.
+    const r = rollGrounded(gradedHole(0.2), { d: 200, x: 30 }, { vd: -4, vx: 0 });
+    expect(surfaceAt(HOLE_1, 200, 30)).toBe('rough');
+    expect(r.ball.resting).toBe(true);
+    expect(Math.hypot(r.ball.vd, r.ball.vx)).toBe(0);
+    expect(r.result).toBe('rough');
+    expect(r.steps).toBeLessThan(2000);
+  });
+
+  it('a ball on a STEEP slope keeps rolling downhill (NOT falsely frozen)', () => {
+    // grad 0.7 → slopeAccel 11.2 yd/s², above the rough static hold, so the slope
+    // overcomes static friction: a ball released from rest starts moving and
+    // travels a meaningful distance downhill within a short window (it is not
+    // snapped to rest). downhill is −d.
+    const r = rollGrounded(gradedHole(0.7), { d: 200, x: 30 }, { vd: 0, vx: 0 }, 1200);
+    expect(r.ball.resting).toBe(false); // still rolling after 10 s
+    expect(200 - r.ball.d).toBeGreaterThan(5); // travelled well downhill, not frozen
+  });
+
+  it('the reported bug: a ball on the HOLE_1 green bank rough STOPS (no perpetual creep)', () => {
+    // The rough bank around the raised green is a "legit hill" where a nearly
+    // stopped ball used to sit exactly on the KINETIC angle-of-repose contour and
+    // creep forever (only the 100000-step safety guard ever stopped it, ~833 s of
+    // sim). It must now settle quickly, held by static friction, with resting set.
+    const start = { d: 514.1, x: -5.9 };
+    expect(surfaceAt(HOLE_1, start.d, start.x)).toBe('rough');
+    const r = rollGrounded(HOLE_1, start, { vd: 0.5, vx: 0.5 });
+    expect(r.ball.resting).toBe(true);
+    expect(Math.hypot(r.ball.vd, r.ball.vx)).toBe(0);
+    expect(r.steps).toBeLessThan(1000); // definite stop, nowhere near the guard
+    expect(r.result).toBe('rough');
   });
 });
 
