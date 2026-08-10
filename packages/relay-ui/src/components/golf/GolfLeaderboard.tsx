@@ -6,10 +6,16 @@ import type { GameLeaderboardEntry } from '../../lib/types';
 interface Props {
   // Bump to force a refetch (e.g. after a score submit succeeds).
   refreshKey?: number;
-  // Which board to show: putting ('golf') or the driving range
-  // ('golfrange'). Defaults to putting so Phase-1 call sites are unchanged.
-  game?: 'golf' | 'golfrange';
+  // Which board to show: putting ('golf'), the driving range ('golfrange')
+  // or full-round course play ('golfcourse'). Defaults to putting so Phase-1
+  // call sites are unchanged.
+  game?: 'golf' | 'golfrange' | 'golfcourse';
 }
+
+// Self-contained medal colours for the top three so the accent works both
+// inside the .golf-hub layer AND on the standalone results screens (which
+// aren't wrapped in .golf-hub). gold / silver / bronze.
+const MEDALS = ['#C9A227', '#9AA0A6', '#B0763A'];
 
 // Weekly / all-time Golf leaderboard. Rows come pre-ranked from the
 // worker; the caller's own row arrives flagged `mine`. Clone of
@@ -107,7 +113,7 @@ export function GolfLeaderboard({ refreshKey = 0, game = 'golf' }: Props) {
             >
               <span
                 className="w-6 text-center text-sm font-bold tabular-nums shrink-0"
-                style={{ color: i < 3 ? 'var(--accent)' : 'var(--text-dim)' }}
+                style={{ color: i < 3 ? MEDALS[i] : 'var(--text-dim)' }}
               >
                 {i + 1}
               </span>

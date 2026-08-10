@@ -58,6 +58,8 @@ const DDL = [
      score INTEGER NOT NULL,
      rounds INTEGER NOT NULL,
      best_streak INTEGER NOT NULL DEFAULT 0,
+     course TEXT,
+     to_par INTEGER,
      created_at INTEGER NOT NULL
    )`,
   `CREATE TABLE IF NOT EXISTS golf_records (
@@ -178,6 +180,30 @@ function getGolfRecords(cookie: string): Promise<Response> {
   return request('/game/golf-records', { headers: { Cookie: cookie } });
 }
 
+function getGolfStats(cookie: string | null, game: string): Promise<Response> {
+  const headers: Record<string, string> = {};
+  if (cookie) headers['Cookie'] = cookie;
+  return request(`/game/golf-stats?game=${game}`, { headers });
+}
+
+// Insert a golf run with an explicit course (may be null) and to_par (may be
+// null). Mirrors insertScoreGame but exercises the new columns directly.
+async function insertGolf(
+  userId: string,
+  game: string,
+  score: number,
+  course: string | null,
+  toPar: number | null,
+  createdAt: number,
+): Promise<void> {
+  await testEnv.DB.prepare(
+    `INSERT INTO game_scores (id, user_id, game, score, rounds, best_streak, course, to_par, created_at)
+     VALUES (?, ?, ?, ?, 5, 2, ?, ?, ?)`,
+  )
+    .bind(crypto.randomUUID(), userId, game, score, course, toPar, createdAt)
+    .run();
+}
+
 beforeAll(seed);
 
 describe('POST /game/score', () => {
@@ -263,6 +289,256 @@ describe('POST /game/score', () => {
       .bind(USERS.A.id)
       .first<{ game: string }>();
     expect(row?.game).toBe('fog');
+  });
+
+  it('persists course (trimmed) and a negative to_par when supplied', async () => {
+    const res = await postScore(cookies.A, {
+      score: 900,
+      rounds: 4,
+      bestStreak: 2,
+      game: 'golf',
+      course: '  Pebble Beach  ',
+      toPar: -3,
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, best: 900 });
+
+    const row = await testEnv.DB.prepare(
+      `SELECT course, to_par AS toPar FROM game_scores
+        WHERE user_id = ? AND game = 'golf' ORDER BY created_at DESC LIMIT 1`,
+    )
+      .bind(USERS.A.id)
+      .first<{ course: string | null; toPar: number | null }>();
+    expect(row).toEqual({ course: 'Pebble Beach', toPar: -3 });
+  });
+
+  it('stores null course/to_par when absent, never a 400', async () => {
+    const res = await postScore(cookies.A, {
+      score: 500,
+      rounds: 3,
+      bestStreak: 1,
+      game: 'golf',
+    });
+    expect(res.status).toBe(200);
+    const row = await testEnv.DB.prepare(
+      `SELECT course, to_par AS toPar FROM game_scores
+        WHERE user_id = ? AND game = 'golf' ORDER BY created_at DESC LIMIT 1`,
+    )
+      .bind(USERS.A.id)
+      .first<{ course: string | null; toPar: number | null }>();
+    expect(row).toEqual({ course: null, toPar: null });
+  });
+
+  it('coerces a bogus course to null without failing the request', async () => {
+    const res = await postScore(cookies.A, {
+      score: 400,
+      rounds: 3,
+      bestStreak: 1,
+      game: 'golf',
+      course: 12345, // not a string
+    });
+    expect(res.status).toBe(200);
+    const row = await testEnv.DB.prepare(
+      `SELECT course FROM game_scores
+        WHERE user_id = ? AND game = 'golf' ORDER BY created_at DESC LIMIT 1`,
+    )
+      .bind(USERS.A.id)
+      .first<{ course: string | null }>();
+    expect(row?.course).toBeNull();
+  });
+
+  it('rejects a present-but-invalid to_par with invalid_score', async () => {
+    const bad = [
+      { score: 400, rounds: 3, bestStreak: 1, game: 'golf', toPar: 2.5 }, // non-integer
+      { score: 400, rounds: 3, bestStreak: 1, game: 'golf', toPar: 9999 }, // past clamp
+    ];
+    for (const body of bad) {
+      const res = await postScore(cookies.A, body);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid_score' });
+    }
+  });
+
+  it('golfcourse: derives score from toPar, ignoring any client score', async () => {
+    // 18-hole round at −5; client-sent score is bogus and must be ignored.
+    const res = await postScore(cookies.A, {
+      score: 999999,
+      rounds: 18,
+      bestStreak: 4,
+      game: 'golfcourse',
+      course: 'St Andrews',
+      toPar: -5,
+    });
+    expect(res.status).toBe(200);
+    // score = max(0, round(1000 - (-5)*10)) = 1050.
+    expect(await res.json()).toEqual({ ok: true, best: 1050 });
+
+    const row = await testEnv.DB.prepare(
+      `SELECT score, rounds, course, to_par AS toPar FROM game_scores
+        WHERE user_id = ? AND game = 'golfcourse' ORDER BY created_at DESC LIMIT 1`,
+    )
+      .bind(USERS.A.id)
+      .first<{ score: number; rounds: number; course: string | null; toPar: number | null }>();
+    expect(row).toEqual({ score: 1050, rounds: 18, course: 'St Andrews', toPar: -5 });
+  });
+
+  it('golfcourse: allows rounds up to 18 but still rejects 19', async () => {
+    const ok = await postScore(cookies.A, {
+      rounds: 18,
+      bestStreak: 0,
+      game: 'golfcourse',
+      toPar: 0,
+    });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ ok: true, best: 1000 }); // scratch = 1000
+
+    const tooMany = await postScore(cookies.A, {
+      rounds: 19,
+      bestStreak: 0,
+      game: 'golfcourse',
+      toPar: 0,
+    });
+    expect(tooMany.status).toBe(400);
+    expect(await tooMany.json()).toEqual({ error: 'invalid_score' });
+  });
+
+  it('golfcourse: requires toPar to be present', async () => {
+    const res = await postScore(cookies.A, {
+      rounds: 18,
+      bestStreak: 0,
+      game: 'golfcourse',
+      course: 'Torrey Pines',
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_score' });
+  });
+
+  it('non-golfcourse games still cap rounds at MAX_ROUNDS', async () => {
+    const res = await postScore(cookies.A, {
+      score: 100,
+      rounds: MAX_ROUNDS + 1,
+      bestStreak: 0,
+      game: 'golf',
+      toPar: 1,
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_score' });
+  });
+});
+
+describe('GET /game/golf-stats', () => {
+  it('requires a session cookie', async () => {
+    const res = await getGolfStats(null, 'golf');
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: 'unauthorized' });
+  });
+
+  it('returns an empty profile before any golf run', async () => {
+    const res = await getGolfStats(cookies.C, 'golf');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      game: 'golf',
+      gamesPlayed: 0,
+      best: null,
+      average: null,
+      bestStreak: null,
+      lastPlayed: null,
+      handicap: null,
+      perCourse: [],
+      recent: [],
+    });
+  });
+
+  it('aggregates the callers own golf runs, bucketing a null course', async () => {
+    const now = Date.now();
+    // Two runs at Augusta (with to_par), one uncategorized (null course, no
+    // to_par). A contact's run must NOT leak into the caller's profile.
+    await insertGolf(USERS.A.id, 'golf', 800, 'Augusta', -2, now - 3000);
+    await insertGolf(USERS.A.id, 'golf', 1200, 'Augusta', 4, now - 2000);
+    await insertGolf(USERS.A.id, 'golf', 600, null, null, now - 1000);
+    await insertGolf(USERS.B.id, 'golf', 5000, 'Augusta', -10, now); // contact — excluded
+
+    const res = await getGolfStats(cookies.A, 'golf');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      game: string;
+      gamesPlayed: number;
+      best: number | null;
+      average: number | null;
+      lastPlayed: number | null;
+      handicap: number | null;
+      perCourse: {
+        course: string | null;
+        games: number;
+        bestScore: number;
+        avgScore: number;
+        bestToPar: number | null;
+        avgToPar: number | null;
+      }[];
+      recent: { course: string | null; score: number; toPar: number | null }[];
+    };
+
+    expect(body.gamesPlayed).toBe(3);
+    expect(body.best).toBe(1200);
+    expect(body.average).toBeCloseTo(866.7, 1);
+    expect(body.lastPlayed).toBe(now - 1000);
+    // Handicap = avg to_par over scored rounds: (-2 + 4) / 2 = 1.
+    expect(body.handicap).toBe(1);
+
+    // perCourse ordered by games DESC: Augusta (2) then the null bucket (1).
+    expect(body.perCourse).toHaveLength(2);
+    const [augusta, uncategorized] = body.perCourse as [
+      (typeof body.perCourse)[number],
+      (typeof body.perCourse)[number],
+    ];
+    expect(augusta).toMatchObject({
+      course: 'Augusta',
+      games: 2,
+      bestScore: 1200,
+      bestToPar: -2, // MIN(to_par): lower is better
+    });
+    expect(augusta.avgToPar).toBeCloseTo(1, 1);
+    expect(uncategorized).toMatchObject({
+      course: null,
+      games: 1,
+      bestScore: 600,
+      bestToPar: null, // no to_par rows in this bucket
+      avgToPar: null,
+    });
+
+    // recent is newest-first and includes the null-course/null-toPar run.
+    expect(body.recent.map((r) => r.course)).toEqual([null, 'Augusta', 'Augusta']);
+    expect(body.recent[0]).toMatchObject({ course: null, score: 600, toPar: null });
+  });
+
+  it('surfaces golfcourse rounds (derived score) in the golfcourse profile', async () => {
+    const post = await postScore(cookies.A, {
+      rounds: 18,
+      bestStreak: 3,
+      game: 'golfcourse',
+      course: 'St Andrews',
+      toPar: -4, // -> score 1040
+    });
+    expect(post.status).toBe(200);
+
+    const res = await getGolfStats(cookies.A, 'golfcourse');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      game: string;
+      gamesPlayed: number;
+      best: number | null;
+      perCourse: { course: string | null; games: number; bestScore: number; bestToPar: number | null }[];
+    };
+    expect(body.game).toBe('golfcourse');
+    expect(body.gamesPlayed).toBe(1);
+    expect(body.best).toBe(1040);
+    expect(body.perCourse).toHaveLength(1);
+    expect(body.perCourse[0]).toMatchObject({
+      course: 'St Andrews',
+      games: 1,
+      bestScore: 1040,
+      bestToPar: -4,
+    });
   });
 });
 

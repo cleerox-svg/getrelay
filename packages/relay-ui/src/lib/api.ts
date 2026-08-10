@@ -4,6 +4,7 @@ import type {
   ContactStatus,
   FeedEvent,
   GameLeaderboardEntry,
+  GolfStats,
   GroupMember,
   Me,
   SportsGame,
@@ -284,7 +285,12 @@ export const api = {
     score: number;
     rounds: number;
     bestStreak: number;
-    game?: 'fog' | 'tune' | 'golf' | 'golfrange';
+    game?: 'fog' | 'tune' | 'golf' | 'golfrange' | 'golfcourse';
+    // Golf-only, both optional: the course played and the run's to-par
+    // (negative = under par). The server stores them as cosmetic metadata;
+    // a bad course is dropped silently, a bad toPar is a 400.
+    course?: string;
+    toPar?: number;
   }) =>
     request<{ ok: true; best: number }>('/game/score', {
       method: 'POST',
@@ -292,11 +298,15 @@ export const api = {
     }),
   getGameLeaderboard: (
     period: 'weekly' | 'all',
-    game: 'fog' | 'tune' | 'golf' | 'golfrange' = 'fog',
+    game: 'fog' | 'tune' | 'golf' | 'golfrange' | 'golfcourse' = 'fog',
   ) =>
     request<{ entries: GameLeaderboardEntry[] }>(
       `/game/leaderboard?period=${period}&game=${game}`,
     ),
+  // The caller's personal golf profile — aggregate stats, per-course
+  // breakdowns and recent rounds. Not contact-scoped (401 if unauthed).
+  getGolfStats: (game: 'golf' | 'golfrange' | 'golfcourse') =>
+    request<GolfStats>(`/game/golf-stats?game=${game}`),
   // Golf personal best-shot records (longest drive, closest-to-pin, longest
   // holed putt), persisted per-account. GET returns the caller's current bests
   // (401 if unauthed — callers must tolerate that and skip the records UI).

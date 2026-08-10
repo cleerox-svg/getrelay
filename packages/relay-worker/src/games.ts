@@ -13,8 +13,12 @@ export const MAX_POINTS_PER_ROUND = 2000;
 // Games that share the game_scores table (and its leaderboard). The
 // column defaults to 'fog', so an omitted/unknown value maps back to fog
 // and every existing client keeps working.
-export const GAME_IDS = ['fog', 'tune', 'golf', 'golfrange'] as const;
+export const GAME_IDS = ['fog', 'tune', 'golf', 'golfrange', 'golfcourse'] as const;
 export type GameId = (typeof GAME_IDS)[number];
+
+// The full 3D Course mode plays up to 18 holes, so its runs need a higher
+// rounds ceiling than the arcade mini games (MAX_ROUNDS = 8).
+export const MAX_COURSE_ROUNDS = 18;
 
 // Sanity clamps for golf best-shot records (see /game/golf-records). Like
 // the Fog score clamps above, these only reject values that couldn't come
@@ -28,6 +32,13 @@ export const MAX_PUTT_YARDS = 200;
 export const MAX_CLOSEST_YARDS = 1000;
 // A hole number, when supplied, has to be a small positive integer.
 export const MAX_HOLE = 999;
+
+// Course name is cosmetic metadata on a golf run; keep it short.
+export const MAX_COURSE_LEN = 64;
+// Sane bound for a per-run to-par figure (negative = under par). A full
+// round can't realistically stray beyond this, so anything past it is a
+// bug or tampering.
+export const MAX_TO_PAR = 200;
 
 function normalizeGame(v: unknown): GameId {
   return typeof v === 'string' && (GAME_IDS as readonly string[]).includes(v)
@@ -130,32 +141,99 @@ export function gamesRoutes() {
     if (!me) return c.json({ error: 'unauthorized' }, 401);
 
     const body = await c.req
-      .json<{ score?: unknown; rounds?: unknown; bestStreak?: unknown; game?: unknown }>()
+      .json<{
+        score?: unknown;
+        rounds?: unknown;
+        bestStreak?: unknown;
+        game?: unknown;
+        course?: unknown;
+        toPar?: unknown;
+      }>()
       .catch(() => null);
-    const score = body?.score;
     const rounds = body?.rounds;
     const bestStreak = body?.bestStreak;
     const game = normalizeGame(body?.game);
 
-    // Clamps: rounds 1..MAX_ROUNDS, score 0..rounds*MAX_POINTS_PER_ROUND,
-    // bestStreak 0..rounds (you can't streak more rounds than you played).
-    const valid =
-      Number.isInteger(score) &&
+    // The full 3D Course mode plays up to 18 holes; the arcade mini games
+    // stay capped at MAX_ROUNDS (8).
+    const maxRounds = game === 'golfcourse' ? MAX_COURSE_ROUNDS : MAX_ROUNDS;
+
+    // rounds + bestStreak are validated the same for every game: rounds
+    // 1..maxRounds, bestStreak 0..rounds (you can't streak more rounds than
+    // you played).
+    const roundsAndStreakValid =
       Number.isInteger(rounds) &&
       Number.isInteger(bestStreak) &&
       (rounds as number) >= 1 &&
-      (rounds as number) <= MAX_ROUNDS &&
-      (score as number) >= 0 &&
-      (score as number) <= (rounds as number) * MAX_POINTS_PER_ROUND &&
+      (rounds as number) <= maxRounds &&
       (bestStreak as number) >= 0 &&
       (bestStreak as number) <= (rounds as number);
-    if (!valid) return c.json({ error: 'invalid_score' }, 400);
+    if (!roundsAndStreakValid) return c.json({ error: 'invalid_score' }, 400);
+
+    // toPar is optional for the mini games but, when supplied, is held to the
+    // same strictness as the score clamps: an integer within
+    // [-MAX_TO_PAR, MAX_TO_PAR]. Absent -> null; present-but-invalid -> 400.
+    let toPar: number | null = null;
+    if (body?.toPar !== undefined && body?.toPar !== null) {
+      if (
+        !Number.isInteger(body.toPar) ||
+        (body.toPar as number) < -MAX_TO_PAR ||
+        (body.toPar as number) > MAX_TO_PAR
+      ) {
+        return c.json({ error: 'invalid_score' }, 400);
+      }
+      toPar = body.toPar as number;
+    }
+
+    // Score: for arcade games the client sends it and we clamp
+    // 0..rounds*MAX_POINTS_PER_ROUND. For golfcourse the client score is
+    // meaningless (a full round is scored by strokes), so we IGNORE it and
+    // derive a leaderboard-friendly points value from to-par instead:
+    //   score = max(0, round(1000 - toPar*10))
+    // scratch (0) = 1000, each shot under par adds 10 (−5 => 1050), each shot
+    // over subtracts 10 (+5 => 950). Higher is better, always ≥ 0, and
+    // monotonic in to-par so the existing MAX(score) leaderboard/best logic
+    // ranks rounds correctly. golfcourse therefore REQUIRES a valid toPar.
+    let score: number;
+    if (game === 'golfcourse') {
+      if (toPar === null) return c.json({ error: 'invalid_score' }, 400);
+      score = Math.max(0, Math.round(1000 - toPar * 10));
+    } else {
+      const raw = body?.score;
+      if (
+        !Number.isInteger(raw) ||
+        (raw as number) < 0 ||
+        (raw as number) > (rounds as number) * MAX_POINTS_PER_ROUND
+      ) {
+        return c.json({ error: 'invalid_score' }, 400);
+      }
+      score = raw as number;
+    }
+
+    // course is cosmetic: a bad value is silently coerced to null, never a
+    // 400. Trim and cap the length; anything not a usable string is dropped.
+    // (golfcourse rounds should carry one, but we stay null-tolerant.)
+    let course: string | null = null;
+    if (typeof body?.course === 'string') {
+      const trimmed = body.course.trim();
+      if (trimmed.length > 0 && trimmed.length <= MAX_COURSE_LEN) course = trimmed;
+    }
 
     await c.env.DB.prepare(
-      `INSERT INTO game_scores (id, user_id, game, score, rounds, best_streak, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO game_scores (id, user_id, game, score, rounds, best_streak, course, to_par, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-      .bind(crypto.randomUUID(), me.id, game, score, rounds, bestStreak, Date.now())
+      .bind(
+        crypto.randomUUID(),
+        me.id,
+        game,
+        score,
+        rounds,
+        bestStreak,
+        course,
+        toPar,
+        Date.now(),
+      )
       .run();
 
     const row = await c.env.DB.prepare(
@@ -215,6 +293,118 @@ export function gamesRoutes() {
       mine: r.id === me.id,
     }));
     return c.json({ entries });
+  });
+
+  // GET /game/golf-stats?game=golf|golfrange — the caller's PERSONAL golf
+  // profile: aggregate stats over their own runs plus per-course breakdowns
+  // and a recent-rounds list. Unlike /game/leaderboard this is not
+  // contact-scoped — every query is filtered to `user_id = me AND game = ?`,
+  // so it never leaks anyone else's play. `game` defaults to fog via
+  // normalizeGame, but the golf ids are the intended callers.
+  app.get('/game/golf-stats', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const game = normalizeGame(c.req.query('game'));
+
+    // Overall aggregates in one pass.
+    const summary = await c.env.DB.prepare(
+      `SELECT COUNT(*) AS gamesPlayed,
+              MAX(score) AS best,
+              ROUND(AVG(score), 1) AS average,
+              MAX(best_streak) AS bestStreak,
+              MAX(created_at) AS lastPlayed
+         FROM game_scores WHERE user_id = ? AND game = ?`,
+    )
+      .bind(me.id, game)
+      .first<{
+        gamesPlayed: number;
+        best: number | null;
+        average: number | null;
+        bestStreak: number | null;
+        lastPlayed: number | null;
+      }>();
+
+    // Per-course breakdown. A null course is its own valid bucket
+    // (mini-golf / uncategorized), so we GROUP BY course including null. The
+    // to_par aggregates are naturally computed only over non-null to_par rows
+    // (SQLite MIN/AVG skip NULLs), yielding null when a course has no to_par.
+    const perCourseRows = await c.env.DB.prepare(
+      `SELECT course,
+              COUNT(*) AS games,
+              MAX(score) AS bestScore,
+              ROUND(AVG(score), 1) AS avgScore,
+              MIN(to_par) AS bestToPar,
+              ROUND(AVG(to_par), 1) AS avgToPar
+         FROM game_scores WHERE user_id = ? AND game = ?
+        GROUP BY course
+        ORDER BY games DESC`,
+    )
+      .bind(me.id, game)
+      .all<{
+        course: string | null;
+        games: number;
+        bestScore: number;
+        avgScore: number;
+        bestToPar: number | null;
+        avgToPar: number | null;
+      }>();
+
+    // Most recent rounds, newest first.
+    const recentRows = await c.env.DB.prepare(
+      `SELECT course, score, rounds, to_par AS toPar, created_at AS createdAt
+         FROM game_scores WHERE user_id = ? AND game = ?
+        ORDER BY created_at DESC
+        LIMIT 10`,
+    )
+      .bind(me.id, game)
+      .all<{
+        course: string | null;
+        score: number;
+        rounds: number;
+        toPar: number | null;
+        createdAt: number;
+      }>();
+
+    // Handicap: an APPROXIMATION, not an official golf handicap. We simply
+    // average the to_par of the caller's most recent up-to-20 rounds that
+    // recorded a to_par. Lower (more under par) is better; null when there
+    // are no scored-to-par rounds yet.
+    const handicapRow = await c.env.DB.prepare(
+      `SELECT ROUND(AVG(to_par), 1) AS handicap FROM (
+         SELECT to_par FROM game_scores
+          WHERE user_id = ? AND game = ? AND to_par IS NOT NULL
+          ORDER BY created_at DESC
+          LIMIT 20
+       )`,
+    )
+      .bind(me.id, game)
+      .first<{ handicap: number | null }>();
+
+    return c.json({
+      game,
+      gamesPlayed: summary?.gamesPlayed ?? 0,
+      best: summary?.best ?? null,
+      average: summary?.average ?? null,
+      bestStreak: summary?.bestStreak ?? null,
+      lastPlayed: summary?.lastPlayed ?? null,
+      handicap: handicapRow?.handicap ?? null,
+      perCourse: (perCourseRows.results ?? []).map((r) => ({
+        course: r.course ?? null,
+        games: r.games,
+        bestScore: r.bestScore,
+        avgScore: r.avgScore,
+        bestToPar: r.bestToPar ?? null,
+        avgToPar: r.avgToPar ?? null,
+      })),
+      recent: (recentRows.results ?? []).map((r) => ({
+        course: r.course ?? null,
+        score: r.score,
+        rounds: r.rounds,
+        toPar: r.toPar ?? null,
+        createdAt: r.createdAt,
+      })),
+    });
   });
 
   // GET /game/golf-records — the caller's personal best-shot records, shaped

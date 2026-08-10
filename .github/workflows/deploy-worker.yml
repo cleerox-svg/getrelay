@@ -194,6 +194,30 @@ jobs:
             echo "users.status_updated_at column already present"
           fi
 
+          # Games/golf redesign: nullable columns on game_scores. course
+          # names the course/track a round was played on; to_par records the
+          # score relative to par. Both nullable so existing rows need no
+          # backfill.
+          probe=$(pnpm exec wrangler d1 execute relay-db --remote --json \
+            --command "SELECT name FROM pragma_table_info('game_scores') WHERE name='course';")
+          if ! echo "$probe" | jq -e '.[0].results | length > 0' > /dev/null; then
+            echo "Adding game_scores.course column"
+            pnpm exec wrangler d1 execute relay-db --remote \
+              --command "ALTER TABLE game_scores ADD COLUMN course TEXT;"
+          else
+            echo "game_scores.course column already present"
+          fi
+
+          probe=$(pnpm exec wrangler d1 execute relay-db --remote --json \
+            --command "SELECT name FROM pragma_table_info('game_scores') WHERE name='to_par';")
+          if ! echo "$probe" | jq -e '.[0].results | length > 0' > /dev/null; then
+            echo "Adding game_scores.to_par column"
+            pnpm exec wrangler d1 execute relay-db --remote \
+              --command "ALTER TABLE game_scores ADD COLUMN to_par INTEGER;"
+          else
+            echo "game_scores.to_par column already present"
+          fi
+
           # user_sports_subs (per-user team subscriptions). CREATE TABLE
           # IF NOT EXISTS is itself idempotent.
           pnpm exec wrangler d1 execute relay-db --remote --command \

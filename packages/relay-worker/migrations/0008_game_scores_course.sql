@@ -1,0 +1,37 @@
+-- Per-course golf stats: add `course` and `to_par` columns to `game_scores`
+-- and an index to support per-course leaderboards (MAX(score) grouped by
+-- user + game + course).
+--
+-- The new columns are defined in src/schema.sql for fresh databases:
+--   course TEXT     -- course id (e.g. 'augusta', 'listowel-vintage');
+--                      NULL for range/practice and non-course games (Fog).
+--   to_par INTEGER  -- round total strokes relative to par for golf Course
+--                      and Mini-Golf rounds (negative = under, positive =
+--                      over); NULL for driving range / non-golf games.
+-- They are NOT added by an `ALTER TABLE ... ADD COLUMN` here on purpose:
+-- SQLite has no `ADD COLUMN IF NOT EXISTS`, so a bare ALTER in a numbered
+-- file is not idempotent — and test:migrations applies schema.sql (which
+-- already has both columns) before this file, so the ALTER would fail with
+-- `duplicate column name`. This is exactly the failure mode documented in
+-- migrations/README.md ("Columns are added by the deploy probe, not by a
+-- numbered file").
+--
+-- DEVOPS HANDOFF: on the live DB BOTH columns must be added by
+-- pragma_table_info probe blocks in .github/workflows/deploy-worker.yml (the
+-- same mechanism that landed is_admin, sports_notify_*, game_feed_shared,
+-- status_updated_at). Add, each guarded by its own pragma_table_info check on
+-- game_scores:
+--   ADD COLUMN course TEXT
+--   ADD COLUMN to_par INTEGER
+-- before this index-only migration is applied to prod.
+--
+-- This file carries only the idempotent index (which references `course`).
+-- On a live DB where the probes have already added the columns, the index
+-- below is safe to (re-)run. On a fresh DB the columns already exist from
+-- schema.sql.
+--
+-- Idempotent (CREATE INDEX IF NOT EXISTS). Apply via the "Seed contacts"
+-- workflow:
+--   gh workflow run "Seed contacts" -F file=0008_game_scores_course.sql
+
+CREATE INDEX IF NOT EXISTS idx_game_scores_user_game_course ON game_scores(user_id, game, course);
