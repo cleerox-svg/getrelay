@@ -63,6 +63,19 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [challengeError, setChallengeError] = useState<string | null>(null);
+  // Challenge length: default to the quick "single hole" option with hole 0
+  // preselected. Full round wagers the whole course.
+  const [challengeMode, setChallengeMode] = useState<'full' | 'single'>('single');
+  const [challengeHoleIdx, setChallengeHoleIdx] = useState(0);
+
+  // Open the opponent picker fresh: clear errors and reset the length choice to
+  // the default single-hole / hole 0.
+  const openChallengePicker = () => {
+    setChallengeError(null);
+    setChallengeMode('single');
+    setChallengeHoleIdx(0);
+    setPickerOpen(true);
+  };
 
   const challengeFriend = async (contact: Contact) => {
     if (creating) return;
@@ -73,6 +86,7 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
         opponentId: contact.id,
         game: 'golfcourse',
         course: selectedCourseId,
+        hole: challengeMode === 'single' ? challengeHoleIdx : undefined,
       });
       const chatId = await openOneToOne(contact.id);
       sendText(chatId, `relay://challenge/${challenge.id}`);
@@ -163,10 +177,7 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
           <button
             type="button"
             className="golf-challenge-cta"
-            onClick={() => {
-              setChallengeError(null);
-              setPickerOpen(true);
-            }}
+            onClick={openChallengePicker}
           >
             <span aria-hidden="true">⛳</span>
             Challenge a friend
@@ -439,8 +450,65 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
               </button>
             </div>
             <div className="challenge-picker-sub">
-              Full round · {getCourse(selectedCourseId).name}
+              {challengeMode === 'full'
+                ? `Full round · ${getCourse(selectedCourseId).name}`
+                : `${getCourse(selectedCourseId).name} · Hole ${
+                    getCourse(selectedCourseId).holes[challengeHoleIdx]?.id ??
+                    challengeHoleIdx + 1
+                  }`}
             </div>
+
+            {/* Length: full round vs a single hole. */}
+            <div
+              className="challenge-len"
+              role="radiogroup"
+              aria-label="Challenge length"
+            >
+              <button
+                type="button"
+                role="radio"
+                aria-checked={challengeMode === 'full'}
+                className={`challenge-len-chip${challengeMode === 'full' ? ' is-on' : ''}`}
+                disabled={creating}
+                onClick={() => setChallengeMode('full')}
+              >
+                Full round
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={challengeMode === 'single'}
+                className={`challenge-len-chip${challengeMode === 'single' ? ' is-on' : ''}`}
+                disabled={creating}
+                onClick={() => setChallengeMode('single')}
+              >
+                Single hole
+              </button>
+            </div>
+
+            {challengeMode === 'single' ? (
+              <div
+                className="challenge-holes"
+                role="radiogroup"
+                aria-label="Choose a hole"
+              >
+                {getCourse(selectedCourseId).holes.map((h, i) => (
+                  <button
+                    key={h.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={challengeHoleIdx === i}
+                    className={`challenge-hole-chip${challengeHoleIdx === i ? ' is-on' : ''}`}
+                    disabled={creating}
+                    onClick={() => setChallengeHoleIdx(i)}
+                  >
+                    {h.id}
+                    {h.name ? <span className="challenge-hole-name"> · {h.name}</span> : null}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
             {challengeError ? (
               <div className="challenge-picker-error">{challengeError}</div>
             ) : null}

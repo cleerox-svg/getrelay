@@ -86,6 +86,7 @@ export default function CourseGame({
   seed,
   onExit,
   onRoundComplete,
+  onHoleComplete,
 }: {
   course: GolfCourse;
   startHole?: number;
@@ -102,6 +103,18 @@ export default function CourseGame({
   onRoundComplete?: (r: {
     courseId: string;
     holes: number;
+    strokes: number;
+    par: number;
+    toPar: number;
+  }) => void;
+  // Fired EXACTLY ONCE per completed single hole, when the chosen hole is holed
+  // out (single-hole mode only — never in full-round mode). Kept SEPARATE from
+  // onRoundComplete so single-hole free play (which doesn't wire this) still
+  // reports nothing; an async friend-challenge wires it to submit one hole.
+  // Optional: when omitted, nothing changes.
+  onHoleComplete?: (r: {
+    courseId: string;
+    hole: number;
     strokes: number;
     par: number;
     toPar: number;
@@ -280,6 +293,24 @@ export default function CourseGame({
     setCard((c) => [...c, { hole: sim.hole.id, par: st.par, strokes: st.strokes }]);
   }, [single, st.holed, st.par, st.strokes, sim]);
 
+  // Single-hole only: when the chosen hole is holed out (the same moment the
+  // single-branch "Play again" recap becomes visible), report the result to the
+  // parent EXACTLY ONCE — mirroring revealScorecard's one-shot pattern.
+  // Guarded by roundReportedRef so it fires once even across re-renders;
+  // playAgain resets the ref so a replay reports again. Full-round mode is
+  // untouched (it never enters this branch).
+  useEffect(() => {
+    if (!single || !st.holed || roundReportedRef.current) return;
+    roundReportedRef.current = true;
+    onHoleComplete?.({
+      courseId: course.id,
+      hole: startHole!,
+      strokes: st.strokes,
+      par: st.par,
+      toPar: st.strokes - st.par,
+    });
+  }, [single, st.holed, st.strokes, st.par, startHole, course.id, onHoleComplete]);
+
   const fire = (e: number) => {
     setArmed(false);
     // Snapshot the locked power + tap error before fireArmed() clears power, so
@@ -311,6 +342,9 @@ export default function CourseGame({
   const playAgain = () => {
     simRef.current = new CourseSim(course.holes[single ? startHole : holeIdx]!);
     applyRoundState(simRef.current);
+    // Reset the one-shot report guard so a replayed hole reports again (mirrors
+    // how playRoundAgain resets it for a fresh full round).
+    roundReportedRef.current = false;
     setResetKey((k) => k + 1);
     setSt(simRef.current.getState());
     resetHoleBookkeeping();
