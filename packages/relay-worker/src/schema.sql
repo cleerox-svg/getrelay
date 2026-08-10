@@ -212,9 +212,21 @@ CREATE TABLE IF NOT EXISTS game_scores (
   score INTEGER NOT NULL,
   rounds INTEGER NOT NULL,
   best_streak INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  -- Course id string (e.g. 'augusta', 'listowel-vintage') for the golf
+  -- Course game, enabling per-course leaderboards. NULL for range/practice
+  -- and non-course games (e.g. Fog). Added on the live DB by the
+  -- deploy-worker.yml pragma_table_info probe; see migrations/README.md.
+  course TEXT,
+  -- Round total strokes relative to par for golf Course and Mini-Golf
+  -- rounds (negative = under par, positive = over). Powers per-course
+  -- "avg to par" and handicap stats. NULL for driving range / non-golf
+  -- games. Added on the live DB by the deploy-worker.yml pragma_table_info
+  -- probe; see migrations/README.md.
+  to_par INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_game_scores_user_time ON game_scores(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_game_scores_user_game_course ON game_scores(user_id, game, course);
 
 -- Per-account personal-best records for the in-app golf Course game.
 -- One row per user (keyed on user_id, like a profile) holding their
@@ -247,3 +259,28 @@ CREATE TABLE IF NOT EXISTS golf_records (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+-- Async friend challenges for the golf games. One row per challenge: the
+-- challenger picks a game/course/hole and a shared RNG seed, the opponent
+-- plays the identical conditions later, and scores are compared to decide a
+-- winner. Both scores are NULL until each side plays; status flips to
+-- 'complete' once resolved. A challenge card is posted to the 1:1 chat
+-- (chat_id) so the opponent gets notified in-thread.
+CREATE TABLE IF NOT EXISTS game_challenges (
+  id TEXT PRIMARY KEY,
+  game TEXT NOT NULL,                 -- 'golf' | 'golfrange'
+  course TEXT,                        -- course id, NULL for range
+  hole INTEGER,                       -- single-hole challenge index, NULL for full round
+  seed INTEGER NOT NULL,             -- shared RNG seed so both play identical conditions
+  challenger_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  opponent_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  challenger_score INTEGER,          -- NULL until played
+  opponent_score  INTEGER,           -- NULL until played
+  winner_id TEXT,                    -- NULL = tie or pending
+  status TEXT NOT NULL DEFAULT 'pending',  -- 'pending' | 'complete'
+  chat_id TEXT,                      -- 1:1 chat the challenge card was posted to
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_game_challenges_opponent ON game_challenges(opponent_id, status);
+CREATE INDEX IF NOT EXISTS idx_game_challenges_challenger ON game_challenges(challenger_id, status);
