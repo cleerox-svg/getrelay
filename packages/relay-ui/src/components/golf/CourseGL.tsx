@@ -1563,7 +1563,12 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       // maps (dual-wave + sun glint), matching the range.
       if (waterKit) waterKit.update(now / 1000);
 
-      // Tracer from the sim trail.
+      // Sim state (used for the tracer gate below and the aim-hide logic).
+      const st = sim.getState();
+
+      // Tracer from the sim trail. Drawn ONLY while the ball is moving (in flight
+      // or rolling); once it comes to rest we clear it. A spent trail left rising
+      // out of a seated ball reads as the ball "floating" in the low putt camera.
       const tr = sim.trail;
       const n = Math.min(tr.length, 70);
       for (let i = 0; i < n; i++) {
@@ -1572,13 +1577,13 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         tracerBuf[i * 3 + 1] = p.h + 0.2;
         tracerBuf[i * 3 + 2] = -p.d;
       }
-      tracerGeo.setDrawRange(0, b.inFlight || tr.length > 1 ? n : 0);
+      const showTrace = !st.resting && !st.holed && n > 1;
+      tracerGeo.setDrawRange(0, showTrace ? n : 0);
       (tracerGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
 
       // The predicted aim arc is refreshed in the pointer handlers (on drag /
       // arm); here we only hide it once the shot is away or the address ends, and
       // animate its colour (gold/green pulse when the shot will hole out).
-      const st = sim.getState();
       if (st.inFlight || (!st.aiming && !st.armed)) showAim(false);
       applyAimColor(now);
 

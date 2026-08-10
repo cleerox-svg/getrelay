@@ -14,6 +14,7 @@ import { validateHole } from './builder';
 import { CourseSim, type CourseResult } from '../courseSim';
 import {
   surfaceAt,
+  heightAt,
   greenPadRadius,
   EDGE_WOBBLE,
   type CourseHole,
@@ -125,6 +126,53 @@ describe('golf courses — per-hole invariants + playability', () => {
             const s = new CourseSim(h);
             const putt = s.simulatePutt({ d: h.green.d, x: h.green.x }, 1.2, 90);
             expect(['green', 'holed']).toContain(putt.result);
+          });
+
+          // REGRESSION (device report: "HOLE 7 · PAR 4, 13 yd, Stroke 1"): a
+          // freshly-addressed hole must read the FULL tee→pin distance, not a
+          // collapsed few yards. Guards against a builder/units regression that
+          // would degenerate the hole geometry (which would ALSO float the ball
+          // and make every club overshoot the tiny hole). distToPin is rounded
+          // in getState, so allow ±1 yd; and it must be a real hole length
+          // (nothing tees off within 100 yd of its own pin).
+          it('distToPin at address equals the tee→pin distance (not collapsed)', () => {
+            const s = new CourseSim(h);
+            const st = s.getState();
+            const teeToPin = Math.hypot(h.pin.d - h.tee.d, h.pin.x - h.tee.x);
+            expect(st.distToPin).toBeGreaterThan(100);
+            expect(Math.abs(st.distToPin - teeToPin)).toBeLessThanOrEqual(1);
+            // Sanity: the address lie is the tee, not some near-green surface.
+            expect(st.lie).toBe('tee');
+          });
+
+          // REGRESSION (device report: a full-power auto-club tee shot flew the
+          // green on a short par 4). The auto-recommended tee club must not
+          // OVERSHOOT: its full-power total lands at or short of the pin, so a
+          // player who pulls full power doesn't automatically fly the green.
+          it('the recommended tee club does not overshoot the hole at full power', () => {
+            const s = new CourseSim(h);
+            const club = s.getState().clubId;
+            const full = new CourseSim(h).simulateShot({ clubId: club, power: 1 });
+            // Straight-line tee→pin (what the recommendation targets). The played
+            // total must not exceed it (the pin sits inside the green, so ≤ tee→pin
+            // keeps the ball at/short of the green — never flying it).
+            const teeToPin = Math.hypot(h.pin.d - h.tee.d, h.pin.x - h.tee.x);
+            // Grace only for a hole shorter than a full sand wedge, where SW is the
+            // sole choice and the finesse curve dials the distance down.
+            expect(full.total).toBeLessThanOrEqual(Math.max(teeToPin, 131));
+          });
+
+          // REGRESSION (device report: "ball floats above the surface"): a shot
+          // that has come to REST must sit exactly on the ground — the rest code
+          // snaps ball.h to heightAt at the resting (d,x). If this drifts the ball
+          // renders floating above its contact shadow. Play a real full swing to
+          // rest and assert the seat is exact.
+          it('a rested ball sits exactly on the ground (ball.h == heightAt)', () => {
+            const s = new CourseSim(h);
+            s.simulateShot({ power: 1 });
+            const b = s.ball;
+            expect(b.resting).toBe(true);
+            expect(Math.abs(b.h - heightAt(h, b.d, b.x))).toBeLessThan(1e-6);
           });
         });
       }

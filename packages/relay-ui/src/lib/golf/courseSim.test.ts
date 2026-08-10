@@ -98,8 +98,11 @@ describe('course sim — full shots on HOLE_1', () => {
   it('a ball hit into the pond finds water; a wild pull goes OB', () => {
     // A short wedge from the approach line, straight at the pin, that comes up in
     // the pond guarding the front of the green splashes. (from→pin runs over the
-    // pond centre, so a shot that lands short of the green finds water.)
-    const water = sim().simulateShot({ clubId: 'pw', power: 0.3, from: { d: 427, x: 13 } });
+    // pond centre, so a shot that lands short of the green finds water.) Power
+    // 0.5: with the wedge finesse curve (quadratic low end) a PW at half power
+    // carries ~49 yd — onto the pond ~49 yd ahead; the old linear map reached it
+    // at 0.3, but full-power carry is unchanged either way.
+    const water = sim().simulateShot({ clubId: 'pw', power: 0.5, from: { d: 427, x: 13 } });
     expect(water.result).toBe('water');
     // A wildly pulled driver off the tee leaves the corridor → out of bounds.
     const ob = sim().simulateShot({ clubId: 'driver', power: 1, aimDeg: -35 });
@@ -422,6 +425,69 @@ describe('course sim — auto club recommendation', () => {
     const near = s.recommendedClub();
     const order = ['sw', 'pw', '9iron', '7iron', '5iron', 'hybrid', '3wood', 'driver'];
     expect(order.indexOf(far)).toBeGreaterThan(order.indexOf(near));
+  });
+
+  it('the auto club never OVERSHOOTS: its full-power total lands at/short of the pin', () => {
+    // The old rule picked the shortest club that "reaches", so a full-power 3-wood
+    // bombed a short par 4's green. The new rule picks the LONGEST club that won't
+    // overshoot — so full power lands at or short of the pin. Sweep a range of
+    // approach distances and assert the recommended club's full-power total is
+    // ≤ the distance to the pin (with a wedge-length grace for very short pitches,
+    // where even the shortest club needs the power dialled down).
+    const g = HOLE_1.green;
+    for (let R = 90; R <= 480; R += 30) {
+      const s = sim();
+      s.ball.d = g.d - R; // straight up the pin line
+      s.ball.x = g.x;
+      const club = s.recommendedClub();
+      const full = sim().simulateShot({ clubId: club, power: 1, from: { d: g.d - R, x: g.x } });
+      // ≤ R for anything a club can be dialled to; the sole exception is a shot
+      // shorter than a full sand wedge, where SW is the only choice and the
+      // finesse curve dials it down.
+      expect(full.total).toBeLessThanOrEqual(Math.max(R, 131));
+    }
+  });
+});
+
+describe('course sim — wedge finesse (controllable short game)', () => {
+  // Off-green pitch/chip shots need FINE low-end control. The wedge power→speed
+  // map is QUADRATIC with a low floor so a soft pitch is playable, while FULL
+  // power is identical to the linear map (A + (1−A)·pᵏ = 1 at p=1) — the club
+  // ladder off the tee is untouched. This pins both halves.
+  const from = { d: 300, x: 4 }; // a fairway approach lie on HOLE_1
+
+  it('a low-power wedge is a genuine short pitch, and carry grows smoothly with power', () => {
+    for (const id of ['pw', 'sw']) {
+      const soft = sim().simulateShot({ clubId: id, power: 0.15, from });
+      expect(soft.carry).toBeGreaterThan(0);
+      expect(soft.carry).toBeLessThan(15); // a controllable chip, not a 35yd jump
+      // Monotonic across the whole drag — no dead zone, no jump.
+      let prev = -1;
+      for (const p of [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.7, 1]) {
+        const c = sim().simulateShot({ clubId: id, power: p, from }).carry;
+        expect(c).toBeGreaterThanOrEqual(prev);
+        prev = c;
+      }
+    }
+  });
+
+  it('FULL-power carry is UNCHANGED for every club (finesse only lifts the low end)', () => {
+    // Baselines measured on HOLE_1 by the harness; the quadratic wedge map must
+    // not move any of them (least of all the wedges).
+    const expected: Record<string, number> = {
+      driver: 278,
+      '3wood': 250,
+      hybrid: 235,
+      '5iron': 213,
+      '7iron': 188,
+      '9iron': 163,
+      pw: 137,
+      sw: 109,
+    };
+    for (const c of CLUBS) {
+      const carry = sim().simulateShot({ clubId: c.id, power: 1 }).carry;
+      expect(Math.abs(carry - expected[c.id]!)).toBeLessThanOrEqual(2);
+    }
   });
 });
 

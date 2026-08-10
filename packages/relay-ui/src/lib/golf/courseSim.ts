@@ -109,6 +109,43 @@ function greenDecel(surf: Surface): number {
 // range (0.35), so a soft pitch can fly a few yards instead of a forced ~40. Full
 // power (sPow=1) is unchanged, so the club ladder off the tee is untouched.
 const COURSE_POWER_FLOOR = 0.06;
+
+// Wedge-class finesse curve. Off-green pitch/chip shots with a lofted wedge need
+// FINE low-end control (a controllable 3–20 yd pitch, not a 35 yd jump from a
+// small drag). For wedges (loft ≥ WEDGE_LOFT: PW + SW) the power→speed map is
+// QUADRATIC with a lower effective floor, so resolution is packed into the low
+// end and a soft pitch is playable — mirroring the putter's quadratic feel.
+// Crucially the map is A + (1−A)·pᵏ, which is 1 at power=1 for ANY A/k, so
+// FULL-power carry is UNCHANGED for every club and the club ladder off the tee is
+// identical. Longer clubs keep the forgiving linear map (COURSE_POWER_FLOOR).
+const WEDGE_LOFT = 37;
+const WEDGE_SPOW_FLOOR = 0.02;
+const WEDGE_POWER_EXP = 2;
+function swingSPow(club: Club, power: number): number {
+  const p = Math.max(0, Math.min(1, power));
+  if (club.loft >= WEDGE_LOFT) {
+    return WEDGE_SPOW_FLOOR + (1 - WEDGE_SPOW_FLOOR) * Math.pow(p, WEDGE_POWER_EXP);
+  }
+  return COURSE_POWER_FLOOR + (1 - COURSE_POWER_FLOOR) * p;
+}
+
+// CONSERVATIVE full-power total distance (yд) per club — the MAX total measured
+// across every authored hole (harness, simulateShot at power=1 from each tee;
+// terrain roll adds a lot on downhill holes, so a club's total ranges ~130 yд).
+// recommendedClub() uses the MAX so the club it picks can never overshoot on ANY
+// hole: the actual full total ≤ this max ≤ the target, so full power lands at or
+// short of the pin instead of flying the green. Re-measure if the ballistics or
+// hole terrain change (the harness prints per-club min/max totals).
+const CLUB_FULL_TOTAL: Record<string, number> = {
+  driver: 420,
+  '3wood': 357,
+  hybrid: 317,
+  '5iron': 278,
+  '7iron': 240,
+  '9iron': 201,
+  pw: 166,
+  sw: 131,
+};
 // Putt power model (its own map, DISTINCT from the full-swing power floor). On
 // the green a stroke ROLLS along the ground (no loft, no floor); drag power maps
 // to an initial ground speed calibrated via the Stimpmeter roll-out so:
@@ -412,7 +449,7 @@ export class CourseSim {
   private swing(power: number, dirRad: number, launchSpinSide: number): void {
     const club = this.club();
     const b = this.ball;
-    const sPow = COURSE_POWER_FLOOR + (1 - COURSE_POWER_FLOOR) * Math.max(0, Math.min(1, power));
+    const sPow = swingSPow(club, power);
     const s = club.baseSpeed * Math.sqrt(sPow);
     const loft = (club.loft * Math.PI) / 180;
     this.launchSpinSide = launchSpinSide;
@@ -537,10 +574,13 @@ export class CourseSim {
 
   // --- Interactive control surface (CourseGL drives this; CourseGame reads it) --
 
-  // The sensible club for the CURRENT lie + distance-to-pin: the shortest club
-  // whose full-power total still reaches (so full power gets there and the
-  // player dials back), and a wedge out of sand regardless. Green → putter
-  // (putt mode handles the stroke). Used to auto-set the club each new shot.
+  // The sensible club for the CURRENT lie + distance-to-pin: the LONGEST club
+  // whose full-power total does NOT overshoot the pin — so full power lands AT or
+  // just SHORT of the target and the auto-club never flies the green (the old
+  // rule picked the shortest club that "reaches", so a full-power 3-wood bombed a
+  // short par 4's green). The player still dials power/cycles up for more. A wedge
+  // out of sand regardless; green → putter (putt mode handles the stroke). Used
+  // to auto-set the club each new shot.
   recommendedClub(): string {
     const b = this.ball;
     const p = this.hole.pin;
@@ -548,14 +588,14 @@ export class CourseSim {
     const lie = this.lieAt(b.d, b.x);
     if (lie === 'green') return 'pw'; // cosmetic; putt mode ignores the club
     if (lie === 'bunker') return R > 110 ? 'pw' : 'sw'; // loft to escape sand
-    if (R > 343) return 'driver';
-    if (R > 301) return '3wood';
-    if (R > 255) return 'hybrid';
-    if (R > 224) return '5iron';
-    if (R > 195) return '7iron';
-    if (R > 157) return '9iron';
-    if (R > 128) return 'pw';
-    return 'sw';
+    // CLUBS is ordered longest → shortest, so the first whose full-power total
+    // fits (≤ R) is the longest club that won't overshoot. If even the shortest
+    // (sand wedge) would overshoot (a very short pitch), fall back to it and let
+    // the wedge finesse curve dial the distance down.
+    for (const c of CLUBS) {
+      if ((CLUB_FULL_TOTAL[c.id] ?? Infinity) <= R) return c.id;
+    }
+    return CLUBS[CLUBS.length - 1]!.id; // shortest (sand wedge)
   }
 
   selectClub(id: string): void {
