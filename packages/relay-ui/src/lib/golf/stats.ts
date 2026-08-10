@@ -89,3 +89,25 @@ export function recordRangeGame(score: number, bestStreak: number): GolfStats {
   }
   return next;
 }
+
+// --- Last-played course (Course mode picker) ------------------------------
+// Remember the course the player last chose so the menu can highlight it on the
+// next visit. Just the course id string; the picker resolves it via getCourse().
+
+const LAST_COURSE_KEY = 'relay.golfLastCourse';
+
+export function getLastCourseId(): string | undefined {
+  try {
+    return localStorage.getItem(LAST_COURSE_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function setLastCourseId(id: string): void {
+  try {
+    localStorage.setItem(LAST_COURSE_KEY, id);
+  } catch {
+    /* private mode — the highlight just won't persist, which is fine */
+  }
+}

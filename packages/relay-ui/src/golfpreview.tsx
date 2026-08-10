@@ -4,7 +4,10 @@
 // QA. It is NEVER imported by the app and is not a production build input.
 //
 // URL query:
-//   ?scene=course                     → CourseGL on HOLE_1
+//   ?scene=course                     → CourseGL on HOLE_1 (default, unchanged)
+//   ?scene=course&course=augusta&hole=11
+//                                     → CourseGL on GOLF_COURSES hole (hole is a
+//                                       0-based index; out-of-range → hole 0)
 //   ?scene=range&layout=fairway       → RangeGL (layout: lane|practiceLane|fairway)
 //
 // The scenes own only the Three.js renderer; they take a sim instance as a prop,
@@ -17,7 +20,8 @@ import { createRoot } from 'react-dom/client';
 import CourseGL from './components/golf/CourseGL';
 import RangeGL from './components/golf/RangeGL';
 import { CourseSim } from './lib/golf/courseSim';
-import { HOLE_1, heightAt } from './lib/golf/terrain';
+import { HOLE_1, heightAt, type CourseHole } from './lib/golf/terrain';
+import { getCourse } from './lib/golf/courses';
 import { FIXED_MS } from './lib/golf/tuning';
 import { RangeSim } from './lib/golf/rangeSim';
 import { pinsFor, DEFAULT_LAYOUT, type RangeLayout } from './lib/golf/rangeTargets';
@@ -32,6 +36,21 @@ declare global {
 const params = new URLSearchParams(location.search);
 const scene = params.get('scene') ?? 'course';
 const layout = (params.get('layout') as RangeLayout | null) ?? DEFAULT_LAYOUT;
+
+// Which hole the course scene renders. With NO ?course param this is HOLE_1 —
+// byte-identical to the original behaviour, so the committed `course`/`secondAim`
+// scenes are unaffected. With ?course=<id>&hole=<idx> (idx 0-based) it resolves
+// the hole from the GOLF_COURSES registry, clamping an out-of-range/invalid idx
+// back to hole 0 so the shooter can never land on `undefined`.
+function resolveHole(): CourseHole {
+  const courseParam = params.get('course');
+  if (!courseParam) return HOLE_1;
+  const course = getCourse(courseParam);
+  const idx = Number.parseInt(params.get('hole') ?? '', 10);
+  const ok = Number.isInteger(idx) && idx >= 0 && idx < course.holes.length;
+  return (ok ? course.holes[idx] : course.holes[0])!;
+}
+const HOLE = resolveHole();
 
 // Flip the readiness flag after the scene has had time to build its textures and
 // draw a handful of frames (the scenes animate — water shimmer, camera settle —
@@ -80,27 +99,30 @@ function CoursePreview({ at }: { at: string | null }) {
   // leave a stray fired-but-unstepped ball — that masked the real state earlier).
   const simRef = useRef<CourseSim | null>(null);
   if (!simRef.current) {
-    const sim = new CourseSim(HOLE_1);
+    const sim = new CourseSim(HOLE);
     // ?at=<lie> teleports the ball for a specific view; the ball is mutable and
-    // getState() reclassifies the lie from position.
+    // getState() reclassifies the lie from position. The green/holed views are
+    // pin-relative so they work for ANY hole; fairway/approach use HOLE_1's
+    // distances and are only meaningful on the default hole (they're the
+    // committed HOLE_1 QA views).
     const b = sim.ball;
     if (at === 'green') {
-      b.d = HOLE_1.pin.d - 6;
-      b.x = HOLE_1.pin.x;
-      b.h = heightAt(HOLE_1, b.d, b.x);
+      b.d = HOLE.pin.d - 6;
+      b.x = HOLE.pin.x;
+      b.h = heightAt(HOLE, b.d, b.x);
       b.inFlight = b.grounded = false;
       b.resting = true;
     } else if (at === 'holed') {
-      b.d = HOLE_1.pin.d;
-      b.x = HOLE_1.pin.x;
-      b.h = heightAt(HOLE_1, b.d, b.x);
+      b.d = HOLE.pin.d;
+      b.x = HOLE.pin.x;
+      b.h = heightAt(HOLE, b.d, b.x);
       b.inFlight = b.grounded = false;
       b.resting = true;
       sim.holed = true;
     } else if (at === 'fairway') {
       b.d = 254;
       b.x = -0.7;
-      b.h = heightAt(HOLE_1, b.d, b.x);
+      b.h = heightAt(HOLE, b.d, b.x);
       b.inFlight = b.grounded = false;
       b.resting = true;
       sim.selectClub('5iron');
@@ -108,7 +130,7 @@ function CoursePreview({ at }: { at: string | null }) {
       // ~45 yd short of the green, so the whole green reads at approach distance.
       b.d = 468;
       b.x = 16;
-      b.h = heightAt(HOLE_1, b.d, b.x);
+      b.h = heightAt(HOLE, b.d, b.x);
       b.inFlight = b.grounded = false;
       b.resting = true;
     }

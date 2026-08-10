@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { GolfLeaderboard } from './GolfLeaderboard';
-import { getGolfStats, getRangeStats } from '../../lib/golf/stats';
+import { getGolfStats, getRangeStats, getLastCourseId, setLastCourseId } from '../../lib/golf/stats';
 import { CLUBS, DEFAULT_CLUB_ID } from '../../lib/golf/clubs';
+import { GOLF_COURSES } from '../../lib/golf/courses';
+import type { GolfCourse } from '../../lib/golf/courses';
 
 // The two flows behind the single "Golf" chiclet: Phase-1 putting and the
 // Phase-2 driving range (open practice or the scored Target Challenge).
@@ -24,9 +26,31 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
   // Which board the personal-best line + leaderboard show.
   const [board, setBoard] = useState<'golf' | 'golfrange'>('golf');
 
+  // Course picker: expand toggle, the highlighted course (seeded from the last
+  // played), and — when "Single hole" is chosen — which course's hole chips show.
+  const [courseExpanded, setCourseExpanded] = useState(false);
+  const [selectedCourseId, setSelectedCourseId] = useState<string>(() => {
+    const last = getLastCourseId();
+    return last && GOLF_COURSES.some((c) => c.id === last) ? last : GOLF_COURSES[0]!.id;
+  });
+  const [pickHoleFor, setPickHoleFor] = useState<string | null>(null);
+
   const puttStats = getGolfStats();
   const rangeStats = getRangeStats();
   const stats = board === 'golf' ? puttStats : rangeStats;
+
+  // Course-start handlers. The course choice is threaded through onStart's
+  // existing optional string arg using the encoding contract the Fog pass
+  // parses: "<courseId>" = full round, "<courseId>#<holeIdx>" = single hole
+  // (holeIdx 0-based). The last-played course is persisted for next time.
+  const startFullRound = (c: GolfCourse) => {
+    setLastCourseId(c.id);
+    onStart('course', c.id);
+  };
+  const startSingleHole = (c: GolfCourse, idx: number) => {
+    setLastCourseId(c.id);
+    onStart('course', `${c.id}#${idx}`);
+  };
 
   const card = (opts: {
     title: string;
@@ -74,11 +98,115 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
           active: expanded,
         })}
         {card({
-          title: 'Course · Hole 1 (beta)',
-          subtitle: 'Play a real 3D hole — rolling terrain, hazards, a sloped green. Drag to aim, tap to strike.',
-          onClick: () => onStart('course'),
+          title: 'Course · Play a round',
+          subtitle:
+            'Real 3D courses — Augusta National + Listowel. Play a full round with a scorecard, or a single hole.',
+          onClick: () => setCourseExpanded((e) => !e),
+          active: courseExpanded,
         })}
       </div>
+
+      {courseExpanded ? (
+        <div
+          className="flex flex-col gap-3 rounded-2xl p-3"
+          style={{ background: 'var(--bubble-them)' }}
+        >
+          <div
+            className="text-[10px] font-bold tracking-wider"
+            style={{ color: 'var(--text-dim)' }}
+          >
+            CHOOSE A COURSE
+          </div>
+          <div className="flex flex-col gap-2">
+            {GOLF_COURSES.map((c) => {
+              const active = c.id === selectedCourseId;
+              return (
+                <div key={c.id} className="flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedCourseId(c.id);
+                      setPickHoleFor(null);
+                    }}
+                    className="flex flex-col text-left"
+                    style={{
+                      border: `1px solid ${active ? 'var(--accent)' : 'var(--separator)'}`,
+                      background: 'var(--card-bg)',
+                      borderRadius: 12,
+                      padding: 12,
+                    }}
+                  >
+                    <div className="text-[14px] font-bold" style={{ color: 'var(--text)' }}>
+                      {c.name}
+                    </div>
+                    {c.location ? (
+                      <div className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
+                        {c.location}
+                      </div>
+                    ) : null}
+                    <div className="text-[11px] pt-0.5" style={{ color: 'var(--text-dim)' }}>
+                      {c.holes.length} holes · par {c.par} · {c.yards.toLocaleString()} yd
+                    </div>
+                  </button>
+
+                  {active ? (
+                    <div className="flex flex-col gap-2 pl-1">
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          className="flex-1 rounded-xl py-2.5 text-[14px] font-bold"
+                          style={{ background: 'var(--accent)', color: '#FFFFFF', border: 0 }}
+                          onClick={() => startFullRound(c)}
+                        >
+                          Full round
+                        </button>
+                        <button
+                          type="button"
+                          className="flex-1 rounded-xl py-2.5 text-[14px] font-bold"
+                          style={{
+                            background: pickHoleFor === c.id ? 'var(--accent)' : 'var(--card-bg)',
+                            color: pickHoleFor === c.id ? '#FFFFFF' : 'var(--text)',
+                            border: '1px solid var(--separator)',
+                          }}
+                          onClick={() => setPickHoleFor((p) => (p === c.id ? null : c.id))}
+                        >
+                          Single hole
+                        </button>
+                      </div>
+
+                      {pickHoleFor === c.id ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {c.holes.map((h, i) => (
+                            <button
+                              key={h.id}
+                              type="button"
+                              onClick={() => startSingleHole(c, i)}
+                              style={{
+                                border: '1px solid var(--separator)',
+                                background: 'var(--card-bg)',
+                                color: 'var(--text)',
+                                borderRadius: 10,
+                                padding: '5px 9px',
+                                fontSize: 12,
+                                fontWeight: 600,
+                              }}
+                            >
+                              {h.id}
+                              {h.name ? (
+                                <span style={{ opacity: 0.6 }}> · {h.name}</span>
+                              ) : null}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
 
       {expanded ? (
         <div className="flex flex-col gap-3 rounded-2xl p-3" style={{ background: 'var(--bubble-them)' }}>
