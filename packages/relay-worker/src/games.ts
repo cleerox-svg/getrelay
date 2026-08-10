@@ -112,6 +112,108 @@ async function readGolfRecords(
     .first<GolfRecordRow>();
 }
 
+// ---- Async friend challenges ----------------------------------------------
+//
+// A challenge pits two contacts against the same seeded golf hole/course. The
+// compared metric is TO-PAR (lower is better), stored per side in
+// challenger_score / opponent_score. Winner = the lower to-par once BOTH
+// sides have submitted; equal to-par is a tie (winner_id null).
+
+// Only golf modes can be challenged — the metric is to-par.
+const CHALLENGE_GAME_IDS = ['golf', 'golfrange', 'golfcourse'] as const;
+
+// A challenge score (to-par) is clamped to this magnitude both ways.
+const MAX_CHALLENGE_TO_PAR = 200;
+
+interface ChallengeRow {
+  id: string;
+  game: string;
+  course: string | null;
+  hole: number | null;
+  seed: number;
+  status: string;
+  winner_id: string | null;
+  challenger_id: string;
+  opponent_id: string;
+  challenger_score: number | null;
+  opponent_score: number | null;
+  created_at: number;
+  challenger_name: string;
+  challenger_avatar_url: string | null;
+  challenger_avatar_r2_key: string | null;
+  opponent_name: string;
+  opponent_avatar_url: string | null;
+  opponent_avatar_r2_key: string | null;
+}
+
+// Read a challenge by id, joining users on both sides, and shape it for the
+// caller. `mine` is 'challenger'/'opponent' when meId is a participant, else
+// null (callers gate participant-only access on that). Returns null when the
+// row doesn't exist.
+async function readChallengeShaped(
+  db: D1Database,
+  origin: string,
+  id: string,
+  meId: string,
+) {
+  const r = await db
+    .prepare(
+      `SELECT c.id, c.game, c.course, c.hole, c.seed, c.status, c.winner_id,
+              c.challenger_id, c.opponent_id, c.challenger_score, c.opponent_score,
+              c.created_at,
+              cu.display_name  AS challenger_name,
+              cu.avatar_url    AS challenger_avatar_url,
+              cu.avatar_r2_key AS challenger_avatar_r2_key,
+              ou.display_name  AS opponent_name,
+              ou.avatar_url    AS opponent_avatar_url,
+              ou.avatar_r2_key AS opponent_avatar_r2_key
+         FROM game_challenges c
+         JOIN users cu ON cu.id = c.challenger_id
+         JOIN users ou ON ou.id = c.opponent_id
+        WHERE c.id = ?`,
+    )
+    .bind(id)
+    .first<ChallengeRow>();
+  if (!r) return null;
+
+  const mine =
+    meId === r.challenger_id
+      ? 'challenger'
+      : meId === r.opponent_id
+        ? 'opponent'
+        : null;
+
+  return {
+    id: r.id,
+    game: r.game,
+    course: r.course ?? null,
+    hole: r.hole ?? null,
+    seed: r.seed,
+    status: r.status,
+    challenger: {
+      userId: r.challenger_id,
+      displayName: r.challenger_name,
+      avatarUrl: avatarUrlFor(origin, {
+        avatar_r2_key: r.challenger_avatar_r2_key,
+        avatar_url: r.challenger_avatar_url,
+      }),
+      toPar: r.challenger_score ?? null,
+    },
+    opponent: {
+      userId: r.opponent_id,
+      displayName: r.opponent_name,
+      avatarUrl: avatarUrlFor(origin, {
+        avatar_r2_key: r.opponent_avatar_r2_key,
+        avatar_url: r.opponent_avatar_url,
+      }),
+      toPar: r.opponent_score ?? null,
+    },
+    winnerId: r.winner_id ?? null,
+    mine,
+    createdAt: r.created_at,
+  };
+}
+
 // ---- Feed surfacing rules -------------------------------------------------
 //
 // Only *notable* runs reach the Updates feed. Fog games are short, so
@@ -550,6 +652,157 @@ export function gamesRoutes() {
 
     const row = await readGolfRecords(c.env.DB, me.id);
     return c.json({ improved, records: shapeGolfRecords(row) });
+  });
+
+  // POST /game/challenge — open an async golf challenge against a contact.
+  // Body: { opponentId, game, course, hole? }. The opponent must be one of the
+  // caller's contacts and not blocked in either direction (mirrors the
+  // leaderboard's contact/block scoping). Returns the shaped challenge.
+  app.post('/game/challenge', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const body = await c.req
+      .json<{ opponentId?: unknown; game?: unknown; course?: unknown; hole?: unknown }>()
+      .catch(() => null);
+
+    const opponentId = typeof body?.opponentId === 'string' ? body.opponentId : '';
+    if (!opponentId) return c.json({ error: 'invalid_opponent' }, 400);
+
+    // Only golf modes carry a to-par metric, so only they can be challenged.
+    const game = normalizeGame(body?.game);
+    if (!(CHALLENGE_GAME_IDS as readonly string[]).includes(game)) {
+      return c.json({ error: 'invalid_game' }, 400);
+    }
+
+    // course is cosmetic metadata; null-tolerant, capped like a golf run.
+    let course: string | null = null;
+    if (typeof body?.course === 'string') {
+      const trimmed = body.course.trim();
+      if (trimmed.length > MAX_COURSE_LEN) return c.json({ error: 'invalid_course' }, 400);
+      if (trimmed.length > 0) course = trimmed;
+    }
+
+    // hole is optional; when present it must be a non-negative integer.
+    let hole: number | null = null;
+    if (body?.hole !== undefined && body?.hole !== null) {
+      if (!Number.isInteger(body.hole) || (body.hole as number) < 0) {
+        return c.json({ error: 'invalid_hole' }, 400);
+      }
+      hole = body.hole as number;
+    }
+
+    // Contact + block scoping in one pass: the opponent must be a contact of
+    // the caller and neither party may have blocked the other. This also
+    // rejects self-challenges (you are not your own contact).
+    const scope = await c.env.DB.prepare(
+      `SELECT
+         EXISTS(SELECT 1 FROM contacts WHERE owner_id = ? AND contact_id = ?) AS is_contact,
+         EXISTS(SELECT 1 FROM user_blocks
+                 WHERE (blocker_id = ? AND blocked_id = ?)
+                    OR (blocker_id = ? AND blocked_id = ?)) AS is_blocked`,
+    )
+      .bind(me.id, opponentId, me.id, opponentId, opponentId, me.id)
+      .first<{ is_contact: number; is_blocked: number }>();
+
+    if (!scope || scope.is_contact !== 1) return c.json({ error: 'not_a_contact' }, 403);
+    if (scope.is_blocked === 1) return c.json({ error: 'blocked' }, 403);
+
+    // Shared RNG seed so both players face identical conditions. Uint32 max is
+    // 4294967295, so /2 floored yields 0..2^31-1.
+    const seed = Math.floor((crypto.getRandomValues(new Uint32Array(1))[0] ?? 0) / 2);
+    const id = crypto.randomUUID();
+    const now = Date.now();
+
+    await c.env.DB.prepare(
+      `INSERT INTO game_challenges
+         (id, game, course, hole, seed, challenger_id, opponent_id,
+          challenger_score, opponent_score, winner_id, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'pending', ?, ?)`,
+    )
+      .bind(id, game, course, hole, seed, me.id, opponentId, now, now)
+      .run();
+
+    const origin = new URL(c.req.url).origin;
+    const challenge = await readChallengeShaped(c.env.DB, origin, id, me.id);
+    return c.json({ challenge });
+  });
+
+  // POST /game/challenge/:id/result — submit the caller's to-par. Body:
+  // { toPar } (integer, clamped to +/-200 else 400). Only a participant may
+  // submit (else 404). The first submission per side wins — re-submits are
+  // ignored. Once both sides are in, the winner (lower to-par; equal -> tie)
+  // is settled and the challenge marked complete.
+  app.post('/game/challenge/:id/result', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const id = c.req.param('id');
+    const body = await c.req.json<{ toPar?: unknown }>().catch(() => null);
+    if (
+      !Number.isInteger(body?.toPar) ||
+      (body!.toPar as number) < -MAX_CHALLENGE_TO_PAR ||
+      (body!.toPar as number) > MAX_CHALLENGE_TO_PAR
+    ) {
+      return c.json({ error: 'invalid_to_par' }, 400);
+    }
+    const toPar = body!.toPar as number;
+
+    const row = await c.env.DB.prepare(
+      `SELECT challenger_id, opponent_id, challenger_score, opponent_score
+         FROM game_challenges WHERE id = ?`,
+    )
+      .bind(id)
+      .first<{
+        challenger_id: string;
+        opponent_id: string;
+        challenger_score: number | null;
+        opponent_score: number | null;
+      }>();
+
+    const isChallenger = row?.challenger_id === me.id;
+    const isOpponent = row?.opponent_id === me.id;
+    if (!row || (!isChallenger && !isOpponent)) return c.json({ error: 'not_found' }, 404);
+
+    // Keep the first submission per side; a re-submit leaves it untouched.
+    const challengerScore = isChallenger
+      ? row.challenger_score ?? toPar
+      : row.challenger_score;
+    const opponentScore = isOpponent
+      ? row.opponent_score ?? toPar
+      : row.opponent_score;
+
+    const bothIn = challengerScore !== null && opponentScore !== null;
+    let winnerId: string | null = null;
+    if (bothIn) {
+      if (challengerScore! < opponentScore!) winnerId = row.challenger_id;
+      else if (opponentScore! < challengerScore!) winnerId = row.opponent_id;
+      // equal -> tie -> winnerId stays null
+    }
+    const status = bothIn ? 'complete' : 'pending';
+
+    await c.env.DB.prepare(
+      `UPDATE game_challenges
+          SET challenger_score = ?, opponent_score = ?, winner_id = ?, status = ?, updated_at = ?
+        WHERE id = ?`,
+    )
+      .bind(challengerScore, opponentScore, winnerId, status, Date.now(), id)
+      .run();
+
+    const origin = new URL(c.req.url).origin;
+    const challenge = await readChallengeShaped(c.env.DB, origin, id, me.id);
+    return c.json({ challenge });
+  });
+
+  // GET /game/challenge/:id — participant-only view of a challenge (else 404).
+  app.get('/game/challenge/:id', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const origin = new URL(c.req.url).origin;
+    const challenge = await readChallengeShaped(c.env.DB, origin, c.req.param('id'), me.id);
+    if (!challenge || challenge.mine === null) return c.json({ error: 'not_found' }, 404);
+    return c.json({ challenge });
   });
 
   return app;

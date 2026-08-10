@@ -1,4 +1,5 @@
 import type {
+  Challenge,
   Chat,
   Contact,
   ContactStatus,
@@ -327,6 +328,30 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  // Open an async golf challenge against a contact. The opponent must be one of
+  // the caller's contacts and not blocked either way (else 4xx). `hole` is
+  // optional (single-hole challenge). Returns the shaped challenge.
+  createChallenge: (body: {
+    opponentId: string;
+    game: 'golf' | 'golfrange' | 'golfcourse';
+    course: string | null;
+    hole?: number;
+  }) =>
+    request<{ challenge: Challenge }>('/game/challenge', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  // Submit the caller's to-par for a challenge (lower wins). The first
+  // submission per side sticks — re-submits are ignored server-side. Once both
+  // sides are in the challenge completes and `winnerId` is settled.
+  submitChallengeResult: (id: string, toPar: number) =>
+    request<{ challenge: Challenge }>(
+      `/game/challenge/${encodeURIComponent(id)}/result`,
+      { method: 'POST', body: JSON.stringify({ toPar }) },
+    ),
+  // Fetch a challenge the caller participates in (404 otherwise).
+  getChallenge: (id: string) =>
+    request<{ challenge: Challenge }>(`/game/challenge/${encodeURIComponent(id)}`),
   // Giphy Action Register pingback. Best-effort: failures are swallowed so
   // analytics never interferes with sending a GIF.
   registerGifAction: (url: string | undefined, randomId: string) => {

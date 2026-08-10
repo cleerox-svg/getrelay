@@ -397,6 +397,34 @@ export interface GolfStats {
   recent: GolfRecentRound[];
 }
 
+// One side of an async golf challenge. `toPar` is null until that player has
+// submitted their result (lower to-par wins). Matches the worker's
+// readChallengeShaped() output in games.ts.
+export interface ChallengeParticipant {
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  toPar: number | null;
+}
+
+// An async friend golf challenge over a shared seed. `status` is 'pending'
+// until both sides submit, then 'complete'; `winnerId` is the lower-to-par
+// player, or null for a tie (or while pending). `mine` says which side the
+// current caller is.
+export interface Challenge {
+  id: string;
+  game: string;
+  course: string | null;
+  hole: number | null;
+  seed: number;
+  status: 'pending' | 'complete';
+  challenger: ChallengeParticipant;
+  opponent: ChallengeParticipant;
+  winnerId: string | null;
+  mine: 'challenger' | 'opponent';
+  createdAt: number;
+}
+
 export interface ReplyPreview {
   id: string;
   from: string;

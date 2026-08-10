@@ -76,6 +76,22 @@ const DDL = [
      created_at INTEGER NOT NULL,
      updated_at INTEGER NOT NULL
    )`,
+  `CREATE TABLE IF NOT EXISTS game_challenges (
+     id TEXT PRIMARY KEY,
+     game TEXT NOT NULL,
+     course TEXT,
+     hole INTEGER,
+     seed INTEGER NOT NULL,
+     challenger_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     opponent_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     challenger_score INTEGER,
+     opponent_score  INTEGER,
+     winner_id TEXT,
+     status TEXT NOT NULL DEFAULT 'pending',
+     chat_id TEXT,
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL
+   )`,
 ];
 
 const USERS = {
@@ -203,6 +219,43 @@ async function insertGolf(
     .bind(crypto.randomUUID(), userId, game, score, course, toPar, createdAt)
     .run();
 }
+
+function createChallenge(cookie: string | null, body: unknown): Promise<Response> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (cookie) headers['Cookie'] = cookie;
+  return request('/game/challenge', { method: 'POST', headers, body: JSON.stringify(body) });
+}
+
+function submitChallengeResult(
+  cookie: string,
+  id: string,
+  body: unknown,
+): Promise<Response> {
+  return request(`/game/challenge/${id}/result`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify(body),
+  });
+}
+
+function getChallenge(cookie: string, id: string): Promise<Response> {
+  return request(`/game/challenge/${id}`, { headers: { Cookie: cookie } });
+}
+
+type ChallengeBody = {
+  challenge: {
+    id: string;
+    game: string;
+    course: string | null;
+    hole: number | null;
+    seed: number;
+    status: string;
+    challenger: { userId: string; toPar: number | null };
+    opponent: { userId: string; toPar: number | null };
+    winnerId: string | null;
+    mine: 'challenger' | 'opponent';
+  };
+};
 
 beforeAll(seed);
 
@@ -700,5 +753,162 @@ describe('golf-records', () => {
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({ error: 'invalid_records' });
     }
+  });
+});
+
+describe('game challenges', () => {
+  it('requires a session cookie', async () => {
+    const res = await createChallenge(null, {
+      opponentId: USERS.B.id,
+      game: 'golfcourse',
+      course: 'St Andrews',
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it('creates a pending challenge against a contact with a seed', async () => {
+    const res = await createChallenge(cookies.A, {
+      opponentId: USERS.B.id,
+      game: 'golfcourse',
+      course: 'St Andrews',
+      hole: 4,
+    });
+    expect(res.status).toBe(200);
+    const { challenge } = (await res.json()) as ChallengeBody;
+    expect(challenge.game).toBe('golfcourse');
+    expect(challenge.course).toBe('St Andrews');
+    expect(challenge.hole).toBe(4);
+    expect(challenge.status).toBe('pending');
+    expect(challenge.challenger.userId).toBe(USERS.A.id);
+    expect(challenge.opponent.userId).toBe(USERS.B.id);
+    expect(challenge.challenger.toPar).toBeNull();
+    expect(challenge.opponent.toPar).toBeNull();
+    expect(challenge.winnerId).toBeNull();
+    expect(challenge.mine).toBe('challenger');
+    // seed is an integer in 0..2^31-1.
+    expect(Number.isInteger(challenge.seed)).toBe(true);
+    expect(challenge.seed).toBeGreaterThanOrEqual(0);
+    expect(challenge.seed).toBeLessThanOrEqual(2 ** 31 - 1);
+  });
+
+  it('rejects a non-contact opponent (403) and a stranger self-challenge', async () => {
+    // C is a stranger to A.
+    const res = await createChallenge(cookies.A, {
+      opponentId: USERS.C.id,
+      game: 'golfcourse',
+      course: 'St Andrews',
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'not_a_contact' });
+  });
+
+  it('rejects a blocked opponent (403), either direction', async () => {
+    const now = Date.now();
+    // B has blocked A; A still lists B as a contact.
+    await testEnv.DB.prepare(
+      `INSERT INTO user_blocks (blocker_id, blocked_id, created_at) VALUES (?, ?, ?)`,
+    )
+      .bind(USERS.B.id, USERS.A.id, now)
+      .run();
+    const res = await createChallenge(cookies.A, {
+      opponentId: USERS.B.id,
+      game: 'golfcourse',
+      course: 'St Andrews',
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'blocked' });
+  });
+
+  it('rejects a non-golf game (400)', async () => {
+    const res = await createChallenge(cookies.A, {
+      opponentId: USERS.B.id,
+      game: 'fog',
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_game' });
+  });
+
+  it('settles the winner by lower to-par once both submit', async () => {
+    const created = await createChallenge(cookies.A, {
+      opponentId: USERS.B.id,
+      game: 'golfcourse',
+      course: 'Pebble Beach',
+    });
+    const { challenge } = (await created.json()) as ChallengeBody;
+    const id = challenge.id;
+
+    // Challenger (A) posts -3; still pending until the opponent submits.
+    const first = await submitChallengeResult(cookies.A, id, { toPar: -3 });
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as ChallengeBody;
+    expect(firstBody.challenge.status).toBe('pending');
+    expect(firstBody.challenge.challenger.toPar).toBe(-3);
+    expect(firstBody.challenge.opponent.toPar).toBeNull();
+    expect(firstBody.challenge.winnerId).toBeNull();
+
+    // A re-submit is ignored — the first submission sticks.
+    const resubmit = await submitChallengeResult(cookies.A, id, { toPar: 10 });
+    const resubmitBody = (await resubmit.json()) as ChallengeBody;
+    expect(resubmitBody.challenge.challenger.toPar).toBe(-3);
+
+    // Opponent (B) posts +1 -> both in, A wins (lower to-par), complete.
+    const second = await submitChallengeResult(cookies.B, id, { toPar: 1 });
+    const secondBody = (await second.json()) as ChallengeBody;
+    expect(secondBody.challenge.status).toBe('complete');
+    expect(secondBody.challenge.opponent.toPar).toBe(1);
+    expect(secondBody.challenge.winnerId).toBe(USERS.A.id);
+    expect(secondBody.challenge.mine).toBe('opponent'); // B's perspective
+  });
+
+  it('records a tie (winnerId null) on equal to-par', async () => {
+    const created = await createChallenge(cookies.A, {
+      opponentId: USERS.B.id,
+      game: 'golfcourse',
+      course: 'Augusta',
+    });
+    const { challenge } = (await created.json()) as ChallengeBody;
+    const id = challenge.id;
+
+    await submitChallengeResult(cookies.A, id, { toPar: 2 });
+    const done = await submitChallengeResult(cookies.B, id, { toPar: 2 });
+    const doneBody = (await done.json()) as ChallengeBody;
+    expect(doneBody.challenge.status).toBe('complete');
+    expect(doneBody.challenge.winnerId).toBeNull();
+  });
+
+  it('clamps an out-of-range to-par (400)', async () => {
+    const created = await createChallenge(cookies.A, {
+      opponentId: USERS.B.id,
+      game: 'golfcourse',
+      course: 'Augusta',
+    });
+    const { challenge } = (await created.json()) as ChallengeBody;
+    for (const toPar of [201, -201, 2.5]) {
+      const res = await submitChallengeResult(cookies.A, challenge.id, { toPar });
+      expect(res.status).toBe(400);
+    }
+  });
+
+  it('is participant-only for GET and result (404 for a non-participant)', async () => {
+    const created = await createChallenge(cookies.A, {
+      opponentId: USERS.B.id,
+      game: 'golfcourse',
+      course: 'Augusta',
+    });
+    const { challenge } = (await created.json()) as ChallengeBody;
+    const id = challenge.id;
+
+    // Participants can read it.
+    expect((await getChallenge(cookies.A, id)).status).toBe(200);
+    expect((await getChallenge(cookies.B, id)).status).toBe(200);
+
+    // C is neither challenger nor opponent -> 404 on both read and result.
+    const cGet = await getChallenge(cookies.C, id);
+    expect(cGet.status).toBe(404);
+    const cResult = await submitChallengeResult(cookies.C, id, { toPar: 0 });
+    expect(cResult.status).toBe(404);
+
+    // A missing id is a 404 too.
+    expect((await getChallenge(cookies.A, 'nope')).status).toBe(404);
   });
 });
