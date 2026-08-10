@@ -53,7 +53,7 @@ interface Props {
 const SURFACE_RGB: Record<Surface, [number, number, number]> = {
   fairway: [0.40, 0.66, 0.28],
   green: [0.49, 0.79, 0.38],
-  fringe: [0.45, 0.72, 0.33],
+  fringe: [0.298, 0.561, 0.243], // rich, dark collar green (0x4c8f3e) — matches the overlay
   rough: [0.19, 0.37, 0.16], // darker + more olive → clearly not fairway
   bunker: [0.9, 0.82, 0.6],
   water: [0.14, 0.42, 0.66],
@@ -823,18 +823,28 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       // rough first cut. It's terrain-FOLLOWING (yAt = heightAt) so it hugs the
       // pad skirt with no z-step, and sits a hair BELOW the cap (fLift < LIFT)
       // so the cap wins the overlap. This is render-only (surfaceAt unchanged).
-      const APRON = 4; // yd of collar→rough feather beyond the pad edge
-      const FRINGE_RGB: [number, number, number] = [0x5a / 255, 0xa2 / 255, 0x4a / 255];
-      const ROUGH_RGB: [number, number, number] = SURFACE_RGB.rough;
+      const APRON = 3; // yd of collar→rough feather beyond the pad edge (tightened
+      // from 4 so the collar reads as a crisp band, not a broad pale ring)
+      // Collar tone. These albedo values are authored in sRGB (the SAME space as
+      // the baked surface map and every material.color); per-vertex 'color'
+      // attributes, however, are consumed by three in the LINEAR working space
+      // with NO sRGB→linear conversion, so we pre-convert here. Skipping that
+      // made the collar render ~3× too bright (the "pale wash" bug) — the earlier
+      // single-material collar looked right precisely because material.color DID
+      // get the conversion. 0x4c8f3e == SURFACE_RGB.fringe, so the overlay mesh
+      // and the baked patch are ONE coherent dark collar green.
+      const fringeLin = new THREE.Color(0x4c8f3e); // rich, dark collar green (sRGB)
+      const rr = SURFACE_RGB.rough;
+      const roughLin = new THREE.Color().setRGB(rr[0], rr[1], rr[2], THREE.SRGBColorSpace);
       const fringeColorAt: ColorFn = (_frac, base) => {
-        if (base <= padR) return FRINGE_RGB;
+        if (base <= padR) return [fringeLin.r, fringeLin.g, fringeLin.b];
         let t = (base - padR) / APRON;
         t = t < 0 ? 0 : t > 1 ? 1 : t;
-        const s = t * t * (3 - 2 * t); // smoothstep collar → rough
+        const s = t * t * (3 - 2 * t); // smoothstep collar → rough (linear space)
         return [
-          FRINGE_RGB[0] + (ROUGH_RGB[0] - FRINGE_RGB[0]) * s,
-          FRINGE_RGB[1] + (ROUGH_RGB[1] - FRINGE_RGB[1]) * s,
-          FRINGE_RGB[2] + (ROUGH_RGB[2] - FRINGE_RGB[2]) * s,
+          fringeLin.r + (roughLin.r - fringeLin.r) * s,
+          fringeLin.g + (roughLin.g - fringeLin.g) * s,
+          fringeLin.b + (roughLin.b - fringeLin.b) * s,
         ];
       };
       const fGeo = track(
