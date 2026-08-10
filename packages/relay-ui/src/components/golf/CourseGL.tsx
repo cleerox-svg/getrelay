@@ -439,6 +439,13 @@ function buildOrganicDisc(
 // ring is exactly interpolating the two wavy edges — and sharing `seed` with the
 // green cap makes the fringe's inner edge nest perfectly against the cap's outer
 // edge. Used for the fringe collar + the water shoreline. Flat if yAt is const.
+// `colorAt`, when passed, writes a per-vertex 'color' attribute keyed by the
+// ring position: frac (0 at rIn → 1 at rOut) and the ring's BASE radius (yd).
+// The fringe collar uses it to FEATHER its outer edge from the collar green into
+// the rough colour across a short apron band, so the collar→rough transition
+// reads as a graded "first cut" (like the fairway↔rough band) instead of a hard
+// mesh-edge line into the dark rough.
+type ColorFn = (frac: number, base: number) => [number, number, number];
 function buildOrganicAnnulus(
   seed: number,
   cd: number,
@@ -450,15 +457,18 @@ function buildOrganicAnnulus(
   uv: UVFn,
   rings: number,
   seg: number,
+  colorAt?: ColorFn,
 ): THREE.BufferGeometry {
   const vcount = (rings + 1) * seg;
   const pos = new Float32Array(vcount * 3);
   const uvs = new Float32Array(vcount * 2);
+  const col = colorAt ? new Float32Array(vcount * 3) : null;
   let p = 0;
   let u = 0;
   for (let ri = 0; ri <= rings; ri++) {
     const frac = ri / rings;
     const base = rInBase + frac * (rOutBase - rInBase);
+    const rgb = colorAt ? colorAt(frac, base) : null;
     for (let s = 0; s < seg; s++) {
       const ang = (s / seg) * Math.PI * 2;
       const rad = edgeRadius(seed, ang, base);
@@ -470,6 +480,11 @@ function buildOrganicAnnulus(
       const vv = uv(wx, wd, ang, frac);
       uvs[u] = vv[0];
       uvs[u + 1] = vv[1];
+      if (col && rgb) {
+        col[p] = rgb[0];
+        col[p + 1] = rgb[1];
+        col[p + 2] = rgb[2];
+      }
       p += 3;
       u += 2;
     }
@@ -486,6 +501,7 @@ function buildOrganicAnnulus(
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  if (col) geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
   geo.setIndex(idx);
   geo.computeVertexNormals();
   return geo;
@@ -798,17 +814,52 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       const SEG = 64; // enough segments for a smooth wavy edge
       const groundY = (d: number, x: number) => heightAt(hole, d, x);
 
-      // Fringe collar: an ORGANIC annulus from the green edge (green.r, pulled in
-      // 0.25 yd so the cap overlaps it → no seam gap) out to the pad radius. Sits
-      // a hair BELOW the cap (fLift < LIFT) so the cap wins the overlap.
+      // Fringe collar + first-cut APRON: an ORGANIC annulus from the green edge
+      // (green.r, pulled in 0.25 yd so the cap overlaps it → no seam gap) out
+      // PAST the pad radius by a short apron. The inner band (green.r→padR) is
+      // the collar; the apron (padR→padR+APRON) FEATHERS the collar green into
+      // the rough colour via per-vertex colours, so the collar no longer ends on
+      // a hard bright/dark line into the rough — it grades in like the fairway↔
+      // rough first cut. It's terrain-FOLLOWING (yAt = heightAt) so it hugs the
+      // pad skirt with no z-step, and sits a hair BELOW the cap (fLift < LIFT)
+      // so the cap wins the overlap. This is render-only (surfaceAt unchanged).
+      const APRON = 4; // yd of collar→rough feather beyond the pad edge
+      const FRINGE_RGB: [number, number, number] = [0x5a / 255, 0xa2 / 255, 0x4a / 255];
+      const ROUGH_RGB: [number, number, number] = SURFACE_RGB.rough;
+      const fringeColorAt: ColorFn = (_frac, base) => {
+        if (base <= padR) return FRINGE_RGB;
+        let t = (base - padR) / APRON;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const s = t * t * (3 - 2 * t); // smoothstep collar → rough
+        return [
+          FRINGE_RGB[0] + (ROUGH_RGB[0] - FRINGE_RGB[0]) * s,
+          FRINGE_RGB[1] + (ROUGH_RGB[1] - FRINGE_RGB[1]) * s,
+          FRINGE_RGB[2] + (ROUGH_RGB[2] - FRINGE_RGB[2]) * s,
+        ];
+      };
       const fGeo = track(
-        buildOrganicAnnulus(gSeed, gDef.d, gDef.x, gDef.r - 0.25, padR, groundY, 0.035, radialUV, 5, SEG),
+        buildOrganicAnnulus(
+          gSeed,
+          gDef.d,
+          gDef.x,
+          gDef.r - 0.25,
+          padR + APRON,
+          groundY,
+          0.035,
+          radialUV,
+          8, // more rings so the collar band + apron feather are both smooth
+          SEG,
+          fringeColorAt,
+        ),
       );
       const fNorm = track(makeTurfNormalMap());
       fNorm.repeat.set(10, 10);
       const fMat = track(
         new THREE.MeshStandardMaterial({
-          color: 0x5aa24a, // duller, slightly darker collar — distinct from green
+          // White base so the per-vertex collar/apron colours show directly (the
+          // collar green → rough feather is baked into the vertex colours above).
+          color: 0xffffff,
+          vertexColors: true,
           roughness: 0.82,
           metalness: 0,
           normalMap: fNorm,

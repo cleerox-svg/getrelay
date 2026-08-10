@@ -399,7 +399,16 @@ export function heightAt(hole: CourseHole, d: number, x: number): number {
   const gSeed = featureSeed(g.d, g.x);
   const gAngle = featureAngle(g.d, g.x, d, x);
   const padOuter = edgeRadius(gSeed, gAngle, g.r + hole.fringeW);
-  const skirt = 10;
+  // The pad SKIRT is the bank that ramps the raised pad down to the surrounding
+  // grade beyond the fringe. Its length is DERIVED from the raise (not a fixed
+  // 10 yd) so the steepest part of the raised-cosine bank stays a gentle,
+  // natural grade — max slope of the profile is raise·π/(2·skirt), so scaling
+  // skirt with raise holds that ~0.26 (a soft mound shoulder) regardless of how
+  // high the pad sits. A short fixed skirt made a tall pad read as a "table" on
+  // a steep dark wall. Clamped so a nearly-flat pad still eases in and a very
+  // tall one doesn't sprawl. This is a pure GEOMETRY change: surfaceAt() (lie
+  // boundaries) is unchanged — only the height of the bank beyond the fringe.
+  const skirt = Math.min(26, Math.max(14, g.raise * 6));
   const gBlend =
     dg <= padOuter
       ? 1
