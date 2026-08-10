@@ -394,7 +394,13 @@ export default function CourseGame({
             {puttRead ? `${puttRead.ft} ft` : `${st.distToPin} yd`}
           </div>
           <div className="text-[11px] opacity-80">
-            Stroke {st.strokes} · {lieLabel[st.lie] ?? st.lie}
+            {/* Show the stroke ABOUT TO BE PLAYED (strokes taken + 1), the golf
+                convention — so the tee reads "Stroke 1" and the shot after the
+                drive reads "Stroke 2". Showing raw strokes-taken here read
+                "Stroke 0" at the tee and "Stroke 1" at the second shot, which
+                made a played-past-the-green lie look like a tee address. Once
+                holed, show the final strokes taken. */}
+            Stroke {st.holed ? st.strokes : st.strokes + 1} · {lieLabel[st.lie] ?? st.lie}
           </div>
           {!single && (
             <div className="text-[11px] font-semibold text-amber-200">

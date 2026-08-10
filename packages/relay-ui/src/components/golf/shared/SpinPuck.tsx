@@ -1,10 +1,12 @@
 import { useRef } from 'react';
 
-// Circular "ball face" spin selector. Drag the dot from centre: up/down =
-// back/top spin, left/right = draw/fade. Centre = no spin. Value persists across
-// shots. onChange gets (back, side) in [-1..1] with back>0 = backspin, side>0 =
-// fade (curves right). Shared by the Range and Course so both wire it to
-// sim.setSpin. Pure DOM / theme CSS-vars — no `three`.
+// Circular "ball face" spin selector — the dot is the CONTACT POINT on the ball.
+// Strike LOW (drag down) = backspin; strike HIGH (drag up) = topspin; left/right
+// = draw/fade. Centre = no spin. Value persists across shots. onChange gets
+// (back, side) in [-1..1] with back>0 = backspin, side>0 = fade (curves right) —
+// the sim's sign convention is unchanged; only the puck axis maps contact-point
+// (low = backspin) so it reads the natural way. Shared by the Range and Course so
+// both wire it to sim.setSpin. Pure DOM / theme CSS-vars — no `three`.
 export function SpinPuck({
   value,
   onChange,
@@ -16,7 +18,9 @@ export function SpinPuck({
   const SIZE = 84;
   const R = SIZE / 2 - 12; // dot travel radius (px)
   const dotX = SIZE / 2 + value.side * R;
-  const dotY = SIZE / 2 - value.back * R;
+  // Contact-point mapping: backspin (back>0) is a LOW strike, so the dot sits
+  // BELOW centre. (Kept in sync with `apply` below.)
+  const dotY = SIZE / 2 + value.back * R;
 
   const apply = (clientX: number, clientY: number) => {
     const el = ref.current;
@@ -29,7 +33,8 @@ export function SpinPuck({
       dx = (dx / len) * R;
       dy = (dy / len) * R;
     }
-    onChange(Math.max(-1, Math.min(1, -dy / R)), Math.max(-1, Math.min(1, dx / R)));
+    // dy>0 (drag DOWN, a low strike) → back>0 = backspin; drag UP → topspin.
+    onChange(Math.max(-1, Math.min(1, dy / R)), Math.max(-1, Math.min(1, dx / R)));
   };
 
   return (
