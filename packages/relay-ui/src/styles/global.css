@@ -1339,6 +1339,318 @@ html.beta .composer-capsule {
   }
 }
 
+/* ---- Challenge-a-friend CTA (Play tab hero) ---- */
+.golf-challenge-cta {
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--golf-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--golf-accent) 12%, var(--card-bg));
+  color: var(--golf-accent);
+  font-weight: 700;
+  font-size: 13.5px;
+  letter-spacing: 0.02em;
+  padding: 11px 14px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.18s, transform 0.1s;
+}
+.golf-challenge-cta:hover {
+  background: color-mix(in srgb, var(--golf-accent) 18%, var(--card-bg));
+}
+.golf-challenge-cta:active {
+  transform: scale(0.985);
+}
+.golf-challenge-cta:focus-visible {
+  outline: 2px solid var(--golf-accent-2);
+  outline-offset: 2px;
+}
+
+/* ============================================================
+   Golf challenge card + opponent picker. The card renders inside
+   the chat text rail (NOT under .golf-hub), so it declares its own
+   golf-green locals and derives everything else from the app's
+   surface tokens (theme-aware in light + dark).
+   ============================================================ */
+.challenge-card {
+  --cc-green: #2fa457;
+  --cc-green-2: #34c759;
+  --cc-red: #ff3b30;
+  min-width: 240px;
+  max-width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid var(--separator);
+  border-left: 3px solid var(--cc-green);
+  background: var(--card-bg);
+  color: var(--text);
+}
+.challenge-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.challenge-card-flag {
+  font-size: 20px;
+  line-height: 1;
+}
+.challenge-card-titles {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.challenge-card-eyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--cc-green);
+}
+.challenge-card-course {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.challenge-players {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.challenge-player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.challenge-player-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.challenge-player-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.challenge-player-role {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.challenge-player-score {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  flex: 0 0 auto;
+}
+.challenge-vs {
+  align-self: center;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.challenge-play {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  border: 0;
+  border-radius: 11px;
+  padding: 11px 14px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+  background: linear-gradient(180deg, var(--cc-green-2), var(--cc-green));
+  transition: transform 0.1s, filter 0.18s;
+}
+.challenge-play:hover {
+  filter: brightness(1.05);
+}
+.challenge-play:active {
+  transform: scale(0.985);
+}
+.challenge-play:focus-visible {
+  outline: 2px solid var(--cc-green-2);
+  outline-offset: 2px;
+}
+.challenge-status {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.challenge-status-score {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+.challenge-outcome {
+  text-align: center;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  padding: 8px;
+  border-radius: 10px;
+}
+.challenge-outcome.is-win {
+  color: var(--cc-green);
+  background: color-mix(in srgb, var(--cc-green) 14%, transparent);
+}
+.challenge-outcome.is-loss {
+  color: var(--cc-red);
+  background: color-mix(in srgb, var(--cc-red) 12%, transparent);
+}
+.challenge-outcome.is-tie {
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--text-dim) 14%, transparent);
+}
+.challenge-chip {
+  display: inline-block;
+  font-size: 12.5px;
+  font-style: italic;
+  color: var(--text-dim);
+}
+
+/* ---- opponent picker (bottom sheet) ---- */
+.challenge-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  animation: cc-fade 0.16s ease-out;
+}
+.challenge-picker-sheet {
+  width: 100%;
+  max-width: 520px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--card-bg);
+  color: var(--text);
+  border-radius: 18px 18px 0 0;
+  border: 1px solid var(--separator);
+  border-bottom: 0;
+  padding: 14px 14px calc(14px + env(safe-area-inset-bottom, 0px));
+  box-shadow: 0 -12px 30px -18px rgba(0, 0, 0, 0.6);
+  animation: cc-slide-up 0.2s ease-out;
+}
+.challenge-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 16px;
+  font-weight: 700;
+}
+.challenge-picker-close {
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 24px;
+  line-height: 1;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.challenge-picker-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 2px 0 8px;
+}
+.challenge-picker-error {
+  font-size: 12.5px;
+  color: var(--ping, #ff3b30);
+  padding-bottom: 8px;
+}
+.challenge-picker-empty {
+  padding: 24px 8px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.challenge-picker-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.challenge-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 9px 6px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.challenge-picker-row:hover {
+  background: var(--bubble-them);
+}
+.challenge-picker-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.challenge-picker-row:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.challenge-picker-name {
+  font-size: 14.5px;
+  font-weight: 600;
+}
+@keyframes cc-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes cc-slide-up {
+  from {
+    transform: translateY(16px);
+    opacity: 0.6;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .challenge-picker-backdrop,
+  .challenge-picker-sheet {
+    animation: none;
+  }
+  .challenge-play,
+  .golf-challenge-cta,
+  .challenge-picker-row {
+    transition: none;
+  }
+}
+
 /* ============================================================
    Relay Arcade — the Games TAB landing (game picker shown
    before a game is selected). Scoped under .games-hub / .games-*
