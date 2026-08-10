@@ -11,7 +11,7 @@ import { CourseSim, type CourseState } from '../../lib/golf/courseSim';
 import type { GolfCourse } from '../../lib/golf/courses';
 import { api } from '../../lib/api';
 import type { GolfRecords, GolfRecordsImproved } from '../../lib/api';
-import { makeWind } from '../../lib/golf/wind';
+import { makeWind, mulberry32 } from '../../lib/golf/wind';
 import { WindChip } from './shared/WindChip';
 import { PowerMeter } from './shared/PowerMeter';
 import { SpinPuck } from './shared/SpinPuck';
@@ -83,11 +83,17 @@ function RecapRow({ label, value, badge }: { label: string; value: string; badge
 export default function CourseGame({
   course,
   startHole,
+  seed,
   onExit,
   onRoundComplete,
 }: {
   course: GolfCourse;
   startHole?: number;
+  // Optional deterministic round seed. When provided, the round wind is derived
+  // from it (makeWind(mulberry32(seed))) at mount AND on "Play round again", so
+  // an async challenge replays the SAME conditions for both players. When
+  // omitted, wind is random and re-rolled on replay (unchanged behaviour).
+  seed?: number;
   onExit?: () => void;
   // Fired EXACTLY ONCE per completed full round, when the end-of-round
   // scorecard is revealed (full-round mode only — never in single-hole mode).
@@ -107,8 +113,11 @@ export default function CourseGame({
 
   // One wind for the whole round (the Range makes one per round too, via the
   // SAME makeWind). It's applied to every hole so the round plays in a
-  // consistent breeze; "Play round again" re-rolls it. Airborne-only in the sim.
-  const [wind, setWindState] = useState(makeWind);
+  // consistent breeze; "Play round again" re-rolls it (unless seeded, when it
+  // reproduces the same wind). Airborne-only in the sim.
+  const [wind, setWindState] = useState(() =>
+    seed != null ? makeWind(mulberry32(seed)) : makeWind(),
+  );
   const windRef = useRef(wind);
   windRef.current = wind;
 
@@ -341,7 +350,7 @@ export default function CourseGame({
   // Full-round: restart the whole round from hole 1 with a fresh scorecard AND a
   // freshly rolled round wind.
   const playRoundAgain = () => {
-    const w = makeWind();
+    const w = seed != null ? makeWind(mulberry32(seed)) : makeWind();
     setWindState(w);
     windRef.current = w;
     simRef.current = new CourseSim(course.holes[0]!);

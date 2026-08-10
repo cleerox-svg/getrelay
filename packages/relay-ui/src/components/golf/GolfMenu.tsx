@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   getGolfStats,
   getRangeStats,
@@ -8,6 +9,10 @@ import {
 import { CLUBS, DEFAULT_CLUB_ID } from '../../lib/golf/clubs';
 import { GOLF_COURSES, getCourse } from '../../lib/golf/courses';
 import type { GolfCourse } from '../../lib/golf/courses';
+import { Avatar } from '../Avatar';
+import { api } from '../../lib/api';
+import { useStore } from '../../lib/store';
+import type { Contact } from '../../lib/types';
 
 // The two flows behind the single "Golf" chiclet: Phase-1 putting and the
 // Phase-2 driving range (open practice or the scored Target Challenge).
@@ -46,6 +51,39 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
     return last && GOLF_COURSES.some((c) => c.id === last) ? last : GOLF_COURSES[0]!.id;
   });
   const [pickHoleFor, setPickHoleFor] = useState<string | null>(null);
+
+  // Challenge-a-friend flow: opponent picker overlay + create state. Creating a
+  // challenge opens (or reuses) the 1to1 chat, drops a `relay://challenge/<id>`
+  // message on the SAME send path as the composer, then lands in that chat so
+  // the challenger can play their round from the card.
+  const nav = useNavigate();
+  const contacts = useStore((s) => s.contacts);
+  const openOneToOne = useStore((s) => s.openOneToOne);
+  const sendText = useStore((s) => s.sendText);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [challengeError, setChallengeError] = useState<string | null>(null);
+
+  const challengeFriend = async (contact: Contact) => {
+    if (creating) return;
+    setCreating(true);
+    setChallengeError(null);
+    try {
+      const { challenge } = await api.createChallenge({
+        opponentId: contact.id,
+        game: 'golfcourse',
+        course: selectedCourseId,
+      });
+      const chatId = await openOneToOne(contact.id);
+      sendText(chatId, `relay://challenge/${challenge.id}`);
+      setPickerOpen(false);
+      nav(`/chats/${encodeURIComponent(chatId)}`);
+    } catch {
+      setChallengeError('Could not start the challenge. Try again.');
+    } finally {
+      setCreating(false);
+    }
+  };
 
   // Local personal bests for the stat strip. Re-read on refreshKey so a fresh
   // submit updates the strip without a network round-trip (works offline too).
@@ -122,6 +160,17 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
               {courseExpanded ? 'Close' : 'Change course'}
             </button>
           </div>
+          <button
+            type="button"
+            className="golf-challenge-cta"
+            onClick={() => {
+              setChallengeError(null);
+              setPickerOpen(true);
+            }}
+          >
+            <span aria-hidden="true">⛳</span>
+            Challenge a friend
+          </button>
         </div>
       </div>
 
@@ -360,6 +409,59 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
           <div className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
             Target Challenge: 8 balls at random island pins — closest to the flag scores. Practice:
             unlimited balls, no scoring.
+          </div>
+        </div>
+      ) : null}
+
+      {/* ---- Opponent picker (challenge a friend) ---- */}
+      {pickerOpen ? (
+        <div
+          className="challenge-picker-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Challenge a friend"
+          onClick={() => {
+            if (!creating) setPickerOpen(false);
+          }}
+        >
+          <div className="challenge-picker-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="challenge-picker-head">
+              <span>Challenge a friend</span>
+              <button
+                type="button"
+                className="challenge-picker-close"
+                aria-label="Close"
+                onClick={() => {
+                  if (!creating) setPickerOpen(false);
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <div className="challenge-picker-sub">
+              Full round · {getCourse(selectedCourseId).name}
+            </div>
+            {challengeError ? (
+              <div className="challenge-picker-error">{challengeError}</div>
+            ) : null}
+            {contacts.length === 0 ? (
+              <div className="challenge-picker-empty">Add a contact to challenge them</div>
+            ) : (
+              <div className="challenge-picker-list">
+                {contacts.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    className="challenge-picker-row"
+                    disabled={creating}
+                    onClick={() => challengeFriend(c)}
+                  >
+                    <Avatar src={c.avatarUrl} name={c.alias ?? c.displayName} size={36} />
+                    <span className="challenge-picker-name">{c.alias ?? c.displayName}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       ) : null}

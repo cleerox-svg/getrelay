@@ -9,6 +9,7 @@ import {
   Page,
 } from 'konsta/react';
 import { Avatar } from '../components/Avatar';
+import { ChallengeCard } from '../components/golf/ChallengeCard';
 import { GifPicker } from '../components/GifPicker';
 import { StickerPicker } from '../components/StickerPicker';
 import { GroupAvatar } from '../components/GroupAvatar';
@@ -534,6 +535,11 @@ export function Chat() {
             >
               Image unavailable
             </div>
+          ) : m.body?.startsWith('relay://challenge/') ? (
+            // A golf friend-challenge rides the plain text rail as
+            // `relay://challenge/<id>`; render it as a live card instead of
+            // the raw URL so the round can be played straight from the bubble.
+            <ChallengeCard id={m.body.slice('relay://challenge/'.length)} />
           ) : (
             <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.35 }}>
               {m.body}
