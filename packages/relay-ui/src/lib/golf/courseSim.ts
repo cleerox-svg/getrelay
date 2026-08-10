@@ -48,12 +48,12 @@ const ROLL_REST = 2.0;
 // than a settling fairway shot (a coarse 2.0 threshold would strand a dying putt
 // a couple of yards short of the cup).
 const GREEN_REST = 0.3;
-// Off-green grass friction (Coulomb) — the piece that stops a slow ball. Below
-// LOW_ROLL_SPEED a constant decel of frictionFor(lie) yd/s² opposes motion, so a
-// near-stopped ball STOPS and HOLDS on a slope up to that decel instead of
-// trickling/oscillating downhill for tens of seconds. fairway/rough/sand bite
-// harder so approach shots settle in a second or two. The green/fringe do NOT
-// use this — they run the calibrated Stimpmeter model below.
+// Off-green grass friction (Coulomb, KINETIC) — the piece that slows a moving
+// ball. Below LOW_ROLL_SPEED a constant decel of frictionFor(lie) yd/s² opposes
+// motion, so a rolling ball bleeds to a stop at the KINETIC angle-of-repose
+// contour (where slopeAccel == this decel and net force is zero). fairway/rough/
+// sand bite harder so approach shots settle in a second or two. The green/fringe
+// do NOT use this — they run the calibrated Stimpmeter model below.
 const LOW_ROLL_SPEED = 8;
 function frictionFor(surf: Surface): number {
   switch (surf) {
@@ -66,6 +66,24 @@ function frictionFor(surf: Surface): number {
     default:
       return 4.5; // fairway / tee
   }
+}
+// STATIC friction is higher than kinetic (a stopped ball resists starting to
+// move more than a moving one resists continuing). This ratio is the physical
+// basis for the rest rule below: a ball rolls to a stop at the KINETIC repose
+// contour (slopeAccel == frictionFor), and STATIC friction — frictionFor ·
+// STATIC_HOLD_FACTOR — then HOLDS it there instead of letting the slope re-
+// accelerate the stationary ball down the hill forever (the "rolls slowly
+// forever on a legit hill" bug). ~1.3 is a typical grass static/kinetic ratio.
+const STATIC_HOLD_FACTOR = 1.3;
+// The maximum downhill slope-acceleration (yd/s²) a surface's STATIC friction
+// can hold a stationary ball against — the single "can it rest here?" test used
+// by the ONE rest rule in substep(). On the green/fringe this is the calibrated
+// Stimpmeter decel μ·g (static == kinetic there BY the green design guard: a
+// green's tilt is authored ≲ μ so a resting putt holds — see A_GREEN below), so
+// the putt-rest and the fairway/rough-rest are the same rule with one hold term.
+function staticHoldFor(surf: Surface): number {
+  if (surf === 'green' || surf === 'fringe') return greenDecel(surf);
+  return frictionFor(surf) * STATIC_HOLD_FACTOR;
 }
 
 // --- Green speed (Stimpmeter) → putting physics ----------------------------
@@ -724,14 +742,21 @@ export class CourseSim {
       if (surf === 'ob') return this.stop('ob');
       const speed = Math.hypot(b.vd, b.vx);
       if (this.holedOut(speed)) return this.stop('holed');
-      // Rest once slow AND the slope is within what this surface's friction can
-      // hold — so the ball settles where it physically would, not creep on. The
-      // green rests at a finer speed (a putt must roll its last inch) and holds
-      // against its own Stimpmeter decel.
+      // ONE rest rule for EVERY grounded surface (green, fringe, fairway, rough,
+      // bunker, tee, cartpath): the ball comes to rest when it is BOTH
+      //   (a) slower than the surface's settle threshold, AND
+      //   (b) on a slope its STATIC friction can hold —
+      // i.e. the downhill slopeAccel can't overcome staticHoldFor(surf). If the
+      // slope IS steeper than the static hold the ball keeps rolling/accelerating
+      // downhill (a genuinely steep bank), unchanged; it then rolls down until
+      // the slope eases to the static-hold contour and settles there — instead of
+      // creeping at a hair above the kinetic-repose slope forever (the reported
+      // bug). The green rests at a finer speed (a putt must roll its last inch);
+      // its static hold IS the Stimpmeter μ·g, so the putt-rest is this same rule.
       const onGreen = surf === 'green' || surf === 'fringe';
       const restSpeed = onGreen ? GREEN_REST : ROLL_REST;
-      const holdAccel = onGreen ? greenDecel(surf) : frictionFor(surf);
-      if (speed <= restSpeed && Math.hypot(ad, ax) <= holdAccel) return this.stop(surf);
+      const staticHold = staticHoldFor(surf);
+      if (speed <= restSpeed && Math.hypot(ad, ax) <= staticHold) return this.stop(surf);
       this.pushTrail();
       return;
     }
