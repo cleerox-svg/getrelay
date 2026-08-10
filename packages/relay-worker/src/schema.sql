@@ -226,7 +226,11 @@ CREATE TABLE IF NOT EXISTS game_scores (
   to_par INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_game_scores_user_time ON game_scores(user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_game_scores_user_game_course ON game_scores(user_id, game, course);
+-- NOTE: the (user_id, game, course) index is NOT created here. `course` is a
+-- probe-added column (see deploy-worker.yml), and on the live DB schema.sql
+-- runs BEFORE that ALTER, so an index referencing `course` would fail with
+-- "no such column: course". It is created in deploy-worker.yml after the
+-- column probes, alongside the other column-dependent indexes.
 
 -- Per-account personal-best records for the in-app golf Course game.
 -- One row per user (keyed on user_id, like a profile) holding their
