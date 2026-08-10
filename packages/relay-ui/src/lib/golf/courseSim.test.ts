@@ -196,6 +196,71 @@ describe('course sim — aim prediction', () => {
   });
 });
 
+// --- Wind on the course (setWind + predict includeWind) ----------------------
+// The Course gains the Range's wind: setWind() mutates the EXISTING
+// windAlong/windCross fields (already in the CourseSnapshot), the airborne-only
+// rule pushes the ball in flight, and predict({includeWind}) mirrors the Range so
+// the aim aids can draw the wind-adjusted arc + the pre-wind reticle. These pin:
+// (a) a windy predict matches the committed windy shot to the yard, (b) cross
+// wind offsets the ball laterally, and (c) setWind added NO new mutable field
+// (the snapshot round-trip guard stays byte-identical).
+describe('course sim — wind', () => {
+  it('predict({includeWind:true}) matches the committed windy shot to the yard', () => {
+    // A non-zero head/cross wind set via setWind; address a full driver at the
+    // tee. The prediction (wind included) must land where the real windy shot,
+    // fired through the interactive path with the SAME wind, comes to rest.
+    const w = { along: -1.5, cross: 2.5 };
+    const s1 = sim();
+    s1.setWind(w.along, w.cross);
+    s1.power = 1;
+    const pred = s1.predict({ includeWind: true });
+
+    const s2 = sim();
+    s2.setWind(w.along, w.cross);
+    s2.power = 1;
+    s2.onPointerDown({ x: 0, y: 0 });
+    s2.onPointerMove({ x: 0, y: 400 }); // straight-back pull → aimRad 0, full power
+    s2.arm({ x: 0, y: 400 });
+    s2.fireArmed(0);
+    let guard = 0;
+    while (s2.ball.inFlight && guard++ < 100000) s2.substep(1 / 120);
+    expect(Math.abs(pred.rest.d - s2.ball.d)).toBeLessThanOrEqual(1);
+    expect(Math.abs(pred.rest.x - s2.ball.x)).toBeLessThanOrEqual(1);
+    expect(pred.landing).not.toBeNull();
+  });
+
+  it('a cross-wind shot lands laterally offset from the same shot with zero wind', () => {
+    // The SAME address predicted with a right cross-wind vs with the wind zeroed
+    // (includeWind:false): the wind must push the ball measurably to the right.
+    const s = sim();
+    s.setWind(0, 3); // strong right cross (+x)
+    s.power = 1;
+    const withWind = s.predict({ includeWind: true });
+    const noWind = s.predict({ includeWind: false });
+    expect(withWind.rest.x - noWind.rest.x).toBeGreaterThan(3);
+  });
+
+  it('setWind adds no mutable field — the snapshot round-trip stays byte-identical', () => {
+    // Same guard as the aim-prediction suite, but with a wind set AND a
+    // predict({includeWind:false}) (which zeroes wind mid-run): restore() must
+    // put windAlong/windCross back, so the full dump is unchanged after predict.
+    const s = sim();
+    s.setWind(-1.2, 2.7);
+    s.power = 0.8;
+    const fullDump = () => {
+      const rest: Record<string, unknown> = {};
+      const all = s as unknown as Record<string, unknown>;
+      for (const k of Object.keys(all)) if (k !== 'hole') rest[k] = all[k];
+      return JSON.stringify(rest);
+    };
+    const before = fullDump();
+    s.predict({ includeWind: true });
+    s.predict({ includeWind: false });
+    s.predict(1);
+    expect(fullDump()).toBe(before);
+  });
+});
+
 describe('course sim — putting on the tilted green', () => {
   const g = HOLE_1.green;
 

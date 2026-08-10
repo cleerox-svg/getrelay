@@ -1,9 +1,8 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
-import type { PointerEvent as ReactPointerEvent } from 'react';
 import { api } from '../../lib/api';
 import { RangeSim } from '../../lib/golf/rangeSim';
 import type { RangeState, ShotResult } from '../../lib/golf/rangeSim';
-import { CLUBS, DEFAULT_CLUB_ID } from '../../lib/golf/clubs';
+import { DEFAULT_CLUB_ID } from '../../lib/golf/clubs';
 import {
   RANGE_LAYOUTS,
   pinsFor,
@@ -14,6 +13,13 @@ import {
 import type { Pin, RangeLayout } from '../../lib/golf/rangeTargets';
 import { recordRangeGame } from '../../lib/golf/stats';
 import { MAX_HOLE_POINTS, RANGE_BALLS } from '../../lib/golf/tuning';
+import { makeWind } from '../../lib/golf/wind';
+import { WindChip } from './shared/WindChip';
+import { PowerMeter } from './shared/PowerMeter';
+import { SpinPuck } from './shared/SpinPuck';
+import { AccuracyBar } from './shared/AccuracyBar';
+import { ClubSelector } from './shared/ClubSelector';
+import { TelemetryPanel, type ShotTelemetry } from './shared/TelemetryPanel';
 
 // Lazy-load the whole Three.js scene so it lands in its own chunk and never
 // bloats the main entry — the HUD/orchestration below is plain React.
@@ -83,14 +89,6 @@ function longestStreak(shots: RangeShot[]): number {
   return best;
 }
 
-// One-time random round wind (yd/s^2 acceleration). Cross moves the ball
-// L/R in flight; along is a head/tail component.
-function makeWind(): { along: number; cross: number } {
-  const mag = 1 + Math.random() * 3;
-  const ang = Math.random() * Math.PI * 2;
-  return { along: Math.sin(ang) * mag * 0.6, cross: Math.cos(ang) * mag };
-}
-
 function Spinner() {
   return (
     <div
@@ -107,328 +105,6 @@ function Spinner() {
       }}
     >
       Loading range…
-    </div>
-  );
-}
-
-// Compass wind chip: an arrow pointing the way the wind pushes the ball, plus
-// a mph readout. Up = downrange; +cross pushes right.
-function WindChip({ along, cross }: { along: number; cross: number }) {
-  const mph = Math.round(Math.hypot(along, cross) * 2.5);
-  const deg = (Math.atan2(cross, Math.max(0.0001, along)) * 180) / Math.PI;
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        background: 'var(--card-bg)',
-        border: '1px solid var(--separator)',
-        borderRadius: 999,
-        padding: '5px 10px 5px 6px',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
-      }}
-    >
-      <svg width={26} height={26} viewBox="0 0 26 26" style={{ transform: `rotate(${deg}deg)` }}>
-        <circle cx={13} cy={13} r={12} fill="none" stroke="var(--separator)" strokeWidth={1.5} />
-        <path d="M13 4 L17 15 L13 12 L9 15 Z" fill="var(--accent)" />
-      </svg>
-      <div style={{ lineHeight: 1 }}>
-        <div className="tabular-nums" style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>
-          {mph}
-        </div>
-        <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1, color: 'var(--text-dim)' }}>
-          MPH
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Always-visible vertical power meter pinned to the right edge, clear of the
-// ball's central drag zone. Empty at rest; fills 0→100% as the player pulls
-// back, ramping from accent to red near max. Display-only (pointer-transparent).
-function PowerMeter({ power }: { power: number }) {
-  const pct = Math.round(Math.max(0, Math.min(1, power)) * 100);
-  const hot = power > 0.8;
-  const fill = hot ? '#ff4d4d' : 'var(--accent)';
-  return (
-    <div
-      style={{
-        position: 'absolute',
-        right: 'calc(env(safe-area-inset-right, 0px) + 10px)',
-        top: '50%',
-        transform: 'translateY(-50%)',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        gap: 6,
-        pointerEvents: 'none',
-      }}
-    >
-      <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: 1, color: '#fff', textShadow: '0 1px 3px rgba(0,0,0,0.5)' }}>
-        {pct}%
-      </div>
-      <div
-        style={{
-          position: 'relative',
-          width: 12,
-          height: 168,
-          borderRadius: 999,
-          background: 'rgba(20,28,40,0.5)',
-          border: '1px solid var(--separator)',
-          overflow: 'hidden',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
-        }}
-      >
-        <div
-          style={{
-            position: 'absolute',
-            left: 0,
-            right: 0,
-            bottom: 0,
-            height: `${pct}%`,
-            background: fill,
-            transition: 'height 60ms linear',
-          }}
-        />
-      </div>
-      <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: 1, color: '#fff', textShadow: '0 1px 3px rgba(0,0,0,0.5)' }}>
-        POWER
-      </div>
-    </div>
-  );
-}
-
-// Circular "ball face" spin selector pinned to the bottom-left, above the club
-// strip. Drag the dot from centre: up/down = back/top spin, left/right =
-// draw/fade. Centre = no spin. Value persists across shots. onChange gets
-// (back, side) in [-1..1] with back>0 = backspin, side>0 = fade (curves right).
-function SpinPuck({
-  value,
-  onChange,
-}: {
-  value: { back: number; side: number };
-  onChange: (back: number, side: number) => void;
-}) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const SIZE = 84;
-  const R = SIZE / 2 - 12; // dot travel radius (px)
-  const dotX = SIZE / 2 + value.side * R;
-  const dotY = SIZE / 2 - value.back * R;
-
-  const apply = (clientX: number, clientY: number) => {
-    const el = ref.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    let dx = clientX - (rect.left + rect.width / 2);
-    let dy = clientY - (rect.top + rect.height / 2);
-    const len = Math.hypot(dx, dy);
-    if (len > R) {
-      dx = (dx / len) * R;
-      dy = (dy / len) * R;
-    }
-    onChange(Math.max(-1, Math.min(1, -dy / R)), Math.max(-1, Math.min(1, dx / R)));
-  };
-
-  return (
-    <div
-      ref={ref}
-      onPointerDown={(e) => {
-        e.currentTarget.setPointerCapture(e.pointerId);
-        apply(e.clientX, e.clientY);
-      }}
-      onPointerMove={(e) => {
-        if (e.currentTarget.hasPointerCapture(e.pointerId)) apply(e.clientX, e.clientY);
-      }}
-      onPointerUp={(e) => {
-        if (e.currentTarget.hasPointerCapture(e.pointerId))
-          e.currentTarget.releasePointerCapture(e.pointerId);
-      }}
-      onDoubleClick={() => onChange(0, 0)}
-      style={{
-        position: 'relative',
-        width: SIZE,
-        height: SIZE,
-        borderRadius: '50%',
-        background: 'radial-gradient(circle at 50% 42%, #ffffff, #d9dee4)',
-        border: '1px solid var(--separator)',
-        boxShadow: '0 2px 10px rgba(0,0,0,0.28)',
-        pointerEvents: 'auto',
-        touchAction: 'none',
-        cursor: 'grab',
-      }}
-    >
-      {/* Cross-hair + label baked onto the ball face. */}
-      <div style={{ position: 'absolute', left: '50%', top: 4, bottom: 4, width: 1, background: 'rgba(0,0,0,0.10)' }} />
-      <div style={{ position: 'absolute', top: '50%', left: 4, right: 4, height: 1, background: 'rgba(0,0,0,0.10)' }} />
-      <div
-        style={{
-          position: 'absolute',
-          top: 4,
-          left: 0,
-          right: 0,
-          textAlign: 'center',
-          fontSize: 8,
-          fontWeight: 800,
-          letterSpacing: 1,
-          color: '#5a6472',
-        }}
-      >
-        SPIN
-      </div>
-      <div
-        style={{
-          position: 'absolute',
-          left: dotX,
-          top: dotY,
-          width: 16,
-          height: 16,
-          marginLeft: -8,
-          marginTop: -8,
-          borderRadius: '50%',
-          background: 'var(--accent)',
-          border: '2px solid #fff',
-          boxShadow: '0 1px 4px rgba(0,0,0,0.35)',
-        }}
-      />
-    </div>
-  );
-}
-
-// Step 2 accuracy UI: a horizontal track with a highlighted centre sweet-spot
-// and a marker that ping-pongs left↔right at a steady, readable rate. Tapping
-// anywhere on the full-bleed overlay stops the marker and reports the error e ∈
-// [-1..1] (0 = dead centre). The marker is animated via its own rAF writing
-// straight to the element's style (no React re-render per frame, no per-frame
-// allocation); the rAF is cancelled on unmount. Paused freezes the sweep in
-// place (phase persists across the pause). The overlay captures the tap so it
-// can never also register as a canvas drag.
-function AccuracyBar({
-  paused,
-  onStop,
-}: {
-  paused: boolean;
-  onStop: (e: number) => void;
-}) {
-  const markerRef = useRef<HTMLDivElement | null>(null);
-  // Triangle phase in [0..2): 0→1 sweeps L→R, 1→2 sweeps R→L. Persisted in a ref
-  // so pausing/resuming continues from where it stopped.
-  const phaseRef = useRef(0);
-  const firedRef = useRef(false);
-  const SWEEP_MS = 950; // one side→side pass
-
-  useEffect(() => {
-    let raf = 0;
-    let last = performance.now();
-    const loop = (now: number) => {
-      const dt = now - last;
-      last = now;
-      if (!paused) {
-        let ph = phaseRef.current + dt / SWEEP_MS;
-        ph %= 2;
-        phaseRef.current = ph;
-        const p = ph < 1 ? ph : 2 - ph; // 0..1 marker position
-        const m = markerRef.current;
-        if (m) m.style.left = `${p * 100}%`;
-      }
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [paused]);
-
-  const stop = (ev: ReactPointerEvent<HTMLDivElement>) => {
-    ev.preventDefault();
-    ev.stopPropagation();
-    if (firedRef.current || paused) return;
-    firedRef.current = true;
-    const ph = phaseRef.current;
-    const p = ph < 1 ? ph : 2 - ph;
-    onStop((p - 0.5) * 2); // e ∈ [-1..1]
-  };
-
-  return (
-    <div
-      onPointerDown={stop}
-      style={{
-        position: 'absolute',
-        inset: 0,
-        zIndex: 45,
-        pointerEvents: 'auto',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'flex-end',
-        paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 120px)',
-        touchAction: 'none',
-      }}
-    >
-      <div style={{ width: 'min(78vw, 340px)' }}>
-        <div
-          className="text-[12px] font-bold text-center"
-          style={{
-            color: '#fff',
-            marginBottom: 8,
-            letterSpacing: 0.4,
-            textShadow: '0 1px 4px rgba(0,0,0,0.6)',
-          }}
-        >
-          TAP TO STOP IN THE CENTER
-        </div>
-        <div
-          style={{
-            position: 'relative',
-            height: 22,
-            borderRadius: 999,
-            background: 'rgba(20,28,40,0.7)',
-            border: '1px solid var(--separator)',
-            boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
-            overflow: 'hidden',
-          }}
-        >
-          {/* Centre sweet-spot band. */}
-          <div
-            style={{
-              position: 'absolute',
-              left: '50%',
-              top: 0,
-              bottom: 0,
-              width: '13%',
-              transform: 'translateX(-50%)',
-              background:
-                'linear-gradient(90deg, rgba(74,222,128,0), rgba(74,222,128,0.6), rgba(74,222,128,0))',
-            }}
-          />
-          {/* Centre line. */}
-          <div
-            style={{
-              position: 'absolute',
-              left: '50%',
-              top: 3,
-              bottom: 3,
-              width: 2,
-              transform: 'translateX(-50%)',
-              background: 'rgba(255,255,255,0.55)',
-            }}
-          />
-          {/* Sweeping marker (left set each frame by the rAF above). */}
-          <div
-            ref={markerRef}
-            style={{
-              position: 'absolute',
-              top: -2,
-              bottom: -2,
-              left: '50%',
-              width: 5,
-              marginLeft: -2.5,
-              borderRadius: 3,
-              background: '#fff',
-              boxShadow: '0 0 8px rgba(255,255,255,0.95)',
-            }}
-          />
-        </div>
-      </div>
     </div>
   );
 }
@@ -530,25 +206,6 @@ function LayoutPicker({
   );
 }
 
-// A completed shot's full record — captured for the in-app telemetry panel and
-// the "Copy telemetry" export, so real device numbers can be compared against
-// the headless harness (rangeSim.test.ts). One per shot that comes to rest.
-interface ShotTelemetry {
-  club: string;
-  powerPct: number;
-  aimDeg: number;
-  spinBack: number;
-  spinSide: number;
-  accuracy: number;
-  carry: number;
-  total: number;
-  apex: number;
-  ballSpeed: number;
-  lateral: number;
-  result: ShotResult;
-  ts: number;
-}
-
 const HINT_KEY = 'relay.golf.range.hintSeen';
 
 export function RangeGame({
@@ -613,9 +270,9 @@ export function RangeGame({
 
   // Telemetry: capture each completed shot for the collapsible debug panel and
   // the "Copy telemetry" export (real device numbers to compare vs the harness).
-  const [debugOpen, setDebugOpen] = useState(false);
+  // The panel (shared/TelemetryPanel) owns its open/copy UI state; we just keep
+  // the rolling log + the last shot to feed it.
   const [lastShot, setLastShot] = useState<ShotTelemetry | null>(null);
-  const [copyMsg, setCopyMsg] = useState('');
   const telemetryRef = useRef<ShotTelemetry[]>([]);
   // Power + accuracy-error at the instant of firing (the sim clears power on
   // launch), captured by fireAccuracy() and read back when the shot comes to rest.
@@ -789,23 +446,6 @@ export function RangeGame({
     log.push(rec);
     if (log.length > 30) log.shift();
     setLastShot(rec);
-  }
-
-  // Copy the rolling telemetry log as JSON to the clipboard, guarded for
-  // environments (older WebViews) without the async clipboard API.
-  async function copyTelemetry() {
-    const json = JSON.stringify(telemetryRef.current, null, 2);
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(json);
-        setCopyMsg(`Copied ${telemetryRef.current.length}`);
-      } else {
-        setCopyMsg('No clipboard');
-      }
-    } catch {
-      setCopyMsg('Copy failed');
-    }
-    window.setTimeout(() => setCopyMsg(''), 1500);
   }
 
   // Step 2 tap: stop the accuracy marker, launch the armed shot with the miss
@@ -1060,48 +700,18 @@ export function RangeGame({
           safe-area padded. It's the only bottom-interactive element and stays
           thin so the ball's drag zone above it is clear. The scroll container
           is pointer-transparent; each chip opts back in. */}
-      <div
+      <ClubSelector
+        variant="strip"
+        clubId={clubId}
+        disabled={!!st?.inFlight}
+        onSelect={selectClub}
         style={{
           position: 'absolute',
           left: 12,
           right: 12,
           bottom: 'calc(env(safe-area-inset-bottom, 0px) + 10px)',
-          display: 'flex',
-          gap: 6,
-          overflowX: 'auto',
-          paddingBottom: 2,
-          scrollbarWidth: 'none',
-          pointerEvents: 'none',
         }}
-      >
-        {CLUBS.map((c) => {
-          const active = c.id === clubId;
-          const disabled = !!st?.inFlight;
-          return (
-            <button
-              key={c.id}
-              type="button"
-              disabled={disabled}
-              onClick={() => selectClub(c.id)}
-              style={{
-                pointerEvents: 'auto',
-                flex: '0 0 auto',
-                border: `1px solid ${active ? 'var(--accent)' : 'var(--separator)'}`,
-                background: active ? 'var(--accent)' : 'var(--card-bg)',
-                color: active ? '#FFFFFF' : 'var(--text)',
-                opacity: disabled && !active ? 0.5 : 1,
-                borderRadius: 12,
-                padding: '6px 12px',
-                fontSize: 12,
-                fontWeight: 700,
-                boxShadow: '0 2px 8px rgba(0,0,0,0.14)',
-              }}
-            >
-              {c.name}
-            </button>
-          );
-        })}
-      </div>
+      />
 
       {/* Always-visible power meter, pinned to the right edge. */}
       <PowerMeter power={st?.power ?? 0} />
@@ -1121,110 +731,14 @@ export function RangeGame({
       {/* Telemetry: a tiny debug toggle + collapsible last-shot panel with a
           Copy-to-clipboard export of the rolling shot log. Unobtrusive, pinned
           to the left edge, clear of the central drag channel. */}
-      <div
-        style={{
-          position: 'absolute',
-          left: 'calc(env(safe-area-inset-left, 0px) + 10px)',
-          top: '50%',
-          transform: 'translateY(-50%)',
-          display: 'flex',
-          alignItems: 'flex-start',
-          gap: 8,
-          pointerEvents: 'none',
-          zIndex: 40,
-        }}
-      >
-        <button
-          type="button"
-          onClick={() => setDebugOpen((o) => !o)}
-          aria-label="Toggle shot telemetry"
-          style={{
-            pointerEvents: 'auto',
-            width: 26,
-            height: 26,
-            borderRadius: 8,
-            border: '1px solid var(--separator)',
-            background: 'var(--card-bg)',
-            color: debugOpen ? 'var(--accent)' : 'var(--text-dim)',
-            fontSize: 15,
-            fontWeight: 800,
-            lineHeight: 1,
-            boxShadow: '0 2px 8px rgba(0,0,0,0.16)',
-          }}
-        >
-          ﹒
-        </button>
-        {debugOpen ? (
-          <div
-            style={{
-              pointerEvents: 'auto',
-              width: 188,
-              background: 'var(--card-bg)',
-              border: '1px solid var(--separator)',
-              borderRadius: 12,
-              padding: 10,
-              boxShadow: '0 4px 14px rgba(0,0,0,0.28)',
-              fontSize: 11,
-              color: 'var(--text)',
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: 6,
-              }}
-            >
-              <span style={{ fontWeight: 800, letterSpacing: 0.5 }}>DEBUG</span>
-              <span style={{ color: 'var(--text-dim)' }}>{telemetryRef.current.length} logged</span>
-            </div>
-            {lastShot ? (
-              <div className="tabular-nums" style={{ lineHeight: 1.5 }}>
-                <div>
-                  {lastShot.club} · {lastShot.powerPct}% · aim {lastShot.aimDeg}°
-                </div>
-                <div>
-                  carry {lastShot.carry} · total {lastShot.total} · {lastShot.result}
-                </div>
-                <div>
-                  apex {lastShot.apex} · ball {lastShot.ballSpeed} · lat {lastShot.lateral}
-                </div>
-                <div>
-                  spin b{lastShot.spinBack}/s{lastShot.spinSide} · acc {lastShot.accuracy}
-                </div>
-              </div>
-            ) : (
-              <div style={{ color: 'var(--text-dim)' }}>No shots yet</div>
-            )}
-            <button
-              type="button"
-              onClick={copyTelemetry}
-              disabled={telemetryRef.current.length === 0}
-              style={{
-                pointerEvents: 'auto',
-                width: '100%',
-                marginTop: 8,
-                borderRadius: 8,
-                border: '1px solid var(--separator)',
-                background: 'var(--accent)',
-                color: '#fff',
-                fontSize: 12,
-                fontWeight: 700,
-                padding: '6px 0',
-                opacity: telemetryRef.current.length === 0 ? 0.5 : 1,
-              }}
-            >
-              {copyMsg || 'Copy telemetry'}
-            </button>
-          </div>
-        ) : null}
-      </div>
+      <TelemetryPanel lastShot={lastShot} log={telemetryRef.current} />
 
       {/* Step 2 accuracy bar — shown only while a shot is armed (aim+power
           locked). Full-bleed interactive overlay so a tap can't leak to the
           canvas as a drag. Firing (or leaving the armed state) unmounts it. */}
-      {st?.armed ? <AccuracyBar paused={paused} onStop={fireAccuracy} /> : null}
+      {st?.armed ? (
+        <AccuracyBar paused={paused} onStop={fireAccuracy} label="TAP TO STOP IN THE CENTER" />
+      ) : null}
 
       {/* Brief accuracy feedback after a shot fires. Pointer-transparent. */}
       {feedback ? (

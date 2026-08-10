@@ -17,7 +17,6 @@ import {
   edgeRadius,
   featureSeed,
   type CourseHole,
-  type Surface,
 } from '../../lib/golf/terrain';
 import {
   sampleHeightField,
@@ -29,9 +28,19 @@ import {
 import {
   addSkyDome,
   createTreeKit,
+  makeContactShadowTexture,
   makeFog,
   makeTurfColor,
   makeTurfNormalMap,
+  makeWater,
+  FIRST_CUT,
+  GREEN_COLOR,
+  STRIPE_HI,
+  STRIPE_LO,
+  STRIPE_YD,
+  SURFACE_RGB,
+  TURF_NORMAL_SCALE,
+  TURF_ROUGHNESS,
 } from '../../lib/golf/scenery';
 import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
 import { BALL_R, CUP_R } from '../../lib/golf/greenPhysics';
@@ -45,22 +54,12 @@ interface Props {
   paused?: boolean;
 }
 
-// Base albedo per lie, painted into the top-down surface map below. Fairway and
-// rough are deliberately far apart in hue+value (rough is darker, more olive) so
-// the corridor edge reads as a hard material change, not a shade of the same
-// grass. Green/fringe/tee/bunker/water are refined by their own overlay meshes;
-// these are the values that show if an overlay ever leaves a sliver.
-const SURFACE_RGB: Record<Surface, [number, number, number]> = {
-  fairway: [0.40, 0.66, 0.28],
-  green: [0.49, 0.79, 0.38],
-  fringe: [0.298, 0.561, 0.243], // rich, dark collar green (0x4c8f3e) — matches the overlay
-  rough: [0.19, 0.37, 0.16], // darker + more olive → clearly not fairway
-  bunker: [0.9, 0.82, 0.6],
-  water: [0.14, 0.42, 0.66],
-  cartpath: [0.74, 0.71, 0.66],
-  tee: [0.34, 0.55, 0.26],
-  ob: [0.13, 0.28, 0.12],
-};
+// Per-lie base albedo, the fairway↔rough first-cut width and the bold mow-stripe
+// scale/contrast now live in the shared scenery kit (SURFACE_RGB / FIRST_CUT /
+// STRIPE_YD / STRIPE_HI / STRIPE_LO) so the Range and Course cut the SAME grass;
+// makeSurfaceMap below consumes them. Fairway and rough stay far apart in
+// hue+value (rough darker, more olive) so the corridor edge reads as a hard
+// material change; green/fringe/tee/bunker/water are refined by overlay meshes.
 
 // Cheap deterministic hash noise in [0,1) for the baked surface texture.
 function hashNoise(ix: number, iy: number): number {
@@ -131,13 +130,11 @@ function makeSurfaceMap(
   const g = c.getContext('2d')!;
   const img = g.createImageData(W, H);
   const data = img.data;
-  const STRIPE_YD = 7; // mow band period downrange
-  // Half-width (yd) of the fairway↔rough "first cut": a short transition band
-  // straddling the corridor edge where the fairway albedo blends into the rough,
-  // so the seam reads as a smooth gradient of intermediate-height grass, not a
-  // hard classification line. Derived only from corridorEdgeDist, so it scales
-  // to any hole; this is a RENDERING treatment (surfaceAt is unchanged).
-  const FIRST_CUT = 4;
+  // STRIPE_YD (mow band period downrange) + FIRST_CUT (half-width of the
+  // fairway↔rough transition feather) are shared from scenery.ts so both scenes
+  // cut the same stripes / first cut; the feather straddles the corridor edge so
+  // the seam reads as intermediate-height grass (render-only; surfaceAt is
+  // unchanged), and it scales to any hole via corridorEdgeDist.
   const FAIR = SURFACE_RGB.fairway;
   const ROUGH = SURFACE_RGB.rough;
   const fair: [number, number, number] = [0, 0, 0];
@@ -145,7 +142,7 @@ function makeSurfaceMap(
   // Fairway albedo at (x,d): bold alternating mow stripes + a whisper of blade
   // speckle. Strong band contrast so the "fairway lines" read clearly.
   const fairwayRGB = (x: number, d: number, out: [number, number, number]) => {
-    const band = Math.floor(d / STRIPE_YD) % 2 === 0 ? 1.16 : 0.82;
+    const band = Math.floor(d / STRIPE_YD) % 2 === 0 ? STRIPE_HI : STRIPE_LO;
     const blade = 0.94 + hashNoise(x * 3.1, d * 3.1) * 0.12;
     const m = band * blade;
     out[0] = FAIR[0] * m;
@@ -337,34 +334,6 @@ function makeTeeTurf(): THREE.Texture {
   return t;
 }
 
-// Water ripple normal-ish map (animated by offsetting in the loop) for shimmer.
-// Seeded PRNG so the ripple layout is reproducible.
-function makeWaterNormal(): THREE.Texture {
-  const S = 128;
-  const c = document.createElement('canvas');
-  c.width = c.height = S;
-  const g = c.getContext('2d')!;
-  const rnd = mulberry32(0x2c0ffee);
-  g.fillStyle = '#8080ff';
-  g.fillRect(0, 0, S, S);
-  for (let i = 0; i < 60; i++) {
-    const x = rnd() * S;
-    const y = rnd() * S;
-    const r = 6 + rnd() * 18;
-    const rg = g.createRadialGradient(x, y, 0, x, y, r);
-    rg.addColorStop(0, 'rgba(150,150,255,0.9)');
-    rg.addColorStop(1, 'rgba(128,128,255,0)');
-    g.fillStyle = rg;
-    g.beginPath();
-    g.arc(x, y, r, 0, Math.PI * 2);
-    g.fill();
-  }
-  const t = new THREE.CanvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.repeat.set(3, 3);
-  return t;
-}
-
 // --- Organic feature meshes (see-what-you-play) ----------------------------
 // A feature's outline is the SAME wavy edge terrain.ts classifies + dishes: a
 // seeded, angle-periodic wobble via edgeRadius(seed, angle, baseR). These polar
@@ -547,10 +516,10 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     host.appendChild(canvas);
 
     const scene = new THREE.Scene();
-    // Warm distance haze (shared with the range). The course corridor is long —
-    // the green sits ~512 yd out — so the far plane is pushed past the pin, but
-    // the near/feel matches the range so distant fairway/trees fade with depth.
-    scene.fog = makeFog(170, 780);
+    // Warm distance haze from the shared kit (makeFog) — one near/far shared with
+    // the range (reconciled to the course's wider values: the green sits ~512 yd
+    // out, so the far plane clears the pin) so distant fairway/trees fade alike.
+    scene.fog = makeFog();
 
     // Cloud + distant-hill sky dome (shared with the range) — replaces the old
     // flat 3-stop background so the sky reads with depth, not a painted wall.
@@ -668,11 +637,11 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       new THREE.MeshStandardMaterial({
         map: turfTex,
         normalMap: turfNorm,
-        roughness: 0.85,
+        roughness: TURF_ROUGHNESS,
         metalness: 0,
       }),
     );
-    groundMat.normalScale.set(0.45, 0.45);
+    groundMat.normalScale.set(TURF_NORMAL_SCALE, TURF_NORMAL_SCALE);
     const ground = new THREE.Mesh(geo, groundMat);
     ground.receiveShadow = true;
     scene.add(ground);
@@ -685,7 +654,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     // the "flat grass" bug. Shared turf so the far ground reads as grass.
     const baseY = fieldMin - 3;
     const fillGeo = track(new THREE.PlaneGeometry(2600, 2600));
-    const fillTex = track(makeTurfColor('green'));
+    const fillTex = track(makeTurfColor());
     fillTex.repeat.set(120, 120);
     const fillMat = track(new THREE.MeshStandardMaterial({ map: fillTex, roughness: 0.95 }));
     const fill = new THREE.Mesh(fillGeo, fillMat);
@@ -701,7 +670,13 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     // classifies — no more circle-vs-organic mismatch. Radial UV for the disc
     // textures. Ground-height (heightAt) sampled per vertex so a bunker cap sits
     // ON the basin bowl; water is a flat surface at its rim height.
-    const waterNormal = track(makeWaterNormal());
+    // Shared animated water material (scenery.makeWater) — the SAME dual-wave
+    // scrolling normal + sun glint the Range uses, replacing the old static teal
+    // disc. Created lazily on the first water hazard and shared across all of a
+    // hole's water meshes (one material, one per-frame update). The geometry
+    // stays terrain-following + organic (buildOrganicDisc), so only the material
+    // is single-sourced.
+    let waterKit: ReturnType<typeof makeWater> | null = null;
     const sandTex = track(makeSand());
     sandTex.repeat.set(3, 3);
     const radialUV: UVFn = (_wx, _wd, ang, frac) => [
@@ -727,21 +702,8 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         const wGeo = track(
           buildOrganicDisc(hzSeed, hz.d, hz.x, hz.r * WATER_OVER, groundY, 0.12, radialUV, 8, 72),
         );
-        const wMat = track(
-          new THREE.MeshStandardMaterial({
-            // A brighter sky-teal with LOW metalness reads as sunlit water; the
-            // old dark navy + high metalness reflected the dim scene and looked
-            // like a black pit. Semi-transparent so it reads as a water surface.
-            color: 0x4aa3d8,
-            roughness: 0.28,
-            metalness: 0.1,
-            transparent: true,
-            opacity: 0.82,
-            normalMap: waterNormal,
-          }),
-        );
-        wMat.normalScale.set(0.5, 0.5);
-        const water = new THREE.Mesh(wGeo, wMat);
+        waterKit ??= makeWater(track);
+        const water = new THREE.Mesh(wGeo, waterKit.material);
         scene.add(water);
         // A thin pale shoreline (organic annulus, SAME seed → hugs the water's
         // wave) that laps JUST outside the water edge. Its inner base sits under
@@ -894,7 +856,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       capNorm.repeat.set(16, 16);
       const capMat = track(
         new THREE.MeshStandardMaterial({
-          color: 0x86d06f, // bright putting green — distinct from fringe + fairway
+          color: GREEN_COLOR, // shared bright putting green — matches the range island green
           roughness: 0.6,
           metalness: 0,
           map: grain, // fine mow grain → textured, not flat paint
@@ -1156,21 +1118,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     // centre is drawn at b.h + BALL_R, i.e. its underside exactly on b.h — the
     // same heightAt the physics rests on — so seated, this disc kisses the base
     // of the ball.
-    const shadowTex = (() => {
-      const S = 64;
-      const cv = document.createElement('canvas');
-      cv.width = cv.height = S;
-      const gx = cv.getContext('2d')!;
-      const rg = gx.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
-      rg.addColorStop(0, 'rgba(0,0,0,0.5)');
-      rg.addColorStop(0.6, 'rgba(0,0,0,0.28)');
-      rg.addColorStop(1, 'rgba(0,0,0,0)');
-      gx.fillStyle = rg;
-      gx.fillRect(0, 0, S, S);
-      const t = new THREE.CanvasTexture(cv);
-      return t;
-    })();
-    track(shadowTex);
+    const shadowTex = track(makeContactShadowTexture());
     const ballShadowMat = track(
       new THREE.MeshBasicMaterial({
         map: shadowTex,
@@ -1275,6 +1223,100 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     const restRing = aimAid(new THREE.Mesh(restRingGeo, restRingMat));
     restRing.rotation.x = -Math.PI / 2;
 
+    // Pre-wind (intended) reticle — a hollow amber ring at where the shot WOULD
+    // land with no wind. The gap between it and the wind-adjusted landing ring
+    // reads the wind push, exactly like the Range. Shown only when it visibly
+    // differs from the wind landing.
+    const preRingGeo = track(new THREE.RingGeometry(2.8, 3.3, 32));
+    const preRingMat = track(
+      overlay(
+        new THREE.MeshBasicMaterial({
+          color: 0xffd54a,
+          transparent: true,
+          opacity: 0.9,
+          side: THREE.DoubleSide,
+        }),
+      ),
+    );
+    const preRing = aimAid(new THREE.Mesh(preRingGeo, preRingMat));
+    preRing.rotation.x = -Math.PI / 2;
+
+    // --- On-turf aim guide (arrow + tip reticle + steer chevrons) ------------
+    // Lifted from the Range for a matched feel: a tapering arrow on the turf from
+    // the ball along the shot line, growing + reddening with power. Oriented in
+    // updateAim toward the intended (pre-wind) landing and shown only while
+    // addressing a shot. depthTest off (overlay) so a sloped fairway can't
+    // occlude it, and frustumCulled off like every other aim aid.
+    const AIM_LEN = 42; // yards to the tip reticle at rest
+    const aimGuide = new THREE.Group();
+    aimGuide.frustumCulled = false;
+    const aimColLow = new THREE.Color(0xffd54a);
+    const aimColHigh = new THREE.Color(0xff5a3c);
+    const aw = 0.42; // shaft half-width
+    const awh = 1.7; // head half-width
+    const ahl = 6; // head length
+    const az0 = -2.4; // start just ahead of the ball
+    const azHead = -(AIM_LEN - ahl);
+    const azTip = -AIM_LEN;
+    const arrowVerts = new Float32Array([
+      -aw, 0, az0, aw, 0, az0, aw, 0, azHead, // shaft tri 1
+      -aw, 0, az0, aw, 0, azHead, -aw, 0, azHead, // shaft tri 2
+      -awh, 0, azHead, awh, 0, azHead, 0, 0, azTip, // head
+    ]);
+    const arrowGeo = track(new THREE.BufferGeometry());
+    arrowGeo.setAttribute('position', new THREE.BufferAttribute(arrowVerts, 3));
+    const aimMat = track(
+      overlay(
+        new THREE.MeshBasicMaterial({
+          color: aimColLow.clone(),
+          transparent: true,
+          opacity: 0.6,
+          side: THREE.DoubleSide,
+        }),
+      ),
+    ) as THREE.MeshBasicMaterial;
+    const arrowMesh = new THREE.Mesh(arrowGeo, aimMat);
+    arrowMesh.renderOrder = AIM_ORDER;
+    arrowMesh.frustumCulled = false;
+    aimGuide.add(arrowMesh);
+    const aimReticleGeo = track(new THREE.RingGeometry(1.7, 2.3, 24));
+    const aimReticle = new THREE.Mesh(aimReticleGeo, aimMat);
+    aimReticle.rotation.x = -Math.PI / 2;
+    aimReticle.position.set(0, 0, azTip);
+    aimReticle.renderOrder = AIM_ORDER;
+    aimReticle.frustumCulled = false;
+    aimGuide.add(aimReticle);
+    const chevGeo = track(new THREE.BufferGeometry());
+    const acs = 1.1;
+    chevGeo.setAttribute(
+      'position',
+      new THREE.BufferAttribute(new Float32Array([0, 0, acs, acs * 1.4, 0, 0, 0, 0, -acs]), 3),
+    );
+    const chevMat = track(
+      overlay(
+        new THREE.MeshBasicMaterial({
+          color: aimColLow.clone(),
+          transparent: true,
+          opacity: 0.42,
+          side: THREE.DoubleSide,
+        }),
+      ),
+    ) as THREE.MeshBasicMaterial;
+    const chevL = new THREE.Mesh(chevGeo, chevMat);
+    chevL.position.set(-4.4, 0, -15);
+    chevL.rotation.y = Math.PI; // point left (−X)
+    chevL.renderOrder = AIM_ORDER;
+    chevL.frustumCulled = false;
+    aimGuide.add(chevL);
+    const chevR = new THREE.Mesh(chevGeo, chevMat);
+    chevR.position.set(4.4, 0, -15); // point right (+X)
+    chevR.renderOrder = AIM_ORDER;
+    chevR.frustumCulled = false;
+    aimGuide.add(chevR);
+    aimGuide.visible = false;
+    scene.add(aimGuide);
+    const aimCol = new THREE.Color();
+
     const fillArc = (
       buf: THREE.BufferGeometry,
       path: { d: number; x: number; h: number }[],
@@ -1304,13 +1346,17 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       edgeR.l.visible = on;
       landRing.visible = on;
       restRing.visible = on;
+      aimGuide.visible = on;
+      if (!on) preRing.visible = false; // gap ring re-decided by updateAim when on
     };
     const updateAim = () => {
-      const c = sim.predict(0);
+      // Wind-adjusted centre line + landing/rest, plus the two tap-timing edges.
+      const c = sim.predict({ includeWind: true });
       aimHoling = c.result === 'holed';
       fillArc(arc.g, c.path);
-      fillArc(edgeL.g, sim.predict(-1).path);
-      fillArc(edgeR.g, sim.predict(1).path);
+      fillArc(edgeL.g, sim.predict({ accuracy: -1, includeWind: true }).path);
+      fillArc(edgeR.g, sim.predict({ accuracy: 1, includeWind: true }).path);
+      const land = c.landing ?? c.rest;
       if (c.landing) {
         landRing.position.set(c.landing.x, c.landing.h + 0.12, -c.landing.d);
         landRing.visible = true;
@@ -1318,7 +1364,28 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         landRing.visible = false;
       }
       restRing.position.set(c.rest.x, c.rest.h + 0.12, -c.rest.d);
+
+      // Pre-wind (intended) reticle — the gap to the landing ring shows the wind
+      // push. Only drawn when it visibly differs.
+      const intended = sim.predict({ includeWind: false, stride: 12 });
+      const iLand = intended.landing ?? intended.rest;
+      preRing.position.set(iLand.x, iLand.h + 0.12, -iLand.d);
+      preRing.visible = Math.hypot(iLand.d - land.d, iLand.x - land.x) > 3;
+
+      // On-turf aim guide: seat it at the ball on the terrain, point it toward
+      // the intended (pre-wind) landing, grow + redden it with power.
+      const gb = sim.ball;
+      aimGuide.position.set(gb.x, heightAt(hole, gb.d, gb.x) + 0.16, -gb.d);
+      aimGuide.rotation.y = Math.atan2(gb.x - iLand.x, iLand.d - gb.d);
+      aimGuide.scale.z = 1 + sim.power * 0.5;
+      aimCol.copy(aimColLow).lerp(aimColHigh, sim.power);
+      aimMat.color.copy(aimCol);
+      chevMat.color.copy(aimCol);
+      aimMat.opacity = 0.42 + sim.power * 0.45;
+      chevMat.opacity = 0.42;
+
       arc.l.visible = arc.line.visible = edgeL.l.visible = edgeR.l.visible = restRing.visible = true;
+      aimGuide.visible = true;
     };
     // Default (not-holing) aim colours, restored whenever the on-target pulse ends.
     const AIM_WHITE = 0xffffff;
@@ -1492,9 +1559,9 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       ballShadow.scale.set(shScale, shScale, shScale);
       ballShadowMat.opacity = 0.9 * Math.max(0.12, 1 - alt / 8);
 
-      // Water shimmer: drift the ripple normal map.
-      waterNormal.offset.x += dt * 0.014;
-      waterNormal.offset.y += dt * 0.009;
+      // Water shimmer: shared per-frame hook scrolls the colour + ripple normal
+      // maps (dual-wave + sun glint), matching the range.
+      if (waterKit) waterKit.update(now / 1000);
 
       // Tracer from the sim trail.
       const tr = sim.trail;

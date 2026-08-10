@@ -207,6 +207,19 @@ export interface CoursePrediction {
   result: CourseResult;
 }
 
+// Options for predict() — unified with rangeSim's shape so both scenes call it
+// the same way. Uses the sim's CURRENT club/power/steer/spin/wind unless
+// overridden. `accuracy` bakes in a tap-timing miss (0 = the pure centre line);
+// `includeWind: false` zeroes wind for the "intended" pre-wind line (the gap to
+// the wind-adjusted landing shows the wind push); `stride` sub-samples the path.
+// A bare number is accepted too (legacy `predict(0)`/`predict(-1)`/`predict(1)`
+// callers) and treated as `{ accuracy }`.
+export interface CoursePredictOptions {
+  accuracy?: number;
+  includeWind?: boolean;
+  stride?: number;
+}
+
 // Live readouts the HUD polls each frame.
 export interface CourseState {
   clubId: string;
@@ -226,6 +239,16 @@ export interface CourseState {
   spinBack: number;
   spinSide: number;
   penaltyPending: boolean;
+  // Round wind (yd/s² accelerations) so the HUD's WindChip reads from the sim,
+  // exactly like the Range. Set once per round via setWind(); airborne-only.
+  windAlong: number;
+  windCross: number;
+  // Last-shot ballistics for the telemetry panel (mirrors RangeState): carry /
+  // total played distance, apex height, and launch ball speed.
+  carry: number;
+  total: number;
+  apex: number;
+  ballSpeed: number;
   // On the green → the next stroke is a putt (ground roll), so the HUD can label
   // the club "Putter" and read the power meter as putt strength.
   putting: boolean;
@@ -548,6 +571,15 @@ export class CourseSim {
     this.spinBack = Math.max(-1, Math.min(1, back));
     this.spinSide = Math.max(-1, Math.min(1, side));
   }
+  // Set the round's wind (yd/s² accelerations: `along` head/tail on +d, `cross`
+  // L/R on +x). Mutates the EXISTING windAlong/windCross fields (already in the
+  // CourseSnapshot) — no new mutable state, so the snapshot round-trip guard is
+  // untouched. Wind is applied airborne-only in substep() (a grounded/settled
+  // ball is never shoved), matching the deliberate course rule.
+  setWind(along: number, cross: number): void {
+    this.windAlong = along;
+    this.windCross = cross;
+  }
   setMaxPull(px: number): void {
     this.maxPull = Math.max(40, px);
   }
@@ -673,6 +705,12 @@ export class CourseSim {
       spinBack: this.spinBack,
       spinSide: this.spinSide,
       penaltyPending: this.penaltyPending,
+      windAlong: this.windAlong,
+      windCross: this.windCross,
+      carry: Math.round(this.carry),
+      total: Math.round(this.total),
+      apex: Math.round(this.apex),
+      ballSpeed: Math.round(this.ballSpeed),
       putting: this.putting(),
       holeId: this.hole.id,
       driveYards: this.driveYards == null ? null : Math.round(this.driveYards),
@@ -933,12 +971,22 @@ export class CourseSim {
   // reuses the real integrator ON THE TERRAIN, the drawn arc, landing reticle
   // and roll-out marker are true to the yard. `accuracy` bakes in a tap-timing
   // miss so the dispersion edges can be drawn. Read-only — the renderer calls it
-  // several times per address (centre + both edges).
-  predict(accuracy = 0): CoursePrediction {
+  // several times per address (centre + both edges). Accepts an options object
+  // ({ accuracy, includeWind, stride }) — unified with rangeSim — or a bare
+  // number for the legacy `predict(0)` callers, which is read as { accuracy }.
+  // With `includeWind: false` the wind is zeroed for the dry-run (the "intended"
+  // pre-wind line); snapshot()/restore() put windAlong/windCross back after.
+  predict(opts: CoursePredictOptions | number = {}): CoursePrediction {
+    const o = typeof opts === 'number' ? { accuracy: opts } : opts;
+    const accuracy = o.accuracy ?? 0;
     const fixedS = FIXED_MS / 1000;
-    const stride = 2;
+    const stride = Math.max(1, Math.floor(o.stride ?? 2));
     const b = this.ball;
     const snap = this.snapshot();
+    if (o.includeWind === false) {
+      this.windAlong = 0;
+      this.windCross = 0;
+    }
 
     const e = Math.max(-1, Math.min(1, accuracy));
     const powerW = ACCURACY_POWER_FLOOR + (1 - ACCURACY_POWER_FLOOR) * this.power;

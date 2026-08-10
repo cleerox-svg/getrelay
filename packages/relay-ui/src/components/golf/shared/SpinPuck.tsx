@@ -1,0 +1,98 @@
+import { useRef } from 'react';
+
+// Circular "ball face" spin selector. Drag the dot from centre: up/down =
+// back/top spin, left/right = draw/fade. Centre = no spin. Value persists across
+// shots. onChange gets (back, side) in [-1..1] with back>0 = backspin, side>0 =
+// fade (curves right). Shared by the Range and Course so both wire it to
+// sim.setSpin. Pure DOM / theme CSS-vars — no `three`.
+export function SpinPuck({
+  value,
+  onChange,
+}: {
+  value: { back: number; side: number };
+  onChange: (back: number, side: number) => void;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const SIZE = 84;
+  const R = SIZE / 2 - 12; // dot travel radius (px)
+  const dotX = SIZE / 2 + value.side * R;
+  const dotY = SIZE / 2 - value.back * R;
+
+  const apply = (clientX: number, clientY: number) => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    let dx = clientX - (rect.left + rect.width / 2);
+    let dy = clientY - (rect.top + rect.height / 2);
+    const len = Math.hypot(dx, dy);
+    if (len > R) {
+      dx = (dx / len) * R;
+      dy = (dy / len) * R;
+    }
+    onChange(Math.max(-1, Math.min(1, -dy / R)), Math.max(-1, Math.min(1, dx / R)));
+  };
+
+  return (
+    <div
+      ref={ref}
+      onPointerDown={(e) => {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        apply(e.clientX, e.clientY);
+      }}
+      onPointerMove={(e) => {
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) apply(e.clientX, e.clientY);
+      }}
+      onPointerUp={(e) => {
+        if (e.currentTarget.hasPointerCapture(e.pointerId))
+          e.currentTarget.releasePointerCapture(e.pointerId);
+      }}
+      onDoubleClick={() => onChange(0, 0)}
+      style={{
+        position: 'relative',
+        width: SIZE,
+        height: SIZE,
+        borderRadius: '50%',
+        background: 'radial-gradient(circle at 50% 42%, #ffffff, #d9dee4)',
+        border: '1px solid var(--separator)',
+        boxShadow: '0 2px 10px rgba(0,0,0,0.28)',
+        pointerEvents: 'auto',
+        touchAction: 'none',
+        cursor: 'grab',
+      }}
+    >
+      {/* Cross-hair + label baked onto the ball face. */}
+      <div style={{ position: 'absolute', left: '50%', top: 4, bottom: 4, width: 1, background: 'rgba(0,0,0,0.10)' }} />
+      <div style={{ position: 'absolute', top: '50%', left: 4, right: 4, height: 1, background: 'rgba(0,0,0,0.10)' }} />
+      <div
+        style={{
+          position: 'absolute',
+          top: 4,
+          left: 0,
+          right: 0,
+          textAlign: 'center',
+          fontSize: 8,
+          fontWeight: 800,
+          letterSpacing: 1,
+          color: '#5a6472',
+        }}
+      >
+        SPIN
+      </div>
+      <div
+        style={{
+          position: 'absolute',
+          left: dotX,
+          top: dotY,
+          width: 16,
+          height: 16,
+          marginLeft: -8,
+          marginTop: -8,
+          borderRadius: '50%',
+          background: 'var(--accent)',
+          border: '2px solid #fff',
+          boxShadow: '0 1px 4px rgba(0,0,0,0.35)',
+        }}
+      />
+    </div>
+  );
+}
