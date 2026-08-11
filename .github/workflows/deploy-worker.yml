@@ -142,6 +142,16 @@ jobs:
             echo "messages.media_url column already present"
           fi
 
+          probe=$(pnpm exec wrangler d1 execute relay-db --remote --json \
+            --command "SELECT name FROM pragma_table_info('messages') WHERE name='body_iv';")
+          if ! echo "$probe" | jq -e '.[0].results | length > 0' > /dev/null; then
+            echo "Adding messages.body_iv column"
+            pnpm exec wrangler d1 execute relay-db --remote \
+              --command "ALTER TABLE messages ADD COLUMN body_iv TEXT;"
+          else
+            echo "messages.body_iv column already present"
+          fi
+
           # Group avatar columns on chats. Both nullable so existing
           # rows don't need backfill — clients render the hashed-letter
           # GroupAvatar fallback whenever both are null.
@@ -324,3 +334,14 @@ jobs:
           # `wrangler secret put SPOTIFY_CLIENT_SECRET --env production`.
           # Until both are set, /tunes/spotify returns { url: null } and the
           # client falls back to a Spotify search link.
+          # Message-body encryption KEK: set MESSAGE_KEK via
+          # `cd packages/relay-worker && wrangler secret put MESSAGE_KEK --env production`
+          # (JSON version map of base64 32-byte keys). Deliberately NOT listed
+          # in the `secrets:` block above — it's set once by hand and must
+          # persist unchanged across deploys; pushing it from CI would risk
+          # overwriting the live KEK and making stored ciphertext undecryptable.
+          # REQUIRED-BEFORE-DEPLOY: MESSAGE_KEK must already exist in the target
+          # environment BEFORE this worker version deploys/merges — config
+          # errors are loud, so the first message send throws and messaging
+          # breaks if it's missing. See wrangler.toml for rotation rules
+          # (old KEK versions can NEVER be dropped — no lazy re-wrap).

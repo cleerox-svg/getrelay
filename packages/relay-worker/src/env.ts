@@ -32,6 +32,13 @@ export interface Env {
   SPOTIFY_CLIENT_ID?: string;
   SPOTIFY_CLIENT_SECRET?: string;
 
+  // Envelope-encryption root key (KEK) for encrypting chat message bodies at
+  // rest — set via `wrangler secret put MESSAGE_KEK`. Value is a JSON version
+  // map of base64 32-byte AES-256 keys, e.g. {"1":"<base64 key>"}. Used to
+  // wrap/unwrap the per-chat data-encryption keys (DEKs); never re-encrypts
+  // bodies on rotation. See wrangler.toml for generation + rotation steps.
+  MESSAGE_KEK: string;
+
   // Firebase Cloud Messaging (native Android/iOS push). PROJECT_ID is the
   // Firebase project id (a plain var); SERVICE_ACCOUNT_JSON is the full
   // service-account JSON (client_email + private_key with the Firebase

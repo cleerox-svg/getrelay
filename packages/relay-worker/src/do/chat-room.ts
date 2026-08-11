@@ -1,5 +1,6 @@
 import type { Env } from '../env';
 import { notifyUserHub } from '../lib/outbound';
+import { getChatDek, encryptBody, decryptStoredBody } from '../lib/message-crypto';
 import {
   EDIT_WINDOW_MS,
   MAX_BODY_LEN,
@@ -170,18 +171,32 @@ export class ChatRoom implements DurableObject {
       if (replyPreview) replyToId = replyPreview.id;
     }
 
+    // Encrypt the body at rest. `body` remains the plaintext used for live
+    // fan-out and previews below; only what we bind to the `body` column is
+    // ciphertext. A null body (ping, or image with no caption) stores no IV.
+    const plaintextBody = body;
+    let storedBody: string | null = body;
+    let bodyIv: string | null = null;
+    if (typeof body === 'string' && body.length > 0) {
+      const dek = await getChatDek(this.env, this.env.DB, chatId);
+      const enc = await encryptBody(dek, body);
+      storedBody = enc.cipher;
+      bodyIv = enc.iv;
+    }
+
     const ops = [
       this.env.DB.prepare(
         `INSERT INTO messages
-           (id, chat_id, sender_id, sequence, message_type, body, media_r2_key, media_url, reply_to, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, chat_id, sender_id, sequence, message_type, body, body_iv, media_r2_key, media_url, reply_to, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).bind(
         id,
         chatId,
         input.senderId,
         seq,
         input.type,
-        body,
+        storedBody,
+        bodyIv,
         mediaKey,
         mediaUrl,
         replyToId,
@@ -212,7 +227,7 @@ export class ChatRoom implements DurableObject {
             from: input.senderId,
             sequence: seq,
             type: input.type,
-            body,
+            body: plaintextBody,
             mediaKey,
             mediaUrl,
             replyTo: replyPreview,
@@ -435,7 +450,7 @@ export class ChatRoom implements DurableObject {
     targetId: string,
   ): Promise<ReplyPreview | null> {
     const row = await this.env.DB.prepare(
-      `SELECT m.id, m.sender_id, m.message_type, m.body, m.media_url, u.display_name
+      `SELECT m.id, m.sender_id, m.message_type, m.body, m.body_iv, m.media_url, u.display_name
        FROM messages m
        JOIN users u ON u.id = m.sender_id
        WHERE m.id = ? AND m.chat_id = ? AND m.deleted_at IS NULL`,
@@ -446,20 +461,30 @@ export class ChatRoom implements DurableObject {
         sender_id: string;
         message_type: string;
         body: string | null;
+        body_iv: string | null;
         media_url: string | null;
         display_name: string;
       }>();
     if (!row) return null;
+    // Stored bodies are ciphertext when body_iv is set; decrypt back to
+    // plaintext for the preview (legacy null-iv rows pass through unchanged).
+    const bodyPlain = await decryptStoredBody(
+      this.env,
+      this.env.DB,
+      chatId,
+      row.body,
+      row.body_iv,
+    );
     const preview =
       row.message_type === 'image'
         ? isStickerMediaUrl(row.media_url)
           ? '🌟 Sticker'
-          : row.body && row.body.trim()
-            ? truncate(row.body, 80)
+          : bodyPlain && bodyPlain.trim()
+            ? truncate(bodyPlain, 80)
             : '📷 Photo'
         : row.message_type === 'ping'
           ? 'PING!!'
-          : truncate(row.body ?? '', 80);
+          : truncate(bodyPlain ?? '', 80);
     return {
       id: row.id,
       from: row.sender_id,
@@ -496,10 +521,13 @@ export class ChatRoom implements DurableObject {
     if (msg.created_at < cutoff) throw new RoomError('cannot_edit', 403);
 
     const now = Date.now();
+    // Encrypt the new body at rest; the fan-out below carries plaintext.
+    const dek = await getChatDek(this.env, this.env.DB, chatId);
+    const { cipher, iv } = await encryptBody(dek, body);
     await this.env.DB.prepare(
-      `UPDATE messages SET body = ?, edited_at = ? WHERE id = ?`,
+      `UPDATE messages SET body = ?, body_iv = ?, edited_at = ? WHERE id = ?`,
     )
-      .bind(body, now, input.messageId)
+      .bind(cipher, iv, now, input.messageId)
       .run();
 
     const recipients = await this.recipientIds(chatId, input.senderId);

@@ -113,6 +113,13 @@ CREATE TABLE IF NOT EXISTS messages (
   -- media_r2_key when the content isn't hosted on our own R2 bucket.
   media_url TEXT,
   reply_to TEXT,
+  -- AES-256-GCM initialization vector (base64) for an encrypted body.
+  -- When set, the `body` column holds base64 ciphertext (envelope
+  -- encryption at rest under the chat's DEK; see chat_keys). Legacy
+  -- rows leave this NULL, meaning `body` is plaintext — the read paths
+  -- pass NULL-iv rows straight through. Added on the live DB by the
+  -- deploy-worker.yml pragma_table_info probe; see migrations/README.md.
+  body_iv TEXT,
   created_at INTEGER NOT NULL,
   edited_at INTEGER,
   deleted_at INTEGER
@@ -120,6 +127,23 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_chat_seq ON messages(chat_id, sequence);
 -- idx_messages_reply_to is created in deploy-worker.yml *after* the
 -- reply_to column has been ensured (see note on idx_participants_pinned).
+
+-- Per-chat wrapped data-encryption keys (DEKs) for envelope encryption of
+-- message bodies at rest. One row per chat, minted lazily on the first
+-- message. wrapped_dek is the chat's AES-256-GCM DEK encrypted (wrapped)
+-- under the root KEK (from env.MESSAGE_KEK); dek_iv is the AES-GCM IV used
+-- for that wrap; kek_version records which KEK version wrapped it so the
+-- KEK can rotate without re-encrypting bodies (only DEKs get re-wrapped).
+-- No CASCADE from chats: deleting the wrapped DEK is the crypto-shredding
+-- mechanism and must be an explicit act. Idempotent — also lives in
+-- migrations/0010_chat_keys.sql.
+CREATE TABLE IF NOT EXISTS chat_keys (
+  chat_id     TEXT PRIMARY KEY,
+  wrapped_dek TEXT NOT NULL,
+  dek_iv      TEXT NOT NULL,
+  kek_version INTEGER NOT NULL,
+  created_at  INTEGER NOT NULL
+);
 
 -- One row per (message, user, emoji). PK keeps a single user from
 -- reacting with the same emoji twice; toggling delete + re-insert.

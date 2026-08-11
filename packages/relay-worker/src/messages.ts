@@ -3,6 +3,7 @@ import type { Env } from './env';
 import { readAuthedUser } from './auth';
 import { mediaUrlFor } from './media';
 import { avatarUrlFor } from './me';
+import { decryptStoredBody } from './lib/message-crypto';
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -41,7 +42,7 @@ export function messagesRoutes() {
     // groups can't rely on the chat-list-level peer record (no peer for
     // multi-party chats) and falling back to "User abcd…" looks broken.
     const rows = await c.env.DB.prepare(
-      `SELECT m.id, m.sender_id, m.sequence, m.message_type, m.body,
+      `SELECT m.id, m.sender_id, m.sequence, m.message_type, m.body, m.body_iv,
               m.media_r2_key, m.media_url, m.reply_to,
               m.created_at, m.edited_at, m.deleted_at,
               u.display_name AS sender_display_name,
@@ -65,6 +66,7 @@ export function messagesRoutes() {
         sequence: number;
         message_type: string;
         body: string | null;
+        body_iv: string | null;
         media_r2_key: string | null;
         media_url: string | null;
         reply_to: string | null;
@@ -149,7 +151,7 @@ export function messagesRoutes() {
     if (replyTargetIds.length > 0) {
       const ph = replyTargetIds.map(() => '?').join(',');
       const rr = await c.env.DB.prepare(
-        `SELECT m.id, m.sender_id, m.message_type, m.body, m.deleted_at, u.display_name
+        `SELECT m.id, m.sender_id, m.message_type, m.body, m.body_iv, m.deleted_at, u.display_name
          FROM messages m JOIN users u ON u.id = m.sender_id
          WHERE m.id IN (${ph})`,
       )
@@ -159,17 +161,27 @@ export function messagesRoutes() {
           sender_id: string;
           message_type: string;
           body: string | null;
+          body_iv: string | null;
           deleted_at: number | null;
           display_name: string;
         }>();
       for (const row of rr.results ?? []) {
+        // Decrypt the reply source body before truncating; legacy plaintext
+        // rows (body_iv null) pass straight through.
+        const srcBody = await decryptStoredBody(
+          c.env,
+          c.env.DB,
+          chatId,
+          row.body,
+          row.body_iv,
+        );
         const preview = row.deleted_at
           ? 'Message recalled'
           : row.message_type === 'image'
-            ? row.body && row.body.trim() ? truncate(row.body, 80) : '📷 Photo'
+            ? srcBody && srcBody.trim() ? truncate(srcBody, 80) : '📷 Photo'
             : row.message_type === 'ping'
               ? 'PING!!'
-              : truncate(row.body ?? '', 80);
+              : truncate(srcBody ?? '', 80);
         replyPreviewById.set(row.id, {
           id: row.id,
           from: row.sender_id,
@@ -178,6 +190,18 @@ export function messagesRoutes() {
         });
       }
     }
+
+    // Decrypt each stored body up front (getChatDek caches the DEK, so this
+    // unwraps once per chat). Legacy rows (body_iv null) pass through as-is.
+    const bodyById = new Map<string, string | null>();
+    await Promise.all(
+      list.map(async (r) => {
+        bodyById.set(
+          r.id,
+          await decryptStoredBody(c.env, c.env.DB, chatId, r.body, r.body_iv),
+        );
+      }),
+    );
 
     const messages = list.map((r) => {
       const mine = r.sender_id === me.id;
@@ -202,7 +226,7 @@ export function messagesRoutes() {
         }),
         sequence: r.sequence,
         type: r.message_type,
-        body: r.deleted_at ? null : r.body,
+        body: r.deleted_at ? null : bodyById.get(r.id) ?? null,
         mediaKey: r.deleted_at ? null : r.media_r2_key,
         // Prefer the external URL (Giphy) when present, otherwise
         // resolve the R2 key against the worker origin.

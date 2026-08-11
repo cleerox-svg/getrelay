@@ -12,6 +12,7 @@ itself lives in `../src/schema.sql` and is applied on every worker deploy.
 | `0005_native_push_tokens.sql` | Create `native_push_tokens` for FCM device tokens registered by the Capacitor Android/iOS apps (no Web Push in a WebView). Idempotent. | Same as above, with `file: 0005_native_push_tokens.sql` |
 | `0006_game_scores.sql` | Create `game_scores` for the Fog mini game (one row per completed game; contact-scoped leaderboards computed as MAX(score) per user over a time window). Idempotent. | Same as above, with `file: 0006_game_scores.sql` |
 | `0007_golf_records.sql` | Create `golf_records` for the in-app golf Course game (one row per user holding personal-best longest drive / closest-to-pin / longest putt; worker upserts a column only when the new value beats the stored one). Idempotent. | Same as above, with `file: 0007_golf_records.sql` |
+| `0010_chat_keys.sql` | Create `chat_keys` for envelope encryption of message bodies at rest (one row per chat holding the chat's DEK wrapped under the root KEK, plus the wrap IV and KEK version). Idempotent. | Same as above, with `file: 0010_chat_keys.sql` |
 
 ## Columns are added by the deploy probe, not by a numbered file
 

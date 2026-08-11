@@ -16,3 +16,10 @@ ADMIN_EMAILS=cleerox@gmail.com
 VAPID_PUBLIC_KEY=
 VAPID_PRIVATE_KEY=
 VAPID_SUBJECT=mailto:you@example.com
+
+# Message-body encryption KEK (envelope encryption at rest). JSON version map
+# of base64 32-byte AES-256 keys. Generate with:
+#   node -e "console.log(JSON.stringify({'1': require('crypto').randomBytes(32).toString('base64')}))"
+# In production this is a Wrangler secret (`wrangler secret put MESSAGE_KEK`),
+# NOT pushed by the deploy workflow — set it once by hand. See wrangler.toml.
+MESSAGE_KEK={"1":"replace-with-base64-32-bytes"}

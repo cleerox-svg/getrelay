@@ -5,6 +5,7 @@ import { isBlockedEitherWay } from './blocks';
 import { notifyUserHub } from './lib/outbound';
 import { avatarUrlFor } from './me';
 import { pushToUser } from './push';
+import { decryptStoredBody } from './lib/message-crypto';
 
 export function chatsRoutes() {
   const app = new Hono<{ Bindings: Env }>();
@@ -300,7 +301,7 @@ export function chatsRoutes() {
          FROM chat_participants WHERE user_id = ?
        ),
        last_msg AS (
-         SELECT m.chat_id, m.id, m.sender_id, m.message_type, m.body,
+         SELECT m.chat_id, m.id, m.sender_id, m.message_type, m.body, m.body_iv,
                 m.created_at, m.edited_at, m.deleted_at
          FROM messages m
          JOIN my_chats mc ON mc.chat_id = m.chat_id
@@ -324,6 +325,7 @@ export function chatsRoutes() {
          lm.sender_id AS msg_sender_id,
          lm.message_type AS msg_type,
          lm.body AS msg_body,
+         lm.body_iv AS msg_body_iv,
          lm.created_at AS msg_created_at,
          lm.edited_at AS msg_edited_at,
          lm.deleted_at AS msg_deleted_at,
@@ -371,6 +373,7 @@ export function chatsRoutes() {
         msg_sender_id: string | null;
         msg_type: string | null;
         msg_body: string | null;
+        msg_body_iv: string | null;
         msg_created_at: number | null;
         msg_edited_at: number | null;
         msg_deleted_at: number | null;
@@ -380,14 +383,27 @@ export function chatsRoutes() {
       }>();
 
     const origin = new URL(c.req.url).origin;
-    const chats = (rows.results ?? []).map((r) => {
+    const chats = await Promise.all(
+      (rows.results ?? []).map(async (r) => {
       const peer = parsePeerBlob(origin, r.peer_blob);
+      // Decrypt the last-message body (deleted → null, legacy plaintext rows
+      // pass through) so the chat-list preview shows real text.
+      const lastBody =
+        r.msg_deleted_at || !r.msg_id
+          ? null
+          : await decryptStoredBody(
+              c.env,
+              c.env.DB,
+              r.chat_id,
+              r.msg_body,
+              r.msg_body_iv,
+            );
       const lastMessage = r.msg_id
         ? {
             id: r.msg_id,
             senderId: r.msg_sender_id,
             messageType: r.msg_type,
-            body: r.msg_deleted_at ? null : r.msg_body,
+            body: lastBody,
             createdAt: r.msg_created_at,
             editedAt: r.msg_edited_at,
             deletedAt: r.msg_deleted_at,
@@ -413,7 +429,8 @@ export function chatsRoutes() {
         muted: r.muted === 1,
         pinnedAt: r.pinned_at,
       };
-    });
+      }),
+    );
 
     return c.json({ chats });
   });
