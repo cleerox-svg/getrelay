@@ -1649,6 +1649,54 @@ html.beta .composer-capsule {
 .challenge-hole-name {
   opacity: 0.6;
 }
+/* Course picker chips (shared challenge sheet). */
+.challenge-courses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 10px;
+}
+.challenge-course-chip {
+  border: 1px solid var(--separator);
+  background: var(--card-bg);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
+}
+.challenge-course-chip.is-on {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+}
+.challenge-course-chip:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+/* Confirm button on the shared challenge sheet. */
+.challenge-confirm {
+  margin-top: 4px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.challenge-confirm:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
 .challenge-picker-list {
   overflow-y: auto;
   display: flex;
@@ -1711,7 +1759,9 @@ html.beta .composer-capsule {
   .golf-challenge-cta,
   .challenge-picker-row,
   .challenge-len-chip,
-  .challenge-hole-chip {
+  .challenge-hole-chip,
+  .challenge-course-chip,
+  .challenge-confirm {
     transition: none;
   }
 }
