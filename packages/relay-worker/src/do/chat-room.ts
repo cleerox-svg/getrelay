@@ -232,6 +232,7 @@ export class ChatRoom implements DurableObject {
             mediaUrl,
             replyTo: replyPreview,
             ts: now,
+            encrypted: bodyIv != null,
           };
 
     await Promise.all(

@@ -464,6 +464,7 @@ export const useStore = create<AppState>((set, get) => ({
           deliveredCount: m.deliveredCount,
           readCount: m.readCount,
           totalRecipients: m.totalRecipients,
+          encrypted: m.encrypted,
         };
         const idx = merged.findIndex((x) => x.id === m.id);
         if (idx >= 0) merged[idx] = { ...merged[idx], ...ui };
@@ -516,6 +517,8 @@ export const useStore = create<AppState>((set, get) => ({
         deletedAt: null,
         delivered: false,
         read: false,
+        // New sends are encrypted at rest.
+        encrypted: true,
         pending: true,
       };
       chat.messages = upsertMessage(chat.messages, optimistic);
@@ -763,6 +766,7 @@ export const useStore = create<AppState>((set, get) => ({
             deletedAt: null,
             delivered: false,
             read: false,
+            encrypted: msg.encrypted,
           };
           chat.messages = upsertMessage(chat.messages, ui);
           const chats = s.chats.map((c) =>

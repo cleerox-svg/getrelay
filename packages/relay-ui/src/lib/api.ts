@@ -475,6 +475,8 @@ export interface HistoryMessage {
   deliveredCount?: number;
   readCount?: number;
   totalRecipients?: number;
+  // Body is stored encrypted at rest on the server.
+  encrypted?: boolean;
 }
 
 export const GOOGLE_SIGNIN_URL = `${API_BASE}/auth/google`;

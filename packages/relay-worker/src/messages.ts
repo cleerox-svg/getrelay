@@ -240,6 +240,7 @@ export function messagesRoutes() {
         ts: r.created_at,
         editedAt: r.edited_at,
         deletedAt: r.deleted_at,
+        encrypted: r.body_iv != null,
         delivered,
         read,
         // Sender-view-only aggregate. Undefined for messages I didn't

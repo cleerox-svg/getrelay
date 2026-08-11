@@ -49,6 +49,7 @@ export type ServerMsg =
       mediaUrl?: string | null;
       replyTo?: ReplyPreview | null;
       ts: number;
+      encrypted?: boolean;
     }
   | { t: 'delivered'; messageId: string; chatId: string; userId: string; ts: number }
   | { t: 'read'; messageId: string; chatId: string; userId: string; ts: number }

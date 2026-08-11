@@ -16,6 +16,7 @@ import { StickerPicker } from '../components/StickerPicker';
 import { GroupAvatar } from '../components/GroupAvatar';
 import { PingChip } from '../components/PingChip';
 import { Receipt } from '../components/Receipt';
+import { LockGlyph } from '../components/LockGlyph';
 import { TypingDots } from '../components/TypingDots';
 import { ApiError, api } from '../lib/api';
 import { isStickerUrl } from '../lib/stickers';
@@ -284,6 +285,25 @@ export function Chat() {
   // Single-column stacked bubbles: every message in chronological order,
   // each bubble colored by sender. No left/right alignment.
   const stacked: React.ReactNode[] = [];
+  // One-time thread notice at the very top: message bodies are encrypted at
+  // rest (not end-to-end). Styled like the date separator but as a subtle
+  // pill.
+  stacked.push(
+    <div key="encrypted-banner" className="flex justify-center py-2">
+      <span
+        className="text-[11px] inline-flex items-center gap-1.5"
+        style={{
+          color: 'var(--text-dim)',
+          background: 'color-mix(in srgb, var(--text-dim) 12%, transparent)',
+          padding: '6px 12px',
+          borderRadius: 999,
+        }}
+      >
+        <LockGlyph size={11} />
+        Messages in this chat are encrypted
+      </span>
+    </div>,
+  );
   let lastDay = '';
   for (const m of messages) {
     const k = dayKey(m.ts);
@@ -560,6 +580,11 @@ export function Chat() {
               paddingLeft: hasMedia ? 10 : 0,
             }}
           >
+            {m.encrypted && !recalled && !isPing ? (
+              <span className="inline-flex items-center">
+                <LockGlyph size={11} />
+              </span>
+            ) : null}
             <span>{formatTime(m.ts)}</span>
             {m.editedAt && !recalled ? <span>· edited</span> : null}
             {mine && !recalled ? (
@@ -665,11 +690,19 @@ export function Chat() {
               <span className="text-base font-semibold" style={{ color: 'var(--text, #000)' }}>
                 {isGroup ? chat?.subject : chat?.peer?.displayName ?? 'Chat'}
               </span>
-              <span className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
-                {isGroup
-                  ? `${chat?.memberCount ?? '–'} members`
-                  : chat?.peer?.statusMessage?.trim() ||
-                    (peerOnline ? 'online' : chat?.peer?.pin ?? '')}
+              <span
+                className="text-[11px] flex items-center gap-1 min-w-0"
+                style={{ color: 'var(--text-dim)' }}
+              >
+                <LockGlyph size={10} />
+                <span className="shrink-0">Encrypted</span>
+                <span className="shrink-0">·</span>
+                <span className="truncate">
+                  {isGroup
+                    ? `${chat?.memberCount ?? '–'} members`
+                    : chat?.peer?.statusMessage?.trim() ||
+                      (peerOnline ? 'online' : chat?.peer?.pin ?? '')}
+                </span>
               </span>
             </span>
           </Link>
