@@ -6,7 +6,7 @@
 // schedule's abstractGameState. These tests pin that behavior.
 import { beforeAll, describe, expect, it } from 'vitest';
 import { fetchMock } from 'cloudflare:test';
-import { fetchMlbForTeam } from '../src/sports';
+import { fetchMlbForTeam, pregameStartPassed, todayCacheMaxAge } from '../src/sports';
 
 const TOR = 141;
 
@@ -110,5 +110,63 @@ describe('fetchMlbForTeam pregame/live gating', () => {
     const game = await fetchMlbForTeam(String(TOR), '2026-08-07');
     expect(game).not.toBeNull();
     expect(game!.status).toBe('final');
+  });
+});
+
+// The Sports response cache (caches.default + the browser HTTP cache)
+// serves a pre/final snapshot. The trap: a snapshot cached while a game
+// was still 'pre' kept being served after first pitch, freezing the card
+// on "7:07 PM ET" while the push cron (which reads upstream directly)
+// still sent live score alerts. pregameStartPassed is the guard that
+// invalidates such a snapshot the moment the scheduled start passes.
+describe('pregameStartPassed cache-staleness guard', () => {
+  const now = Date.now();
+  const HOUR = 60 * 60 * 1000;
+
+  it('flags a pre-game whose start time has passed as stale', () => {
+    expect(pregameStartPassed('pre', now - HOUR)).toBe(true);
+  });
+
+  it('keeps a pre-game that has not started yet cached', () => {
+    expect(pregameStartPassed('pre', now + HOUR)).toBe(false);
+  });
+
+  it('never flags live or final snapshots (they are cached/no-stored on their own rules)', () => {
+    expect(pregameStartPassed('live', now - HOUR)).toBe(false);
+    expect(pregameStartPassed('final', now - HOUR)).toBe(false);
+  });
+
+  it('ignores a missing or zero start time', () => {
+    expect(pregameStartPassed('pre', undefined)).toBe(false);
+    expect(pregameStartPassed('pre', 0)).toBe(false);
+  });
+});
+
+// The browser's HTTP cache can't be intercepted by the edge start-time
+// bypass, so today's non-live TTL is clamped to never span first pitch.
+describe('todayCacheMaxAge browser-TTL clamp', () => {
+  const now = Date.now();
+
+  it('returns the cap when no pre-game is pending', () => {
+    expect(todayCacheMaxAge([], 30)).toBe(30);
+  });
+
+  it('caps a far-off pre-game at the ceiling, not its full countdown', () => {
+    expect(todayCacheMaxAge([now + 3 * 60 * 60 * 1000], 30)).toBe(30);
+  });
+
+  it('clamps to the seconds remaining until an imminent first pitch', () => {
+    const ttl = todayCacheMaxAge([now + 12_000], 30);
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(12);
+  });
+
+  it('returns 0 once the start time has passed (no caching over a live game)', () => {
+    expect(todayCacheMaxAge([now - 60_000], 30)).toBe(0);
+  });
+
+  it('takes the nearest pre-game across several pending starts', () => {
+    const ttl = todayCacheMaxAge([now + 3 * 60 * 60 * 1000, now + 10_000], 30);
+    expect(ttl).toBeLessThanOrEqual(10);
   });
 });
