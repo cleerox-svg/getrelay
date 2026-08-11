@@ -10,6 +10,7 @@ import {
 } from 'konsta/react';
 import { Avatar } from '../components/Avatar';
 import { ChallengeCard } from '../components/golf/ChallengeCard';
+import { NewChallengeSheet } from '../components/golf/NewChallengeSheet';
 import { GifPicker } from '../components/GifPicker';
 import { StickerPicker } from '../components/StickerPicker';
 import { GroupAvatar } from '../components/GroupAvatar';
@@ -87,6 +88,9 @@ export function Chat() {
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [gifOpen, setGifOpen] = useState(false);
   const [stickerOpen, setStickerOpen] = useState(false);
+  // Golf challenge from the chat (1:1 only): opens the shared NewChallengeSheet
+  // targeting the peer — no opponent picker since we're already talking to them.
+  const [golfOpen, setGolfOpen] = useState(false);
 
   function insertEmoji(emoji: string) {
     const ta = taRef.current;
@@ -820,6 +824,21 @@ export function Chat() {
           )}
         </button>
 
+        {/* Golf challenge — 1:1 chats only (no opponent picker: the peer IS
+            the opponent). Hidden in groups, where there's no single peer. */}
+        {!isGroup && chat?.peer ? (
+          <button
+            type="button"
+            onClick={() => setGolfOpen(true)}
+            aria-label="Challenge to golf"
+            className="composer-btn"
+          >
+            <span style={{ fontSize: 20, lineHeight: 1 }} aria-hidden="true">
+              ⛳
+            </span>
+          </button>
+        ) : null}
+
         <div className="composer-capsule">
           <textarea
             ref={taRef}
@@ -928,6 +947,15 @@ export function Chat() {
         onClose={() => setStickerOpen(false)}
         onPick={(url) => sendSticker(chatId, url, replyingTo?.id)}
       />
+
+      {golfOpen && !isGroup && chat?.peer ? (
+        <NewChallengeSheet
+          opponentId={chat.peer.id}
+          opponentName={chat.peer.displayName}
+          chatId={chatId}
+          onClose={() => setGolfOpen(false)}
+        />
+      ) : null}
 
       <Actions opened={!!actionsFor} onBackdropClick={() => setActionsFor(null)}>
         <ActionsGroup>
