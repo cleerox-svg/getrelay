@@ -43,9 +43,55 @@ crons = ["* * * * *"]
 [observability]
 enabled = true
 
+# ----- Message-body encryption key (KEK) -----
+# Chat message bodies are stored encrypted at rest in D1 (envelope
+# encryption): a per-chat data key (DEK) encrypts each body and is itself
+# wrapped under this root key-encryption-key (KEK). MESSAGE_KEK is a plain
+# runtime secret (no binding block here — this repo sets sensitive secrets via
+# `wrangler secret put`, not Secrets Store), read by the Worker as
+# `env.MESSAGE_KEK`. Its value is a JSON version map of base64-encoded 32-byte
+# AES-256 keys so the key can rotate without re-encrypting message bodies.
+#
+# ⚠️ REQUIRED-BEFORE-DEPLOY: MESSAGE_KEK is a REQUIRED secret that is
+# deliberately NOT pushed by CI (see the note in deploy-worker.yml's deploy
+# step). Config errors are now LOUD: if a Worker version that reads
+# MESSAGE_KEK is deployed/merged before the secret exists in that
+# environment, the first message send throws and messaging breaks. You MUST
+# set the secret in the target environment BEFORE this Worker version is
+# deployed/merged:
+#   cd packages/relay-worker
+#   wrangler secret put MESSAGE_KEK --env production
+#
+# Generate a fresh key (do NOT commit the value):
+#   node -e "console.log(JSON.stringify({'1': require('crypto').randomBytes(32).toString('base64')}))"
+# Set it (production):
+#   cd packages/relay-worker
+#   wrangler secret put MESSAGE_KEK --env production   # paste the JSON, Ctrl-D
+# Local dev: put the same JSON in .dev.vars as MESSAGE_KEK=... (see
+# .dev.vars.example).
+#
+# Rotation (READ CAREFULLY — there is NO lazy re-wrap):
+#   Add a new version to the map, e.g.
+#     {"1":"<old base64 key>","2":"<new base64 key>"}
+#   and make version "2" the current version in the Worker crypto code. From
+#   then on, NEW chats mint their DEK wrapped under the newest version ("2").
+#   Message-body ciphertext is NEVER re-encrypted by rotation.
+#
+#   Existing chats keep their DEK wrapped under whatever version minted them.
+#   getChatDek unwraps each chat_keys row using that row's STORED kek_version
+#   and never rewrites it — there is NO automatic re-wrap-on-access. So every
+#   KEK version referenced by any chat_keys row MUST stay in the map forever.
+#
+#   DO NOT drop an old version. Dropping a still-referenced version makes
+#   those chats' message bodies permanently UNDECRYPTABLE — and, now that
+#   config errors are loud, they surface as hard errors rather than silent
+#   failures. Safely retiring an old version would require an explicit
+#   backfill that re-wraps ALL chat_keys rows under the newest version first
+#   (not yet implemented — future work).
+
 # ----- Plain (non-secret) vars -----
 # Override per-environment below. Secrets (GOOGLE_ID, GOOGLE_SECRET,
-# JWT_SECRET) live in `wrangler secret put` or .dev.vars locally.
+# JWT_SECRET, MESSAGE_KEK) live in `wrangler secret put` or .dev.vars locally.
 [vars]
 APP_URL = "http://localhost:5173"
 AUTH_COOKIE_DOMAIN = ""

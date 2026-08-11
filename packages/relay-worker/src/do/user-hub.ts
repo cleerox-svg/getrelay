@@ -188,8 +188,18 @@ export class UserHub implements DurableObject {
     if (sockets.length === 0) {
       // No live socket on this UserHub. Queue persistable kinds for the
       // recipient to drain on next connect; ephemeral kinds drop.
+      //
+      // Never let plaintext message content rest in outbound_events: strip
+      // the body (and reply-preview) before persisting. drainOutbound
+      // rehydrates the body from the encrypted messages store on drain, so
+      // the client still receives plaintext on reconnect. See
+      // stripPlaintextForQueue below.
       if (persistKind !== null) {
-        await insertOutboundEvent(this.env, userId, persistKind, payload);
+        const storable =
+          persistKind === 'message_preview'
+            ? stripPlaintextForQueue(payload)
+            : payload;
+        await insertOutboundEvent(this.env, userId, persistKind, storable);
       }
     } else {
       for (const s of sockets) this.safeSend(s, payload as ServerMsg);
@@ -470,6 +480,31 @@ export class UserHub implements DurableObject {
   private sendError(ws: WebSocket, code: ErrorCode): void {
     this.safeSend(ws, { t: 'error', code });
   }
+}
+
+// Produce a persistable form of a `message_preview` payload that contains NO
+// plaintext message content. The plaintext `body` is dropped (set null) and
+// any reply-preview text is removed (the id/from/fromName references are kept
+// so a drained client can still resolve the reply, but the plaintext preview
+// is never persisted). Everything else — id, chatId, from, sequence, type,
+// mediaKey, mediaUrl, ts — is retained; media keys/urls are references, not
+// secret content. On drain, drainOutbound rehydrates `body` from the encrypted
+// messages store. Written generically so a ping payload (body already null,
+// no replyTo) passes through unchanged.
+function stripPlaintextForQueue(payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object') return payload;
+  const src = payload as Record<string, unknown> & {
+    replyTo?: { id?: string; from?: string; fromName?: string; preview?: string } | null;
+  };
+  const stripped: Record<string, unknown> = { ...src, body: null };
+  if (src.replyTo && typeof src.replyTo === 'object') {
+    const { id, from, fromName } = src.replyTo;
+    // Keep the reference fields; drop the plaintext preview. The client
+    // refetches history (with correctly decrypted reply previews) on
+    // reconnect, so a blank preview here is harmless.
+    stripped.replyTo = { id, from, fromName, preview: '' };
+  }
+  return stripped;
 }
 
 // Resolve the sender's display name and the chat type/subject so the
