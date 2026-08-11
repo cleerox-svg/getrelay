@@ -345,16 +345,111 @@ export function corridorHalfAt(hole: CourseHole, t: number): number {
   return hole.fairwayHalf + (hole.fairwayTaper ?? 0) * t;
 }
 
+// --- Corner bevel (removes the outside-of-dogleg fairway bulge) --------------
+// The corridor is `distToPolyline(centerline) ≤ corridorHalfAt`. At an INTERIOR
+// centerline vertex the distance field rounds the OUTSIDE of the bend with a cap
+// of radius = half-width, so the perpendicular corridor width swells from 2·half
+// on a straight leg to ~2·half/sin(θ/2) across the mitre — the ~32→48 yd bulge
+// on a sharp dogleg. fairwayEdgeDist() BEVELS each interior vertex: in the
+// vertex's OUTSIDE wedge (the round-cap region, where the point projects PAST the
+// incoming leg and BEFORE the outgoing leg) it clips the corridor with the bevel
+// chord — the straight line tangent to both legs' outer edges. That trims the
+// overhang back so the width stays ~constant through the bend, WITHOUT touching
+// the legs (the bevel never fires on leg points) or the INSIDE of the bend (the
+// inside is a segment's Voronoi cell, never the vertex wedge, so no fairway gap).
+// On a collinear (straight) hole/leg the cross product is 0, the wedge is empty,
+// and the bevel never fires — classification is byte-identical. This is the ONE
+// shared corridor test read by BOTH surfaceAt (physics lie) and corridorEdgeDist
+// (render feather), so drawn == played.
+
+// Cross-product magnitude below which a vertex is treated as collinear (no bend →
+// no bevel). Guarantees straight legs/holes are byte-identical.
+const BEVEL_MIN_CROSS = 1e-9;
+
+// Signed distance (yd) to the mown FAIRWAY edge, WITH the interior-vertex bevel
+// clamp. NEGATIVE inside the corridor, 0 on the edge, POSITIVE in the rough.
+// Equals the plain `distToPolyline − corridorHalfAt` everywhere the bevel does
+// not fire (all straight legs and collinear holes), so it is a strict, additive
+// tightening of only the outside-corner overhang.
+export function fairwayEdgeDist(hole: CourseHole, d: number, x: number): number {
+  return fairwayEdgeFromNear(hole, d, x, nearestOnPolyline(hole.centerline, d, x));
+}
+
+// Same as fairwayEdgeDist but takes a PRE-COMPUTED nearestOnPolyline result, so a
+// caller that already needs `near` (surfaceAt uses it for the rough/OB test too)
+// pays the polyline cost ONCE. Kept internal (the public API stays d,x only).
+function fairwayEdgeFromNear(
+  hole: CourseHole,
+  d: number,
+  x: number,
+  near: { dist: number; t: number },
+): number {
+  const pts = hole.centerline;
+  const half = corridorHalfAt(hole, near.t);
+  let edge = near.dist - half;
+  // Bevel each INTERIOR vertex whose outside wedge contains the point.
+  for (let i = 1; i < pts.length - 1; i++) {
+    const A = pts[i - 1]!;
+    const V = pts[i]!;
+    const B = pts[i + 1]!;
+    // NEAREST-FEATURE GUARD: only clip when THIS vertex is the point's actual
+    // nearest centreline feature (|P−V| === near.dist inside a true wedge). On a
+    // fold-back / S-curve / hairpin centreline a legit fairway point on a LATER
+    // leg can stray into an earlier vertex's outer wedge; without this guard its
+    // bevel would punch that point to rough. A no-op for the shipped single
+    // doglegs (and for straight holes the wedge is empty anyway).
+    if (Math.hypot(d - V.d, x - V.x) > near.dist + 1e-6) continue;
+    // Unclamped projection params: tin=1 at V (incoming A→V), tout=0 at V
+    // (outgoing V→B). The vertex's outside wedge (the round-cap region) is
+    // exactly tin ≥ 1 AND tout ≤ 0 — inside-of-bend points fall in a segment's
+    // cell (tin<1 or tout>0), so the bevel never punches an inside gap.
+    const iad = V.d - A.d;
+    const iax = V.x - A.x;
+    const iL2 = iad * iad + iax * iax || 1e-6;
+    const tin = ((d - A.d) * iad + (x - A.x) * iax) / iL2;
+    if (tin < 1) continue;
+    const obd = B.d - V.d;
+    const obx = B.x - V.x;
+    const oL2 = obd * obd + obx * obx || 1e-6;
+    const tout = ((d - V.d) * obd + (x - V.x) * obx) / oL2;
+    if (tout > 0) continue;
+    // Unit leg dirs + turn sign.
+    const iLen = Math.sqrt(iL2);
+    const oLen = Math.sqrt(oL2);
+    const ud = iad / iLen;
+    const ux = iax / iLen;
+    const wd = obd / oLen;
+    const wx = obx / oLen;
+    const cross = ud * wx - ux * wd;
+    if (Math.abs(cross) <= BEVEL_MIN_CROSS) continue; // collinear → no bevel
+    const s = cross > 0 ? 1 : -1;
+    // Outward leg normals = −s · rot90(dir), rot90(v)=(−v.x, v.d) in (d,x).
+    const oud = -s * -ux; // = s*ux
+    const oux = -s * ud;
+    const owd = -s * -wx; // = s*wx
+    const owx = -s * wd;
+    // Outward bisector (unit) and the bevel chord offset along it.
+    let bd = oud + owd;
+    let bx = oux + owx;
+    const bl = Math.hypot(bd, bx) || 1;
+    bd /= bl;
+    bx /= bl;
+    const cosPhi = oud * bd + oux * bx; // = owd·b too (symmetric)
+    const chord = V.d * bd + V.x * bx + half * cosPhi;
+    const beyond = d * bd + x * bx - chord; // >0 = past the bevel (overhang)
+    if (beyond > edge) edge = beyond; // intersect: max of the two signed edges
+  }
+  return edge;
+}
+
 // Signed distance (yd) from a point to the FAIRWAY edge: NEGATIVE inside the
-// mown corridor, 0 exactly on the edge, POSITIVE out in the rough — measured to
-// the taper-aware corridor half-width at the nearest centreline point. This is a
-// pure read helper (surfaceAt's hard classification is UNCHANGED); renderers use
-// it to paint a smooth "first cut" transition band across the corridor edge so
-// the fairway→rough seam reads as a gradient, not a hard line. Scales to any
-// hole via corridorHalfAt.
+// mown corridor, 0 exactly on the edge, POSITIVE out in the rough — the
+// bevel-clamped corridor edge (fairwayEdgeDist), so the painted "first cut"
+// transition band tracks the SAME beveled corridor the ball plays (drawn ==
+// played). Renderers use it to feather the fairway→rough seam. On a straight
+// hole/leg this is exactly `distToPolyline − corridorHalfAt` (the bevel is inert).
 export function corridorEdgeDist(hole: CourseHole, d: number, x: number): number {
-  const near = nearestOnPolyline(hole.centerline, d, x);
-  return near.dist - corridorHalfAt(hole, near.t);
+  return fairwayEdgeDist(hole, d, x);
 }
 
 // Arc-length position (yd) ALONG the centerline of the nearest point to (d,x),
@@ -537,9 +632,14 @@ export function surfaceAt(hole: CourseHole, d: number, x: number): Surface {
   }
   // 5. Tee box.
   if (dist(d, x, hole.tee) <= TEE_R) return 'tee';
-  // 6–8. Fairway corridor (taperable), else rough, else out of bounds.
+  // 6–8. Fairway corridor (taperable + corner-BEVELED so the outside of a dogleg
+  // doesn't balloon), else rough (plain distance — an unbeveled rough bulge at a
+  // corner is unnoticed and beveling it risks an OB notch), else out of bounds.
+  // The fairway test is the beveled edge; the rough test uses the raw distance.
+  // nearestOnPolyline is computed ONCE and shared by both tests (the majority of
+  // baked texels are rough/OB, so this halves their polyline cost).
   const near = nearestOnPolyline(hole.centerline, d, x);
-  if (near.dist <= corridorHalfAt(hole, near.t)) return 'fairway';
+  if (fairwayEdgeFromNear(hole, d, x, near) <= 0) return 'fairway';
   if (near.dist <= hole.roughHalf) return 'rough';
   return 'ob';
 }
