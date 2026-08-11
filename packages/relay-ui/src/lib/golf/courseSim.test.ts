@@ -398,7 +398,7 @@ function fireStraight(s: CourseSim, power: number): void {
   const MP = 100;
   s.setMaxPull(MP);
   // A REAL finger drag can't be shorter than MIN_PULL (arm() cancels below it),
-  // so the smallest arm-able tap is powerCurve(MIN_PULL/MP) ≈ 0.17, not 0. Clamp
+  // so the smallest arm-able tap is powerCurve(MIN_PULL/MP) ≈ 0.09, not 0. Clamp
   // the inverse-mapped drag to that floor: a request below it fires the genuine
   // minimum tap (still a delicate trickle), which is what the sim can produce.
   const drag = Math.max(MIN_PULL + 0.5, powerCurveInv(power) * MP); // aim at pin
@@ -427,11 +427,15 @@ describe('course sim — elastic power curve', () => {
     expect(s.power).toBe(1);
   });
 
-  it('eases out: ~65% of the pull already yields ~90% power (reachability)', () => {
-    // The point of the curve — a partial (comfortable) pull reaches near-max
-    // power, so a ball rendered low on screen can still be hit at full strength.
-    expect(powerCurve(0.65)).toBeGreaterThan(0.88);
-    expect(powerCurve(0.65)).toBeLessThan(0.93);
+  it('is near-linear so the MIDDLE is dialable (~50% pull ≈ ~50% power)', () => {
+    // The camera now frames the ball high enough for a generous pull, so the curve
+    // is gentle (no longer front-loaded): mid-pull maps to mid-power, giving a
+    // controllable middle instead of a hypersensitive 0→100 twitch.
+    expect(powerCurve(0.5)).toBeGreaterThan(0.5);
+    expect(powerCurve(0.5)).toBeLessThan(0.6); // ~0.55 — barely above linear
+    // Only a MILD strain up top: 65% pull is well short of max (was ~0.90).
+    expect(powerCurve(0.65)).toBeGreaterThan(0.66);
+    expect(powerCurve(0.65)).toBeLessThan(0.74);
     // Monotonic and strictly increasing across the drag (no dead zone / plateau).
     let prev = -1;
     for (let t = 0; t <= 1.0001; t += 0.05) {
@@ -439,9 +443,11 @@ describe('course sim — elastic power curve', () => {
       expect(p).toBeGreaterThan(prev);
       prev = p;
     }
-    // Low end stays dialable (not collapsed to ~0), preserving wedge finesse.
-    expect(powerCurve(0.1)).toBeGreaterThan(0.15);
-    expect(powerCurve(0.3)).toBeGreaterThan(0.45);
+    // Low end tracks the pull closely (dialable, near 1:1), preserving finesse.
+    expect(powerCurve(0.1)).toBeGreaterThan(0.08);
+    expect(powerCurve(0.1)).toBeLessThan(0.16);
+    expect(powerCurve(0.3)).toBeGreaterThan(0.28);
+    expect(powerCurve(0.3)).toBeLessThan(0.4);
   });
 
   it('powerCurveInv round-trips powerCurve (tools/tests can hit a given power)', () => {
@@ -450,18 +456,19 @@ describe('course sim — elastic power curve', () => {
     }
   });
 
-  it('a low-ball full swing reaches 100% on a TINY room-derived maxPull', () => {
-    // The GL scene gives a full swing the small measured room below a low ball
-    // (44px floor): a full downward pull to that room must still hit power 1.0, so
-    // a low ball can be hit at full strength without dragging into the controls.
+  it('a full swing reaches 100% on the room-derived maxPull, and mid-pull is mid-power', () => {
+    // The GL scene frames the ball ~64% down and sets maxPull to the (now
+    // generous) measured room below it — a full downward pull to that room hits
+    // power 1.0, so 100% is always reachable within the screen.
     const s = sim();
-    s.setMaxPull(44);
+    s.setMaxPull(200); // a typical phone's measured room
     s.onPointerDown({ x: 0, y: 0 });
-    s.onPointerMove({ x: 0, y: 44 }); // pull down exactly the available room
+    s.onPointerMove({ x: 0, y: 200 }); // pull down exactly the available room
     expect(s.power).toBe(1);
-    // ~90% is already reached at ~29px (well inside the room) — the reachability.
-    s.onPointerMove({ x: 0, y: 29 });
-    expect(s.power).toBeGreaterThan(0.88);
+    // The dialable middle: half the pull yields roughly half the power.
+    s.onPointerMove({ x: 0, y: 100 });
+    expect(s.power).toBeGreaterThan(0.5);
+    expect(s.power).toBeLessThan(0.6);
   });
 
   it('a putt stays FEATHER-able on a generous (non-room) maxPull', () => {

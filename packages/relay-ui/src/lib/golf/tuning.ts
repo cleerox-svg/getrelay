@@ -43,18 +43,20 @@ export const MIN_PULL = 8;
 
 // --- Elastic ("slingshot") power response ---------------------------------
 // The RAW pull fraction (|drag| / maxPull, clamped 0..1) is shaped by this
-// ease-out curve BEFORE it becomes shot power, giving a rubber-band feel: power
-// rises quickly through the low/mid pull and COMPRESSES near the top, so ~65% of
-// the physical pull already yields ~90% power (100% is reachable in the limited
-// screen room below a low ball — the reported bug) while the last stretch to
-// 100% is a deliberate strain rather than a twitch. The maps are exact at the
-// ends — f(0)=0, f(1)=1 — so a FULL pull is still power=1 and every club's
-// full-power carry (and the whole ladder) is UNCHANGED. Pure function of the
-// pull, so the sim stays deterministic.
-//   f(t)     = 1 − (1 − t)^EXP          (EXP > 1 → ease-out / compress near top)
+// NEAR-LINEAR curve BEFORE it becomes shot power. The aiming camera now frames
+// the ball high enough that a full swing gets ~180–240px of downward pull travel
+// (see applyPull in CourseGL/RangeGL), so the curve no longer has to cram the
+// whole range into a cramped drag. It's a GENTLE ease-out (EXP just above 1) so
+// the MIDDLE is dialable — ~50% pull ≈ ~50% power — with only a mild strain in
+// the last stretch to 100% (the elastic feel is carried by the VISUAL cues, not
+// a twitchy curve). The maps are exact at the ends — f(0)=0, f(1)=1 — so a FULL
+// pull is still power=1 and every club's full-power carry (and the whole ladder)
+// is UNCHANGED. Pure function of the pull, so the sim stays deterministic.
+//   f(t)     = 1 − (1 − t)^EXP          (EXP > 1 → gentle ease-out near the top)
 //   f⁻¹(p)   = 1 − (1 − p)^(1/EXP)      (used by tools/tests to hit a given power)
-// EXP 2.2 gives: 0.1→0.21, 0.3→0.54, 0.5→0.78, 0.65→0.90, 0.8→0.97, 1→1.00.
-export const POWER_CURVE_EXP = 2.2;
+// EXP 1.15 gives: 0.1→0.11, 0.25→0.28, 0.5→0.55, 0.65→0.70, 0.75→0.80,
+//   0.9→0.93, 1→1.00 (dialable middle; a soft strain up top).
+export const POWER_CURVE_EXP = 1.15;
 export function powerCurve(pullFrac: number): number {
   const t = Math.max(0, Math.min(1, pullFrac));
   return 1 - Math.pow(1 - t, POWER_CURVE_EXP);

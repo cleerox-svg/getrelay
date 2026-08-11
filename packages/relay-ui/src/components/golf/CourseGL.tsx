@@ -1250,8 +1250,11 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     const AIM_LEN = 42; // yards to the tip reticle at rest
     const aimGuide = new THREE.Group();
     aimGuide.frustumCulled = false;
-    const aimColLow = new THREE.Color(0xffd54a);
-    const aimColHigh = new THREE.Color(0xff5a3c);
+    // Continuous power feedback across the WHOLE range: GREEN (low) → AMBER (mid)
+    // → RED (max), matched to RangeGL so the two scenes read identically.
+    const aimColLow = new THREE.Color(0x46d66b); // green — soft
+    const aimColMid = new THREE.Color(0xffd54a); // amber — half power
+    const aimColHigh = new THREE.Color(0xff4326); // red — near max (straining)
     const aw = 0.42; // shaft half-width
     const awh = 1.7; // head half-width
     const ahl = 6; // head length
@@ -1377,11 +1380,15 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       const gb = sim.ball;
       aimGuide.position.set(gb.x, heightAt(hole, gb.d, gb.x) + 0.16, -gb.d);
       aimGuide.rotation.y = Math.atan2(gb.x - iLand.x, iLand.d - gb.d);
-      aimGuide.scale.z = 1 + sim.power * 0.5;
-      aimCol.copy(aimColLow).lerp(aimColHigh, sim.power);
+      aimGuide.scale.z = 1 + sim.power * 0.85; // clearer length delta across range
+      // 3-stop green→amber→red ramp (colour is refreshed per-frame by
+      // applyAimStrain too, so the strain throb animates even while armed/idle).
+      const pw = sim.power;
+      if (pw < 0.5) aimCol.copy(aimColLow).lerp(aimColMid, pw * 2);
+      else aimCol.copy(aimColMid).lerp(aimColHigh, (pw - 0.5) * 2);
       aimMat.color.copy(aimCol);
       chevMat.color.copy(aimCol);
-      aimMat.opacity = 0.42 + sim.power * 0.45;
+      aimMat.opacity = 0.42 + pw * 0.45;
       chevMat.opacity = 0.42;
 
       arc.l.visible = arc.line.visible = edgeL.l.visible = edgeR.l.visible = restRing.visible = true;
@@ -1476,13 +1483,15 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
 
     const ballWorld = (out: THREE.Vector3) => out.set(sim.ball.x, sim.ball.h + BALL_R, -sim.ball.d);
 
-    // Initialise camera at the address position.
+    // Initialise camera at the address position. Framed so the ball sits ~64%
+    // down the screen (was ~83%), leaving a generous downward slingshot travel
+    // below it — see the ADDRESS-CAMERA note on the camera-follow tee branch.
     ballWorld(tmpB);
     tmpDir.subVectors(pinV, tmpB).setY(0).normalize();
-    camPos.copy(tmpB).addScaledVector(tmpDir, -17);
-    camPos.y = tmpB.y + 10;
-    camLook.copy(tmpB).addScaledVector(tmpDir, 46);
-    camLook.y = tmpB.y - 0.5;
+    camPos.copy(tmpB).addScaledVector(tmpDir, -21);
+    camPos.y = tmpB.y + 7.5;
+    camLook.copy(tmpB).addScaledVector(tmpDir, 38);
+    camLook.y = tmpB.y - 3.5;
     camera.position.copy(camPos);
     camera.lookAt(camLook);
 
@@ -1496,7 +1505,10 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     // band; falls back to a fraction of height only if the projection is
     // degenerate. Recomputed at each address (onDown) since the lie/camera — and
     // thus the ball's on-screen height — change shot to shot.
-    const BOTTOM_ZONE = 140; // accuracy bar + club controls + safe area, in px
+    // Only a safe-area margin now — the drag uses pointer capture, so the finger
+    // can travel over the HUD to the very bottom of the screen; we just keep 100%
+    // off the extreme edge (awkward to hit + iOS edge gestures).
+    const BOTTOM_ZONE = 96;
     const pullVec = new THREE.Vector3();
     const applyPull = () => {
       camera.updateMatrixWorld();
@@ -1513,13 +1525,29 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       ballWorld(pullVec);
       pullVec.project(camera);
       const ballY = ((1 - pullVec.y) / 2) * h; // px from the top of the canvas
+      const ok = Number.isFinite(ballY) && ballY > 0 && ballY < h;
+      if (!ok) {
+        // Degenerate projection: no reliable ballY to cap against, so use a
+        // modest, definitely-reachable pull rather than a room-derived guess.
+        sim.setMaxPull(Math.max(44, h * 0.22));
+        return;
+      }
       const room = h - BOTTOM_ZONE - ballY;
-      const ok = Number.isFinite(ballY) && ballY > 0 && ballY < h && room > 0;
-      const px = ok ? room : h * 0.14;
-      // Let the measured room WIN even when it's small (a low ball): a floor
-      // ABOVE the room would push 100% back into the control zone. The elastic
-      // curve compensates — 44px still gives ~90% power at ~29px of pull.
-      sim.setMaxPull(Math.max(44, Math.min(px, h * 0.5)));
+      // With the ball framed ~64% down, `room` is GENEROUS (~180–240px on a
+      // typical phone) so the whole 0→100% range has real travel and the middle
+      // is dialable. The band is a sanity clamp: a floor so a well-framed ball
+      // always gets a generous pull, and a cap so a very tall viewport doesn't
+      // demand an arm-length drag.
+      const desired = Math.max(140, Math.min(room, h * 0.55));
+      // CRITICAL: never let maxPull exceed the physical drag travel below the ball
+      // (pointer capture makes the whole gap down to the bottom edge usable,
+      // INCLUDING the HUD/safe-area zone), or 100% becomes unreachable — the exact
+      // regression this guard prevents on SHORT viewports (landscape/split-screen/
+      // small desktop windows) where h−ballY < the floor. On a normal portrait
+      // phone `desired` (≥140) wins; on a short viewport it caps to the reachable
+      // travel, so 100% is ALWAYS reachable within the screen.
+      const travel = h - ballY;
+      sim.setMaxPull(Math.max(44, Math.min(desired, travel - 8)));
     };
     applyPull();
     const local = (e: PointerEvent) => {
@@ -1638,6 +1666,14 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       // animate its colour (gold/green pulse when the shot will hole out).
       if (st.inFlight || (!st.aiming && !st.armed)) showAim(false);
       applyAimColor(now);
+      // Elastic strain near max: the tip reticle throbs/stretches as power → 1, a
+      // visual "straining against the band" cue (no haptics needed on iOS). Runs
+      // per-frame so it animates while dragging AND while the shot is armed/idle.
+      if (aimGuide.visible) {
+        const strain = Math.max(0, (sim.power - 0.72) / 0.28);
+        const throb = 1 + strain * (0.28 + 0.16 * Math.sin(now * 0.02));
+        aimReticle.scale.set(throb, throb, 1);
+      }
 
       // Tee peg: only for the tee shot (stroke 0), and hidden once the ball is
       // away so it doesn't linger under a mid-flight/rolling ball.
@@ -1713,11 +1749,18 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         desiredLook.copy(tmpB).addScaledVector(tmpDir, Math.min(R + 3, 24));
         desiredLook.y = tmpB.y - 0.2;
       } else {
+        // ADDRESS CAMERA (full swing). Sit lower + further back and tilt down a
+        // touch more than the old (−17, +10 → look +46/−0.5) frame, which put the
+        // ball ~83% down the screen and left only ~28px of pull room below it (the
+        // 44px-floor bug: 0→100% power lived in a ~7mm drag). This frames the ball
+        // ~64% down, so applyPull() measures ~180–240px of room → a dialable pull,
+        // while the pin/green and the upward arc preview stay in frame (horizon
+        // ~34% down). Keep in sync with the initial address frame + RangeGL's tee.
         tmpDir.subVectors(pinV, tmpB).setY(0).normalize();
-        desiredPos.copy(tmpB).addScaledVector(tmpDir, -17);
-        desiredPos.y = tmpB.y + 10;
-        desiredLook.copy(tmpB).addScaledVector(tmpDir, 46);
-        desiredLook.y = tmpB.y - 0.5;
+        desiredPos.copy(tmpB).addScaledVector(tmpDir, -21);
+        desiredPos.y = tmpB.y + 7.5;
+        desiredLook.copy(tmpB).addScaledVector(tmpDir, 38);
+        desiredLook.y = tmpB.y - 3.5;
       }
       const k = 1 - Math.pow(0.001, dt);
       camPos.lerp(desiredPos, k);
