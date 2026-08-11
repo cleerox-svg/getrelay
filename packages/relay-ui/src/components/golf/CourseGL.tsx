@@ -956,9 +956,9 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       // with NO sRGB→linear conversion, so we pre-convert here. Skipping that
       // made the collar render ~3× too bright (the "pale wash" bug) — the earlier
       // single-material collar looked right precisely because material.color DID
-      // get the conversion. 0x4c8f3e == SURFACE_RGB.fringe, so the overlay mesh
+      // get the conversion. 0x3a6e30 == SURFACE_RGB.fringe, so the overlay mesh
       // and the baked patch are ONE coherent dark collar green.
-      const fringeLin = new THREE.Color(0x4c8f3e); // rich, dark collar green (sRGB)
+      const fringeLin = new THREE.Color(0x3a6e30); // rich, dark collar green (sRGB)
       const rr = SURFACE_RGB.rough;
       const roughLin = new THREE.Color().setRGB(rr[0], rr[1], rr[2], THREE.SRGBColorSpace);
       const fringeColorAt: ColorFn = (_frac, base) => {
@@ -980,7 +980,8 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
           gDef.r - 0.25,
           padR + APRON,
           groundY,
-          0.035,
+          0.01, // fringe lift — lowered so the ball's contact shadow (heightAt+0.03)
+          // pokes above the green stack and anchors the ball (was 0.035)
           radialUV,
           8, // more rings so the collar band + apron feather are both smooth
           SEG,
@@ -1013,7 +1014,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       // tile) for an even mow.
       const grainUV: UVFn = (wx, wd) => [wx / 6, wd / 6];
       const capGeo = track(
-        buildOrganicDisc(gSeed, gDef.d, gDef.x, gDef.r, groundY, 0.05, grainUV, 10, SEG, {
+        buildOrganicDisc(gSeed, gDef.d, gDef.x, gDef.r, groundY, 0.02, grainUV, 10, SEG, {
           pd: hole.pin.d,
           px: hole.pin.x,
           r: CUP_APERTURE_R,
@@ -1242,7 +1243,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       // triangle so the ragged coarse-grid/cap aperture is fully hidden. Same grain
       // + colour as the cap → seamless (a hair above the cap so it wins the overlap).
       const collarR = Math.max(gridCoverR, capCoverR, cupR + 0.4) + 0.3;
-      const collarGeo = track(buildCupCollar(hole.pin.d, hole.pin.x, cupR + LIP_W, collarR, groundY, 0.06, 4, 48));
+      const collarGeo = track(buildCupCollar(hole.pin.d, hole.pin.x, cupR + LIP_W, collarR, groundY, 0.03, 4, 48));
       const collarNorm = track(makeTurfNormalMap());
       collarNorm.repeat.set(16, 16);
       const collarMat = track(

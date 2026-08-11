@@ -47,8 +47,8 @@ export function makeFog(near = FOG_NEAR, far = FOG_FAR): THREE.Fog {
 // `Surface` string union and is a render albedo.)
 export const SURFACE_RGB: Record<Surface, [number, number, number]> = {
   fairway: [0.4, 0.66, 0.28],
-  green: [0.49, 0.79, 0.38],
-  fringe: [0.298, 0.561, 0.243], // rich, dark collar green (0x4c8f3e) — matches the overlay
+  green: [0.373, 0.686, 0.337], // darker, lusher putting green (0x5faf56) — matches GREEN_COLOR
+  fringe: [0.227, 0.431, 0.188], // rich, dark collar green (0x3a6e30) — matches the overlay
   rough: [0.19, 0.37, 0.16], // darker + more olive → clearly not fairway
   bunker: [0.9, 0.82, 0.6],
   water: [0.14, 0.42, 0.66],
@@ -72,7 +72,7 @@ export const TURF_NORMAL_SCALE = 0.45;
 
 // One putting-green colour so the Course putting green and the Range island
 // green read the same. Leans to the brighter Course green.
-export const GREEN_COLOR = 0x86d06f;
+export const GREEN_COLOR = 0x5faf56;
 
 // --- Sky -------------------------------------------------------------------
 // Deep-blue → hazy-horizon gradient with puffy cumulus clusters and two layers
