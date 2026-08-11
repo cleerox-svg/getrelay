@@ -240,6 +240,12 @@ export interface CourseShotOptions {
 export interface CoursePrediction {
   path: CourseTrailPt[];
   landing: { d: number; x: number; h: number } | null;
+  // Index into `path` of the sample at/just after the first ground contact
+  // (i.e. the carry endpoint that `landing` marks). null when `landing` is null
+  // (a putt/roll that never goes airborne). HUD-only: lets a full-swing aim
+  // preview draw the arc up to the FIRST bounce and drop the post-bounce roll
+  // guess; `path`/`landing`/`rest`/`result` semantics are unchanged.
+  landingIndex: number | null;
   rest: { d: number; x: number; h: number };
   result: CourseResult;
 }
@@ -634,6 +640,15 @@ export class CourseSim {
     // (bearing points backward, |angle| > 90°). Clamping the denominator used to
     // snap it sideways/away, making the hole unputtable from long.
     return Math.atan2(p.x - b.x, p.d - b.d);
+  }
+
+  // Public: the INTENDED shot heading (rad off +d) = bearing-to-pin + the current
+  // slingshot steer (aimRad), i.e. the pre-wind, pre-accuracy line the aim arrow
+  // points down. The scene reads this to yaw the address camera down the aimed
+  // line (steer left/right turns the view); aimRad = 0 returns bearing-to-pin, so
+  // the camera faces the pin exactly as before. Read-only — no state change.
+  aimHeading(): number {
+    return this.bearingToPin() + this.aimRad;
   }
 
   // Is the ball on the green? Then a stroke is a PUTT (ground roll), not a swing.
@@ -1046,15 +1061,25 @@ export class CourseSim {
 
     const path: CourseTrailPt[] = [{ d: b.d, x: b.x, h: b.h }];
     let landing: { d: number; x: number; h: number } | null = null;
+    // Index into `path` of the first sample AT/AFTER the first ground contact, so
+    // a full-swing aim preview can truncate the drawn arc at the first bounce
+    // (drawer takes path.slice(0, landingIndex + 1)). null for a putt/roll that
+    // never goes airborne. Additive: path/landing/rest/result are unchanged.
+    let landingIndex: number | null = null;
     let i = 0;
     let guard = 0;
     while (b.inFlight && guard < 100000) {
       const wasFirst = this.firstLanding;
       this.substep(fixedS);
+      const pushed = i % stride === 0;
+      if (pushed) path.push({ d: b.d, x: b.x, h: b.h });
       if (wasFirst && !this.firstLanding && landing == null) {
         landing = { d: b.d, x: b.x, h: b.h };
+        // The carry endpoint's slot in `path`: the sample just pushed this
+        // substep (the contact point), else the NEXT slot — a later substep push
+        // or the final rest push always fills it, so the index is always valid.
+        landingIndex = pushed ? path.length - 1 : path.length;
       }
-      if (i % stride === 0) path.push({ d: b.d, x: b.x, h: b.h });
       i++;
       guard++;
     }
@@ -1062,6 +1087,7 @@ export class CourseSim {
     const out: CoursePrediction = {
       path,
       landing,
+      landingIndex,
       rest: { d: b.d, x: b.x, h: b.h },
       result: this.result,
     };

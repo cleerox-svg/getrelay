@@ -675,9 +675,18 @@ export default function RangeGL({
     // Recompute the prediction, called only when the input signature changes.
     let predSig = '';
     const updatePrediction = () => {
-      // Wind-adjusted center line + landing/rest.
+      // Wind-adjusted center line + landing/rest. The drawn line stops at the
+      // FIRST bounce (landingIndex) — the carry only; the post-bounce roll guess
+      // is left for the player to judge. (Every range shot goes airborne, so
+      // landingIndex is set; the null branch is only the fly-out-of-bounds
+      // fallback, where the whole line is drawn.)
       const wind = sim.predict({ accuracy: 0, includeWind: true, stride: 3 });
-      const n = Math.min(wind.path.length, PRED_MAX);
+      const fullSwing = wind.landingIndex != null;
+      const n = Math.min(
+        fullSwing ? wind.landingIndex! + 1 : wind.path.length,
+        wind.path.length,
+        PRED_MAX,
+      );
       for (let k = 0; k < n; k++) {
         const p = wind.path[k]!;
         predPos[k * 3] = p.x;
@@ -691,9 +700,11 @@ export default function RangeGL({
       // landing, fall back to the rest point so the ring still reads.
       const land = wind.landing ?? wind.rest;
       landRing.position.set(land.x, PRED_Y, -land.d);
+      // Roll-out rest marker: hidden for a full swing (its post-bounce roll is the
+      // guess we're dropping); only the no-landing fly-out fallback still shows it.
       const rolled = Math.hypot(wind.rest.d - land.d, wind.rest.x - land.x);
       restRing.position.set(wind.rest.x, PRED_Y, -wind.rest.d);
-      restRing.visible = rolled > 4;
+      restRing.visible = !fullSwing && rolled > 4;
 
       // Pre-wind (intended) reticle — only when it visibly differs.
       const intended = sim.predict({ accuracy: 0, includeWind: false, stride: 12 });
@@ -977,6 +988,8 @@ export default function RangeGL({
     let revertAt = 0;
     const followTarget = new THREE.Vector3();
     const lookTarget = new THREE.Vector3();
+    // Up axis for yawing the tee view about the tee (origin) by the aim steer.
+    const camUp = new THREE.Vector3(0, 1, 0);
 
     // --- Fixed-timestep loop -------------------------------------------
     let raf = 0;
@@ -1241,8 +1254,13 @@ export default function RangeGL({
         followTarget.set(b.x * 0.7, 8 + b.h * 0.35, -b.d + 18);
         lookTarget.set(b.x, b.h + BALL_R + 1, -b.d);
       } else {
-        followTarget.copy(teeCamPos);
-        lookTarget.copy(teeLookAt);
+        // Tee view faces down the AIMED line: yaw the static tee framing about the
+        // tee (origin) by the slingshot steer, mirroring the Course address camera.
+        // The −z forward maps to (sin aimRad, 0, −cos aimRad) under −aimRad, so
+        // steering right turns the view right; aimRad = 0 is the unchanged tee view.
+        // Still lerped below (k), so the turn eases and never snaps.
+        followTarget.copy(teeCamPos).applyAxisAngle(camUp, -sim.aimRad);
+        lookTarget.copy(teeLookAt).applyAxisAngle(camUp, -sim.aimRad);
       }
       // Snappier tracking in flight so the chase keeps up with the ball;
       // gentler on the ease back to the tee.

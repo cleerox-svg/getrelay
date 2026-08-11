@@ -45,7 +45,7 @@ import {
 } from '../../lib/golf/scenery';
 import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
 import { BALL_R, CUP_R } from '../../lib/golf/greenPhysics';
-import type { CourseSim } from '../../lib/golf/courseSim';
+import type { CourseSim, CoursePrediction, CourseTrailPt } from '../../lib/golf/courseSim';
 
 interface Props {
   sim: CourseSim;
@@ -1359,13 +1359,21 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       aimGuide.visible = on;
       if (!on) preRing.visible = false; // gap ring re-decided by updateAim when on
     };
+    // Draw a predicted path but, for a FULL SWING, only up to the FIRST bounce —
+    // everything past the carry endpoint (bounces + roll-out) is left for the
+    // player to judge (landingIndex marks that slot). A PUTT never goes airborne
+    // (landingIndex null), so its full roll line to the cup is drawn unchanged.
+    const arcPathOf = (p: CoursePrediction): CourseTrailPt[] =>
+      p.landingIndex != null ? p.path.slice(0, p.landingIndex + 1) : p.path;
     const updateAim = () => {
       // Wind-adjusted centre line + landing/rest, plus the two tap-timing edges.
       const c = sim.predict({ includeWind: true });
       aimHoling = c.result === 'holed';
-      fillArc(arc.g, c.path);
-      fillArc(edgeL.g, sim.predict({ accuracy: -1, includeWind: true }).path);
-      fillArc(edgeR.g, sim.predict({ accuracy: 1, includeWind: true }).path);
+      // Full swing → arcs stop at the first bounce; putt → full roll line.
+      const fullSwing = c.landingIndex != null;
+      fillArc(arc.g, arcPathOf(c));
+      fillArc(edgeL.g, arcPathOf(sim.predict({ accuracy: -1, includeWind: true })));
+      fillArc(edgeR.g, arcPathOf(sim.predict({ accuracy: 1, includeWind: true })));
       const land = c.landing ?? c.rest;
       if (c.landing) {
         landRing.position.set(c.landing.x, c.landing.h + 0.12, -c.landing.d);
@@ -1373,7 +1381,10 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       } else {
         landRing.visible = false;
       }
+      // Roll-out rest marker: only a putt shows it (the post-bounce roll guess is
+      // removed for full swings). Position is still set for the putt case.
       restRing.position.set(c.rest.x, c.rest.h + 0.12, -c.rest.d);
+      restRing.visible = !fullSwing;
 
       // Pre-wind (intended) reticle — the gap to the landing ring shows the wind
       // push. Only drawn when it visibly differs.
@@ -1398,7 +1409,8 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       aimMat.opacity = 0.42 + pw * 0.45;
       chevMat.opacity = 0.42;
 
-      arc.l.visible = arc.line.visible = edgeL.l.visible = edgeR.l.visible = restRing.visible = true;
+      // restRing visibility is decided above (putt only); don't force it on here.
+      arc.l.visible = arc.line.visible = edgeL.l.visible = edgeR.l.visible = true;
       aimGuide.visible = true;
     };
     // Default (not-holing) aim colours, restored whenever the on-target pulse ends.
@@ -1490,11 +1502,22 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
 
     const ballWorld = (out: THREE.Vector3) => out.set(sim.ball.x, sim.ball.h + BALL_R, -sim.ball.d);
 
+    // The ADDRESS view faces down the AIMED line, not the raw pin direction: the
+    // horizontal heading is sim.aimHeading() (bearing-to-pin + the slingshot
+    // steer), so steering left/right turns the view down the intended line — key
+    // now that fairways dogleg. At aimRad = 0 this equals the pin direction, so
+    // the default framing is unchanged. Writes the unit (d,x)→world(x,−z) dir into
+    // `tmpDir` for the same downrange/offset maths the pin-vector used.
+    const aimDir = (out: THREE.Vector3) => {
+      const a = sim.aimHeading(); // rad off +d, +x = right
+      return out.set(Math.sin(a), 0, -Math.cos(a)).normalize();
+    };
+
     // Initialise camera at the address position. Framed so the ball sits ~64%
     // down the screen (was ~83%), leaving a generous downward slingshot travel
     // below it — see the ADDRESS-CAMERA note on the camera-follow tee branch.
     ballWorld(tmpB);
-    tmpDir.subVectors(pinV, tmpB).setY(0).normalize();
+    aimDir(tmpDir);
     camPos.copy(tmpB).addScaledVector(tmpDir, -21);
     camPos.y = tmpB.y + 7.5;
     camLook.copy(tmpB).addScaledVector(tmpDir, 38);
@@ -1766,7 +1789,9 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         // ~64% down, so applyPull() measures ~180–240px of room → a dialable pull,
         // while the pin/green and the upward arc preview stay in frame (horizon
         // ~34% down). Keep in sync with the initial address frame + RangeGL's tee.
-        tmpDir.subVectors(pinV, tmpB).setY(0).normalize();
+        // Faces the AIMED line (aimDir), so steering yaws the view; the desiredPos/
+        // Look below are still smoothly lerped, so the turn eases (never snaps).
+        aimDir(tmpDir);
         desiredPos.copy(tmpB).addScaledVector(tmpDir, -21);
         desiredPos.y = tmpB.y + 7.5;
         desiredLook.copy(tmpB).addScaledVector(tmpDir, 38);
