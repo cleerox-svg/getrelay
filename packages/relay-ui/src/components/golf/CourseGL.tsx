@@ -887,18 +887,37 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     // forward down that line, v runs perpendicular. It's set BACK from the ball so
     // the ball sits on the front third.
     let teePeg: THREE.Mesh | null = null;
+    // The whole tee box (pad + markers + peg) lives in a GROUP centred at the tee
+    // so it can be yawed to track the camera view: on the teed drive the camera
+    // faces aimHeading = DRIVE LINE (first fairway leg) + aimRad, and the box is
+    // BAKED to the drive-line heading, so rotating the group by −aimRad each frame
+    // keeps the box SQUARE TO THE VIEW as you steer (fixing the dogleg skew where a
+    // pin-oriented box twisted around the corner). At aimRad = 0 the rotation is 0 →
+    // identical to the baked, terrain-following box (no regression).
+    let teeGroup: THREE.Group | null = null;
     {
       const teeD = hole.tee.d;
       const teeX = hole.tee.x;
-      // Forward unit (tee→pin) and its right-perpendicular, in (d,x) space.
-      let fd = hole.pin.d - teeD;
-      let fx = hole.pin.x - teeX;
+      const teeGrp = new THREE.Group();
+      teeGrp.position.set(teeX, 0, -teeD); // rotate about the tee; children are tee-local
+      teeGroup = teeGrp;
+      // Forward unit = the DRIVE LINE (first fairway leg, centerline[0]→[1]) — the
+      // tee-shot aim base (sim.aimHeading() at aimRad 0), so the address camera and
+      // this box are square to the fairway, not twisted at the pin on a dogleg. The
+      // group rotation (−aimRad) in the loop then tracks the camera as you steer.
+      // On a straight hole / par-3 the first leg is collinear tee→pin, so this is
+      // the old tee→pin heading (byte-identical box). Its right-perpendicular is
+      // (fx, −fd).
+      const c0 = hole.centerline[0] ?? hole.tee;
+      const c1 = hole.centerline[1] ?? hole.pin;
+      let fd = c1.d - c0.d;
+      let fx = c1.x - c0.x;
       const flen = Math.hypot(fd, fx) || 1;
       fd /= flen;
       fx /= flen;
       const rd = fx; // right = perpendicular of forward: (fx, -fd)
       const rx = -fd;
-      const heading = Math.atan2(fx, fd); // world yaw of the aim line (small here)
+      const heading = Math.atan2(fx, fd); // world yaw of the drive line
 
       const PAD_HALF_W = 4.5; // ~9 yd wide
       const PAD_FRONT = 3.5; // yd ahead of the ball
@@ -919,9 +938,11 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
           const v = -PAD_HALF_W + (c / NV) * (PAD_HALF_W * 2);
           const wd = teeD + fd * u + rd * v;
           const wx = teeX + fx * u + rx * v;
-          ppos[pp] = wx;
+          // Tee-LOCAL x/z (offset from the group origin at the tee) so the group can
+          // rotate the box about the tee; Y stays the absolute sampled ground height.
+          ppos[pp] = wx - teeX;
           ppos[pp + 1] = heightAt(hole, wd, wx) + LIFT;
-          ppos[pp + 2] = -wd;
+          ppos[pp + 2] = -(wd - teeD);
           puv[pu] = c / NV;
           puv[pu + 1] = a / NU;
           pp += 3;
@@ -968,7 +989,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       padMat.normalScale.set(0.3, 0.3);
       const pad = new THREE.Mesh(padGeo, padMat);
       pad.receiveShadow = true;
-      scene.add(pad);
+      teeGrp.add(pad);
 
       // Two tee markers flanking the ball, perpendicular to the aim line. Low
       // blue blocks; they cast shadows onto the pad. Geometry/material shared.
@@ -982,11 +1003,13 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         const wd = teeD + fd * markU + rd * sgn * markV;
         const wx = teeX + fx * markU + rx * sgn * markV;
         const mk = new THREE.Mesh(markGeo, markMat);
-        mk.position.set(wx, heightAt(hole, wd, wx) + 0.25, -wd);
+        // Tee-local position (Y absolute); the box's small yaw stays the baked
+        // heading — cosmetically irrelevant for a low block, exact at aimRad = 0.
+        mk.position.set(wx - teeX, heightAt(hole, wd, wx) + 0.25, -(wd - teeD));
         mk.rotation.y = heading;
         mk.castShadow = true;
         mk.receiveShadow = true;
-        scene.add(mk);
+        teeGrp.add(mk);
       }
 
       // Subtle tee peg under the ball (tee shot only — toggled in the loop by
@@ -996,9 +1019,11 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       const pegMat = track(new THREE.MeshStandardMaterial({ color: 0xf2f2f0, roughness: 0.55 }));
       teePeg = new THREE.Mesh(pegGeo, pegMat);
       const pegY = heightAt(hole, teeD, teeX) + LIFT;
-      teePeg.position.set(teeX, pegY + pegH / 2, -teeD);
+      // At the tee centre → the group's local origin (Y absolute).
+      teePeg.position.set(0, pegY + pegH / 2, 0);
       teePeg.castShadow = true;
-      scene.add(teePeg);
+      teeGrp.add(teePeg);
+      scene.add(teeGrp);
     }
 
     // NOTE: the in-scene green-reading overlay (slope heat tint + contour grid +
@@ -1711,6 +1736,12 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       // Tee peg: only for the tee shot (stroke 0), and hidden once the ball is
       // away so it doesn't linger under a mid-flight/rolling ball.
       if (teePeg) teePeg.visible = st.strokes === 0 && !st.inFlight;
+      // Yaw the tee box to track the address camera (which on the teed drive faces
+      // aimHeading = DRIVE LINE + aimRad). The box is baked to the drive line, so
+      // −aimRad keeps it SQUARE TO THE VIEW as the player steers on a dogleg;
+      // aimRad = 0 leaves it exactly as baked. Only while addressing the tee shot
+      // (strokes === 0) — the SAME predicate the sim uses for the drive-line base.
+      if (teeGroup) teeGroup.rotation.y = st.strokes === 0 ? -sim.aimRad : 0;
 
       // Hole-out celebration: fire once when the ball drops, then animate the
       // ring pulse + confetti for ~1.6 s.
