@@ -199,13 +199,14 @@ export default function RangeGL({
     scene.fog = makeFog();
 
     const camera = new THREE.PerspectiveCamera(60, w / h, 0.5, 1400);
-    // Sit a touch lower and aim a touch higher than dead-level so the teed
-    // ball (near the camera, low to the ground) frames in the lower-MIDDLE of
-    // the now full-screen viewport with open turf below it for the drag-back
-    // gesture — rather than sinking to the very bottom edge. Camera-follow on
-    // the shot lerps away from these and back, unchanged.
-    const teeCamPos = new THREE.Vector3(0, 8.4, 18);
-    const teeLookAt = new THREE.Vector3(0, 4, -68);
+    // Sit lower + further back and tilt down a touch more (was pos y8.4 z18 →
+    // look y4 z-68, which put the teed ball ~82% down the screen and left almost
+    // no pull room). This frames the teed ball ~64% down the full-screen viewport,
+    // giving the drag-back gesture a generous ~180–240px of travel below the ball
+    // (matched to the Course address frame so the two scenes can't drift), while
+    // the down-range targets/haze stay in view. Camera-follow lerps away and back.
+    const teeCamPos = new THREE.Vector3(0, 7, 22);
+    const teeLookAt = new THREE.Vector3(0, 1, -42);
     camera.position.copy(teeCamPos);
     const lookAt = teeLookAt.clone();
     camera.lookAt(lookAt);
@@ -498,8 +499,12 @@ export default function RangeGL({
     const AIM_LEN = 42; // yards to the reticle at rest
     const aimGuide = new THREE.Group();
     aimGuide.position.set(0, 0.16, 0);
-    const aimColLow = new THREE.Color(0xffd54a);
-    const aimColHigh = new THREE.Color(0xff5a3c);
+    // Continuous power feedback across the WHOLE range: the arrow ramps GREEN (low)
+    // → AMBER (mid) → RED (max) as a 3-stop gradient, so every increment reads —
+    // not just a redden near the top. `powerColor` writes into `aimCol`.
+    const aimColLow = new THREE.Color(0x46d66b); // green — soft
+    const aimColMid = new THREE.Color(0xffd54a); // amber — half power
+    const aimColHigh = new THREE.Color(0xff4326); // red — near max (straining)
     // Tapering arrow (shaft + head) as one flat, horizontal buffer geometry.
     const ws = 0.42; // shaft half-width
     const wh = 1.7; // head half-width
@@ -934,20 +939,33 @@ export default function RangeGL({
     // fraction of height if the projection is degenerate. The teed ball's address
     // position is fixed, so this holds for every shot (recomputed on resize). Kept
     // IDENTICAL in spirit to the course, so the two scenes' feel can't drift.
-    const BOTTOM_ZONE = 128; // controls + safe area at the base, in px
+    const BOTTOM_ZONE = 96; // safe-area margin only (pointer capture; see Course)
     const pullVec = new THREE.Vector3();
     const applyPull = () => {
       camera.updateMatrixWorld();
       pullVec.set(0, BALL_R + TEE_LIFT, 0).project(camera);
       const ballY = ((1 - pullVec.y) / 2) * h; // px from the top of the canvas
+      const ok = Number.isFinite(ballY) && ballY > 0 && ballY < h;
+      if (!ok) {
+        // Degenerate projection: no reliable ballY to cap against — use a modest,
+        // definitely-reachable pull.
+        sim.setMaxPull(Math.max(44, h * 0.22));
+        return;
+      }
       const room = h - BOTTOM_ZONE - ballY;
-      const ok = Number.isFinite(ballY) && ballY > 0 && ballY < h && room > 0;
-      const px = ok ? room : h * 0.14;
-      // Let the measured room WIN even when it's small: a floor ABOVE the room
-      // would push 100% back into the control zone. The elastic curve compensates
-      // — 44px still gives ~90% power at ~29px of pull. (The range never putts, so
-      // there is no finesse branch here — every shot is a full swing.)
-      sim.setMaxPull(Math.max(44, Math.min(px, h * 0.5)));
+      // The ball is framed ~64% down, so `room` is GENEROUS (~180–240px on a
+      // typical phone): the whole 0→100% range has real travel and the middle is
+      // dialable. Band is a sanity clamp (floor for a generous pull, cap for a very
+      // tall viewport).
+      const desired = Math.max(140, Math.min(room, h * 0.55));
+      // CRITICAL: never let maxPull exceed the physical drag travel below the ball
+      // (pointer capture makes the whole gap to the bottom edge usable), or 100%
+      // becomes unreachable on SHORT viewports where h−ballY < the floor. On a
+      // normal portrait phone `desired` (≥140) wins; a short viewport caps to the
+      // reachable travel, so 100% is ALWAYS reachable. Kept IDENTICAL to the Course
+      // so feel can't drift. (The range never putts — every shot is a full swing.)
+      const travel = h - ballY;
+      sim.setMaxPull(Math.max(44, Math.min(desired, travel - 8)));
     };
     applyPull();
 
@@ -1085,18 +1103,28 @@ export default function RangeGL({
       ballShadowMat.opacity = 0.9 * Math.max(0.1, 1 - shAlt / 8);
       ballShadow.visible = ball.visible && !sinking;
 
-      // Aim guide: visible only at the tee. Steer with aimRad, grow with power,
-      // ramp toward red near max, and pulse gently when idle to invite a drag.
+      // Aim guide: visible only at the tee. Steer with aimRad; the arrow GROWS in
+      // length and ramps GREEN→AMBER→RED continuously with power (feedback across
+      // the whole range), and its head/tip reticle PULSE-STRETCH near max as an
+      // elastic "straining against the band" cue (visual — no haptics needed on
+      // iOS). Idle pulse invites a drag.
       aimGuide.visible = teed;
       if (teed) {
+        const pw = sim.power;
         aimGuide.rotation.y = -sim.aimRad;
-        aimGuide.scale.z = 1 + sim.power * 0.5;
-        aimCol.copy(aimColLow).lerp(aimColHigh, sim.power);
+        aimGuide.scale.z = 1 + pw * 0.85; // clearer length delta across the range
+        // 3-stop green→amber→red ramp.
+        if (pw < 0.5) aimCol.copy(aimColLow).lerp(aimColMid, pw * 2);
+        else aimCol.copy(aimColMid).lerp(aimColHigh, (pw - 0.5) * 2);
         aimMat.color.copy(aimCol);
         chevMat.color.copy(aimCol);
         const pulse = sim.aiming ? 1 : 0.82 + 0.18 * Math.sin(now / 320);
-        aimMat.opacity = (0.42 + sim.power * 0.45) * pulse;
+        aimMat.opacity = (0.42 + pw * 0.45) * pulse;
         chevMat.opacity = 0.42 * pulse;
+        // Elastic strain near max: the tip reticle throbs/stretches as power → 1.
+        const strain = Math.max(0, (pw - 0.72) / 0.28); // 0 below 72%, 1 at 100%
+        const throb = 1 + strain * (0.28 + 0.16 * Math.sin(now * 0.02));
+        reticle.scale.set(throb, throb, 1);
       }
 
       // Predicted trajectory: shown while actively setting up a shot at the tee
