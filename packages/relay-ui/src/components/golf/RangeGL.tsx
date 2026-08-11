@@ -939,7 +939,6 @@ export default function RangeGL({
     // fraction of height if the projection is degenerate. The teed ball's address
     // position is fixed, so this holds for every shot (recomputed on resize). Kept
     // IDENTICAL in spirit to the course, so the two scenes' feel can't drift.
-    const BOTTOM_ZONE = 96; // safe-area margin only (pointer capture; see Course)
     const pullVec = new THREE.Vector3();
     const applyPull = () => {
       camera.updateMatrixWorld();
@@ -952,19 +951,23 @@ export default function RangeGL({
         sim.setMaxPull(Math.max(44, h * 0.22));
         return;
       }
-      const room = h - BOTTOM_ZONE - ballY;
-      // The ball is framed ~64% down, so `room` is GENEROUS (~180–240px on a
-      // typical phone): the whole 0→100% range has real travel and the middle is
-      // dialable. Band is a sanity clamp (floor for a generous pull, cap for a very
-      // tall viewport).
-      const desired = Math.max(140, Math.min(room, h * 0.55));
-      // CRITICAL: never let maxPull exceed the physical drag travel below the ball
-      // (pointer capture makes the whole gap to the bottom edge usable), or 100%
-      // becomes unreachable on SHORT viewports where h−ballY < the floor. On a
-      // normal portrait phone `desired` (≥140) wins; a short viewport caps to the
-      // reachable travel, so 100% is ALWAYS reachable. Kept IDENTICAL to the Course
-      // so feel can't drift. (The range never putts — every shot is a full swing.)
+      // Pointer capture makes the WHOLE gap down to the bottom edge usable, so
+      // base the full-power pull on the physical `travel` below the ball (less a
+      // small bottom MARGIN) rather than on `room` (which subtracted the 96px
+      // BOTTOM_ZONE and needlessly shrank maxPull, making 100% arrive too fast).
+      // With the ball framed ~64% down this yields a longer, more deliberate full
+      // pull (~268px on a typical phone vs the old 196px) while scaling the whole
+      // 0→100% range up together, so the dialable middle is preserved. Band is a
+      // sanity clamp (floor for a generous pull, cap for a very tall viewport).
       const travel = h - ballY;
+      const MARGIN = 24; // keep a little room above the bottom edge
+      const desired = Math.max(140, Math.min(travel - MARGIN, h * 0.55));
+      // CRITICAL: never let maxPull exceed the physical drag travel below the ball,
+      // or 100% becomes unreachable on SHORT viewports where the floor (140)
+      // exceeds the travel. On a normal portrait phone `desired` wins (~268px); a
+      // short viewport caps to the reachable travel, so 100% is ALWAYS reachable.
+      // Kept IDENTICAL to the Course so feel can't drift. (The range never putts —
+      // every shot is a full swing.)
       sim.setMaxPull(Math.max(44, Math.min(desired, travel - 8)));
     };
     applyPull();

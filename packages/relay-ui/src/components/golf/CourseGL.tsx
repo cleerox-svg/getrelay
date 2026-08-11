@@ -1505,10 +1505,9 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     // band; falls back to a fraction of height only if the projection is
     // degenerate. Recomputed at each address (onDown) since the lie/camera — and
     // thus the ball's on-screen height — change shot to shot.
-    // Only a safe-area margin now — the drag uses pointer capture, so the finger
-    // can travel over the HUD to the very bottom of the screen; we just keep 100%
-    // off the extreme edge (awkward to hit + iOS edge gestures).
-    const BOTTOM_ZONE = 96;
+    // The drag uses pointer capture, so the finger can travel over the HUD to the
+    // very bottom of the screen; a small MARGIN (below) just keeps 100% off the
+    // extreme edge (awkward to hit + iOS edge gestures).
     const pullVec = new THREE.Vector3();
     const applyPull = () => {
       camera.updateMatrixWorld();
@@ -1532,21 +1531,25 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         sim.setMaxPull(Math.max(44, h * 0.22));
         return;
       }
-      const room = h - BOTTOM_ZONE - ballY;
-      // With the ball framed ~64% down, `room` is GENEROUS (~180–240px on a
-      // typical phone) so the whole 0→100% range has real travel and the middle
-      // is dialable. The band is a sanity clamp: a floor so a well-framed ball
-      // always gets a generous pull, and a cap so a very tall viewport doesn't
-      // demand an arm-length drag.
-      const desired = Math.max(140, Math.min(room, h * 0.55));
-      // CRITICAL: never let maxPull exceed the physical drag travel below the ball
-      // (pointer capture makes the whole gap down to the bottom edge usable,
-      // INCLUDING the HUD/safe-area zone), or 100% becomes unreachable — the exact
-      // regression this guard prevents on SHORT viewports (landscape/split-screen/
-      // small desktop windows) where h−ballY < the floor. On a normal portrait
-      // phone `desired` (≥140) wins; on a short viewport it caps to the reachable
-      // travel, so 100% is ALWAYS reachable within the screen.
+      // Pointer capture makes the WHOLE gap down to the bottom edge usable
+      // (INCLUDING the HUD/safe-area zone), so base the full-power pull on the
+      // physical `travel` below the ball (less a small bottom MARGIN) rather than
+      // on `room` (which subtracted the 96px BOTTOM_ZONE and needlessly shrank
+      // maxPull, making 100% arrive with too little finger travel). With the ball
+      // framed ~64% down this yields a longer, more deliberate full pull (~268px
+      // on a typical phone vs the old 196px) while scaling the whole 0→100% range
+      // up together, so the dialable middle is preserved. The band is a sanity
+      // clamp: a floor so a well-framed ball always gets a generous pull, and a
+      // cap so a very tall viewport doesn't demand an arm-length drag.
       const travel = h - ballY;
+      const MARGIN = 24; // keep a little room above the bottom edge
+      const desired = Math.max(140, Math.min(travel - MARGIN, h * 0.55));
+      // CRITICAL: never let maxPull exceed the physical drag travel below the ball,
+      // or 100% becomes unreachable — the exact regression this guard prevents on
+      // SHORT viewports (landscape/split-screen/small desktop windows) where the
+      // floor (140) exceeds the travel. On a normal portrait phone `desired` wins
+      // (~268px); on a short viewport it caps to the reachable travel, so 100% is
+      // ALWAYS reachable within the screen.
       sim.setMaxPull(Math.max(44, Math.min(desired, travel - 8)));
     };
     applyPull();
