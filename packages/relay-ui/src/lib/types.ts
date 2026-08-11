@@ -469,6 +469,9 @@ export interface UiMessage {
   deliveredCount?: number;
   readCount?: number;
   totalRecipients?: number;
+  // Message body is encrypted at rest (not end-to-end). Optional so legacy
+  // messages without the flag simply render no lock.
+  encrypted?: boolean;
   pending?: boolean;
   tempId?: string;
 }
@@ -514,6 +517,8 @@ export type ServerMsg =
       mediaUrl?: string | null;
       replyTo?: ReplyPreview | null;
       ts: number;
+      // Body is encrypted at rest on the server.
+      encrypted?: boolean;
     }
   | {
       t: 'reaction';
