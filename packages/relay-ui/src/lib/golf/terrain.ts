@@ -357,6 +357,23 @@ export function corridorEdgeDist(hole: CourseHole, d: number, x: number): number
   return near.dist - corridorHalfAt(hole, near.t);
 }
 
+// Arc-length position (yd) ALONG the centerline of the nearest point to (d,x),
+// measured from the tee end (centerline[0]). Renderers band mow stripes on THIS
+// instead of raw downrange d: stripe boundaries then run PERPENDICULAR to the
+// LOCAL fairway direction and wrap around a dogleg, so a diagonal/bent corridor
+// reads as an even ribbon (stripes no longer cut across it at an angle). On a
+// straight hole (centerline running down d from the tee) the arc-length ≈ d, so
+// the stripe spacing/phase is essentially unchanged. Pure read helper (physics
+// classification is UNCHANGED); scales to any hole.
+export function centerlineArcYd(hole: CourseHole, d: number, x: number): number {
+  const pts = hole.centerline;
+  let total = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    total += Math.hypot(pts[i + 1]!.d - pts[i]!.d, pts[i + 1]!.x - pts[i]!.x);
+  }
+  return nearestOnPolyline(pts, d, x).t * total;
+}
+
 // Radius (yd) of the mown pad = putting surface + fringe collar, at its BASE
 // (un-wobbled) size. The organic green + fringe edges wobble around this.
 export function greenPadRadius(hole: CourseHole): number {

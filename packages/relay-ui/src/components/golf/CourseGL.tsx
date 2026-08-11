@@ -14,6 +14,7 @@ import {
   surfaceAt,
   greenPadRadius,
   corridorEdgeDist,
+  centerlineArcYd,
   edgeRadius,
   featureSeed,
   type CourseHole,
@@ -140,9 +141,13 @@ function makeSurfaceMap(
   const fair: [number, number, number] = [0, 0, 0];
   const rgh: [number, number, number] = [0, 0, 0];
   // Fairway albedo at (x,d): bold alternating mow stripes + a whisper of blade
-  // speckle. Strong band contrast so the "fairway lines" read clearly.
-  const fairwayRGB = (x: number, d: number, out: [number, number, number]) => {
-    const band = Math.floor(d / STRIPE_YD) % 2 === 0 ? STRIPE_HI : STRIPE_LO;
+  // speckle. The stripe band is keyed to ARC-LENGTH along the centerline (`arc`,
+  // yd) rather than raw downrange `d`, so on a diagonal/dogleg corridor the band
+  // boundaries run perpendicular to the LOCAL fairway direction and wrap the
+  // bend — the ribbon reads as even width. On a straight hole arc ≈ d, so the
+  // stripes are unchanged. Strong band contrast so the "fairway lines" read.
+  const fairwayRGB = (x: number, d: number, arc: number, out: [number, number, number]) => {
+    const band = Math.floor(arc / STRIPE_YD) % 2 === 0 ? STRIPE_HI : STRIPE_LO;
     const blade = 0.94 + hashNoise(x * 3.1, d * 3.1) * 0.12;
     const m = band * blade;
     out[0] = FAIR[0] * m;
@@ -176,7 +181,9 @@ function makeSurfaceMap(
       let gg: number;
       let b: number;
       if (surf === 'fairway' || surf === 'rough') {
-        fairwayRGB(x, d, fair);
+        // Band the mow stripes on centerline arc-length so they follow the
+        // corridor direction (and wrap a dogleg) instead of cutting across it.
+        fairwayRGB(x, d, centerlineArcYd(hole, d, x), fair);
         roughRGB(x, d, ROUGH, rgh);
         // First cut: smoothstep-blend fairway→rough across ±FIRST_CUT of the
         // corridor edge (ed<0 inside the fairway, >0 in the rough).
