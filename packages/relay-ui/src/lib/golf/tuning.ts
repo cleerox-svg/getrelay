@@ -41,6 +41,29 @@ export const MAX_LAUNCH_SPEED = 240;
 export const MAX_PULL = 170;
 export const MIN_PULL = 8;
 
+// --- Elastic ("slingshot") power response ---------------------------------
+// The RAW pull fraction (|drag| / maxPull, clamped 0..1) is shaped by this
+// ease-out curve BEFORE it becomes shot power, giving a rubber-band feel: power
+// rises quickly through the low/mid pull and COMPRESSES near the top, so ~65% of
+// the physical pull already yields ~90% power (100% is reachable in the limited
+// screen room below a low ball — the reported bug) while the last stretch to
+// 100% is a deliberate strain rather than a twitch. The maps are exact at the
+// ends — f(0)=0, f(1)=1 — so a FULL pull is still power=1 and every club's
+// full-power carry (and the whole ladder) is UNCHANGED. Pure function of the
+// pull, so the sim stays deterministic.
+//   f(t)     = 1 − (1 − t)^EXP          (EXP > 1 → ease-out / compress near top)
+//   f⁻¹(p)   = 1 − (1 − p)^(1/EXP)      (used by tools/tests to hit a given power)
+// EXP 2.2 gives: 0.1→0.21, 0.3→0.54, 0.5→0.78, 0.65→0.90, 0.8→0.97, 1→1.00.
+export const POWER_CURVE_EXP = 2.2;
+export function powerCurve(pullFrac: number): number {
+  const t = Math.max(0, Math.min(1, pullFrac));
+  return 1 - Math.pow(1 - t, POWER_CURVE_EXP);
+}
+export function powerCurveInv(power: number): number {
+  const p = Math.max(0, Math.min(1, power));
+  return 1 - Math.pow(1 - p, 1 / POWER_CURVE_EXP);
+}
+
 // Radii in virtual units.
 export const BALL_R = 1.6;
 export const CUP_R = 2.8;

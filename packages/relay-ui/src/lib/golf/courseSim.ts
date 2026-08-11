@@ -14,7 +14,7 @@
 
 import { CLUBS, clubById, DEFAULT_CLUB_ID } from './clubs';
 import type { Club } from './clubs';
-import { FIXED_MS, MIN_PULL } from './tuning';
+import { FIXED_MS, MIN_PULL, powerCurve } from './tuning';
 import {
   ACCURACY_AIM,
   ACCURACY_CURVE,
@@ -662,7 +662,9 @@ export class CourseSim {
     if (!this.aiming) return;
     const rawX = this.dragStart.x - p.x;
     const rawY = this.dragStart.y - p.y;
-    this.power = Math.min(Math.hypot(rawX, rawY), this.maxPull) / this.maxPull;
+    // Elastic response: raw pull fraction → power via the ease-out curve, so a
+    // downward pull reaches high power in less room and the top is a strain.
+    this.power = powerCurve(Math.min(Math.hypot(rawX, rawY), this.maxPull) / this.maxPull);
     this.aimRad = this.pullAim(rawX, rawY);
   }
   // Release: lock power + steer and raise the accuracy bar (no launch yet). A
@@ -677,7 +679,7 @@ export class CourseSim {
       this.power = 0;
       return false;
     }
-    this.power = Math.min(Math.hypot(pullX, pullY), this.maxPull) / this.maxPull;
+    this.power = powerCurve(Math.min(Math.hypot(pullX, pullY), this.maxPull) / this.maxPull);
     this.aimRad = this.pullAim(pullX, pullY);
     this.armed = true;
     return true;

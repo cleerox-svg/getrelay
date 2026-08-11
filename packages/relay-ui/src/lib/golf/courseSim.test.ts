@@ -11,6 +11,7 @@ import { HOLE_1, surfaceAt, type CourseHole } from './terrain';
 import { CLUBS } from './clubs';
 import { GRAVITY } from './rangeSim';
 import { BALL_R, CUP_R, greenRollDecel, rollOutDistance } from './greenPhysics';
+import { MIN_PULL, powerCurve, powerCurveInv } from './tuning';
 
 // A HOLE_1 clone with a DEAD-FLAT green (no tilt, no undulation) — the control
 // for proving the tilt (not noise) is what breaks a putt.
@@ -388,17 +389,97 @@ describe('course sim — static-friction rest on grounded slopes', () => {
 // wedge flies genuinely short (finesse floor), and a ball behind the pin aims
 // back at the cup instead of away.
 
-// Fire a straight-at-pin shot at the given power through the interactive path.
+// Fire a straight-at-pin shot at the given EFFECTIVE power through the
+// interactive path. onPointerMove now shapes the raw pull through the elastic
+// powerCurve, so to land on a specific effective power the drag distance is the
+// curve's INVERSE (powerCurveInv) — the tests reason in effective power, which is
+// what the sim stores, uses and shows on the meter.
 function fireStraight(s: CourseSim, power: number): void {
   const MP = 100;
   s.setMaxPull(MP);
+  // A REAL finger drag can't be shorter than MIN_PULL (arm() cancels below it),
+  // so the smallest arm-able tap is powerCurve(MIN_PULL/MP) ≈ 0.17, not 0. Clamp
+  // the inverse-mapped drag to that floor: a request below it fires the genuine
+  // minimum tap (still a delicate trickle), which is what the sim can produce.
+  const drag = Math.max(MIN_PULL + 0.5, powerCurveInv(power) * MP); // aim at pin
   s.onPointerDown({ x: 0, y: 0 });
-  s.onPointerMove({ x: 0, y: power * MP }); // straight-back pull → aim at pin
-  s.arm({ x: 0, y: power * MP });
+  s.onPointerMove({ x: 0, y: drag });
+  s.arm({ x: 0, y: drag });
   s.fireArmed(0); // pure strike
   let g = 0;
   while (s.ball.inFlight && g++ < 200000) s.substep(1 / 120);
 }
+
+// --- Elastic slingshot power response (reachability + rubber-band feel) -------
+// onPointerMove/arm shape the raw pull fraction through powerCurve() so a low
+// ball can reach 100% power in the limited screen room below it, while the last
+// stretch compresses (a deliberate strain). The ENDS must be exact — f(0)=0,
+// f(1)=1 — or full-power carry (and the club ladder) would move.
+describe('course sim — elastic power curve', () => {
+  it('is exact at the ends so full-power carry is UNCHANGED (f(0)=0, f(1)=1)', () => {
+    expect(powerCurve(0)).toBe(0);
+    expect(powerCurve(1)).toBe(1);
+    // A FULL downward pull (drag ≥ maxPull) still yields power exactly 1.
+    const s = sim();
+    s.setMaxPull(100);
+    s.onPointerDown({ x: 0, y: 0 });
+    s.onPointerMove({ x: 0, y: 140 }); // past maxPull → clamps to a full pull
+    expect(s.power).toBe(1);
+  });
+
+  it('eases out: ~65% of the pull already yields ~90% power (reachability)', () => {
+    // The point of the curve — a partial (comfortable) pull reaches near-max
+    // power, so a ball rendered low on screen can still be hit at full strength.
+    expect(powerCurve(0.65)).toBeGreaterThan(0.88);
+    expect(powerCurve(0.65)).toBeLessThan(0.93);
+    // Monotonic and strictly increasing across the drag (no dead zone / plateau).
+    let prev = -1;
+    for (let t = 0; t <= 1.0001; t += 0.05) {
+      const p = powerCurve(t);
+      expect(p).toBeGreaterThan(prev);
+      prev = p;
+    }
+    // Low end stays dialable (not collapsed to ~0), preserving wedge finesse.
+    expect(powerCurve(0.1)).toBeGreaterThan(0.15);
+    expect(powerCurve(0.3)).toBeGreaterThan(0.45);
+  });
+
+  it('powerCurveInv round-trips powerCurve (tools/tests can hit a given power)', () => {
+    for (const p of [0.05, 0.2, 0.4, 0.6, 0.8, 0.95]) {
+      expect(powerCurve(powerCurveInv(p))).toBeCloseTo(p, 6);
+    }
+  });
+
+  it('a low-ball full swing reaches 100% on a TINY room-derived maxPull', () => {
+    // The GL scene gives a full swing the small measured room below a low ball
+    // (44px floor): a full downward pull to that room must still hit power 1.0, so
+    // a low ball can be hit at full strength without dragging into the controls.
+    const s = sim();
+    s.setMaxPull(44);
+    s.onPointerDown({ x: 0, y: 0 });
+    s.onPointerMove({ x: 0, y: 44 }); // pull down exactly the available room
+    expect(s.power).toBe(1);
+    // ~90% is already reached at ~29px (well inside the room) — the reachability.
+    s.onPointerMove({ x: 0, y: 29 });
+    expect(s.power).toBeGreaterThan(0.88);
+  });
+
+  it('a putt stays FEATHER-able on a generous (non-room) maxPull', () => {
+    // Putts never need 100%; the GL scene gives them a generous finesse maxPull
+    // (~h*0.3), NOT the tiny green room, so the smallest arm-able tap is a soft
+    // trickle rather than a blast that overshoots a short putt.
+    const s = sim();
+    const g = HOLE_1.green;
+    s.ball.d = g.d;
+    s.ball.x = g.x - 2;
+    s.ball.h = 0;
+    expect(s.getState().putting).toBe(true);
+    s.setMaxPull(240); // generous finesse pull (≈ h*0.3 on a phone)
+    s.onPointerDown({ x: 0, y: 0 });
+    s.onPointerMove({ x: 0, y: MIN_PULL + 1 }); // the minimum arm-able tap
+    expect(s.power).toBeLessThan(0.12); // soft enough to feather a short putt
+  });
+});
 
 describe('course sim — auto club recommendation', () => {
   const g = HOLE_1.green;
@@ -618,6 +699,9 @@ describe('course sim — putting scale + holing (Phase 2)', () => {
     s.ball.d = g.d;
     s.ball.x = g.x - 1; // 3 ft from the cup
     s.ball.h = 0;
+    // NOTE: 0.1 is below the MIN_PULL floor, so fireStraight clamps the drag to
+    // MIN_PULL and the ACTUAL fired power is the genuine minimum tap (~0.18) — the
+    // literal 0.1 is not exercised; this pins that even the softest tap stays put.
     fireStraight(s, 0.1); // barely-there tap
     // It didn't fly off (still a putt outcome) and it did not overshoot: it rests
     // no further from the cup than it started (it came up short / dead).
