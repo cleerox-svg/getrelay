@@ -210,6 +210,48 @@ interface GameDetail extends Game {
   awayBox: TeamBox;
 }
 
+// A cached Sports response is always a pre/final snapshot — live states
+// are served `no-store` and never stored. The trap: a snapshot cached
+// while a followed game was still `pre` keeps being served (from this
+// edge cache AND the browser's HTTP cache) after first pitch, freezing
+// the card on the pre-game "7:00 PM ET" state even though the game is now
+// live. The cron path reads upstream directly, so notifications stay
+// timely while the card sits stale — exactly the "notifications but no
+// live score" symptom. Once a pre-game's scheduled start has passed,
+// treat the cached snapshot as stale so the request falls through to a
+// fresh upstream read (which the live-bypass then serves `no-store`).
+// Games whose start is still in the future stay cached.
+//
+// Exported for tests: this predicate is the whole fix for the "timely
+// notifications but a frozen pre-game card" bug, so it's worth pinning.
+export function pregameStartPassed(
+  status: string | undefined,
+  startTime: number | undefined,
+): boolean {
+  return (
+    status === 'pre' &&
+    typeof startTime === 'number' &&
+    startTime > 0 &&
+    Date.now() >= startTime
+  );
+}
+
+// Browser/edge TTL (seconds) for a today, non-live response. A pre-game
+// body must never be cached past first pitch — otherwise the browser's
+// HTTP cache re-freezes the card just after the edge guard clears it. So
+// clamp to whichever is smaller: `cap`, or the seconds until the nearest
+// pre-game starts (0 once a start has passed, or when the start is
+// unknown). No pre-game today ⇒ the flat `cap`.
+export function todayCacheMaxAge(startTimes: (number | undefined)[], cap: number): number {
+  const now = Date.now();
+  let ttl = cap;
+  for (const st of startTimes) {
+    if (typeof st !== 'number' || st <= 0) continue;
+    ttl = Math.min(ttl, Math.max(0, Math.floor((st - now) / 1000)));
+  }
+  return ttl;
+}
+
 export function sportsRoutes() {
   const app = new Hono<{ Bindings: Env }>();
 
@@ -234,7 +276,19 @@ export function sportsRoutes() {
       `https://relay-cache.local/sports/${ymd}?subs=${encodeURIComponent(subKey)}`,
     );
     const cached = await cache.match(cacheKey);
-    if (cached) return cached;
+    if (cached) {
+      // Non-today views can't be "live right now" from this client's
+      // perspective, so a cached snapshot is always safe to return. For
+      // today, bypass the cache the moment a followed pre-game has
+      // reached its start time — otherwise we'd serve a frozen pre-game
+      // card over a now-live game.
+      if (!isToday) return cached;
+      const snap = (await cached.clone().json()) as { subs?: SubGames[] };
+      const stale = (snap.subs ?? []).some((s) =>
+        pregameStartPassed(s.current?.status, s.current?.startTime),
+      );
+      if (!stale) return cached;
+    }
 
     // Pull the NHL records table once per /sports request. fetchNhl*
     // for every followed NHL team shares it via the records arg, so
@@ -278,10 +332,24 @@ export function sportsRoutes() {
     // Only the today view triggers the no-store path — other days
     // can't be "live right now" from this client's perspective and
     // benefit from the longer cache.
+    // Today's non-live view gets a short TTL, further clamped so the
+    // browser's HTTP cache is never told to hold a pre-game body past
+    // first pitch (the edge start-time bypass above can't intercept a
+    // browser-cache hit). Other days keep the long cache.
+    const todayTtl = todayCacheMaxAge(
+      items
+        .filter((i) => i.current?.status === 'pre')
+        .map((i) => i.current!.startTime),
+      30,
+    );
     const resp = new Response(JSON.stringify({ games, subs: items }), {
       headers: {
         'content-type': 'application/json',
-        'cache-control': hasLive ? 'no-store' : 'public, max-age=300',
+        'cache-control': hasLive
+          ? 'no-store'
+          : isToday
+            ? `public, max-age=${todayTtl}`
+            : 'public, max-age=300',
       },
     });
     if (!hasLive) {
@@ -330,10 +398,14 @@ export function sportsRoutes() {
     // Only consult our own cache for non-live states (pre/final); for
     // live games go straight to upstream every call so the drill-down
     // matches what you'd expect after tapping into an in-progress game.
+    // A pre-game cached before first pitch is also bypassed once its
+    // start time passes — the overlay path on the list reads this
+    // endpoint, so a stale pre-game detail would freeze the card's score.
     const cached = await cache.match(cacheKey);
     if (cached) {
-      const detail = (await cached.clone().json()) as { status?: string };
-      if (detail.status !== 'live') return cached;
+      const detail = (await cached.clone().json()) as { status?: string; startTime?: number };
+      if (detail.status !== 'live' && !pregameStartPassed(detail.status, detail.startTime))
+        return cached;
     }
     const detail = await fetchNhlDetail(id, ourAbbr);
     if (!detail) return c.json({ error: 'not found' }, 404);
@@ -341,7 +413,11 @@ export function sportsRoutes() {
     const resp = new Response(JSON.stringify(detail), {
       headers: {
         'content-type': 'application/json',
-        'cache-control': live ? 'no-store' : 'public, max-age=300',
+        'cache-control': live
+          ? 'no-store'
+          : detail.status === 'pre'
+            ? `public, max-age=${todayCacheMaxAge([detail.startTime], 30)}`
+            : 'public, max-age=300',
       },
     });
     if (!live) c.executionCtx.waitUntil(cache.put(cacheKey, resp.clone()));
@@ -358,8 +434,9 @@ export function sportsRoutes() {
     );
     const cached = await cache.match(cacheKey);
     if (cached) {
-      const detail = (await cached.clone().json()) as { status?: string };
-      if (detail.status !== 'live') return cached;
+      const detail = (await cached.clone().json()) as { status?: string; startTime?: number };
+      if (detail.status !== 'live' && !pregameStartPassed(detail.status, detail.startTime))
+        return cached;
     }
     const detail = await fetchMlbDetail(id, Number(ourTeamId) || Number(DEFAULT_MLB_ID));
     if (!detail) return c.json({ error: 'not found' }, 404);
@@ -367,7 +444,11 @@ export function sportsRoutes() {
     const resp = new Response(JSON.stringify(detail), {
       headers: {
         'content-type': 'application/json',
-        'cache-control': live ? 'no-store' : 'public, max-age=300',
+        'cache-control': live
+          ? 'no-store'
+          : detail.status === 'pre'
+            ? `public, max-age=${todayCacheMaxAge([detail.startTime], 30)}`
+            : 'public, max-age=300',
       },
     });
     if (!live) c.executionCtx.waitUntil(cache.put(cacheKey, resp.clone()));
