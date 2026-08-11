@@ -887,20 +887,19 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     // forward down that line, v runs perpendicular. It's set BACK from the ball so
     // the ball sits on the front third.
     let teePeg: THREE.Mesh | null = null;
-    // The whole tee box (pad + markers + peg) lives in a GROUP centred at the tee
-    // so it can be yawed to track the camera view: on the teed drive the camera
-    // faces aimHeading = DRIVE LINE (first fairway leg) + aimRad, and the box is
-    // BAKED to the drive-line heading, so rotating the group by −aimRad each frame
-    // keeps the box SQUARE TO THE VIEW as you steer (fixing the dogleg skew where a
-    // pin-oriented box twisted around the corner). At aimRad = 0 the rotation is 0 →
-    // identical to the baked, terrain-following box (no regression).
-    let teeGroup: THREE.Group | null = null;
+    // The tee box (pad + markers + peg) lives in a GROUP centred at the tee, with
+    // children in tee-local coords, baked to the DRIVE-LINE heading (first fairway
+    // leg). It stays FIXED there in world space — a teeing ground is a physical
+    // object and does not move. At address (aimRad = 0, camera looking down the
+    // drive line) it reads square to the screen; as the player steers, only the
+    // CAMERA yaws while the box stays put (a golfer turning to a new line — the tee
+    // markers don't move). The group carries no aim rotation (rotation.y stays 0 =
+    // the baked drive-line orientation).
     {
       const teeD = hole.tee.d;
       const teeX = hole.tee.x;
       const teeGrp = new THREE.Group();
-      teeGrp.position.set(teeX, 0, -teeD); // rotate about the tee; children are tee-local
-      teeGroup = teeGrp;
+      teeGrp.position.set(teeX, 0, -teeD); // fixed at the tee; children are tee-local
       // Forward unit = the DRIVE LINE (first fairway leg, centerline[0]→[1]) — the
       // tee-shot aim base (sim.aimHeading() at aimRad 0), so the address camera and
       // this box are square to the fairway, not twisted at the pin on a dogleg. The
@@ -1736,12 +1735,6 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       // Tee peg: only for the tee shot (stroke 0), and hidden once the ball is
       // away so it doesn't linger under a mid-flight/rolling ball.
       if (teePeg) teePeg.visible = st.strokes === 0 && !st.inFlight;
-      // Yaw the tee box to track the address camera (which on the teed drive faces
-      // aimHeading = DRIVE LINE + aimRad). The box is baked to the drive line, so
-      // −aimRad keeps it SQUARE TO THE VIEW as the player steers on a dogleg;
-      // aimRad = 0 leaves it exactly as baked. Only while addressing the tee shot
-      // (strokes === 0) — the SAME predicate the sim uses for the drive-line base.
-      if (teeGroup) teeGroup.rotation.y = st.strokes === 0 ? -sim.aimRad : 0;
 
       // Hole-out celebration: fire once when the ball drops, then animate the
       // ring pulse + confetti for ~1.6 s.
