@@ -121,7 +121,7 @@ describe('course sim — full shots on HOLE_1', () => {
 
 describe('course sim — aim prediction', () => {
   it('predict() matches the committed live shot to the yard, and never mutates', () => {
-    // Address a full driver at the tee (aim toward the pin, aimRad 0).
+    // Address a full driver at the tee (aim down the drive line, aimRad 0).
     const s1 = sim();
     s1.power = 1;
     const before = JSON.stringify(s1.getState());
@@ -161,15 +161,16 @@ describe('course sim — aim prediction', () => {
   });
 
   it('predict() rest matches simulateShot for the SAME absolute inputs (shared physics)', () => {
-    // predict aims at bearingToPin + aimRad; with aimRad 0 that is the straight
-    // tee→pin bearing. Firing simulateShot at that SAME absolute bearing + power
-    // must land in the same spot — proof both paths run one integrator.
-    const bearingDeg =
-      (Math.atan2(HOLE_1.pin.x - HOLE_1.tee.x, HOLE_1.pin.d - HOLE_1.tee.d) * 180) / Math.PI;
+    // On the TEE, predict aims along the DRIVE LINE (first fairway leg) + aimRad;
+    // with aimRad 0 that is the first-leg heading. Firing simulateShot at that SAME
+    // absolute heading + power must land in the same spot — proof both paths run
+    // one integrator. (HOLE_1 is a dogleg, so the drive line ≠ the pin bearing.)
+    const cl = HOLE_1.centerline;
+    const driveDeg = (Math.atan2(cl[1]!.x - cl[0]!.x, cl[1]!.d - cl[0]!.d) * 180) / Math.PI;
     const s1 = sim();
     s1.power = 0.7;
     const pred = s1.predict(0);
-    const shot = sim().simulateShot({ clubId: s1.getState().clubId, power: 0.7, aimDeg: bearingDeg });
+    const shot = sim().simulateShot({ clubId: s1.getState().clubId, power: 0.7, aimDeg: driveDeg });
     expect(Math.abs(pred.rest.d - shot.restD)).toBeLessThanOrEqual(1);
     expect(Math.abs(pred.rest.x - shot.restX)).toBeLessThanOrEqual(1);
   });
@@ -197,6 +198,84 @@ describe('course sim — aim prediction', () => {
     s.predict(-1);
     s.predict(1);
     expect(fullDump()).toBe(before);
+  });
+});
+
+// The TEE-SHOT aim base is the DRIVE LINE (first fairway leg), so the address view
+// + tee box sit square to the fairway, not twisted at the pin around a dogleg.
+// Every other lie (approach + putts) keeps aiming at the pin/cup. On a straight
+// hole / par-3 the drive line is collinear tee→pin, so those holes are unchanged.
+describe('course sim — tee-shot aim base is the drive line (first leg)', () => {
+  // Build a hole from HOLE_1, overriding the shape bits. Clears the cart path so a
+  // sampled lie can't land on it.
+  const shape = (o: Partial<CourseHole>): CourseHole => ({
+    ...HOLE_1,
+    tee: { d: 0, x: 0 },
+    hazards: [],
+    cartPath: undefined,
+    ...o,
+  });
+  const legHeading = (h: CourseHole) =>
+    Math.atan2(h.centerline[1]!.x - h.centerline[0]!.x, h.centerline[1]!.d - h.centerline[0]!.d);
+  const pinBearing = (h: CourseHole) => Math.atan2(h.pin.x - h.tee.x, h.pin.d - h.tee.d);
+
+  it('STRAIGHT / collinear hole: drive heading == pin bearing (byte-identical)', () => {
+    const straight = shape({
+      pin: { d: 300, x: 0 },
+      centerline: [
+        { d: 0, x: 0 },
+        { d: 150, x: 0 },
+        { d: 300, x: 0 },
+      ],
+      green: { ...HOLE_1.green, d: 300, x: 0 },
+    });
+    expect(legHeading(straight)).toBeCloseTo(pinBearing(straight), 12);
+    // The tee-shot aim heading (aimRad 0) is exactly the tee→pin bearing (0 here).
+    expect(new CourseSim(straight).aimHeading()).toBeCloseTo(pinBearing(straight), 12);
+  });
+
+  it('a par-3 (collinear tee→pin at an angle): drive heading == pin bearing', () => {
+    const p3 = shape({
+      par: 3,
+      pin: { d: 180, x: -20 },
+      centerline: [
+        { d: 0, x: 0 },
+        { d: 90, x: -10 },
+        { d: 180, x: -20 }, // collinear: constant slope −10/90
+      ],
+      green: { ...HOLE_1.green, d: 180, x: -20, r: 14 },
+    });
+    expect(legHeading(p3)).toBeCloseTo(pinBearing(p3), 12);
+    expect(new CourseSim(p3).aimHeading()).toBeCloseTo(pinBearing(p3), 12);
+  });
+
+  it('a DOGLEG: tee-shot aim heading is the first leg, NOT the pin bearing', () => {
+    const s = new CourseSim(HOLE_1); // dogleg-right; ball on the tee
+    expect(s.aimHeading()).toBeCloseTo(legHeading(HOLE_1), 12);
+    // The drive line genuinely differs from the pin bearing on a dogleg.
+    expect(Math.abs(legHeading(HOLE_1) - pinBearing(HOLE_1))).toBeGreaterThan(0.02);
+  });
+
+  it('after the drive (strokes > 0) the aim base reverts to the pin/cup', () => {
+    // The predicate is strokes === 0, so any later stroke aims at the pin/cup.
+    const s = new CourseSim(HOLE_1);
+    s.strokes = 1;
+    s.ball.d = 300; // out on the hole
+    s.ball.x = 4;
+    const wantPin = Math.atan2(HOLE_1.pin.x - s.ball.x, HOLE_1.pin.d - s.ball.d);
+    expect(s.aimHeading()).toBeCloseTo(wantPin, 12);
+  });
+
+  it('a later stroke resting ON the tee disc still aims at the pin (strokes gate)', () => {
+    // The case the old lieAt('tee') predicate got wrong: a ball that trickled back
+    // onto the tee box on a LATER stroke must aim at the pin, not down the drive
+    // line. `strokes > 0` gives that; a lie-based gate would have flipped to drive.
+    const s = new CourseSim(HOLE_1);
+    s.strokes = 2;
+    s.ball.d = HOLE_1.tee.d; // literally on the tee (lie === 'tee')
+    s.ball.x = HOLE_1.tee.x;
+    const wantPin = Math.atan2(HOLE_1.pin.x - s.ball.x, HOLE_1.pin.d - s.ball.d);
+    expect(s.aimHeading()).toBeCloseTo(wantPin, 12);
   });
 });
 
@@ -628,6 +707,7 @@ describe('course sim — play-test fixes (interactive fire path)', () => {
 
   it('a ball BEHIND the pin aims back at the cup, not away', () => {
     const s = sim();
+    s.strokes = 1; // not the teed drive → the aim base is the pin, not the drive line
     s.selectClub('sw'); // a realistic short shot back toward the pin
     s.ball.d = g.d + 28; // 28yd past the green, on the pin's line
     s.ball.x = g.x;
@@ -664,6 +744,7 @@ describe('course sim — putting scale + holing (Phase 2)', () => {
     let holed = false;
     for (let power = 0.35; power <= 0.62; power += 0.02) {
       const s = sim();
+      s.strokes = 1; // a putt is never the opening (teed) stroke → aims at the cup
       s.ball.d = g.d;
       s.ball.x = g.x - 2; // 2 yd from the cup, on the cross line
       s.ball.h = 0;
@@ -680,6 +761,7 @@ describe('course sim — putting scale + holing (Phase 2)', () => {
     // Phase 3 lights the aim line when predict().result === 'holed', so predict
     // must faithfully report a drop for the same on-line stroke the fire path holes.
     const s = sim();
+    s.strokes = 1; // a putt is never the opening (teed) stroke → aims at the cup
     s.ball.d = g.d;
     s.ball.x = g.x - 1; // 3 ft below the cup
     s.ball.h = 0;
@@ -691,6 +773,7 @@ describe('course sim — putting scale + holing (Phase 2)', () => {
   it('a putt hit much too hard does NOT hole (lips out / rolls over)', () => {
     // Full power over the cup from 6 ft: far above the capture limit, so it runs on.
     const s = sim();
+    s.strokes = 1; // a putt is never the opening (teed) stroke → aims at the cup
     s.ball.d = g.d;
     s.ball.x = g.x - 2;
     s.ball.h = 0;
@@ -703,6 +786,7 @@ describe('course sim — putting scale + holing (Phase 2)', () => {
     // putt. A soft tap on a 1-yd putt must trickle up short of / near the cup,
     // never rocket past it.
     const s = sim();
+    s.strokes = 1; // a putt is never the opening (teed) stroke → aims at the cup
     s.ball.d = g.d;
     s.ball.x = g.x - 1; // 3 ft from the cup
     s.ball.h = 0;
@@ -724,6 +808,7 @@ describe('course sim — putting scale + holing (Phase 2)', () => {
     let holed = false;
     for (let power = 0.2; power <= 0.45; power += 0.02) {
       const s = sim();
+      s.strokes = 1; // a putt is never the opening (teed) stroke → aims at the cup
       s.ball.d = g.d;
       s.ball.x = g.x - 1;
       s.ball.h = 0;

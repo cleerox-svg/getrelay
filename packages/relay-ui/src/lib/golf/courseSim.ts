@@ -630,8 +630,8 @@ export class CourseSim {
     this.maxPull = Math.max(40, px);
   }
 
-  // Bearing (rad off +d) from the ball to the pin, so "straight" aims at the flag
-  // even on a dogleg; the slingshot steer is added on top of this.
+  // Bearing (rad off +d) from the ball to the pin. KEPT for readouts / any
+  // pin-relative math, but it is NO LONGER the aim base — see driveHeading().
   private bearingToPin(): number {
     const b = this.ball;
     const p = this.hole.pin;
@@ -642,13 +642,42 @@ export class CourseSim {
     return Math.atan2(p.x - b.x, p.d - b.d);
   }
 
-  // Public: the INTENDED shot heading (rad off +d) = bearing-to-pin + the current
+  // Direction (rad off +d) of the FIRST FAIRWAY LEG from the tee (centerline[0] →
+  // centerline[1], the drive line). On a straight hole / par-3 the centerline is
+  // collinear tee→pin, so this equals bearingToPin() from the tee. Guards a
+  // degenerate/empty centerline (falls back to the tee then the pin) so it can
+  // never atan2(0,0) — mirrors the CourseGL tee-box twin.
+  private driveHeading(): number {
+    const cl = this.hole.centerline;
+    const a = cl[0] ?? this.hole.tee;
+    const b = cl[1] ?? this.hole.pin;
+    return Math.atan2(b.x - a.x, b.d - a.d);
+  }
+
+  // The BASE aim heading (rad off +d) the slingshot steer is added to:
+  //   • THE TEED DRIVE (strokes === 0) → the DRIVE LINE (first fairway leg).
+  //     "Straight" points down the fairway you're standing on, NOT around the
+  //     corner at the pin, so on a dogleg the address view + tee box sit square to
+  //     the drive line and steering shapes the drive off it.
+  //   • EVERY OTHER STROKE (approach, chip, and PUTTS on the green) → bearing-to-
+  //     pin, exactly as before — aim points at the pin/cup. Putting is UNCHANGED.
+  // The predicate is `strokes === 0`, which is EXACTLY what CourseGL gates the tee
+  // box + peg on, so the sim aim base and the rendered box can never split-brain
+  // (the earlier lieAt('tee') gate depended on surfaceAt precedence — a cartpath
+  // or hazard within TEE_R would misclassify the opening drive). On a straight
+  // hole / par-3 both bases are equal (collinear centerline), so those holes are
+  // byte-identical everywhere.
+  private baseHeading(): number {
+    return this.strokes === 0 ? this.driveHeading() : this.bearingToPin();
+  }
+
+  // Public: the INTENDED shot heading (rad off +d) = base heading + the current
   // slingshot steer (aimRad), i.e. the pre-wind, pre-accuracy line the aim arrow
-  // points down. The scene reads this to yaw the address camera down the aimed
-  // line (steer left/right turns the view); aimRad = 0 returns bearing-to-pin, so
-  // the camera faces the pin exactly as before. Read-only — no state change.
+  // points down. The scene reads this to yaw the address camera + tee box down the
+  // aimed line; aimRad = 0 returns the base (the drive line on the tee, the pin
+  // elsewhere). Read-only — no state change.
   aimHeading(): number {
-    return this.bearingToPin() + this.aimRad;
+    return this.baseHeading() + this.aimRad;
   }
 
   // Is the ball on the green? Then a stroke is a PUTT (ground roll), not a swing.
@@ -707,7 +736,8 @@ export class CourseSim {
 
   // Fire the armed shot with the tap-timing error e∈[-1..1] (0 = pure). Turns the
   // miss into a straight push + side-spin curve (same model as the range), aims
-  // at bearing-to-pin + steer, launches, counts the stroke.
+  // along the BASE heading + steer (drive line on the tee, pin elsewhere — matches
+  // aimHeading()/the on-turf arrow/the camera), launches, counts the stroke.
   fireArmed(accuracyError: number): void {
     if (!this.armed) return;
     this.armed = false;
@@ -719,9 +749,10 @@ export class CourseSim {
     const b = this.ball;
     this.originD = this.shotOriginD = b.d;
     this.originX = this.shotOriginX = b.x;
-    const dir = this.bearingToPin() + this.aimRad + pushAim;
+    const dir = this.baseHeading() + this.aimRad + pushAim;
     // On the green the stroke is a PUTT (ground roll); everywhere else a lofted
-    // swing. Both aim at bearing-to-pin + the steer, and both count a stroke.
+    // swing. Both aim along baseHeading() + the steer (the drive line on the teed
+    // shot, bearing-to-pin otherwise), and both count a stroke.
     if (this.putting()) this.puttLaunch(this.power, dir);
     else this.swing(this.power, dir, lss);
     this.strokes += 1;
@@ -1053,7 +1084,10 @@ export class CourseSim {
     );
     this.originD = b.d;
     this.originX = b.x;
-    const dir = this.bearingToPin() + this.aimRad + e * ACCURACY_AIM * powerW;
+    // SAME base as fireArmed (drive line on the tee, pin elsewhere; + steer), so
+    // the predicted arc, landing reticle and dispersion centre on the exact line
+    // the shot will fly.
+    const dir = this.baseHeading() + this.aimRad + e * ACCURACY_AIM * powerW;
     // Predict the SAME stroke the live fire will make — a putt roll on the green,
     // a lofted swing elsewhere — so the on-turf aim line never lies about it.
     if (this.putting()) this.puttLaunch(this.power, dir);
