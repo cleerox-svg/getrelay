@@ -62,21 +62,80 @@ const lieLabel: Record<string, string> = {
   ob: 'Out of bounds',
 };
 
-// One line in a recap card: a label on the left, a value on the right, with an
-// optional "New best!" badge for a metric the server reported as improved.
-function RecapRow({ label, value, badge }: { label: string; value: string; badge?: boolean }) {
+// The app bundles JetBrains Mono as var(--font-mono); Tailwind's `font-mono`
+// only reaches the generic ui-monospace stack, so numerals use this inline.
+const MONO = { fontFamily: 'var(--font-mono)' } as const;
+
+// Broadcast "score state" palette, driven by strokes-relative-to-par (d):
+// under → emerald, level → slate, over → rose. `grad` is the state stripe/bug
+// gradient, `dark` the ink that reads on it, `chip`/`chipFg` the ± chip colours.
+function scoreState(d: number): { grad: string; dark: string; chip: string; chipFg: string } {
+  if (d < 0)
+    return {
+      grad: 'linear-gradient(155deg,#43c96d,#1c6f3d)',
+      dark: '#062012',
+      chip: 'rgba(67,201,109,.16)',
+      chipFg: '#8ff0ab',
+    };
+  if (d > 0)
+    return {
+      grad: 'linear-gradient(155deg,#f0492e,#8f1f12)',
+      dark: '#2a0a05',
+      chip: 'rgba(240,73,46,.16)',
+      chipFg: '#ffb3a6',
+    };
+  return {
+    grad: 'linear-gradient(155deg,#64717d,#333e47)',
+    dark: '#0b0f12',
+    chip: 'rgba(255,255,255,.08)',
+    chipFg: 'rgba(255,255,255,.6)',
+  };
+}
+
+// Signed to-par bug label: even reads "E", otherwise the true ± sign.
+function toParBug(d: number): string {
+  return d === 0 ? 'E' : toPar(d);
+}
+
+// One "this hole" stat cell in the 3-column broadcast panel: tiny dim uppercase
+// label over a big mono tabular value with a small unit.
+function StatCol({ label, value, unit }: { label: string; value: string; unit?: string }) {
   return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="opacity-80">{label}</span>
-      <span className="flex items-center gap-2 font-semibold tabular-nums">
+    <div className="flex flex-col items-center justify-center px-1 text-center">
+      <span className="text-[9px] font-bold uppercase tracking-wider text-white/40">{label}</span>
+      <span
+        className="mt-1 text-xl font-extrabold leading-none tabular-nums text-white"
+        style={MONO}
+      >
         {value}
-        {badge && (
-          <span className="rounded-full bg-amber-400 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-black">
-            New best!
+        {unit && (
+          <span className="ml-0.5 text-[10px] font-semibold text-white/45" style={MONO}>
+            {unit}
           </span>
         )}
       </span>
     </div>
+  );
+}
+
+// One "personal best" chip in the compact broadcast strip: dim label + brass
+// mono value, with an optional brass "New best" pill when the server improved it.
+function RecapRow({ label, value, badge }: { label: string; value: string; badge?: boolean }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="text-[10px] font-bold uppercase tracking-wide text-white/45">{label}</span>
+      <span className="font-extrabold tabular-nums" style={{ ...MONO, color: '#e6c266' }}>
+        {value}
+      </span>
+      {badge && (
+        <span
+          className="rounded-full px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wide"
+          style={{ background: '#e6c266', color: '#1a1206' }}
+        >
+          New best
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -558,7 +617,8 @@ export default function CourseGame({
 
       {armed && !st.holed && <AccuracyBar onStop={fire} label="Tap to strike" />}
 
-      {/* Hole-out banner */}
+      {/* Hole-out result card (broadcast/TV-golf styling; always dark over the
+          live 3D scene). All data + button logic below is unchanged. */}
       {st.holed && !showScorecard && (
         <div
           style={{
@@ -572,96 +632,141 @@ export default function CourseGame({
             background: 'rgba(0,0,0,.5)',
           }}
         >
-          <div className="text-white text-center">
-            <div className="text-3xl font-extrabold mb-1">{scoreName(st.strokes, st.par)}</div>
-            <div className="text-lg mb-4">
-              Holed in {st.strokes} (par {st.par})
-            </div>
-
-            {/* This hole's best shots. */}
-            <div className="mx-auto mb-3 w-[min(84vw,340px)] rounded-2xl bg-white/10 px-4 py-3 text-left text-sm">
-              <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide opacity-70">
-                This hole
-              </div>
-              <div className="space-y-1">
-                <RecapRow
-                  label="Drive"
-                  value={st.driveYards != null ? `${st.driveYards} yd` : '—'}
-                />
-                <RecapRow
-                  label="Closest to pin"
-                  value={st.closestToPinYards != null ? `${st.closestToPinYards} yd` : '—'}
-                />
-                <RecapRow
-                  label="Longest putt"
-                  value={st.longestPuttYards ? `${st.longestPuttYards} yd` : '—'}
-                />
-              </div>
-            </div>
-
-            {/* Personal bests. Seeded from GET on mount, refreshed by the
-                hole-out POST (read-after-write + "New best!" badges). Shows the
-                last-known bests even if the POST fails offline; only when BOTH
-                the GET and POST failed (records still null) is it skipped. */}
-            {recordsState === 'saving' && (
-              <div className="mb-5 text-sm opacity-70">Saving records…</div>
-            )}
-            {recordsState !== 'saving' && records && (
-              <div className="mx-auto mb-5 w-[min(84vw,340px)] rounded-2xl bg-white/10 px-4 py-3 text-left text-sm">
-                <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide opacity-70">
-                  Personal bests
-                </div>
-                <div className="space-y-1">
-                  <RecapRow
-                    label="Longest drive"
-                    value={records.longestDrive ? `${records.longestDrive.yards} yd` : '—'}
-                    badge={improved?.longestDrive}
-                  />
-                  <RecapRow
-                    label="Closest to pin"
-                    value={records.closestToPin ? `${records.closestToPin.yards} yd` : '—'}
-                    badge={improved?.closestToPin}
-                  />
-                  <RecapRow
-                    label="Longest putt"
-                    value={records.longestPutt ? `${records.longestPutt.yards} yd` : '—'}
-                    badge={improved?.longestPutt}
-                  />
-                </div>
-              </div>
-            )}
-
-            <div className="flex gap-3 justify-center">
-              {single ? (
-                <button
-                  onClick={playAgain}
-                  className="rounded-full bg-emerald-500 px-5 py-2 font-bold text-white"
-                >
-                  Play again
-                </button>
-              ) : isLastHole ? (
-                <button
-                  onClick={revealScorecard}
-                  className="rounded-full bg-emerald-500 px-5 py-2 font-bold text-white"
-                >
-                  See scorecard
-                </button>
-              ) : (
-                <button
-                  onClick={nextHole}
-                  className="rounded-full bg-emerald-500 px-5 py-2 font-bold text-white"
-                >
-                  Next hole
-                </button>
-              )}
-              <button
-                onClick={onExit}
-                className="rounded-full bg-white/20 px-5 py-2 font-bold text-white"
+          {(() => {
+            const d = st.strokes - st.par;
+            const state = scoreState(d);
+            return (
+              <div
+                className="w-[min(90vw,380px)] overflow-hidden rounded-2xl border text-left"
+                style={{
+                  background: 'linear-gradient(160deg,#0f1a14,#0a120d)',
+                  borderColor: 'rgba(255,255,255,.08)',
+                  boxShadow: '0 20px 60px rgba(0,0,0,.55)',
+                }}
               >
-                Menu
-              </button>
-            </div>
-          </div>
+                {/* Header band: state stripe + score bug + result title. */}
+                <div className="relative flex items-center gap-3 py-3.5 pl-5 pr-4">
+                  <div
+                    className="absolute inset-y-0 left-0"
+                    style={{ width: 7, background: state.grad }}
+                  />
+                  <div
+                    className="flex h-[46px] w-[46px] flex-col items-center justify-center rounded-xl"
+                    style={{ background: state.grad, color: state.dark }}
+                  >
+                    <span className="text-lg font-extrabold leading-none tabular-nums" style={MONO}>
+                      {toParBug(d)}
+                    </span>
+                    <span className="text-[7px] font-bold uppercase tracking-wider opacity-75">
+                      to par
+                    </span>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-lg font-extrabold uppercase leading-tight tracking-wide text-white">
+                      {scoreName(st.strokes, st.par)}
+                    </div>
+                    <div
+                      className="text-[11px] uppercase tracking-wide text-white/55"
+                      style={MONO}
+                    >
+                      Holed in {st.strokes} · Par {st.par}
+                    </div>
+                  </div>
+                </div>
+
+                {/* This hole — 3-column broadcast stat panel. */}
+                <div className="px-4">
+                  <div className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-white/40">
+                    This hole
+                  </div>
+                  <div className="grid grid-cols-3 divide-x divide-white/10 rounded-xl bg-white/[.04] py-2.5">
+                    <StatCol
+                      label="Drive"
+                      value={st.driveYards != null ? `${st.driveYards}` : '—'}
+                      unit={st.driveYards != null ? 'yd' : undefined}
+                    />
+                    <StatCol
+                      label="To pin"
+                      value={st.closestToPinYards != null ? `${st.closestToPinYards}` : '—'}
+                      unit={st.closestToPinYards != null ? 'yd' : undefined}
+                    />
+                    <StatCol
+                      label="Lng putt"
+                      value={st.longestPuttYards ? `${st.longestPuttYards}` : '—'}
+                      unit={st.longestPuttYards ? 'yd' : undefined}
+                    />
+                  </div>
+                </div>
+
+                {/* Personal bests — compact brass strip. Seeded from GET on
+                    mount, refreshed by the hole-out POST (read-after-write +
+                    "New best" badges). Shows last-known bests even if the POST
+                    fails offline; only when records is still null (both GET and
+                    POST failed / unauthed) is it skipped. */}
+                {recordsState === 'saving' && (
+                  <div className="px-4 pb-1 pt-3 text-[11px] text-white/50">Saving records…</div>
+                )}
+                {recordsState !== 'saving' && records && (
+                  <div className="px-4 pt-3">
+                    <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-white/40">
+                      Personal bests
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs">
+                      <RecapRow
+                        label="Best drive"
+                        value={records.longestDrive ? `${records.longestDrive.yards}` : '—'}
+                        badge={improved?.longestDrive}
+                      />
+                      <span className="text-white/20">·</span>
+                      <RecapRow
+                        label="To pin"
+                        value={records.closestToPin ? `${records.closestToPin.yards}` : '—'}
+                        badge={improved?.closestToPin}
+                      />
+                      <span className="text-white/20">·</span>
+                      <RecapRow
+                        label="Putt"
+                        value={records.longestPutt ? `${records.longestPutt.yards}` : '—'}
+                        badge={improved?.longestPutt}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Buttons — context-dependent primary (logic unchanged) + Menu. */}
+                <div className="flex gap-2.5 px-4 pb-4 pt-4">
+                  {single ? (
+                    <button
+                      onClick={playAgain}
+                      className="flex-1 rounded-full bg-emerald-500 px-5 py-2.5 text-sm font-bold text-white"
+                    >
+                      Play again
+                    </button>
+                  ) : isLastHole ? (
+                    <button
+                      onClick={revealScorecard}
+                      className="flex-1 rounded-full bg-emerald-500 px-5 py-2.5 text-sm font-bold text-white"
+                    >
+                      See scorecard
+                    </button>
+                  ) : (
+                    <button
+                      onClick={nextHole}
+                      className="flex-1 rounded-full bg-emerald-500 px-5 py-2.5 text-sm font-bold text-white"
+                    >
+                      Next hole
+                    </button>
+                  )}
+                  <button
+                    onClick={onExit}
+                    className="rounded-full bg-white/20 px-5 py-2.5 text-sm font-bold text-white"
+                  >
+                    Menu
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -681,96 +786,153 @@ export default function CourseGame({
             padding: 16,
           }}
         >
-          <div className="w-[min(92vw,420px)] text-white">
-            <div className="mb-1 text-center text-2xl font-extrabold">Scorecard</div>
-            <div className="mb-3 text-center text-sm opacity-80">
-              {course.name}
-              {course.location ? ` · ${course.location}` : ''}
-            </div>
-            <div className="max-h-[52vh] overflow-auto rounded-2xl bg-white/10 px-4 py-3 text-sm">
-              <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-4 gap-y-1 tabular-nums">
-                <div className="text-[11px] font-bold uppercase tracking-wide opacity-70">Hole</div>
-                <div className="text-right text-[11px] font-bold uppercase tracking-wide opacity-70">
-                  Par
-                </div>
-                <div className="text-right text-[11px] font-bold uppercase tracking-wide opacity-70">
-                  Score
-                </div>
-                <div className="text-right text-[11px] font-bold uppercase tracking-wide opacity-70">
-                  ±
-                </div>
-                {card.map((h) => (
-                  <ScoreRow key={h.hole} hole={h} />
-                ))}
-              </div>
-
-              {(() => {
-                const front = card.slice(0, 9);
-                const back = card.slice(9);
-                const sub = (rows: HoleScore[]) => ({
-                  par: rows.reduce((a, h) => a + h.par, 0),
-                  strokes: rows.reduce((a, h) => a + h.strokes, 0),
-                });
-                const f = sub(front);
-                const b = sub(back);
-                const total = sub(card);
-                return (
-                  <div className="mt-2 space-y-1 border-t border-white/20 pt-2">
-                    {/* Out/In split only for an 18-hole round; a 9-hole round would
-                        make "Out" identical to "Total", so just show the total. */}
-                    {back.length > 0 && (
-                      <>
-                        <SubtotalRow label="Out" par={f.par} strokes={f.strokes} />
-                        <SubtotalRow label="In" par={b.par} strokes={b.strokes} />
-                      </>
-                    )}
-                    <SubtotalRow label="Total" par={total.par} strokes={total.strokes} bold />
+          {(() => {
+            const totalStrokes = card.reduce((a, h) => a + h.strokes, 0);
+            const totalPar = card.reduce((a, h) => a + h.par, 0);
+            const totalD = totalStrokes - totalPar;
+            const totalState = scoreState(totalD);
+            return (
+              <div
+                className="w-[min(92vw,420px)] overflow-hidden rounded-2xl border"
+                style={{
+                  background: 'linear-gradient(160deg,#0f1a14,#0a120d)',
+                  borderColor: 'rgba(255,255,255,.08)',
+                  boxShadow: '0 20px 60px rgba(0,0,0,.55)',
+                }}
+              >
+                {/* Header: title + course on the left, total score bug right. */}
+                <div className="flex items-end justify-between gap-3 px-4 pb-3 pt-4">
+                  <div className="min-w-0">
+                    <div className="text-2xl font-extrabold uppercase tracking-wide text-white">
+                      Scorecard
+                    </div>
+                    <div
+                      className="mt-0.5 text-[11px] uppercase tracking-wide text-white/55"
+                      style={MONO}
+                    >
+                      {course.name}
+                      {course.location ? ` · ${course.location}` : ''}
+                    </div>
                   </div>
-                );
-              })()}
-            </div>
+                  <div
+                    className="flex flex-col items-center justify-center rounded-xl px-3 py-1.5"
+                    style={{ background: totalState.grad, color: totalState.dark }}
+                  >
+                    <span
+                      className="text-2xl font-extrabold leading-none tabular-nums"
+                      style={MONO}
+                    >
+                      {totalStrokes}
+                    </span>
+                    <span className="mt-0.5 text-[8px] font-bold uppercase tracking-wider opacity-80">
+                      {toParBug(totalD)} · to par
+                    </span>
+                  </div>
+                </div>
 
-            <div className="mt-4 flex justify-center gap-3">
-              <button
-                onClick={playRoundAgain}
-                className="rounded-full bg-emerald-500 px-5 py-2 font-bold text-white"
-              >
-                Play round again
-              </button>
-              <button
-                onClick={onExit}
-                className="rounded-full bg-white/20 px-5 py-2 font-bold text-white"
-              >
-                Menu
-              </button>
-            </div>
-          </div>
+                <div className="max-h-[52vh] overflow-auto px-4 pb-1">
+                  <div className="grid grid-cols-[1fr_auto_auto_auto] items-center">
+                    <div className="py-1 pl-2 text-[10px] font-bold uppercase tracking-wide text-white/40">
+                      Hole
+                    </div>
+                    <div className="py-1 px-3 text-right text-[10px] font-bold uppercase tracking-wide text-white/40">
+                      Par
+                    </div>
+                    <div className="py-1 px-3 text-right text-[10px] font-bold uppercase tracking-wide text-white/40">
+                      Score
+                    </div>
+                    <div className="py-1 pr-2 text-right text-[10px] font-bold uppercase tracking-wide text-white/40">
+                      ±
+                    </div>
+                    {card.map((h, i) => (
+                      <ScoreRow key={h.hole} hole={h} alt={i % 2 === 1} />
+                    ))}
+                  </div>
+
+                  {(() => {
+                    const front = card.slice(0, 9);
+                    const back = card.slice(9);
+                    const sub = (rows: HoleScore[]) => ({
+                      par: rows.reduce((a, h) => a + h.par, 0),
+                      strokes: rows.reduce((a, h) => a + h.strokes, 0),
+                    });
+                    const f = sub(front);
+                    const b = sub(back);
+                    const total = sub(card);
+                    return (
+                      <div className="mt-2 space-y-1.5 border-t border-white/15 px-2 pt-2.5">
+                        {/* Out/In split only for an 18-hole round; a 9-hole round
+                            would make "Out" identical to "Total", so just show the
+                            total. */}
+                        {back.length > 0 && (
+                          <>
+                            <SubtotalRow label="Out" par={f.par} strokes={f.strokes} />
+                            <SubtotalRow label="In" par={b.par} strokes={b.strokes} />
+                          </>
+                        )}
+                        <SubtotalRow label="Total" par={total.par} strokes={total.strokes} bold />
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                <div className="flex gap-2.5 px-4 pb-4 pt-3">
+                  <button
+                    onClick={playRoundAgain}
+                    className="flex-1 rounded-full bg-emerald-500 px-5 py-2.5 text-sm font-bold text-white"
+                  >
+                    Play round again
+                  </button>
+                  <button
+                    onClick={onExit}
+                    className="rounded-full bg-white/20 px-5 py-2.5 text-sm font-bold text-white"
+                  >
+                    Menu
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>
   );
 }
 
-// One hole row on the scorecard, coloured ± to par.
-function ScoreRow({ hole }: { hole: HoleScore }) {
+// One hole row on the scorecard (broadcast): mono tabular cells, an alternating
+// faint row tint, and the ± rendered as a state-coloured chip.
+function ScoreRow({ hole, alt }: { hole: HoleScore; alt: boolean }) {
   const d = hole.strokes - hole.par;
+  const state = scoreState(d);
+  const cell = alt ? 'bg-white/[.03]' : '';
   return (
     <>
-      <div>{hole.hole}</div>
-      <div className="text-right opacity-80">{hole.par}</div>
-      <div className="text-right font-semibold">{hole.strokes}</div>
+      <div className={`py-1.5 pl-2 tabular-nums text-white ${cell}`} style={MONO}>
+        {hole.hole}
+      </div>
+      <div className={`py-1.5 px-3 text-right tabular-nums text-white/55 ${cell}`} style={MONO}>
+        {hole.par}
+      </div>
       <div
-        className={`text-right font-semibold ${
-          d < 0 ? 'text-emerald-300' : d > 0 ? 'text-rose-300' : 'opacity-70'
-        }`}
+        className={`py-1.5 px-3 text-right font-semibold tabular-nums text-white ${cell}`}
+        style={MONO}
       >
-        {toPar(d)}
+        {hole.strokes}
+      </div>
+      <div className={`py-1.5 pr-2 text-right ${cell}`}>
+        <span
+          className="inline-block rounded px-1.5 py-0.5 text-[11px] font-bold tabular-nums"
+          style={{ ...MONO, background: state.chip, color: state.chipFg }}
+        >
+          {toPar(d)}
+        </span>
       </div>
     </>
   );
 }
 
-// A subtotal / total line under the scorecard rows.
+// A subtotal / total line under the scorecard rows (broadcast): mono strokes +
+// a state-coloured (±) suffix; the Total row is emphasised.
 function SubtotalRow({
   label,
   par,
@@ -782,11 +944,24 @@ function SubtotalRow({
   strokes: number;
   bold?: boolean;
 }) {
+  const d = strokes - par;
+  const state = scoreState(d);
   return (
-    <div className={`flex items-center justify-between ${bold ? 'font-extrabold' : 'font-semibold'}`}>
-      <span className="opacity-80">{label}</span>
-      <span className="tabular-nums">
-        {strokes} <span className="opacity-70">({toPar(strokes - par)})</span>
+    <div className="flex items-center justify-between">
+      <span
+        className={`text-[11px] uppercase tracking-wide ${
+          bold ? 'font-extrabold text-white' : 'font-bold text-white/70'
+        }`}
+      >
+        {label}
+      </span>
+      <span className="tabular-nums" style={MONO}>
+        <span className={bold ? 'text-base font-extrabold text-white' : 'font-semibold text-white'}>
+          {strokes}
+        </span>
+        <span className="ml-1.5 text-xs font-bold" style={{ color: state.chipFg }}>
+          ({toPar(d)})
+        </span>
       </span>
     </div>
   );

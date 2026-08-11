@@ -62,7 +62,7 @@ export function hole(h: HoleInput): CourseHole {
     tee: { d: 0, x: 0 },
     fairwayHalf,
     roughHalf: h.roughHalf ?? fairwayHalf + 22,
-    fringeW: 4,
+    fringeW: 2,
     hazards: [],
     wind: { along: 0, cross: 0 },
     ...h,

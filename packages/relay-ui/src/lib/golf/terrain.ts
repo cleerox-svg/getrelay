@@ -649,7 +649,7 @@ export function surfaceAt(hole: CourseHole, d: number, x: number): Surface {
 // downhill tee shot into a rising fairway (a 2·16 = 32-yd mown corridor pinching
 // to 26 yd at the green via fairwayTaper), flanked by a wide ROUGH band out to
 // the OB line at 40 yd; a fairway bunker on the inside of the dogleg; a cart path
-// down the left; a raised, back-to-front-tilted green ringed by a 4-yd FRINGE
+// down the left; a raised, back-to-front-tilted green ringed by a 2-yd FRINGE
 // collar; a pond guarding the approach short of the green and a greenside bunker
 // front-right — both sitting OUTSIDE the fringe so the green never abuts them
 // (they border the collar). Distances in yards.
@@ -670,14 +670,14 @@ export const HOLE_1: CourseHole = {
   fairwayTaper: -3, // pinch to 13-yd half (26-yd fairway) at the green
   roughHalf: 40,
   green: { d: 512, x: 18, r: 15, raise: 3.2, tiltPct: 0.04, tiltDir: Math.PI, undulation: 0.08 },
-  fringeW: 4,
+  fringeW: 2,
   hazards: [
     { kind: 'bunker', d: 300, x: 20, r: 12, depth: -1.6 }, // fairway bunker, inside the dogleg
     // Greenside bunker front-right. Pushed out so its WOBBLED edge still clears
-    // the WOBBLED fringe: dist(bunker,green)=33.6 ≥ (padR 19 + r 8)·1.15 = 31.1.
+    // the WOBBLED fringe: dist(bunker,green)=33.6 ≥ (padR 17 + r 8)·1.15 = 28.75.
     { kind: 'bunker', d: 495, x: 47, r: 8, depth: -1.8 },
     // Pond guarding the approach short of the green — likewise cleared of the
-    // wobbled fringe: dist(water,green)=36.1 ≥ (padR 19 + r 11)·1.15 = 34.5.
+    // wobbled fringe: dist(water,green)=36.1 ≥ (padR 17 + r 11)·1.15 = 32.2.
     { kind: 'water', d: 476, x: 15, r: 11, depth: -2.2 },
   ],
   cartPath: {

@@ -47,6 +47,13 @@ import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTextur
 import { BALL_R, CUP_R } from '../../lib/golf/greenPhysics';
 import type { CourseSim, CoursePrediction, CourseTrailPt } from '../../lib/golf/courseSim';
 
+// Regulation liner (sunken cup) geometry. CUP_DEPTH ≈ 3.5×BALL_R so the ball
+// sits clearly below the rim; the aperture punched in the green (grid + cap) is a
+// hair past the visible lip so the collar patch's clean CUP_R inner edge is the
+// only mouth you see. The camera can then look DOWN into a real hole.
+const CUP_DEPTH = 0.7; // yd sunk below the green surface
+const CUP_APERTURE_R = CUP_R + 0.12; // green removed out to here, hidden by the collar
+
 interface Props {
   sim: CourseSim;
   // Raised when a drag is released into a valid shot (armed) — the HUD then runs
@@ -221,21 +228,20 @@ function makeSurfaceMap(
   return t;
 }
 
-// Fine putting-green grain: a subtle light/dark mow so the green reads as a real
-// textured surface, not flat paint — but far gentler than the fairway stripes.
+// Fine putting-green grain: a UNIFORM manicured surface (no mow stripes — unlike
+// the fairway) with a seeded blade-streak stipple so the green reads as real
+// textured turf, not flat paint.
 function makeGreenGrain(): THREE.Texture {
   const S = 256;
   const c = document.createElement('canvas');
   c.width = c.height = S;
   const g = c.getContext('2d')!;
-  g.fillStyle = '#ffffff';
+  // UNIFORM base — no mow stripes on the putting surface. A single flat mid tone
+  // (the old light-band colour) keeps the green's brightness while reading as a
+  // continuous manicured surface; the seeded blade-streak stipple below + the
+  // capNorm normalMap still give it mown-turf texture (not flat plastic).
+  g.fillStyle = 'rgba(232,238,228,1)';
   g.fillRect(0, 0, S, S);
-  const bands = 14; // finer than the fairway → a smoother, more manicured mow
-  const bw = S / bands;
-  for (let i = 0; i < bands; i++) {
-    g.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,1)' : 'rgba(232,238,228,1)';
-    g.fillRect(i * bw, 0, bw, S);
-  }
   // Seeded PRNG (mulberry32) instead of Math.random so the grain is IDENTICAL
   // across mounts — the screenshot harness stays reproducible and determinism is
   // preserved (GOLF.md). Fixed seed → same grain every load.
@@ -363,6 +369,11 @@ function buildOrganicDisc(
   uv: UVFn,
   rings: number,
   seg: number,
+  // Optional cup aperture: drop every triangle overlapping the disc (pd,px,r) and
+  // report the radius that must be covered by the collar patch (max pin→removed-
+  // vertex distance) via onPunched. Used by the green cap so the sunken liner is
+  // visible; other callers omit it.
+  punch?: { pd: number; px: number; r: number; onPunched?: (coverR: number) => void },
 ): THREE.BufferGeometry {
   const vcount = 1 + rings * seg;
   const pos = new Float32Array(vcount * 3);
@@ -393,15 +404,34 @@ function buildOrganicDisc(
     }
   }
   const idx: number[] = [];
-  for (let s = 0; s < seg; s++) idx.push(0, 1 + s, 1 + ((s + 1) % seg));
+  let coverR = 0;
+  const keep = (i0: number, i1: number, i2: number): boolean => {
+    if (!punch) return true;
+    const ax = pos[i0 * 3]!, ad = -pos[i0 * 3 + 2]!;
+    const bx = pos[i1 * 3]!, bd = -pos[i1 * 3 + 2]!;
+    const cxv = pos[i2 * 3]!, cdv = -pos[i2 * 3 + 2]!;
+    if (!triHitsDisc(punch.px, punch.pd, punch.r, ax, ad, bx, bd, cxv, cdv)) return true;
+    // Removed: track how far its vertices reach so the collar patch fully hides it.
+    for (const [vx, vd] of [[ax, ad], [bx, bd], [cxv, cdv]] as const) {
+      const dd = Math.hypot(vx - punch.px, vd - punch.pd);
+      if (dd > coverR) coverR = dd;
+    }
+    return false;
+  };
+  for (let s = 0; s < seg; s++) {
+    const a = 1 + s, b = 1 + ((s + 1) % seg);
+    if (keep(0, a, b)) idx.push(0, a, b);
+  }
   for (let ri = 1; ri < rings; ri++) {
     const b0 = 1 + (ri - 1) * seg;
     const b1 = 1 + ri * seg;
     for (let s = 0; s < seg; s++) {
       const s1 = (s + 1) % seg;
-      idx.push(b0 + s, b1 + s, b0 + s1, b0 + s1, b1 + s, b1 + s1);
+      if (keep(b0 + s, b1 + s, b0 + s1)) idx.push(b0 + s, b1 + s, b0 + s1);
+      if (keep(b0 + s1, b1 + s, b1 + s1)) idx.push(b0 + s1, b1 + s, b1 + s1);
     }
   }
+  if (punch) punch.onPunched?.(coverR);
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
@@ -478,6 +508,105 @@ function buildOrganicAnnulus(
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
   if (col) geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// --- Cup aperture (see-into-the-hole) --------------------------------------
+// The regulation liner (a real sunken cup) needs the opaque green surfaces at the
+// pin PUNCHED so the camera can see DOWN into it — a cylinder dropped below a
+// continuous green cap is otherwise fully occluded. Both the coarse base terrain
+// grid AND the finer green cap have their triangles OVER the cup removed; a small
+// terrain-following "collar" patch (buildCupCollar) then restores the green right
+// up to a clean circular lip at CUP_R, hiding the ragged coarse aperture. These
+// tests classify which triangles to drop.
+//
+// True if triangle (a,b,c), in the (x,d) ground plane, overlaps the disc centred
+// (px,pd) radius r: any edge passes within r, OR the disc centre is inside the
+// triangle. (Endpoint-in-disc is covered by the edge test, which clamps to the
+// segment ends.)
+function segNearPt(px: number, pd: number, ax: number, ad: number, bx: number, bd: number, r: number): boolean {
+  const dx = bx - ax;
+  const dd = bd - ad;
+  const l2 = dx * dx + dd * dd;
+  let t = l2 > 0 ? ((px - ax) * dx + (pd - ad) * dd) / l2 : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  const cx = ax + t * dx;
+  const cd = ad + t * dd;
+  const ex = px - cx;
+  const ed = pd - cd;
+  return ex * ex + ed * ed <= r * r;
+}
+function ptInTri(
+  px: number, pd: number,
+  ax: number, ad: number, bx: number, bd: number, cx: number, cd: number,
+): boolean {
+  const d1 = (px - bx) * (ad - bd) - (ax - bx) * (pd - bd);
+  const d2 = (px - cx) * (bd - cd) - (bx - cx) * (pd - cd);
+  const d3 = (px - ax) * (cd - ad) - (cx - ax) * (pd - ad);
+  const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
+  const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
+  return !(hasNeg && hasPos);
+}
+function triHitsDisc(
+  px: number, pd: number, r: number,
+  ax: number, ad: number, bx: number, bd: number, cx: number, cd: number,
+): boolean {
+  return (
+    segNearPt(px, pd, ax, ad, bx, bd, r) ||
+    segNearPt(px, pd, bx, bd, cx, cd, r) ||
+    segNearPt(px, pd, cx, cd, ax, ad, r) ||
+    ptInTri(px, pd, ax, ad, bx, bd, cx, cd)
+  );
+}
+
+// A plain circular, terrain-FOLLOWING annulus (green collar) from rIn to rOut,
+// world-scaled grain UV so it tiles seamlessly with the green cap. Unlike the
+// organic builders this keeps a CLEAN CIRCULAR inner edge — that inner edge is the
+// visible cup lip, so it must not wobble. Wound top-face-up.
+function buildCupCollar(
+  cd: number,
+  cx: number,
+  rIn: number,
+  rOut: number,
+  yAt: (d: number, x: number) => number,
+  lift: number,
+  rings: number,
+  seg: number,
+): THREE.BufferGeometry {
+  const vcount = (rings + 1) * seg;
+  const pos = new Float32Array(vcount * 3);
+  const uvs = new Float32Array(vcount * 2);
+  let p = 0;
+  let u = 0;
+  for (let ri = 0; ri <= rings; ri++) {
+    const rad = rIn + (ri / rings) * (rOut - rIn);
+    for (let s = 0; s < seg; s++) {
+      const ang = (s / seg) * Math.PI * 2;
+      const wx = cx + Math.cos(ang) * rad;
+      const wd = cd + Math.sin(ang) * rad;
+      pos[p] = wx;
+      pos[p + 1] = yAt(wd, wx) + lift;
+      pos[p + 2] = -wd;
+      uvs[u] = wx / 6;
+      uvs[u + 1] = wd / 6;
+      p += 3;
+      u += 2;
+    }
+  }
+  const idx: number[] = [];
+  for (let ri = 0; ri < rings; ri++) {
+    const b0 = ri * seg;
+    const b1 = (ri + 1) * seg;
+    for (let s = 0; s < seg; s++) {
+      const s1 = (s + 1) % seg;
+      idx.push(b0 + s, b1 + s, b0 + s1, b0 + s1, b1 + s, b1 + s1);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
   geo.setIndex(idx);
   geo.computeVertexNormals();
   return geo;
@@ -618,6 +747,28 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     }
     const idx: number[] = [];
     const row = nx + 1;
+    // Punch the cup aperture in the ground grid so the sunken liner is visible.
+    // The grid is coarse (~2–3 yd cells), so removing the few triangles over the
+    // pin leaves a ragged gap much larger than the cup; `gridCoverR` records how
+    // far it reaches so the green collar patch is sized to fully hide it.
+    const pinD = hole.pin.d;
+    const pinX = hole.pin.x;
+    const xOf = (i: number) => -xHalf + (i / nx) * (xHalf * 2);
+    const dOf = (j: number) => dMin + (j / nd) * (dMax - dMin);
+    let gridCoverR = 0;
+    const keepGrid = (
+      ja: number, ia: number, jb: number, ib: number, jc: number, ic: number,
+    ): boolean => {
+      const ax = xOf(ia), ad = dOf(ja);
+      const bx = xOf(ib), bd = dOf(jb);
+      const cx = xOf(ic), cd = dOf(jc);
+      if (!triHitsDisc(pinX, pinD, CUP_APERTURE_R, ax, ad, bx, bd, cx, cd)) return true;
+      for (const [vx, vd] of [[ax, ad], [bx, bd], [cx, cd]] as const) {
+        const dd = Math.hypot(vx - pinX, vd - pinD);
+        if (dd > gridCoverR) gridCoverR = dd;
+      }
+      return false;
+    };
     for (let j = 0; j < nd; j++)
       for (let i = 0; i < nx; i++) {
         const a = j * row + i;
@@ -625,7 +776,8 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         // faced them down, so the whole top was back-face culled and only a flat
         // fill plane showed in the foreground — the "flat grass" bug. Now the
         // displaced, textured terrain renders directly (single-sided, cheap).
-        idx.push(a, a + 1, a + row, a + 1, a + row + 1, a + row);
+        if (keepGrid(j, i, j, i + 1, j + 1, i)) idx.push(a, a + 1, a + row);
+        if (keepGrid(j, i + 1, j + 1, i + 1, j + 1, i)) idx.push(a + 1, a + row + 1, a + row);
       }
     geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
     geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
@@ -771,6 +923,10 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     //     fringe and the fairway.
     // Both hug heightAt (tilt + undulation) with REAL computed normals so the
     // contour shades as a sculpted green from any angle, not flat paint.
+    // The green CAP is punched at the pin (cup aperture); `capCoverR` records how
+    // far the removed cap triangles reach so the cup collar hides them (shared with
+    // the cup block below).
+    let capCoverR = 0;
     {
       const gDef = hole.green;
       const padR = greenPadRadius(hole); // green.r + fringeW (BASE pad radius)
@@ -857,7 +1013,14 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       // tile) for an even mow.
       const grainUV: UVFn = (wx, wd) => [wx / 6, wd / 6];
       const capGeo = track(
-        buildOrganicDisc(gSeed, gDef.d, gDef.x, gDef.r, groundY, 0.05, grainUV, 10, SEG),
+        buildOrganicDisc(gSeed, gDef.d, gDef.x, gDef.r, groundY, 0.05, grainUV, 10, SEG, {
+          pd: hole.pin.d,
+          px: hole.pin.x,
+          r: CUP_APERTURE_R,
+          onPunched: (r) => {
+            capCoverR = r;
+          },
+        }),
       );
       const capNorm = track(makeTurfNormalMap());
       capNorm.repeat.set(16, 16);
@@ -1035,11 +1198,15 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     // data layer. The scene is yard-space, so the metric constants convert with
     // YD_PER_M; the old pole was a hard-coded 8 yd (24 ft), 3.4× too tall.
     const pinY = heightAt(hole, hole.pin.d, hole.pin.x);
+    const floorY = pinY - CUP_DEPTH; // liner base sits here (ball rests at floorY + BALL_R)
     const poleH = FLAGSTICK_HEIGHT_M * YD_PER_M; // 2.13 m ≈ 2.33 yd
-    const poleGeo = track(new THREE.CylinderGeometry(0.06, 0.06, poleH, 6));
+    // The stick now seats on the cup FLOOR (regulation — the flagstick rests in the
+    // hole), so it's extended by CUP_DEPTH and centred lower; the flag stays put.
+    const poleLen = poleH + CUP_DEPTH;
+    const poleGeo = track(new THREE.CylinderGeometry(0.06, 0.06, poleLen, 6));
     const poleMat = track(new THREE.MeshStandardMaterial({ color: 0xf4f4f4, roughness: 0.6 }));
     const pole = new THREE.Mesh(poleGeo, poleMat);
-    pole.position.set(hole.pin.x, pinY + poleH / 2, -hole.pin.d);
+    pole.position.set(hole.pin.x, floorY + poleLen / 2, -hole.pin.d);
     pole.castShadow = true;
     scene.add(pole);
     const flagW = poleH * 0.42;
@@ -1052,25 +1219,82 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     flag.position.set(hole.pin.x + flagW / 2, pinY + poleH - flagH / 2, -hole.pin.d);
     flag.castShadow = true;
     scene.add(flag);
-    // The cup. The regulation hole (HOLE_DIAMETER_M = 0.108 m ≈ 0.06 yd radius,
-    // the data-model truth) is sub-pixel to look at, so — like the ball — it's
-    // drawn OVERSIZED for readability: a dark hole with a white rim ring so you
-    // can actually see where to putt. The visible hole is drawn at the sim's
-    // speed-dependent capture radius (greenPhysics.CUP_R), so what you aim at is
-    // exactly what drops, and the ball (BALL_R ≈ 0.4× CUP_R) visibly fits it.
+    // The cup — a REGULATION LINER (a real sunken 3D hole). The regulation hole
+    // (HOLE_DIAMETER_M = 0.108 m ≈ 0.06 yd radius, the data-model truth) is sub-
+    // pixel, so — like the ball — it's drawn OVERSIZED for readability at the sim's
+    // capture radius (greenPhysics.CUP_R); the ball (BALL_R ≈ 0.4× CUP_R) drops in
+    // and nestles at the bottom. Built ONCE (static), no per-frame geometry, no new
+    // shadow map. Course scene only.
+    //
+    // SEE-INTO-THE-CUP: the green cap AND the coarse base grid were PUNCHED at the
+    // pin (above) — a cylinder below a continuous opaque cap is otherwise occluded.
+    // A terrain-following COLLAR patch then restores the green from the clean CUP_R
+    // lip out past both apertures (max coverR + margin), so the only mouth you see
+    // is a crisp circle, and everything inside it is the liner interior. Depth-
+    // correct (real depthTest), so the near rim occludes the far wall + the settled
+    // ball — it reads as a true hole from the low in-game camera.
+    void HOLE_DIAMETER_M;
     const cupR = CUP_R;
-    const cupGeo = track(new THREE.CircleGeometry(cupR, 24));
-    const cupMat = track(new THREE.MeshBasicMaterial({ color: 0x0a0f0a }));
-    const cup = new THREE.Mesh(cupGeo, cupMat);
-    cup.rotation.x = -Math.PI / 2;
-    cup.position.set(hole.pin.x, pinY + 0.09, -hole.pin.d);
-    scene.add(cup);
-    const rimGeo = track(new THREE.RingGeometry(cupR, cupR + 0.16, 24));
-    const rimMat = track(new THREE.MeshBasicMaterial({ color: 0xf4faf4, side: THREE.DoubleSide }));
-    const rim = new THREE.Mesh(rimGeo, rimMat);
-    rim.rotation.x = -Math.PI / 2;
-    rim.position.set(hole.pin.x, pinY + 0.085, -hole.pin.d);
-    scene.add(rim);
+    {
+      const groundY = (d: number, x: number) => heightAt(hole, d, x);
+      const LIP_W = 0.05; // width of the bright cut-rim band around the mouth
+      // Collar: green from just outside the bright lip out past the widest punched
+      // triangle so the ragged coarse-grid/cap aperture is fully hidden. Same grain
+      // + colour as the cap → seamless (a hair above the cap so it wins the overlap).
+      const collarR = Math.max(gridCoverR, capCoverR, cupR + 0.4) + 0.3;
+      const collarGeo = track(buildCupCollar(hole.pin.d, hole.pin.x, cupR + LIP_W, collarR, groundY, 0.06, 4, 48));
+      const collarNorm = track(makeTurfNormalMap());
+      collarNorm.repeat.set(16, 16);
+      const collarMat = track(
+        new THREE.MeshStandardMaterial({
+          color: GREEN_COLOR,
+          roughness: 0.6,
+          metalness: 0,
+          map: track(makeGreenGrain()),
+          normalMap: collarNorm,
+        }),
+      );
+      collarMat.normalScale.set(0.22, 0.22);
+      const collar = new THREE.Mesh(collarGeo, collarMat);
+      collar.receiveShadow = true;
+      scene.add(collar);
+
+      // A thin bright LIP (cut rim) between the mouth and the collar, sitting a
+      // hair proud of the green — the crisp white edge you putt at.
+      const lipGeo = track(new THREE.RingGeometry(cupR, cupR + LIP_W, 40));
+      const lipMat = track(new THREE.MeshStandardMaterial({ color: 0xf4faf4, roughness: 0.5, side: THREE.DoubleSide }));
+      const lip = new THREE.Mesh(lipGeo, lipMat);
+      lip.rotation.x = -Math.PI / 2;
+      lip.position.set(hole.pin.x, pinY + 0.03, -hole.pin.d);
+      scene.add(lip);
+
+      // Cut-soil shoulder: a short DARK collar at the very top of the wall (the
+      // sliver of earth between the turf and the plastic liner).
+      const soilH = 0.14;
+      const soilGeo = track(new THREE.CylinderGeometry(cupR, cupR, soilH, 40, 1, true));
+      const soilMat = track(new THREE.MeshStandardMaterial({ color: 0x2a2418, roughness: 1, side: THREE.DoubleSide }));
+      const soil = new THREE.Mesh(soilGeo, soilMat);
+      soil.position.set(hole.pin.x, pinY - soilH / 2, -hole.pin.d);
+      scene.add(soil);
+
+      // White plastic liner wall (open cylinder), from just under the soil rim down
+      // to the base. High roughness matte plastic; DoubleSide so the inner face
+      // reads from the shallow camera.
+      const wallH = CUP_DEPTH - soilH;
+      const wallGeo = track(new THREE.CylinderGeometry(cupR, cupR, wallH, 40, 1, true));
+      const wallMat = track(new THREE.MeshStandardMaterial({ color: 0xeef3ee, roughness: 0.85, metalness: 0, side: THREE.DoubleSide }));
+      const wall = new THREE.Mesh(wallGeo, wallMat);
+      wall.position.set(hole.pin.x, pinY - soilH - wallH / 2, -hole.pin.d);
+      scene.add(wall);
+
+      // White base disc the ball rests on (a touch darker than the wall for depth).
+      const baseGeo = track(new THREE.CircleGeometry(cupR, 40));
+      const baseMat = track(new THREE.MeshStandardMaterial({ color: 0xdbe3db, roughness: 0.9, side: THREE.DoubleSide }));
+      const base = new THREE.Mesh(baseGeo, baseMat);
+      base.rotation.x = -Math.PI / 2;
+      base.position.set(hole.pin.x, floorY + 0.006, -hole.pin.d);
+      scene.add(base);
+    }
 
     // --- Hole-out celebration (the payoff) -----------------------------
     // A ground ring that pulses outward + a burst of confetti points from the
@@ -1126,6 +1350,23 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     confetti.visible = false;
     scene.add(confetti);
     let celebrate = -1; // seconds since hole-out; <0 = not celebrating
+
+    // Clean-DROP animation (render-only — the sim has already stopped at rest near
+    // the cup centre when holed, so we OVERRIDE the ball mesh position while holed:
+    // ease x/z to the exact cup centre and drop Y from the surface to the cup floor
+    // with an accelerating fall + one soft settle, THEN fire the celebration on the
+    // landing beat). No CourseSim state added — this is purely the render.
+    const DROP_FALL = 0.32; // s: accelerating fall to the base
+    const DROP_SETTLE = 0.12; // s: one soft damped bounce off the base
+    let dropT = -1; // seconds into the drop; <0 = not dropping
+    // Fire-once latch: the ring+confetti celebration plays EXACTLY ONCE per hole-
+    // out (it used to re-fire every ~1.6 s while holed, pulsing over the cup-drop
+    // moment). Independent of dropT (never gates the drop); cleared on hole reset.
+    let celebrated = false;
+    const dropStart = new THREE.Vector3();
+    // The ball rests with its underside exactly ON the base disc (which sits at
+    // floorY + 0.006), so centre = floorY + 0.006 + BALL_R (no intersection).
+    const cupCenter = new THREE.Vector3(hole.pin.x, floorY + 0.006 + BALL_R, -hole.pin.d);
 
     // Ball. BALL_R is a VISUAL radius: the regulation ball (BALL_DIAMETER_M =
     // 0.0427 m ≈ 0.023 yd radius) is sub-pixel under the yard-tuned follow camera,
@@ -1683,6 +1924,8 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         }
       }
       const b = sim.ball;
+      // Normal positioning: the ball sits on its lie. When holed, the clean-DROP
+      // block below OVERRIDES this (later write wins) to sink it into the cup.
       ball.position.set(b.x, b.h + BALL_R, -b.d);
 
       // Contact shadow: pin it to the GROUND under the ball (heightAt), and fade +
@@ -1736,16 +1979,56 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       // away so it doesn't linger under a mid-flight/rolling ball.
       if (teePeg) teePeg.visible = st.strokes === 0 && !st.inFlight;
 
-      // Hole-out celebration: fire once when the ball drops, then animate the
-      // ring pulse + confetti for ~1.6 s.
-      if (st.holed && celebrate < 0) {
-        celebrate = 0;
-        celebRing.position.set(hole.pin.x, pinY + 0.06, -hole.pin.d);
-        for (let i = 0; i < PCOUNT; i++) {
-          confPos[i * 3] = hole.pin.x;
-          confPos[i * 3 + 1] = pinY + 0.2;
-          confPos[i * 3 + 2] = -hole.pin.d;
+      // Clean-DROP: when holed, override the ball to roll to the exact cup centre
+      // and tip in — an accelerating fall to the base then ONE soft settle. The
+      // celebration is SEQUENCED to fire as the ball LANDS (not instantly), so the
+      // drop reads first. Reset cleanly when the hole resets (st.holed → false).
+      if (st.holed) {
+        if (dropT < 0) {
+          dropT = 0;
+          dropStart.set(b.x, b.h + BALL_R, -b.d); // where it came to rest on the green
+        } else {
+          dropT += dt;
         }
+        if (dropT <= DROP_FALL) {
+          // Ease x/z to centre (ease-out) while Y accelerates DOWN (ease-in) into
+          // the hole.
+          const q = dropT / DROP_FALL;
+          const ez = 1 - (1 - q) * (1 - q);
+          const dx = dropStart.x + (cupCenter.x - dropStart.x) * ez;
+          const dz = dropStart.z + (cupCenter.z - dropStart.z) * ez;
+          const dy = dropStart.y + (cupCenter.y - dropStart.y) * (q * q);
+          ball.position.set(dx, dy, dz);
+        } else {
+          // One soft damped bounce off the base, then rest at the floor.
+          const t = Math.min(1, (dropT - DROP_FALL) / DROP_SETTLE);
+          const bounce = Math.sin(t * Math.PI) * (0.4 * BALL_R) * (1 - t);
+          ball.position.set(cupCenter.x, cupCenter.y + bounce, cupCenter.z);
+        }
+        ballShadow.visible = false; // in the hole → no on-turf contact shadow
+        // Fire the celebration ONCE on the landing beat (drop completes ~DROP_FALL);
+        // the latch keeps it from re-triggering for the rest of this hole-out.
+        if (dropT >= DROP_FALL && celebrate < 0 && !celebrated) {
+          celebrate = 0;
+          celebrated = true;
+          celebRing.position.set(hole.pin.x, pinY + 0.06, -hole.pin.d);
+          for (let i = 0; i < PCOUNT; i++) {
+            confPos[i * 3] = hole.pin.x;
+            confPos[i * 3 + 1] = pinY + 0.2;
+            confPos[i * 3 + 2] = -hole.pin.d;
+          }
+        }
+      } else {
+        // Hole reset / next hole / replay: drop the override so normal ballWorld
+        // positioning resumes and the cup is ready again (no leftover drop-state).
+        if (dropT >= 0) {
+          dropT = -1;
+          celebrate = -1;
+          celebrated = false; // re-arm so the NEXT hole-out celebrates again
+          celebRing.visible = false;
+          confetti.visible = false;
+        }
+        ballShadow.visible = true;
       }
       if (celebrate >= 0) {
         celebrate += dt;
