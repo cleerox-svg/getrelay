@@ -1487,15 +1487,66 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     camera.lookAt(camLook);
 
     // --- Input (slingshot) ---------------------------------------------
-    const applyPull = () => sim.setMaxPull(Math.max(90, h * 0.17));
+    // Full-power pull distance = the ACTUAL screen room below the ball, so a
+    // downward slingshot can reach 100% power even when the ball renders LOW (the
+    // reported bug: a low ball capped the pull at the bottom controls before
+    // maxPull). Project the ball to screen, measure the gap down to the bottom
+    // control/safe zone, and make that the maxPull. The elastic powerCurve() then
+    // means ~65% of even a short pull already yields ~90% power. Clamped to a sane
+    // band; falls back to a fraction of height only if the projection is
+    // degenerate. Recomputed at each address (onDown) since the lie/camera — and
+    // thus the ball's on-screen height — change shot to shot.
+    const BOTTOM_ZONE = 140; // accuracy bar + club controls + safe area, in px
+    const pullVec = new THREE.Vector3();
+    const applyPull = () => {
+      camera.updateMatrixWorld();
+      // A PUTT never needs 100% power, and the on-green camera leaves little room
+      // below the ball — a room-derived (small) maxPull would make even the
+      // minimum arm-able tap too hot and overshoot short putts. So on the green
+      // use a GENEROUS finesse maxPull (NOT room-limited) to keep soft taps
+      // feather-able. A FULL SWING instead uses the room-derived REACHABLE maxPull
+      // so a low ball can still reach full power.
+      if (sim.getState().putting) {
+        sim.setMaxPull(Math.max(120, h * 0.3));
+        return;
+      }
+      ballWorld(pullVec);
+      pullVec.project(camera);
+      const ballY = ((1 - pullVec.y) / 2) * h; // px from the top of the canvas
+      const room = h - BOTTOM_ZONE - ballY;
+      const ok = Number.isFinite(ballY) && ballY > 0 && ballY < h && room > 0;
+      const px = ok ? room : h * 0.14;
+      // Let the measured room WIN even when it's small (a low ball): a floor
+      // ABOVE the room would push 100% back into the control zone. The elastic
+      // curve compensates — 44px still gives ~90% power at ~29px of pull.
+      sim.setMaxPull(Math.max(44, Math.min(px, h * 0.5)));
+    };
     applyPull();
     const local = (e: PointerEvent) => {
       const r = canvas.getBoundingClientRect();
       return { x: e.clientX - r.left, y: e.clientY - r.top };
     };
+    // Ramping haptics (view-only, guarded): a short buzz that intensifies as the
+    // pull nears 100%, fired sparingly — only when the power crosses a new 10%
+    // bucket at/above 50% — so it reads as the slingshot "straining", never a
+    // per-frame rattle. Deterministic sim is untouched (this reads sim.power).
+    let lastPulseBucket = -1;
+    const haptic = (power: number) => {
+      if (typeof navigator === 'undefined' || !navigator.vibrate) return;
+      if (power < 0.5) {
+        lastPulseBucket = -1;
+        return;
+      }
+      const bucket = Math.min(10, Math.floor(power * 10)); // 5..10
+      if (bucket <= lastPulseBucket) return; // ramp UP only — easing off won't re-buzz
+      lastPulseBucket = bucket;
+      navigator.vibrate(6 + (bucket - 5) * 6); // 6ms @50% → 36ms @100%
+    };
     const onDown = (e: PointerEvent) => {
       if (pausedRef.current) return;
       canvas.setPointerCapture?.(e.pointerId);
+      applyPull(); // re-measure the room for THIS lie/camera before aiming
+      lastPulseBucket = -1;
       sim.onPointerDown(local(e));
       showAim(false); // hidden until the first drag gives it a power/aim
     };
@@ -1503,6 +1554,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       if (pausedRef.current) return;
       sim.onPointerMove(local(e));
       if (sim.getState().aiming && sim.power > 0.02) updateAim();
+      if (sim.getState().aiming) haptic(sim.power);
     };
     const onUp = (e: PointerEvent) => {
       if (pausedRef.current) return;

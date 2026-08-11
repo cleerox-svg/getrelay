@@ -879,6 +879,22 @@ export default function RangeGL({
       const rect = canvas.getBoundingClientRect();
       return { x: e.clientX - rect.left, y: e.clientY - rect.top };
     };
+    // Ramping haptics (view-only, guarded): a short buzz that intensifies as the
+    // pull nears 100%, fired sparingly — only when power crosses a new 10% bucket
+    // at/above 50% — so it reads as the slingshot "straining", never a per-frame
+    // rattle. IDENTICAL to the course. Deterministic sim untouched (reads power).
+    let lastPulseBucket = -1;
+    const haptic = (power: number) => {
+      if (typeof navigator === 'undefined' || !navigator.vibrate) return;
+      if (power < 0.5) {
+        lastPulseBucket = -1;
+        return;
+      }
+      const bucket = Math.min(10, Math.floor(power * 10)); // 5..10
+      if (bucket <= lastPulseBucket) return; // ramp UP only — easing off won't re-buzz
+      lastPulseBucket = bucket;
+      navigator.vibrate(6 + (bucket - 5) * 6); // 6ms @50% → 36ms @100%
+    };
     const onDown = (e: PointerEvent) => {
       // Ignore new drags while a shot is locked (accuracy phase) or in flight —
       // Step 2 is a tap on the DOM accuracy bar, not a canvas drag.
@@ -886,11 +902,13 @@ export default function RangeGL({
         return;
       activePointer = e.pointerId;
       canvas.setPointerCapture(e.pointerId);
+      lastPulseBucket = -1;
       sim.onPointerDown(local(e));
     };
     const onMove = (e: PointerEvent) => {
       if (e.pointerId !== activePointer || pausedRef.current) return;
       sim.onPointerMove(local(e));
+      if (sim.getState().aiming) haptic(sim.power);
     };
     const onUp = (e: PointerEvent) => {
       if (e.pointerId !== activePointer) return;
@@ -907,13 +925,30 @@ export default function RangeGL({
     canvas.addEventListener('pointerup', onUp);
     canvas.addEventListener('pointercancel', onUp);
 
-    // Full-power drag ≈ 17% of the canvas height (min 90px floor). On a phone a
-    // natural thumb pull was only reaching ~60% power at the old 28%, so the
-    // meter couldn't be maxed without dragging off the bottom edge; shortening
-    // the full-power travel to ~60% of that (0.28→0.17) puts a genuine 100%
-    // within an easy, comfortable pull. The ball sits low in the lower-middle of
-    // the viewport, so this stays clear of the bottom edge.
-    const applyPull = () => sim.setMaxPull(Math.max(90, h * 0.17));
+    // Full-power drag = the ACTUAL screen room below the teed ball down to the
+    // bottom control/safe zone, so a downward slingshot reaches 100% power within
+    // a comfortable pull that FITS a phone from a low ball (the reported bug: a
+    // low ball capped the pull at the controls before maxPull). Project the teed
+    // ball to screen and measure the gap; the elastic powerCurve() then makes
+    // ~65% of even a short pull yield ~90% power. Clamped; falls back to a
+    // fraction of height if the projection is degenerate. The teed ball's address
+    // position is fixed, so this holds for every shot (recomputed on resize). Kept
+    // IDENTICAL in spirit to the course, so the two scenes' feel can't drift.
+    const BOTTOM_ZONE = 128; // controls + safe area at the base, in px
+    const pullVec = new THREE.Vector3();
+    const applyPull = () => {
+      camera.updateMatrixWorld();
+      pullVec.set(0, BALL_R + TEE_LIFT, 0).project(camera);
+      const ballY = ((1 - pullVec.y) / 2) * h; // px from the top of the canvas
+      const room = h - BOTTOM_ZONE - ballY;
+      const ok = Number.isFinite(ballY) && ballY > 0 && ballY < h && room > 0;
+      const px = ok ? room : h * 0.14;
+      // Let the measured room WIN even when it's small: a floor ABOVE the room
+      // would push 100% back into the control zone. The elastic curve compensates
+      // — 44px still gives ~90% power at ~29px of pull. (The range never putts, so
+      // there is no finesse branch here — every shot is a full swing.)
+      sim.setMaxPull(Math.max(44, Math.min(px, h * 0.5)));
+    };
     applyPull();
 
     // --- Camera follow state -------------------------------------------

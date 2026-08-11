@@ -16,7 +16,7 @@ import { CLUBS, DEFAULT_CLUB_ID, clubById } from './clubs';
 import type { Club } from './clubs';
 import { RANGE_YD, islandAt, islandSurfaceR, surfaceAt } from './rangeTargets';
 import type { Pin, RangeLayout } from './rangeTargets';
-import { FIXED_MS, MIN_PULL } from './tuning';
+import { FIXED_MS, MIN_PULL, powerCurve } from './tuning';
 
 // --- Physics constants (world space, yards & seconds) ---
 
@@ -725,7 +725,10 @@ export class RangeSim {
     const rawX = this.dragStart.x - p.x;
     const rawY = this.dragStart.y - p.y;
     const len = Math.hypot(rawX, rawY);
-    this.power = Math.min(len, this.maxPull) / this.maxPull;
+    // Elastic response (see powerCurve in tuning): the raw pull fraction is eased
+    // so ~65% of the physical pull already yields ~90% power (100% reachable in a
+    // short pull) and the last stretch compresses. IDENTICAL to the course.
+    this.power = powerCurve(Math.min(len, this.maxPull) / this.maxPull);
     this.aimRad = this.pullAim(rawX, rawY);
   }
 
@@ -743,7 +746,7 @@ export class RangeSim {
       this.cancelArm();
       return;
     }
-    this.power = Math.min(len, this.maxPull) / this.maxPull;
+    this.power = powerCurve(Math.min(len, this.maxPull) / this.maxPull);
     // Lock the final steered direction from the same pull vector.
     this.aimRad = this.pullAim(pullX, pullY);
     this.armed = true;
