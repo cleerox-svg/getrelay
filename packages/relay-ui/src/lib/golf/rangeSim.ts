@@ -188,6 +188,12 @@ export interface WorldPt {
 export interface ShotPrediction {
   path: TrailPt[];
   landing: WorldPt | null;
+  // Index into `path` of the sample at/just after the first ground contact (the
+  // carry endpoint), so a full-swing aim preview can draw the arc up to the FIRST
+  // bounce and drop the post-bounce roll guess; drawer takes path.slice(0,
+  // landingIndex + 1). null when `landing` is null. Additive — path/landing/rest
+  // semantics are unchanged.
+  landingIndex: number | null;
   rest: WorldPt;
   apex: number;
   ballSpeed: number;
@@ -872,16 +878,22 @@ export class RangeSim {
 
     const path: TrailPt[] = [{ d: 0, x: 0, h: 0 }];
     let landing: WorldPt | null = null;
+    // Slot in `path` of the carry endpoint (see ShotPrediction.landingIndex).
+    let landingIndex: number | null = null;
     let i = 0;
     let guard = 0;
     while (this.ball.inFlight && guard < 72000) {
       const wasFirst = this.firstLanding;
       this.substep(fixedS);
+      const pushed = i % stride === 0;
+      if (pushed) path.push({ d: b.d, x: b.x, h: b.h });
       // Capture the carry point at the instant of first ground contact.
       if (wasFirst && !this.firstLanding && landing == null) {
         landing = { d: this.carry, x: b.x };
+        // The just-pushed sample (contact) else the next slot — a later push or
+        // the final rest push always fills it, so the index is always valid.
+        landingIndex = pushed ? path.length - 1 : path.length;
       }
-      if (i % stride === 0) path.push({ d: b.d, x: b.x, h: b.h });
       i++;
       guard++;
     }
@@ -890,6 +902,7 @@ export class RangeSim {
     const out: ShotPrediction = {
       path,
       landing,
+      landingIndex,
       rest: { d: b.d, x: b.x },
       apex: this.apex,
       ballSpeed: this.ballSpeed,
