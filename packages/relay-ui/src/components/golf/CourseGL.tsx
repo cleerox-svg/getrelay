@@ -167,13 +167,6 @@ function makeSurfaceMap(
   // across 512 texels ≈ 0.24 yd/texel), far narrower than FRINGE_BAND so the band
   // itself stays a hard-edged strip, never a wide gradient.
   const SEAM_AA = 0.18;
-  // A darker "mow line" pinstripe painted EXACTLY on each edge (fairway|cut and
-  // cut|rough) — the definite collar line a real course cuts. It survives the turf
-  // normal + oblique camera that washed out a pure colour step: LINE_HALF is the
-  // pinstripe half-width (yd) and LINE_DARK how far it darkens the albedo at the
-  // seam. Kept thin so the two lines frame the uniform band, not swamp it.
-  const LINE_HALF = 0.4;
-  const LINE_DARK = 0.42;
   const fair: [number, number, number] = [0, 0, 0];
   const rgh: [number, number, number] = [0, 0, 0];
   // Fairway albedo at (x,d): bold alternating mow stripes + a whisper of blade
@@ -240,22 +233,15 @@ function makeSurfaceMap(
         const wLo = smoothstep(-SEAM_AA, SEAM_AA, ed);
         const wHi = smoothstep(FRINGE_BAND - SEAM_AA, FRINGE_BAND + SEAM_AA, ed);
         // fairway → first cut → rough (the two seams never overlap: SEAM_AA ≪
-        // FRINGE_BAND), so each transition is a clean line.
+        // FRINGE_BAND), so each transition is a clean colour line. The three bands
+        // sit hard-lined beside each other — no darker "mow line" pinstripe frames
+        // the seams; the crisp colour step alone separates the surfaces.
         const fcR = fair[0] + (cutR - fair[0]) * wLo;
         const fcG = fair[1] + (cutG - fair[1]) * wLo;
         const fcB = fair[2] + (cutB - fair[2]) * wLo;
-        let rr = fcR + (rgh[0] - fcR) * wHi;
-        let gr = fcG + (rgh[1] - fcG) * wHi;
-        let br = fcB + (rgh[2] - fcB) * wHi;
-        // Dark mow-line pinstripe on each seam: darken within LINE_HALF of ed=0 or
-        // ed=FRINGE_BAND, full at the seam and fading out (anti-aliased outer edge)
-        // so the eye catches a definite collar line even through the turf normal at
-        // the grazing course camera. This is what makes the band actually READ.
-        const nearSeam = Math.min(Math.abs(ed), Math.abs(ed - FRINGE_BAND));
-        const line = 1 - LINE_DARK * (1 - smoothstep(LINE_HALF - SEAM_AA, LINE_HALF, nearSeam));
-        r = rr * line;
-        gg = gr * line;
-        b = br * line;
+        r = fcR + (rgh[0] - fcR) * wHi;
+        gg = fcG + (rgh[1] - fcG) * wHi;
+        b = fcB + (rgh[2] - fcB) * wHi;
       } else if (surf === 'ob') {
         roughRGB(x, d, SURFACE_RGB.ob, rgh);
         r = rgh[0];
