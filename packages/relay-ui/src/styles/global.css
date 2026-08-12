@@ -990,16 +990,14 @@ html.beta .composer-capsule {
   color: var(--text);
 }
 .golf-modes {
-  display: flex;
-  gap: 12px;
-  overflow-x: auto;
-  padding-bottom: 4px;
-  scroll-snap-type: x mandatory;
-  -webkit-overflow-scrolling: touch;
+  /* Mirror the 3-up stat strip above so the mode cards land on the same
+     grid and honor the page gutters (was a fixed-150px overflow-x strip,
+     which overran the right gutter and clipped the "Course" card). */
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
 }
 .golf-mode {
-  scroll-snap-align: start;
-  flex: 0 0 150px;
   border-radius: 16px;
   overflow: hidden;
   border: 1px solid var(--golf-line);
@@ -1021,7 +1019,7 @@ html.beta .composer-capsule {
   outline-offset: 2px;
 }
 .golf-mode .g-cap {
-  height: 76px;
+  height: 52px;
   position: relative;
   overflow: hidden;
 }
@@ -1063,17 +1061,18 @@ html.beta .composer-capsule {
   clip-path: polygon(0 0, 100% 50%, 0 100%);
 }
 .golf-mode .g-mbody {
-  padding: 11px 12px 13px;
+  padding: 9px 10px 11px;
 }
 .golf-mode .g-mbody b {
-  font-size: 14px;
+  font-size: 13px;
   display: block;
+  letter-spacing: -0.01em;
   color: var(--text);
 }
 .golf-mode .g-mbody p {
-  margin: 5px 0 0;
+  margin: 4px 0 0;
   font-size: 11px;
-  line-height: 1.4;
+  line-height: 1.35;
   color: var(--text-dim);
 }
 
