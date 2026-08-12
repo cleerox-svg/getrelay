@@ -998,6 +998,11 @@ html.beta .composer-capsule {
   gap: 10px;
 }
 .golf-mode {
+  /* Column flex so the art cap + body spans (inline by default) become
+     block-level and stack — otherwise the cap's height is ignored, it
+     collapses, and its flag pin spills down over the title. */
+  display: flex;
+  flex-direction: column;
   border-radius: 16px;
   overflow: hidden;
   border: 1px solid var(--golf-line);
@@ -1019,6 +1024,7 @@ html.beta .composer-capsule {
   outline-offset: 2px;
 }
 .golf-mode .g-cap {
+  flex: none;
   height: 52px;
   position: relative;
   overflow: hidden;
