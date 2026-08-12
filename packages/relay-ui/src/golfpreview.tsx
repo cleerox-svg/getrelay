@@ -19,7 +19,10 @@ import { StrictMode, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import CourseGL from './components/golf/CourseGL';
 import RangeGL from './components/golf/RangeGL';
+import PuttGL from './components/golf/PuttGL';
 import { CourseSim } from './lib/golf/courseSim';
+import { PuttSim } from './lib/golf/puttSim';
+import { getPuttCourse } from './lib/golf/puttCourses';
 import { HOLE_1, heightAt, type CourseHole } from './lib/golf/terrain';
 import { getCourse } from './lib/golf/courses';
 import { FIXED_MS } from './lib/golf/tuning';
@@ -29,7 +32,7 @@ import { pinsFor, DEFAULT_LAYOUT, type RangeLayout } from './lib/golf/rangeTarge
 declare global {
   interface Window {
     __golfReady?: boolean;
-    __sim?: CourseSim;
+    __sim?: CourseSim | PuttSim;
   }
 }
 
@@ -91,7 +94,29 @@ function Preview() {
       </>
     );
   }
+  if (scene === 'putt') return <PuttPreview />;
   return <CoursePreview at={params.get('at')} />;
+}
+
+// Mini-golf scene: mount PuttGL on a PuttSim built exactly as GolfGame builds it
+// (new PuttSim(course.holes[idx])). The hole is selectable via ?hole=<idx>
+// (0-based into the default GARDEN course) so the harness can shoot a slope hole,
+// a ramp hole and a banked-rail hole. ?course=<id> picks another registry course.
+function PuttPreview() {
+  const simRef = useRef<PuttSim | null>(null);
+  const course = getPuttCourse(params.get('course') ?? undefined);
+  const idxParam = Number.parseInt(params.get('hole') ?? '', 10);
+  const idx = Number.isInteger(idxParam) && idxParam >= 0 && idxParam < course.holes.length ? idxParam : 0;
+  const hole = course.holes[idx]!;
+  if (!simRef.current) simRef.current = new PuttSim(hole);
+  const sim = simRef.current;
+  window.__sim = sim; // dev-only: lets the shooter inspect aim state
+  return (
+    <>
+      <PuttGL sim={sim} hole={hole} />
+      <ReadyBeacon />
+    </>
+  );
 }
 
 function CoursePreview({ at }: { at: string | null }) {

@@ -15,11 +15,19 @@ first when picking up golf work.
 
 Three modes behind the "Golf" chiclet in the Games hub:
 
-- **Mini-Golf (putting)** — top-down/angled 3D hole; drag-to-putt; 6 holes;
-  sink the cup; par/stroke scoring. Cohesive 3D (Three.js). NOTE: this is a
-  SEPARATE flat, no-heightfield engine (`puttSim.ts`/`PuttGL.tsx`) and does NOT
-  yet use `greenPhysics.ts` — consolidating it onto a real heightfield green is a
-  documented follow-up.
+- **Mini-Golf (putting)** — top-down/angled 3D hole; drag-to-putt; sink the cup;
+  par/stroke scoring. Now a REAL mini-put engine: `puttSim.ts` runs
+  slope-coupled Coulomb physics on a per-hole slope FIELD (`puttField.ts` —
+  tilt planes, ramps, undulation) reusing `greenPhysics.ts`'s functions at
+  mini-scale, so putts BREAK, ramps check/feed the ball, and banked rails
+  (`Wall.bank`) run the ball along the rail. Holes are pure DATA validated
+  against the physics invariants (`puttCourses/`, default `garden.ts` = 8 slope
+  holes). `PuttGL.tsx` renders the green as a DISPLACED BufferGeometry sampled
+  from `puttHeightAt` (see-what-you-play: the ball rides the surface, ramps rise,
+  banked rails read as leaned amber rails), model-driven camera frame, shared
+  scenery kit. HUD (`GolfGame.tsx`) drives off the course's actual hole count.
+  Phase-2 STUBS present but not wired: moving obstacles + hazards physics + a
+  course picker.
 - **Course · Hole 1 (beta)** — a full terrain-aware hole (tee → fairway → green
   → cup) on `courseSim.ts` + `CourseGL.tsx`; slingshot aim/power, tap-timing,
   camera-follow, a predicted aim arc, and a real Coulomb-friction putting green
@@ -412,9 +420,11 @@ only imported by the already `lazy()`-loaded `*GL.tsx`.
 **Shared putting physics.** `lib/golf/greenPhysics.ts` is the pure-math
 counterpart for greens (Stimp → μ, roll-out, cup capture; no `three`, no sim
 state), used by `courseSim`'s green/fringe roll. **Consolidation status:**
-Mini-Golf (`puttSim.ts`/`PuttGL.tsx`) is still a SEPARATE flat, no-heightfield
-engine and does NOT yet share `greenPhysics` — moving it onto a real heightfield
-green is a documented follow-up.
+Mini-Golf now REUSES `greenPhysics`'s functions (roll-out decel + elliptic cup
+capture) at mini-scale through a slope FIELD (`puttField.ts`), so its putts break
+on a real heightfield instead of the old flat arcade engine. It keeps its own
+mini-scale CONSTANTS (`tuning.ts` `PUTT_*` — a ~8× scale difference from the
+yard-space Course values) by design; only the shared FUNCTIONS port.
 
 **Seeing the game (committed harness).** `pnpm --filter @relay/ui shoot:golf`
 renders each scene headlessly (Vite + pre-installed Chromium with

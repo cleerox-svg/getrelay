@@ -1,9 +1,9 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/api';
-import { COURSE } from '../../lib/golf/course';
+import { getPuttCourse, type PuttCourse } from '../../lib/golf/puttCourses';
 import { PuttSim } from '../../lib/golf/puttSim';
 import { recordGolfGame } from '../../lib/golf/stats';
-import { HOLES, holePoints } from '../../lib/golf/tuning';
+import { holePoints } from '../../lib/golf/tuning';
 
 // Lazy-load the whole Three.js scene so it lands in its own chunk (shared
 // with the range's vendor chunk) and never bloats the main entry — the
@@ -12,8 +12,8 @@ const PuttGL = lazy(() => import('./PuttGL'));
 
 export interface GolfGameResult {
   score: number;
-  // Holes completed (sunk). HOLES for a full round; 1..HOLES-1 when
-  // ended early; 0 when nothing was completed — callers must
+  // Holes completed (sunk). course.holes.length for a full round; 1..len-1
+  // when ended early; 0 when nothing was completed — callers must
   // record/submit NOTHING for a 0-hole game.
   roundsPlayed: number;
   bestStreak: number;
@@ -28,6 +28,11 @@ interface Props {
   // funnels through the same finishNow as the header End pill.
   paused: boolean;
   onResume: () => void;
+  // The mini-golf course to play. Defaults to the registry's default course
+  // (GARDEN, 8 holes). Full course-picker wiring (menu/screen arg threading)
+  // lands in a later slice; a defaulted prop keeps this playable now while the
+  // round already iterates the course's ACTUAL hole count (<= 8).
+  course?: PuttCourse;
 }
 
 type PerHole = GolfGameResult['perHole'];
@@ -76,14 +81,16 @@ function Spinner() {
   );
 }
 
-// The scored 6-hole round in real 3D. Each hole: drag back from the ball to
+// The scored mini-golf round in real 3D (course.holes.length holes, <= 8).
+// Each hole: drag back from the ball to
 // aim in any direction, release to putt around the walls, sink the cup,
 // advance. Points scale with strokes under/over par (see lib/golf/tuning.ts).
 // Ending early banks the holes already completed. Full-bleed immersive shell,
 // mirroring RangeGame: the scene owns the viewport; the HUD is a display-only
 // top strip with only the End button interactive, so the whole centre stays a
 // clear drag zone over the ball.
-export function GolfGame({ onFinish, paused, onResume }: Props) {
+export function GolfGame({ onFinish, paused, onResume, course = getPuttCourse() }: Props) {
+  const holeCount = course.holes.length;
   const perHoleRef = useRef<PerHole>([]);
   const strokesRef = useRef(0);
   const holeIdxRef = useRef(0);
@@ -100,7 +107,7 @@ export function GolfGame({ onFinish, paused, onResume }: Props) {
   // scene while the ball drops and the next hole is prepared.
   const [transitioning, setTransitioning] = useState(false);
 
-  const hole = COURSE.holes[holeIdx];
+  const hole = course.holes[holeIdx];
   const holeNo = holeIdx + 1;
 
   // A fresh sim per hole; PuttGL remounts by the same key so its GPU scene
@@ -167,7 +174,7 @@ export function GolfGame({ onFinish, paused, onResume }: Props) {
 
   function handleSink() {
     const idx = holeIdxRef.current;
-    const h = COURSE.holes[idx];
+    const h = course.holes[idx];
     if (!h) return;
     perHoleRef.current.push({
       hole: idx + 1,
@@ -194,7 +201,7 @@ export function GolfGame({ onFinish, paused, onResume }: Props) {
   // Commit the hole transition: finish the round on the last hole, else tee
   // the next one (a fresh sim + remounted scene).
   function doAdvance(next: number) {
-    if (next >= HOLES) {
+    if (next >= holeCount) {
       finishRef.current();
       return;
     }
@@ -287,7 +294,7 @@ export function GolfGame({ onFinish, paused, onResume }: Props) {
             boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
           }}
         >
-          {readout('HOLE', `${holeNo}/${HOLES}`)}
+          {readout('HOLE', `${holeNo}/${holeCount}`)}
           {readout('PAR', `${hole?.par ?? '—'}`)}
           {readout('STROKES', `${strokes}`)}
           {readout('PTS', score.toLocaleString())}
@@ -384,8 +391,34 @@ export function GolfGame({ onFinish, paused, onResume }: Props) {
               className="tabular-nums"
               style={{ fontSize: 13, paddingTop: 4, color: 'var(--text-dim)' }}
             >
-              Hole {holeNo} of {HOLES} · {score.toLocaleString()} pts
+              Hole {holeNo} of {holeCount} · {score.toLocaleString()} pts
             </div>
+            {/* Compact scorecard: every hole completed so far, strokes vs par
+                (E / +n / -n). The perHole data already backs the results screen;
+                surfacing it here lets a paused player read their card. */}
+            {perHoleRef.current.length > 0 ? (
+              <div className="flex flex-wrap justify-center gap-1.5 pt-3">
+                {perHoleRef.current.map((h) => {
+                  const diff = h.strokes - h.par;
+                  const label = diff === 0 ? 'E' : diff > 0 ? `+${diff}` : `${diff}`;
+                  const under = diff <= 0;
+                  return (
+                    <span
+                      key={h.hole}
+                      className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-bold tabular-nums"
+                      style={{
+                        background: under
+                          ? 'color-mix(in srgb, var(--online) 18%, transparent)'
+                          : 'color-mix(in srgb, var(--ping) 15%, transparent)',
+                        color: under ? 'var(--online)' : 'var(--ping)',
+                      }}
+                    >
+                      H{h.hole} {label}
+                    </span>
+                  );
+                })}
+              </div>
+            ) : null}
             <div
               style={{ fontSize: 13, paddingTop: 10, lineHeight: 1.45, color: 'var(--text-dim)' }}
             >
