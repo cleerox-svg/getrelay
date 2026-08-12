@@ -95,6 +95,33 @@ export const PUTT_STATIC_HOLD = PUTT_DECEL * STATIC_HOLD_FACTOR;
 // overrun the cup by ~21 units still drops (forgiving but not a magnet).
 export const PUTT_CAPTURE_SPEED = 90;
 
+// --- Moving obstacles + hazards (Phase 2) ----------------------------------
+// All obstacle motion is a pure function of the sim's deterministic simTime, so
+// these only tune FEEL, never determinism.
+//
+// Blade/arm bounce: a windmill blade or pendulum arm reflects the ball like a
+// lively wall (its own restitution) AND imparts its surface velocity at the
+// contact point (ω × r) so a swinging blade can KNOCK the ball. BLADE_RESTITUTION
+// mirrors the plain-wall RESTITUTION (a blade is a solid barrier, not a springy
+// bumper); the imparted surface speed is CLAMPED to BLADE_MAX_SURFACE_SPEED so a
+// fast blade gives a satisfying shove without flinging the ball off the board
+// (a bit under MAX_LAUNCH_SPEED).
+export const BLADE_RESTITUTION = 0.7;
+export const BLADE_MAX_SURFACE_SPEED = 130;
+
+// Tunnel re-entry guard: after a portal teleport the ball is placed just past
+// the exit mouth, but if the two mouths sit close together it could immediately
+// cross back. For PORTAL_COOLDOWN seconds of SIM time after a teleport the sim
+// skips all tunnel checks, so it can't ping-pong within a shot. simTime-based →
+// deterministic. ~0.18s ≈ a couple of substeps of clearance at any pace.
+export const PORTAL_COOLDOWN = 0.18;
+
+// Sand hazard: while the ball is over a sand region it decelerates at
+// PUTT_DECEL·PUTT_SAND_DECEL_MULT (a HIGHER effective Coulomb decel — same
+// constant-decel model, no second friction system), so it bogs down and stops
+// short. ~4× reads as heavy sand while still letting a firm putt escape.
+export const PUTT_SAND_DECEL_MULT = 4;
+
 // Aim drag geometry, in CSS pixels of finger travel.
 export const MAX_PULL = 170;
 export const MIN_PULL = 8;

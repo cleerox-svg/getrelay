@@ -49,9 +49,26 @@ import {
   PUTT_DECEL,
   PUTT_STATIC_HOLD,
   PUTT_CAPTURE_SPEED,
+  BLADE_RESTITUTION,
+  BLADE_MAX_SURFACE_SPEED,
+  PORTAL_COOLDOWN,
+  PUTT_SAND_DECEL_MULT,
 } from './tuning';
 import { cupCaptured, CUP_CAPTURE_SPEED } from './greenPhysics';
 import { puttSlopeAccel, type Ramp, type SlopePlane } from './puttField';
+import {
+  obstacleSegments,
+  reflectMovingSegment,
+  tunnelCrossing,
+  type Obstacle,
+} from './puttObstacles';
+
+export type {
+  Obstacle,
+  WindmillObstacle,
+  PendulumObstacle,
+  TunnelObstacle,
+} from './puttObstacles';
 
 export interface Vec {
   x: number;
@@ -83,39 +100,17 @@ export interface Green {
   r: number;
 }
 
-// --- Hazards (region + kind). Phase 1 carries the DATA (authored + validated
-// in bounds) but does NOT yet run hazard physics — that is Phase 2. Kept
-// axis-aligned for a terse, checkable schema. ------------------------------
+// --- Hazards (region + kind). Water resets the shot (+penalty); sand slows the
+// ball. Axis-aligned for a terse, checkable schema; run in substep(). --------
 export interface Hazard {
   kind: 'water' | 'sand';
   region: { x0: number; y0: number; x1: number; y1: number };
 }
 
-// --- Moving obstacles (Phase 2 STUB). A minimal, clearly-typed placeholder
-// union so the Hole shape and the authoring/validation layer are forward-
-// compatible; NO moving-obstacle physics runs in this slice. Phase 2 will drive
-// each from the deterministic simTime accumulator. ------------------------
-export interface WindmillObstacle {
-  kind: 'windmill';
-  pivot: Vec;
-  blades: number;
-  bladeLen: number;
-  omega: number; // rad/s about the pivot, phase = omega·simTime
-}
-export interface PendulumObstacle {
-  kind: 'pendulum';
-  pivot: Vec;
-  length: number;
-  amp: number; // swing amplitude (rad)
-  omega: number; // rad/s
-}
-export interface PortalObstacle {
-  kind: 'portal';
-  a: Vec;
-  b: Vec; // ball entering mouth `a` re-emerges at `b` (and vice-versa)
-  r: number;
-}
-export type Obstacle = WindmillObstacle | PendulumObstacle | PortalObstacle;
+// --- Moving obstacles (Phase 2). The obstacle union + its per-simTime collider
+// geometry and reflect/teleport solvers live in puttObstacles.ts (pure math,
+// three-free); the sim consumes them each substep, all driven off the
+// deterministic simTime accumulator. -------------------------------------
 
 export interface Hole {
   id: number;
@@ -132,9 +127,11 @@ export interface Hole {
   tilts?: SlopePlane[];
   ramps?: Ramp[];
   undulation?: number;
-  // Reset+penalty / slow zones — DATA only in Phase 1 (physics is Phase 2).
+  // Hazards: 'water' resets the ball to the start of the shot (+penalty event),
+  // 'sand' bogs it down with a higher effective decel. Run in substep().
   hazards?: Hazard[];
-  // Moving colliders — Phase 2 STUB (no physics yet).
+  // Moving colliders (windmills / swinging gates / portal tunnels), each driven
+  // off simTime and resolved in substep() via puttObstacles.ts.
   obstacles?: Obstacle[];
 }
 
@@ -146,7 +143,9 @@ export interface Ball {
   resting: boolean;
 }
 
-export type PuttEventType = 'stroke' | 'sink' | 'rest';
+// 'stroke' launch, 'sink' holed, 'rest' came to rest, 'penalty' entered water
+// (ball reset to the start of the shot; a later HUD adds +1 stroke).
+export type PuttEventType = 'stroke' | 'sink' | 'rest' | 'penalty';
 export interface PuttEvent {
   type: PuttEventType;
 }
@@ -212,12 +211,22 @@ export class PuttSim {
   private aim: Vec = { x: 0, y: 0 };
   private power = 0;
 
+  // Ball position at the launch of the current shot — the reset point for a
+  // water penalty. Captured on onPointerUp; starts at the tee.
+  private _shotStart: Vec = { x: 0, y: 0 };
+
+  // simTime until which tunnel crossings are ignored (re-entry guard after a
+  // portal teleport). Purely simTime-derived, so it stays deterministic.
+  private _portalGuardUntil = 0;
+
   // Event queue, drained by the renderer once per frame.
   private events: PuttEvent[] = [];
 
   constructor(hole: Hole) {
     this.hole = hole;
     this._simTime = 0;
+    this._shotStart = { x: hole.tee.x, y: hole.tee.y };
+    this._portalGuardUntil = 0;
     this.ball = {
       pos: { x: hole.tee.x, y: hole.tee.y },
       vel: { x: 0, y: 0 },
@@ -259,17 +268,58 @@ export class PuttSim {
     const { ax, ay } = puttSlopeAccel(this.hole, ball.pos.x, ball.pos.y, PUTT_GRAVITY);
     ball.vel = { x: ball.vel.x + ax * h, y: ball.vel.y + ay * h };
 
-    // Coulomb constant deceleration: shave PUTT_DECEL·h off the SPEED (clamped
-    // at 0), direction preserved. Constant decel while the slope bends a
-    // shrinking velocity → a dying putt breaks hardest (emergent).
+    // Coulomb constant deceleration: shave decel·h off the SPEED (clamped at 0),
+    // direction preserved. Constant decel while the slope bends a shrinking
+    // velocity → a dying putt breaks hardest (emergent). Over SAND the effective
+    // decel is higher (PUTT_SAND_DECEL_MULT×) so the ball bogs down — same
+    // constant-decel model, just a larger coefficient, no second friction system.
+    const surfKind = this.hazardKindAt(ball.pos.x, ball.pos.y);
+    const decel = surfKind === 'sand' ? PUTT_DECEL * PUTT_SAND_DECEL_MULT : PUTT_DECEL;
     const preSpeed = len(ball.vel);
     if (preSpeed > 1e-6) {
-      const k = Math.max(0, (preSpeed - PUTT_DECEL * h) / preSpeed);
+      const k = Math.max(0, (preSpeed - decel * h) / preSpeed);
       ball.vel = scale(ball.vel, k);
     }
 
     // Integrate.
+    const prevPos = { x: ball.pos.x, y: ball.pos.y };
     ball.pos = add(ball.pos, scale(ball.vel, h));
+
+    // Moving obstacles (windmills / swinging gates) reflect + impart the blade's
+    // surface velocity; tunnels teleport. All geometry is a pure function of
+    // simTime (puttObstacles.ts), so the interaction is deterministic and the
+    // renderer, reading the same simTime, draws exactly what collided.
+    const obstacles = this.hole.obstacles;
+    if (obstacles) {
+      for (const ob of obstacles) {
+        if (ob.kind === 'tunnel') {
+          if (this._simTime >= this._portalGuardUntil) {
+            const tp = tunnelCrossing(ob, prevPos, ball.pos, ball.vel, ball.r + 0.5);
+            if (tp) {
+              ball.pos = tp.pos;
+              ball.vel = tp.vel;
+              this._portalGuardUntil = this._simTime + PORTAL_COOLDOWN;
+            }
+          }
+          continue;
+        }
+        const segs = obstacleSegments(ob, this._simTime);
+        for (let s = 0; s < segs.length; s++) {
+          const res = reflectMovingSegment(
+            ball.pos,
+            ball.vel,
+            ball.r,
+            segs[s]!,
+            BLADE_RESTITUTION,
+            BLADE_MAX_SURFACE_SPEED,
+          );
+          if (res.hit) {
+            ball.pos = res.pos;
+            ball.vel = res.vel;
+          }
+        }
+      }
+    }
 
     // Wall collisions: depenetrate + reflect (only when moving inward). A
     // banked rail additionally steers the ball to run ALONG the wall.
@@ -305,6 +355,17 @@ export class PuttSim {
       }
     }
 
+    // Water hazard: rolling into water resets the ball to the START of the shot
+    // and emits a 'penalty' (a later HUD adds +1 stroke). The ball comes to rest
+    // at the reset point. Deterministic (region test + captured shot start).
+    if (len(ball.vel) > 1e-6 && this.hazardKindAt(ball.pos.x, ball.pos.y) === 'water') {
+      ball.pos = { x: this._shotStart.x, y: this._shotStart.y };
+      ball.vel = { x: 0, y: 0 };
+      ball.resting = true;
+      this.events.push({ type: 'penalty' });
+      return;
+    }
+
     // Cup interaction. Elliptic, speed-dependent capture from the shared green
     // model (rescaled to mini speeds). A ball over the rim that is too fast to
     // capture still feels a lip-out tug so it visibly curls instead of rolling
@@ -333,6 +394,18 @@ export class PuttSim {
       ball.resting = true;
       this.events.push({ type: 'rest' });
     }
+  }
+
+  // The hazard kind under a board point, or null. Axis-aligned region test; the
+  // first matching hazard wins (validated non-overlapping by the builder).
+  private hazardKindAt(x: number, y: number): 'water' | 'sand' | null {
+    const hz = this.hole.hazards;
+    if (!hz) return null;
+    for (let i = 0; i < hz.length; i++) {
+      const r = hz[i]!.region;
+      if (x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1) return hz[i]!.kind;
+    }
+    return null;
   }
 
   // --- Input (aim points arrive in VIRTUAL ground coords) --------------
@@ -373,6 +446,8 @@ export class PuttSim {
     }
     const dir = normalize(sub(this.dragStart, vp));
     const power = Math.min(pullPx, MAX_PULL) / MAX_PULL;
+    // Capture the reset point for a water penalty BEFORE the ball leaves rest.
+    this._shotStart = { x: this.ball.pos.x, y: this.ball.pos.y };
     this.ball.vel = scale(dir, power * MAX_LAUNCH_SPEED);
     this.ball.resting = false;
     this.aim = { x: 0, y: 0 };

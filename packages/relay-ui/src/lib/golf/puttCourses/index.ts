@@ -5,9 +5,14 @@
 // validated against the puttSim/puttField invariants by puttCourses.test.ts.
 
 import { GARDEN } from './garden';
+import { WINDMILL_LINKS } from './windmill-links';
+import { PIRATE_COVE } from './pirate-cove';
 import type { PuttCourse } from './types';
 
-export const PUTT_COURSES: PuttCourse[] = [GARDEN];
+// Garden stays first (the default). Windmill Links showcases the moving
+// obstacles (windmills + swinging gates + banked rails); Pirate Cove showcases
+// tunnels/portals + water/sand hazards + ramps + slopes.
+export const PUTT_COURSES: PuttCourse[] = [GARDEN, WINDMILL_LINKS, PIRATE_COVE];
 
 export const DEFAULT_PUTT_COURSE_ID = 'garden';
 
@@ -19,3 +24,5 @@ export function getPuttCourse(id?: string): PuttCourse {
 
 export type { PuttCourse } from './types';
 export { GARDEN } from './garden';
+export { WINDMILL_LINKS } from './windmill-links';
+export { PIRATE_COVE } from './pirate-cove';

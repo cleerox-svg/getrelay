@@ -12,8 +12,8 @@ import { validatePuttCourse, validatePuttHole } from './builder';
 import { HOLES } from '../tuning';
 
 describe('mini-golf courses — registry', () => {
-  it('exposes the authored courses with the documented ids', () => {
-    expect(PUTT_COURSES.map((c) => c.id)).toEqual(['garden']);
+  it('exposes the authored courses with the documented ids (garden first/default)', () => {
+    expect(PUTT_COURSES.map((c) => c.id)).toEqual(['garden', 'windmill-links', 'pirate-cove']);
   });
 
   it('getPuttCourse returns the requested course, else the default (Garden)', () => {

@@ -10,7 +10,13 @@
 
 import type { Green, Hole, Wall } from '../puttSim';
 import { puttSlopeAccel, type Pt } from '../puttField';
-import { CUP_R, PUTT_GRAVITY, PUTT_STATIC_HOLD } from '../tuning';
+import { BALL_R, CUP_R, PUTT_GRAVITY, PUTT_STATIC_HOLD } from '../tuning';
+import type {
+  Obstacle,
+  PendulumObstacle,
+  TunnelObstacle,
+  WindmillObstacle,
+} from '../puttObstacles';
 import type { PuttCourse } from './types';
 
 // Play area inset from the 100x125 virtual bounds; every hole shares it. The
@@ -48,6 +54,63 @@ export function seg(ax: number, ay: number, bx: number, by: number, bank = false
 // so a data file only spells out what makes a hole distinctive).
 export const BORDER: Wall[] = rectWalls(BX0, BY0, BX1, BY1);
 export const FULL_GREEN: Green[] = [{ x: BX0, y: BY0, w: BX1 - BX0, h: BY1 - BY0, r: 6 }];
+
+// --- Moving-obstacle authoring helpers (mirror greensideHazard() in
+// courses/builder.ts — terse constructors with sensible defaults). ----------
+
+// A windmill: `bladeCount` blades of `bladeLen` pivoting at `omega` rad/s about
+// `pivot`. Default 4 blades. Keep the swept disc (radius bladeLen) inside the
+// bounds and clear of the cup/tee (validatePuttHole enforces it).
+export function windmill(
+  pivot: Pt,
+  o: { bladeLen: number; bladeCount?: number; omega: number; phase0?: number },
+): WindmillObstacle {
+  return {
+    kind: 'windmill',
+    pivot: { x: pivot.x, y: pivot.y },
+    bladeLen: o.bladeLen,
+    bladeCount: o.bladeCount ?? 4,
+    omega: o.omega,
+    phase0: o.phase0,
+  };
+}
+
+// A swinging gate/pendulum: an arm of `length` from `pivot` sweeping
+// `centerDeg ± ampDeg` at `omega` rad/s (centerDeg defaults 90 = pointing +y,
+// i.e. "down" the board). `gate:true` adds a second opposed arm.
+export function pendulum(
+  pivot: Pt,
+  o: {
+    length: number;
+    ampDeg: number;
+    omega: number;
+    centerDeg?: number;
+    phase0?: number;
+    gate?: boolean;
+  },
+): PendulumObstacle {
+  return {
+    kind: 'pendulum',
+    pivot: { x: pivot.x, y: pivot.y },
+    length: o.length,
+    centerDeg: o.centerDeg ?? 90,
+    ampDeg: o.ampDeg,
+    omega: o.omega,
+    phase0: o.phase0,
+    gate: o.gate,
+  };
+}
+
+// A portal tunnel: crossing INTO mouthA re-emerges at mouthB (and vice-versa).
+// Each mouth is a segment [a, b]; author it so the ball approaches from the
+// mouth's outward-normal side (see puttObstacles.mouthNormal).
+export function tunnel(mouthA: [Pt, Pt], mouthB: [Pt, Pt]): TunnelObstacle {
+  return {
+    kind: 'tunnel',
+    mouthA: { a: { x: mouthA[0].x, y: mouthA[0].y }, b: { x: mouthA[1].x, y: mouthA[1].y } },
+    mouthB: { a: { x: mouthB[0].x, y: mouthB[0].y }, b: { x: mouthB[1].x, y: mouthB[1].y } },
+  };
+}
 
 // --- Authoring helper ------------------------------------------------------
 
@@ -109,6 +172,12 @@ export function definePuttCourse(
 // --- Validation ------------------------------------------------------------
 
 const inBounds = (x: number, y: number): boolean => x >= BX0 && x <= BX1 && y >= BY0 && y <= BY1;
+const ptInRect = (r: { x0: number; y0: number; x1: number; y1: number }, x: number, y: number): boolean =>
+  x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1;
+const rectsOverlap = (
+  a: { x0: number; y0: number; x1: number; y1: number },
+  b: { x0: number; y0: number; x1: number; y1: number },
+): boolean => a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0;
 
 // Point-in-rounded-rect, mirroring how PuttGL draws the green footprint (a
 // rounded-rect with corner radius g.r): inside the axis-aligned rect AND, in the
@@ -198,14 +267,71 @@ export function validatePuttHole(h: Hole): string[] {
     }
     if (rp.width <= 0) errs.push(`${tag}: ramp ${i} width must be positive`);
   }
-  for (let i = 0; i < (h.hazards?.length ?? 0); i++) {
-    const r = h.hazards![i]!.region;
+  const hazards = h.hazards ?? [];
+  for (let i = 0; i < hazards.length; i++) {
+    const r = hazards[i]!.region;
     if (r.x0 >= r.x1 || r.y0 >= r.y1) errs.push(`${tag}: hazard ${i} region is empty/inverted`);
     if (!inBounds(r.x0, r.y0) || !inBounds(r.x1, r.y1)) {
       errs.push(`${tag}: hazard ${i} region out of play bounds`);
     }
+    // A hazard must not swallow the cup or tee, nor wall the board off with no
+    // way past (best-effort "the only path isn't fully blocked" — mirrors the
+    // spirit of courses/builder's fringe-clearance guard). Mini-golf is
+    // ground-only, so a full-span hazard truly blocks (no carry over it).
+    if (ptInRect(r, h.cup.c.x, h.cup.c.y)) errs.push(`${tag}: hazard ${i} covers the cup`);
+    if (ptInRect(r, h.tee.x, h.tee.y)) errs.push(`${tag}: hazard ${i} covers the tee`);
+    if (r.x0 <= BX0 && r.x1 >= BX1) errs.push(`${tag}: hazard ${i} spans the full width (blocks the only path)`);
+    if (r.y0 <= BY0 && r.y1 >= BY1) errs.push(`${tag}: hazard ${i} spans the full height (blocks the only path)`);
+    // Overlapping hazards are ambiguous (hazardKindAt takes the first match).
+    for (let j = i + 1; j < hazards.length; j++) {
+      if (rectsOverlap(r, hazards[j]!.region)) errs.push(`${tag}: hazards ${i} and ${j} overlap`);
+    }
   }
 
+  for (let i = 0; i < (h.obstacles?.length ?? 0); i++) {
+    errs.push(...validateObstacle(h, h.obstacles![i]!, i, tag));
+  }
+
+  return errs;
+}
+
+// Per-obstacle invariants ([] = good):
+//   • windmill/pendulum: pivot in bounds; the SWEPT DISC (radius = bladeLen /
+//     arm length) fits inside the bounds and clears the cup and the tee (a blade
+//     must never sit permanently over either);
+//   • tunnel: both mouths' endpoints in bounds and each mouth's midpoint on a
+//     green (both ends reachable).
+function validateObstacle(h: Hole, ob: Obstacle, i: number, tag: string): string[] {
+  const errs: string[] = [];
+  if (ob.kind === 'windmill' || ob.kind === 'pendulum') {
+    const p = ob.pivot;
+    const reach = ob.kind === 'windmill' ? ob.bladeLen : ob.length;
+    if (reach <= 0) errs.push(`${tag}: obstacle ${i} has non-positive reach`);
+    if (ob.kind === 'windmill' && ob.bladeCount < 1) errs.push(`${tag}: obstacle ${i} needs ≥1 blade`);
+    if (!inBounds(p.x, p.y)) errs.push(`${tag}: obstacle ${i} pivot out of play bounds`);
+    if (p.x - reach < BX0 || p.x + reach > BX1 || p.y - reach < BY0 || p.y + reach > BY1) {
+      errs.push(`${tag}: obstacle ${i} swept area extends out of play bounds`);
+    }
+    const dCup = Math.hypot(h.cup.c.x - p.x, h.cup.c.y - p.y);
+    const dTee = Math.hypot(h.tee.x - p.x, h.tee.y - p.y);
+    if (dCup <= reach + h.cup.r) errs.push(`${tag}: obstacle ${i} swept area overlaps the cup`);
+    if (dTee <= reach + BALL_R) errs.push(`${tag}: obstacle ${i} swept area overlaps the tee`);
+  } else {
+    const mouths: [string, TunnelObstacle['mouthA']][] = [
+      ['A', ob.mouthA],
+      ['B', ob.mouthB],
+    ];
+    for (const [nm, m] of mouths) {
+      if (!inBounds(m.a.x, m.a.y) || !inBounds(m.b.x, m.b.y)) {
+        errs.push(`${tag}: obstacle ${i} tunnel mouth ${nm} out of play bounds`);
+      }
+      const mx = (m.a.x + m.b.x) / 2;
+      const my = (m.a.y + m.b.y) / 2;
+      if (!onAnyGreen(h.greens, mx, my)) {
+        errs.push(`${tag}: obstacle ${i} tunnel mouth ${nm} not reachable (off the green)`);
+      }
+    }
+  }
   return errs;
 }
 
