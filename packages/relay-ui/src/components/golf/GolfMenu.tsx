@@ -306,7 +306,7 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
           </span>
           <span className="g-mbody">
             <b>Mini-Golf</b>
-            <p>Six top-down holes. Drag back to aim, release to putt.</p>
+            <p>Top-down holes. Drag to aim, release to putt.</p>
           </span>
         </button>
 
@@ -321,7 +321,7 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
           </span>
           <span className="g-mbody">
             <b>Driving Range</b>
-            <p>Real 3D. Carry the water, land the island targets.</p>
+            <p>Real 3D. Carry the water to island pins.</p>
           </span>
         </button>
 
@@ -337,7 +337,7 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
           </span>
           <span className="g-mbody">
             <b>Course</b>
-            <p>Full 3D round with a scorecard, or a single hole.</p>
+            <p>Full 3D round, or a single hole.</p>
           </span>
         </button>
       </div>
