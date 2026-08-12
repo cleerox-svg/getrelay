@@ -60,6 +60,22 @@ const SCENES = {
     drag: true,
     dragFrom: { x: 0.5, y: 0.69 },
   },
+  // Phase-2 obstacle/hazard scenes. Moving obstacles read the sim's simTime, so
+  // `&t=<seconds>` pre-advances the clock to catch a windmill/gate MID-rotation
+  // (not frozen at angle 0); tunnels/hazards are static so they need no phase.
+  // Courses: windmill-links (windmills + gates), pirate-cove (tunnels + water +
+  // sand). Holes are 0-based indices into each course.
+  'putt-windmill': {
+    query: 'scene=putt&course=windmill-links&hole=0&t=0.34',
+    label: 'putt-windmill',
+  },
+  'putt-pendulum': {
+    query: 'scene=putt&course=windmill-links&hole=2&t=0.3',
+    label: 'putt-pendulum',
+  },
+  'putt-tunnel': { query: 'scene=putt&course=pirate-cove&hole=2', label: 'putt-tunnel' },
+  'putt-water': { query: 'scene=putt&course=pirate-cove&hole=1', label: 'putt-water' },
+  'putt-sand': { query: 'scene=putt&course=pirate-cove&hole=0', label: 'putt-sand' },
   // Regression guard for the frustum-cull second-aim bug: the aim arc/reticles
   // were culled on the SECOND rendered aim (stale cached boundingSphere from the
   // tee) and the shot rendered blank. Only reproducible by driving TWO real

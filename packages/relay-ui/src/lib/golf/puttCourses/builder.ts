@@ -10,7 +10,7 @@
 
 import type { Green, Hole, Wall } from '../puttSim';
 import { puttSlopeAccel, type Pt } from '../puttField';
-import { BALL_R, CUP_R, PUTT_GRAVITY, PUTT_STATIC_HOLD } from '../tuning';
+import { BALL_R, CUP_R, MAX_LAUNCH_SPEED, PUTT_GRAVITY, PUTT_STATIC_HOLD } from '../tuning';
 import type {
   Obstacle,
   PendulumObstacle,
@@ -316,6 +316,22 @@ function validateObstacle(h: Hole, ob: Obstacle, i: number, tag: string): string
     const dTee = Math.hypot(h.tee.x - p.x, h.tee.y - p.y);
     if (dCup <= reach + h.cup.r) errs.push(`${tag}: obstacle ${i} swept area overlaps the cup`);
     if (dTee <= reach + BALL_R) errs.push(`${tag}: obstacle ${i} swept area overlaps the tee`);
+    // Bound the blade/arm TIP SPEED below the tunnelling-safe launch ceiling so a
+    // future course can't author an obstacle that sweeps PAST the ball within one
+    // 1/120s substep (a fast blade skipping a wall / passing through the ball).
+    // Windmill tip speed = |omega|·bladeLen; a pendulum's PEAK tip speed is
+    // ampRad·|omega|·length (its max angular velocity ampRad·omega, at the swing
+    // centre, times the arm). The sim also clamps post-hit speed (puttSim), but
+    // rejecting the bad authoring here fails loudly with a clear message.
+    const tipSpeed =
+      ob.kind === 'windmill'
+        ? Math.abs(ob.omega) * ob.bladeLen
+        : ((ob.ampDeg * Math.PI) / 180) * Math.abs(ob.omega) * ob.length;
+    if (tipSpeed > MAX_LAUNCH_SPEED) {
+      errs.push(
+        `${tag}: obstacle ${i} tip speed ${tipSpeed.toFixed(1)} exceeds the tunnelling-safe MAX_LAUNCH_SPEED=${MAX_LAUNCH_SPEED}`,
+      );
+    }
   } else {
     const mouths: [string, TunnelObstacle['mouthA']][] = [
       ['A', ob.mouthA],

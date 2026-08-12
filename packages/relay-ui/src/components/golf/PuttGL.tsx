@@ -2,6 +2,12 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { PuttSim } from '../../lib/golf/puttSim';
 import type { Green, Hole, PuttEvent, Wall } from '../../lib/golf/puttSim';
+import {
+  windmillBladeAngle,
+  pendulumAngle,
+  mouthNormal,
+  type TunnelMouth,
+} from '../../lib/golf/puttObstacles';
 import { puttHeightAt, puttGradientAt } from '../../lib/golf/puttField';
 import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
 import {
@@ -379,8 +385,13 @@ export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
     // and its cool→warm colour scale with the local GRADE, and anything below
     // ~1.3% is skipped — so a flat green shows nothing and a steep break pops.
     {
-      const ARROW_STEP = 11; // virtual units between samples
-      const MIN_GRADE = 0.013; // ~1.3% grade — below this the tilt is negligible
+      // Sparser + lighter than Phase 1 (folds the visual-QA arrow-density nit):
+      // a wider sample grid, a higher draw threshold and lower opacity so a
+      // uniform-grade green shows a READABLE-but-light field instead of a full
+      // edge-to-edge cover that dominates the turf. The physics-derived direction
+      // (downhill = -gradient) and cool→warm grade colour mapping are unchanged.
+      const ARROW_STEP = 17; // virtual units between samples (was 11 — sparser)
+      const MIN_GRADE = 0.02; // ~2% grade — below this we skip (was 1.3%)
       const HOT_GRADE = 0.06; // grade at which the arrow is fully "warm"
       const gcLo = new THREE.Color(0xdaf0ff); // gentle: pale cool
       const gcHi = new THREE.Color(0xffb347); // steep: warm amber (bank-rail hue)
@@ -426,7 +437,7 @@ export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
           new THREE.MeshBasicMaterial({
             vertexColors: true,
             transparent: true,
-            opacity: 0.72,
+            opacity: 0.5,
             depthWrite: false,
             side: THREE.DoubleSide,
           }),
@@ -512,6 +523,130 @@ export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
       group.add(cap);
     };
     for (const wall of hole.walls) addWall(wall);
+
+    // --- Moving obstacles (windmills / swinging gates / portal tunnels) ------
+    // Meshes are built ONCE here; only their transform is updated per frame, and
+    // ALWAYS from the sim's deterministic simTime via the SAME puttObstacles
+    // helpers the physics uses (windmillBladeAngle / pendulumAngle / mouthNormal)
+    // — never a private wall-clock — so what you SEE is exactly what the ball
+    // collides with. No per-frame allocation (transforms only). Blades/arms sweep
+    // in the board plane (horizontal, rotating about world +Y), matching their
+    // physics colliders (segments through the pivot in the flat board), so they
+    // ride just above the ball. A little tower/roof (windmill) or post (pendulum)
+    // adds the classic mini-put read without changing the collider.
+    const spinUpdaters: ((t: number) => void)[] = [];
+    const obstacles = hole.obstacles ?? [];
+    if (obstacles.length) {
+      const BLADE_Y = BALL_R + 1.6; // sweep height — just over the ball
+      const towerMat = track(new THREE.MeshStandardMaterial({ color: 0xf3ede2, roughness: 0.85 }));
+      const roofMat = track(new THREE.MeshStandardMaterial({ color: 0xc0392b, roughness: 0.7 }));
+      const bladeMat = track(new THREE.MeshStandardMaterial({ color: 0xfbfbf7, roughness: 0.55 }));
+      const hubMat = track(new THREE.MeshStandardMaterial({ color: 0xc0392b, roughness: 0.5 }));
+      const armMat = track(new THREE.MeshStandardMaterial({ color: 0xb5732e, roughness: 0.7 }));
+      const holeDiscMat = track(new THREE.MeshBasicMaterial({ color: 0x0b0d12, side: THREE.DoubleSide }));
+      // Barrel-mouth hues, cycled per tunnel so the two mouths of ONE tunnel share
+      // a colour and read as connected ent/exit.
+      const TUNNEL_COLORS = [0x9c6b3f, 0x2e8b6b, 0x8455a8];
+      let tunnelIdx = 0;
+
+      for (const ob of obstacles) {
+        if (ob.kind === 'windmill') {
+          const baseY = heightAtV(ob.pivot.x, ob.pivot.y);
+          // Decorative tower + peaked roof (flavour; the sweeping blades below are
+          // the actual collider).
+          const towerH = BLADE_Y + 7;
+          const towerGeo = track(new THREE.CylinderGeometry(3, 4, towerH, 12));
+          const tower = new THREE.Mesh(towerGeo, towerMat);
+          tower.position.set(wx(ob.pivot.x), baseY + towerH / 2, wz(ob.pivot.y));
+          tower.castShadow = true;
+          tower.receiveShadow = true;
+          scene.add(tower);
+          const roofGeo = track(new THREE.ConeGeometry(4.8, 5, 12));
+          const roof = new THREE.Mesh(roofGeo, roofMat);
+          roof.position.set(wx(ob.pivot.x), baseY + towerH + 2.4, wz(ob.pivot.y));
+          roof.castShadow = true;
+          scene.add(roof);
+          // Sweeping blades at ball height. Each blade i is baked at local yaw
+          // -(i·2π/n) with a box offset +bladeLen/2 along its arm; the group yaw
+          // carries the time-varying phase, so blade i's world bearing equals
+          // windmillBladeAngle(ob, t, i) exactly (board angle = -three yaw).
+          const spin = new THREE.Group();
+          spin.position.set(wx(ob.pivot.x), baseY + BLADE_Y, wz(ob.pivot.y));
+          const hubGeo = track(new THREE.CylinderGeometry(1.6, 1.6, 3, 10));
+          spin.add(new THREE.Mesh(hubGeo, hubMat));
+          const bladeGeo = track(new THREE.BoxGeometry(ob.bladeLen, 1.4, 2.6));
+          for (let i = 0; i < ob.bladeCount; i++) {
+            const bg = new THREE.Group();
+            bg.rotation.y = -(i * 2 * Math.PI) / ob.bladeCount;
+            const box = new THREE.Mesh(bladeGeo, bladeMat);
+            box.position.x = ob.bladeLen / 2;
+            box.castShadow = true;
+            bg.add(box);
+            spin.add(bg);
+          }
+          scene.add(spin);
+          spinUpdaters.push((t) => {
+            spin.rotation.y = -windmillBladeAngle(ob, t, 0);
+          });
+        } else if (ob.kind === 'pendulum') {
+          const baseY = heightAtV(ob.pivot.x, ob.pivot.y);
+          const postH = BLADE_Y + 4;
+          const postGeo = track(new THREE.CylinderGeometry(1.4, 1.8, postH, 10));
+          const post = new THREE.Mesh(postGeo, towerMat);
+          post.position.set(wx(ob.pivot.x), baseY + postH / 2, wz(ob.pivot.y));
+          post.castShadow = true;
+          scene.add(post);
+          const swing = new THREE.Group();
+          swing.position.set(wx(ob.pivot.x), baseY + BLADE_Y, wz(ob.pivot.y));
+          const armGeo = track(new THREE.BoxGeometry(ob.length, 1.8, 2.2));
+          const addArm = (flip: boolean) => {
+            const bg = new THREE.Group();
+            if (flip) bg.rotation.y = Math.PI; // opposed arm for a `gate`
+            const box = new THREE.Mesh(armGeo, armMat);
+            box.position.x = ob.length / 2;
+            box.castShadow = true;
+            bg.add(box);
+            swing.add(bg);
+          };
+          addArm(false);
+          if (ob.gate) addArm(true);
+          scene.add(swing);
+          spinUpdaters.push((t) => {
+            swing.rotation.y = -pendulumAngle(ob, t);
+          });
+        } else {
+          // Tunnel: two barrel-end mouths, coloured the same so they pair up. Each
+          // opening faces its outward normal (mouthNormal), so ent/exit are read
+          // exactly as the sim maps them (crossing INTO one emerges at the other).
+          const color = TUNNEL_COLORS[tunnelIdx % TUNNEL_COLORS.length]!;
+          tunnelIdx++;
+          const ringMat = track(new THREE.MeshStandardMaterial({ color, roughness: 0.7 }));
+          const drawMouth = (m: TunnelMouth) => {
+            const mx = (m.a.x + m.b.x) / 2;
+            const my = (m.a.y + m.b.y) / 2;
+            const half = Math.hypot(m.b.x - m.a.x, m.b.y - m.a.y) / 2;
+            const n = mouthNormal(m);
+            // local +Z → world (n.x, 0, n.y) so the barrel opening faces outward.
+            const yaw = Math.atan2(n.x, n.y);
+            const gy = heightAtV(mx, my);
+            const cy = gy + half; // arch sits on the ground (bottom ≈ ground)
+            const ringGeo = track(new THREE.TorusGeometry(half, 1.2, 10, 22));
+            const ring = new THREE.Mesh(ringGeo, ringMat);
+            ring.position.set(wx(mx), cy, wz(my));
+            ring.rotation.y = yaw;
+            ring.castShadow = true;
+            scene.add(ring);
+            const discGeo = track(new THREE.CircleGeometry(half * 0.92, 22));
+            const disc = new THREE.Mesh(discGeo, holeDiscMat);
+            disc.position.set(wx(mx), cy, wz(my));
+            disc.rotation.y = yaw;
+            scene.add(disc);
+          };
+          drawMouth(ob.mouthA);
+          drawMouth(ob.mouthB);
+        }
+      }
+    }
 
     // --- Cup (recessed at its terrain height) + flag --------------------
     const cupX = wx(hole.cup.c.x);
@@ -767,6 +902,11 @@ export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
         aimLine.visible = false;
         tip.visible = false;
       }
+
+      // Moving obstacles: drive every spinner/swing from the sim's DETERMINISTIC
+      // simTime (never `now`) so the rendered blade/arm angle is byte-for-byte the
+      // one the physics collided against this substep.
+      for (let i = 0; i < spinUpdaters.length; i++) spinUpdaters[i]!(sim.simTime);
 
       // Flag sway + water shimmer.
       const t = now / 1000;
