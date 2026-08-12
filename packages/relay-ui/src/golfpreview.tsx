@@ -108,7 +108,21 @@ function PuttPreview() {
   const idxParam = Number.parseInt(params.get('hole') ?? '', 10);
   const idx = Number.isInteger(idxParam) && idxParam >= 0 && idxParam < course.holes.length ? idxParam : 0;
   const hole = course.holes[idx]!;
-  if (!simRef.current) simRef.current = new PuttSim(hole);
+  if (!simRef.current) {
+    const sim = new PuttSim(hole);
+    // ?t=<seconds> pre-advances the sim's deterministic clock BEFORE the scene
+    // mounts, so a moving obstacle (windmill/gate) is caught MID-rotation, not
+    // frozen at phase 0. The ball is at rest, so substep() only accumulates
+    // simTime (it early-returns after the clock tick) — no physics side effect.
+    // PuttGL's own loop then keeps stepping from here, so the obstacle stays live.
+    const t = Number.parseFloat(params.get('t') ?? '');
+    if (Number.isFinite(t) && t > 0) {
+      const h = FIXED_MS / 1000;
+      const steps = Math.min(100000, Math.round(t / h));
+      for (let i = 0; i < steps; i++) sim.substep(h);
+    }
+    simRef.current = sim;
+  }
   const sim = simRef.current;
   window.__sim = sim; // dev-only: lets the shooter inspect aim state
   return (

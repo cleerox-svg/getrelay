@@ -111,3 +111,26 @@ export function setLastCourseId(id: string): void {
     /* private mode — the highlight just won't persist, which is fine */
   }
 }
+
+// --- Last-played Mini-Golf course (putt picker) ---------------------------
+// Separate key from the full-swing Course picker above so the two never
+// clobber each other. Just the putt-course id string; the picker resolves it
+// via getPuttCourse().
+
+const LAST_PUTT_COURSE_KEY = 'relay.golfLastPuttCourse';
+
+export function getLastPuttCourseId(): string | undefined {
+  try {
+    return localStorage.getItem(LAST_PUTT_COURSE_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function setLastPuttCourseId(id: string): void {
+  try {
+    localStorage.setItem(LAST_PUTT_COURSE_KEY, id);
+  } catch {
+    /* private mode — the highlight just won't persist, which is fine */
+  }
+}

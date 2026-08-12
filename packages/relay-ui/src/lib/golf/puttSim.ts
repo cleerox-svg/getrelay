@@ -319,6 +319,17 @@ export class PuttSim {
           }
         }
       }
+      // Safety guard: a blade/gate contact imparts the segment's surface velocity
+      // (already bounded to BLADE_MAX_SURFACE_SPEED) and a tunnel preserves speed,
+      // so today's authored obstacles stay well under the launch ceiling. This
+      // single clamp GUARANTEES no obstacle interaction can ever leave the ball
+      // faster than MAX_LAUNCH_SPEED — the speed the 1/120s substep is sized to
+      // integrate without tunnelling a wall — bounding any future/edge authoring.
+      // Pure arithmetic → determinism unchanged.
+      const guardSpeed = len(ball.vel);
+      if (guardSpeed > MAX_LAUNCH_SPEED) {
+        ball.vel = scale(ball.vel, MAX_LAUNCH_SPEED / guardSpeed);
+      }
     }
 
     // Wall collisions: depenetrate + reflect (only when moving inward). A

@@ -5,10 +5,14 @@ import {
   getRangeStats,
   getLastCourseId,
   setLastCourseId,
+  getLastPuttCourseId,
+  setLastPuttCourseId,
 } from '../../lib/golf/stats';
 import { CLUBS, DEFAULT_CLUB_ID } from '../../lib/golf/clubs';
 import { GOLF_COURSES, getCourse } from '../../lib/golf/courses';
 import type { GolfCourse } from '../../lib/golf/courses';
+import { PUTT_COURSES } from '../../lib/golf/puttCourses';
+import type { PuttCourse } from '../../lib/golf/puttCourses';
 import { Avatar } from '../Avatar';
 import { NewChallengeSheet } from './NewChallengeSheet';
 import { useStore } from '../../lib/store';
@@ -51,6 +55,16 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
     return last && GOLF_COURSES.some((c) => c.id === last) ? last : GOLF_COURSES[0]!.id;
   });
   const [pickHoleFor, setPickHoleFor] = useState<string | null>(null);
+
+  // Mini-Golf course picker — mirrors the Course-mode picker above but over
+  // PUTT_COURSES, with its OWN expand toggle, highlighted course (seeded from
+  // the persisted last mini course) and single-hole chip target.
+  const [puttExpanded, setPuttExpanded] = useState(false);
+  const [selectedPuttCourseId, setSelectedPuttCourseId] = useState<string>(() => {
+    const last = getLastPuttCourseId();
+    return last && PUTT_COURSES.some((c) => c.id === last) ? last : PUTT_COURSES[0]!.id;
+  });
+  const [pickPuttHoleFor, setPickPuttHoleFor] = useState<string | null>(null);
 
   // Challenge-a-friend flow: pick an opponent from the contact list, then hand
   // off to the shared NewChallengeSheet (course / length / hole + create+send).
@@ -107,6 +121,21 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
   };
 
   const toggleCoursePicker = () => setCourseExpanded((e) => !e);
+
+  // Mini-Golf start handlers — the same encoding contract as Course mode, but
+  // through onStart('putt', …): "<id>" = full round, "<id>#<holeIdx>" = single
+  // hole (0-based). GolfScreen parses it and threads the resolved PuttCourse
+  // into GolfGame. The chosen mini course is persisted for next time.
+  const startPuttRound = (c: PuttCourse) => {
+    setLastPuttCourseId(c.id);
+    onStart('putt', c.id);
+  };
+  const startPuttHole = (c: PuttCourse, idx: number) => {
+    setLastPuttCourseId(c.id);
+    onStart('putt', `${c.id}#${idx}`);
+  };
+
+  const togglePuttPicker = () => setPuttExpanded((e) => !e);
 
   return (
     <div className="flex flex-col gap-4">
@@ -299,14 +328,19 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
         <h3>Ways to play</h3>
       </div>
       <div className="golf-modes">
-        <button type="button" className="golf-mode mini" onClick={() => onStart('putt')}>
+        <button
+          type="button"
+          className="golf-mode mini"
+          aria-expanded={puttExpanded}
+          onClick={togglePuttPicker}
+        >
           <span className="g-cap" aria-hidden="true">
             <span className="g-pin" />
             <span className="g-ball" />
           </span>
           <span className="g-mbody">
             <b>Mini-Golf</b>
-            <p>Top-down holes. Drag to aim, release to putt.</p>
+            <p>Themed short courses. Drag to aim, release to putt.</p>
           </span>
         </button>
 
@@ -341,6 +375,108 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
           </span>
         </button>
       </div>
+
+      {/* ---- Mini-Golf course picker (revealed by the Mini-Golf mode tile) ---- */}
+      {puttExpanded ? (
+        <div
+          className="flex flex-col gap-3 rounded-2xl p-3"
+          style={{ background: 'var(--bubble-them)' }}
+        >
+          <div className="text-[10px] font-bold tracking-wider" style={{ color: 'var(--text-dim)' }}>
+            CHOOSE A MINI-GOLF COURSE
+          </div>
+          <div className="flex flex-col gap-2">
+            {PUTT_COURSES.map((c) => {
+              const active = c.id === selectedPuttCourseId;
+              return (
+                <div key={c.id} className="flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedPuttCourseId(c.id);
+                      setPickPuttHoleFor(null);
+                    }}
+                    className="flex flex-col text-left"
+                    style={{
+                      border: `1px solid ${active ? 'var(--accent)' : 'var(--separator)'}`,
+                      background: 'var(--card-bg)',
+                      borderRadius: 12,
+                      padding: 12,
+                    }}
+                  >
+                    <div className="text-[14px] font-bold" style={{ color: 'var(--text)' }}>
+                      {c.name}
+                    </div>
+                    <div className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
+                      {c.theme}
+                    </div>
+                    <div className="text-[11px] pt-0.5" style={{ color: 'var(--text-dim)' }}>
+                      {c.holes.length} holes · par {c.par}
+                    </div>
+                  </button>
+
+                  {active ? (
+                    <div className="flex flex-col gap-2 pl-1">
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          className="flex-1 rounded-xl py-2.5 text-[14px] font-bold"
+                          style={{ background: 'var(--accent)', color: '#FFFFFF', border: 0 }}
+                          onClick={() => startPuttRound(c)}
+                        >
+                          Full round
+                        </button>
+                        <button
+                          type="button"
+                          className="flex-1 rounded-xl py-2.5 text-[14px] font-bold"
+                          style={{
+                            background: pickPuttHoleFor === c.id ? 'var(--accent)' : 'var(--card-bg)',
+                            color: pickPuttHoleFor === c.id ? '#FFFFFF' : 'var(--text)',
+                            border: '1px solid var(--separator)',
+                          }}
+                          onClick={() =>
+                            setPickPuttHoleFor((p) => (p === c.id ? null : c.id))
+                          }
+                        >
+                          Single hole
+                        </button>
+                      </div>
+
+                      {pickPuttHoleFor === c.id ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {c.holes.map((h, i) => (
+                            <button
+                              key={i}
+                              type="button"
+                              onClick={() => startPuttHole(c, i)}
+                              style={{
+                                border: '1px solid var(--separator)',
+                                background: 'var(--card-bg)',
+                                color: 'var(--text)',
+                                borderRadius: 10,
+                                padding: '5px 9px',
+                                fontSize: 12,
+                                fontWeight: 600,
+                              }}
+                            >
+                              {i + 1}
+                              {h.name ? (
+                                <span style={{ opacity: 0.6 }}> · {h.name}</span>
+                              ) : (
+                                <span style={{ opacity: 0.6 }}> · par {h.par}</span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
 
       {/* ---- Driving-range expansion: starting club + Practice / Challenge ---- */}
       {expanded ? (
