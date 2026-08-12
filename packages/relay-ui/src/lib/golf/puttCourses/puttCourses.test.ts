@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { PUTT_COURSES, getPuttCourse, DEFAULT_PUTT_COURSE_ID } from './index';
 import { validatePuttCourse, validatePuttHole } from './builder';
+import { HOLES } from '../tuning';
 
 describe('mini-golf courses — registry', () => {
   it('exposes the authored courses with the documented ids', () => {
@@ -34,6 +35,14 @@ describe('mini-golf courses — totals + structure', () => {
 
   it('The Back Garden is 8 holes', () => {
     expect(getPuttCourse('garden').holes.length).toBe(8);
+  });
+
+  // Drift guard: tuning.HOLES is a hand-kept literal (it can't import the course
+  // without a tuning↔puttCourses↔builder cycle), so pin it to the DEFAULT course
+  // length here. GolfGame drives off course.holes.length; GolfScreen's "ended
+  // early — n/HOLES" copy uses HOLES — they must agree with the default course.
+  it('tuning.HOLES equals the default mini-golf course length', () => {
+    expect(HOLES).toBe(getPuttCourse(DEFAULT_PUTT_COURSE_ID).holes.length);
   });
 });
 

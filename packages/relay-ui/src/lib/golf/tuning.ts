@@ -16,12 +16,6 @@ import { greenRollDecel } from './greenPhysics';
 // a fast putt integrates finely enough not to tunnel through a wall.
 export const FIXED_MS = 1000 / 120;
 
-// Per-substep exponential green friction. Applied as FRICTION**(h*60)
-// (h in seconds) so the decay is framerate-independent: the ball loses
-// the same fraction of speed per wall-clock second regardless of how
-// many substeps ran.
-export const FRICTION = 0.97;
-
 // Wall bounce energy retention (<1 so a putt always settles).
 export const RESTITUTION = 0.7;
 
@@ -136,8 +130,14 @@ export const CUP_R = 2.8;
 
 // --- Scoring ---
 
-// Number of holes in a round. MUST stay <= 8 (the worker's rounds clamp).
-export const HOLES = 6;
+// Legacy round length for Mini-Golf. The scored round now drives off the
+// actual course's hole count (GolfGame iterates `course.holes.length`), so this
+// constant only backs GolfScreen's "ended early — n/HOLES" copy. It MUST equal
+// the DEFAULT mini-golf course length (puttCourses GARDEN = 8 holes) and stay
+// <= 8 (the worker's rounds clamp). Kept a literal (not an import of GARDEN) to
+// avoid a tuning↔puttCourses↔builder circular import; puttCourses.test.ts
+// asserts GARDEN has exactly HOLES holes so the two can never silently drift.
+export const HOLES = 8;
 
 // Driving-range Target Challenge: balls per round. Doubles as the "rounds"
 // value submitted to the worker, so it MUST stay <= 8 (the rounds clamp);

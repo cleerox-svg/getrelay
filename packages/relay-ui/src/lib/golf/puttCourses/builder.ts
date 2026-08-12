@@ -110,8 +110,20 @@ export function definePuttCourse(
 
 const inBounds = (x: number, y: number): boolean => x >= BX0 && x <= BX1 && y >= BY0 && y <= BY1;
 
+// Point-in-rounded-rect, mirroring how PuttGL draws the green footprint (a
+// rounded-rect with corner radius g.r): inside the axis-aligned rect AND, in the
+// four corner quadrants, within g.r of the corner arc centre. So the validator
+// is exactly as permissive as the rendered/played surface — a cup or tee tucked
+// into a clipped corner is correctly rejected, not waved through by a plain rect
+// test.
 function ptOnGreen(g: Green, x: number, y: number): boolean {
-  return x >= g.x && x <= g.x + g.w && y >= g.y && y <= g.y + g.h;
+  if (x < g.x || x > g.x + g.w || y < g.y || y > g.y + g.h) return false;
+  const r = Math.min(g.r, g.w / 2, g.h / 2);
+  if (r <= 0) return true;
+  // Nearest point of the inset core rect (corner-arc centres live on its border).
+  const cx = x < g.x + r ? g.x + r : x > g.x + g.w - r ? g.x + g.w - r : x;
+  const cy = y < g.y + r ? g.y + r : y > g.y + g.h - r ? g.y + g.h - r : y;
+  return (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r;
 }
 function onAnyGreen(greens: Green[], x: number, y: number): boolean {
   return greens.some((g) => ptOnGreen(g, x, y));

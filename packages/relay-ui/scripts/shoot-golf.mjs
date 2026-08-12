@@ -43,6 +43,23 @@ const SCENES = {
   played: { query: 'scene=course&at=played', label: 'course-played-aim', drag: true },
   celebrate: { query: 'scene=course&at=holed', label: 'course-celebrate' },
   range: { query: 'scene=range&layout=fairway', label: 'range-fairway' },
+  // Mini-golf (PuttGL). Holes are 0-based into the default GARDEN course; each
+  // shows a signature feature so golf-visual-qa can read the displaced slope,
+  // the ramp and a banked rail. `putt-drag` pulls back from the ball to capture
+  // the in-scene dashed aim line + power tip (the only way to render aiming).
+  putt: { query: 'scene=putt&hole=0', label: 'putt-hole1-slope' },
+  'putt-slope': { query: 'scene=putt&hole=6', label: 'putt-sidehill' },
+  'putt-ramp': { query: 'scene=putt&hole=3', label: 'putt-ramp' },
+  'putt-bank': { query: 'scene=putt&hole=1', label: 'putt-bank-rail' },
+  // The mini-golf ball sits higher on screen than the course tee, so start the
+  // pull ON the ball (dragFrom, viewport fractions) — the grab test needs the
+  // pointer-down within the ball's grab radius.
+  'putt-drag': {
+    query: 'scene=putt&hole=0',
+    label: 'putt-aim',
+    drag: true,
+    dragFrom: { x: 0.5, y: 0.69 },
+  },
   // Regression guard for the frustum-cull second-aim bug: the aim arc/reticles
   // were culled on the SECOND rendered aim (stale cached boundingSphere from the
   // tee) and the shot rendered blank. Only reproducible by driving TWO real
@@ -189,7 +206,7 @@ async function main() {
       args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
     });
     for (const id of ids) {
-      const { query, label, drag, sequence } = SCENES[id];
+      const { query, label, drag, sequence, dragFrom } = SCENES[id];
       const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1 });
       const errors = [];
       page.on('pageerror', (e) => errors.push(String(e)));
@@ -207,10 +224,12 @@ async function main() {
           continue;
         }
         if (drag) {
-          // Pull back from near the ball (lower-middle) to load power + aim, and
-          // hold — the aim arc/reticles render only while aiming.
-          const cx = VIEWPORT.width / 2;
-          const y0 = VIEWPORT.height * 0.8;
+          // Pull back from near the ball to load power + aim, and hold — the aim
+          // arc/reticles render only while aiming. Default start is lower-middle
+          // (course tee); a scene may override with dragFrom (viewport fractions,
+          // e.g. mini-golf whose ball sits higher on screen).
+          const cx = (dragFrom?.x ?? 0.5) * VIEWPORT.width;
+          const y0 = (dragFrom?.y ?? 0.8) * VIEWPORT.height;
           await page.mouse.move(cx, y0);
           await page.mouse.down();
           for (let s = 1; s <= 6; s++) await page.mouse.move(cx, y0 - (250 * s) / 6);
