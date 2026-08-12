@@ -282,7 +282,7 @@ export default function RangeGL({
     const waterNear = isFairway ? FAIRWAY_WATER_START : GRASS_END;
     const waterFar = isFairway ? FAIRWAY_WATER_END : WATER_END;
     const WATER_Y = 0.06;
-    // Shared animated water (scenery.makeWater): dual-wave scrolling normal + sun
+    // Shared animated water (scenery.makeWater): multi-wave scrolling normal + sun
     // glint. The Course uses the SAME material on its organic water disc.
     const waterKit = makeWater(track);
     const waterGeo = track(new THREE.PlaneGeometry(150, waterFar - waterNear));

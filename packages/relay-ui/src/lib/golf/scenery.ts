@@ -64,8 +64,12 @@ export const SURFACE_RGB: Record<Surface, [number, number, number]> = {
 export const STRIPE_YD = 7;
 export const STRIPE_HI = 1.16;
 export const STRIPE_LO = 0.82;
-// Half-width (yd) of the fairway↔rough "first cut" feather (a render-only band).
-export const FIRST_CUT = 4;
+// Width (yd) of the distinct intermediate-cut / "first cut" band that sits
+// between the mown fairway and the long-grass rough — a tightly-mown step-cut
+// collar with CRISP lines at both edges (fairway | first cut | rough), NOT a
+// smooth gradient. Kept very narrow (a real step cut is ~a mower-width wide).
+// Render-only: surfaceAt classification is unchanged (see makeSurfaceMap).
+export const FRINGE_BAND = 2.75;
 // Shared turf material tuning so both scenes catch the same sun sheen.
 export const TURF_ROUGHNESS = 0.85;
 export const TURF_NORMAL_SCALE = 0.45;
@@ -407,23 +411,43 @@ export function createTreeKit(scene: THREE.Scene, track: Track): TreeKit {
 // animated normal map below, so this stays soft. Repeat is baked so the caller
 // only supplies geometry (a flat plane on the range, an organic disc on the
 // course — both map UVs the material can tile over).
+
+// Seeded PRNG (mulberry32) so the water mottle is IDENTICAL every load — the old
+// makeWaterTexture used Math.random, which broke the screenshot harness's
+// reproducibility (determinism is a hard requirement, GOLF.md). Fixed seed.
+function waterRng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 function makeWaterTexture(): THREE.Texture {
   const c = document.createElement('canvas');
   c.width = 256;
   c.height = 256;
   const g = c.getContext('2d')!;
+  const rnd = waterRng(0x9a71c3);
+  // Lighter, sky-leaning lake: a bright cyan-blue near the surface fading to a
+  // MEDIUM blue at depth (not near-black) so the pond reads as reflecting the
+  // sky, not a dark navy blob. The dark bottom stop was lifted well up.
   const grad = g.createLinearGradient(0, 0, 0, c.height);
-  grad.addColorStop(0, '#2183c2');
-  grad.addColorStop(1, '#14608f');
+  grad.addColorStop(0, '#7cc0e6');
+  grad.addColorStop(0.55, '#57a4d3');
+  grad.addColorStop(1, '#3f8dc0');
   g.fillStyle = grad;
   g.fillRect(0, 0, c.width, c.height);
-  for (let i = 0; i < 90; i++) {
-    const x = Math.random() * c.width;
-    const y = Math.random() * c.height;
-    const r = 8 + Math.random() * 26;
+  for (let i = 0; i < 110; i++) {
+    const x = rnd() * c.width;
+    const y = rnd() * c.height;
+    const r = 8 + rnd() * 30;
     const rg = g.createRadialGradient(x, y, 0, x, y, r);
-    const light = Math.random() < 0.6;
-    rg.addColorStop(0, light ? 'rgba(180,220,240,0.10)' : 'rgba(10,40,70,0.10)');
+    // Brighter sky-glints, softer shadows — keeps the surface lively but light.
+    const light = rnd() < 0.62;
+    rg.addColorStop(0, light ? 'rgba(214,240,252,0.14)' : 'rgba(38,92,138,0.09)');
     rg.addColorStop(1, 'rgba(0,0,0,0)');
     g.fillStyle = rg;
     g.beginPath();
@@ -437,7 +461,7 @@ function makeWaterTexture(): THREE.Texture {
   return tex;
 }
 
-// Tileable ripple normal map: two crossing wave trains baked into a normal
+// Tileable ripple normal map: four crossing wave trains baked into a normal
 // field. Scrolling its offset each frame makes the water visibly move, and the
 // low roughness on the material turns the moving normals into a shifting sun
 // glint. Frequencies are integer cycles across the tile so it wraps seamlessly.
@@ -450,21 +474,26 @@ function makeWaterNormalMap(): THREE.Texture {
   const img = g.createImageData(S, S);
   const data = img.data;
   const TAU = Math.PI * 2;
+  // Four crossing wave trains — a longer swell plus three shorter wavelets — so
+  // the surface reads as choppier pond water (not faint horizontal lines) once
+  // the offsets scroll. Amplitudes tuned so wavelets show at course camera range.
   const wave = (x: number, y: number) => {
     const u = (x / S) * TAU;
     const v = (y / S) * TAU;
     return (
       Math.sin(u * 3 + v * 1) * 0.5 +
-      Math.sin(u * 1 - v * 4) * 0.35 +
-      Math.sin((u + v) * 5) * 0.2
+      Math.sin(u * 1 - v * 4) * 0.4 +
+      Math.sin((u + v) * 5) * 0.28 +
+      Math.sin((u * 2 - v * 3) + 1.7) * 0.2
     );
   };
   for (let y = 0; y < S; y++) {
     for (let x = 0; x < S; x++) {
       const hx = wave(x + 1, y) - wave(x - 1, y);
       const hy = wave(x, y + 1) - wave(x, y - 1);
-      let nx = -hx * 2.2;
-      let ny = -hy * 2.2;
+      // Steeper slopes → more visible wavelets + a livelier moving sun glint.
+      let nx = -hx * 3.0;
+      let ny = -hy * 3.0;
       let nz = 1;
       const inv = 1 / Math.hypot(nx, ny, nz);
       nx *= inv;
@@ -486,7 +515,7 @@ function makeWaterNormalMap(): THREE.Texture {
 }
 
 export interface WaterKit {
-  /** Shared animated water material (dual-wave scrolling normal + sun glint). */
+  /** Shared animated water material (multi-wave scrolling normal + sun glint). */
   material: THREE.MeshStandardMaterial;
   /** Per-frame hook: scroll the colour + normal offsets. Call with elapsed seconds. */
   update: (t: number) => void;
@@ -506,19 +535,31 @@ export function makeWater(track: Track): WaterKit {
   const material = track(
     new THREE.MeshStandardMaterial({
       map: colorMap,
-      color: 0x2a86c4,
-      roughness: 0.14,
-      metalness: 0.2,
+      // Light sky-blue TINT (was a saturated navy 0x2a86c4 that multiplied the
+      // colour map DOWN into the dark-navy blob the user saw). A near-neutral,
+      // sky-leaning tint keeps the lighter colour map light and lets the
+      // hemisphere sky light tint the surface so it reads as reflecting the sky.
+      color: 0xbfe0f2,
+      // Lower roughness → a tighter, brighter sun glint riding the moving
+      // ripples; metalness 0 keeps the sky-blue diffuse (a metallic surface with
+      // no env map would go dark). The scrolling normal breaks the glint into
+      // lively wavelets. Cheap: no env map / PMREM / post — stays low-end safe.
+      roughness: 0.08,
+      metalness: 0,
       normalMap,
-      normalScale: new THREE.Vector2(0.55, 0.55),
+      normalScale: new THREE.Vector2(0.9, 0.9),
       transparent: true,
-      opacity: 0.9,
+      // A touch more see-through so it reads as a liquid surface, not a painted
+      // lid (the shoreline annulus each scene draws still laps the edge).
+      opacity: 0.82,
     }),
   );
   const update = (t: number) => {
-    colorMap.offset.y = (t * 0.03) % 1;
-    normalMap.offset.x = (t * 0.035) % 1;
-    normalMap.offset.y = (t * 0.06) % 1;
+    // Faster scroll so the surface visibly moves at course camera distance —
+    // small and tasteful (a pond, not an ocean).
+    colorMap.offset.y = (t * 0.04) % 1;
+    normalMap.offset.x = (t * 0.05) % 1;
+    normalMap.offset.y = (t * 0.09) % 1;
   };
   return { material, update };
 }
