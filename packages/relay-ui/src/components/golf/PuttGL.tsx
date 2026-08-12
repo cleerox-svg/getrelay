@@ -552,27 +552,45 @@ export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
       for (const ob of obstacles) {
         if (ob.kind === 'windmill') {
           const baseY = heightAtV(ob.pivot.x, ob.pivot.y);
-          // Decorative tower + peaked roof (flavour; the sweeping blades below are
-          // the actual collider).
-          const towerH = BLADE_Y + 7;
-          const towerGeo = track(new THREE.CylinderGeometry(3, 4, towerH, 12));
-          const tower = new THREE.Mesh(towerGeo, towerMat);
-          tower.position.set(wx(ob.pivot.x), baseY + towerH / 2, wz(ob.pivot.y));
-          tower.castShadow = true;
-          tower.receiveShadow = true;
-          scene.add(tower);
-          const roofGeo = track(new THREE.ConeGeometry(4.8, 5, 12));
+          const px = wx(ob.pivot.x);
+          const pz = wz(ob.pivot.y);
+          // Iconic mill silhouette (flavour; the sweeping blades are the actual
+          // collider). Three stacked pieces STRADDLE the horizontal blade band so
+          // the rotor never clips the tower: a tapered mill HOUSE that stops just
+          // UNDER the blades (houseTop < blade bottom), a slim axle HUB at blade
+          // height (inside the rotor), and a tall peaked red CAP that starts just
+          // ABOVE the blades — a proper little windmill under the sails instead of
+          // the old stub-that-pokes-through-the-blades.
+          //
+          // The sails ride a touch higher than the general BLADE_Y (still "just
+          // over the ball", ball top ≈ BALL_R·2) so a readable house fits beneath
+          // — the blade sweep is purely cosmetic (the collider is a 2-D board
+          // segment; only windmillBladeAngle's yaw is authoritative), so lifting
+          // the mesh doesn't change physics. The lane under the mill stays clear.
+          const millY = BALL_R + 3.4; // ~1 unit over the ball top; house has room
+          const houseTop = millY - 0.9; // stops below the blade box (millY-0.7)
+          const houseGeo = track(new THREE.CylinderGeometry(3.6, 5.2, houseTop, 14));
+          const house = new THREE.Mesh(houseGeo, towerMat);
+          house.position.set(px, baseY + houseTop / 2, pz);
+          house.castShadow = true;
+          house.receiveShadow = true;
+          scene.add(house);
+          const capBase = millY + 0.9; // starts above the blade box (millY+0.7)
+          const capH = 7.5;
+          const roofGeo = track(new THREE.ConeGeometry(4, capH, 14));
           const roof = new THREE.Mesh(roofGeo, roofMat);
-          roof.position.set(wx(ob.pivot.x), baseY + towerH + 2.4, wz(ob.pivot.y));
+          roof.position.set(px, baseY + capBase + capH / 2, pz);
           roof.castShadow = true;
           scene.add(roof);
-          // Sweeping blades at ball height. Each blade i is baked at local yaw
+          // Sweeping blades just over the lane. Each blade i is baked at local yaw
           // -(i·2π/n) with a box offset +bladeLen/2 along its arm; the group yaw
           // carries the time-varying phase, so blade i's world bearing equals
           // windmillBladeAngle(ob, t, i) exactly (board angle = -three yaw).
           const spin = new THREE.Group();
-          spin.position.set(wx(ob.pivot.x), baseY + BLADE_Y, wz(ob.pivot.y));
-          const hubGeo = track(new THREE.CylinderGeometry(1.6, 1.6, 3, 10));
+          spin.position.set(px, baseY + millY, pz);
+          // Slim axle hub bridging the house→cap gap; narrower than either so the
+          // blades read cleanly past it (its inner ends hide inside the hub).
+          const hubGeo = track(new THREE.CylinderGeometry(1.9, 1.9, 2, 12));
           spin.add(new THREE.Mesh(hubGeo, hubMat));
           const bladeGeo = track(new THREE.BoxGeometry(ob.bladeLen, 1.4, 2.6));
           for (let i = 0; i < ob.bladeCount; i++) {
@@ -615,32 +633,52 @@ export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
             swing.rotation.y = -pendulumAngle(ob, t);
           });
         } else {
-          // Tunnel: two barrel-end mouths, coloured the same so they pair up. Each
-          // opening faces its outward normal (mouthNormal), so ent/exit are read
-          // exactly as the sim maps them (crossing INTO one emerges at the other).
+          // Tunnel: each mouth is a short forward-facing BARREL (an open pipe)
+          // whose bore points along mouthNormal — the SAME outward direction the
+          // sim maps the crossing to — so an opening you putt INTO reads clearly
+          // (the old flat torus+disc faced the camera and looked like a ground
+          // PIT). Both mouths of one tunnel share a colour so the pair reads as
+          // one connected ent/exit.
           const color = TUNNEL_COLORS[tunnelIdx % TUNNEL_COLORS.length]!;
           tunnelIdx++;
-          const ringMat = track(new THREE.MeshStandardMaterial({ color, roughness: 0.7 }));
+          const barrelMat = track(
+            new THREE.MeshStandardMaterial({ color, roughness: 0.75, side: THREE.DoubleSide }),
+          );
+          const lipMat = track(new THREE.MeshStandardMaterial({ color, roughness: 0.55 }));
           const drawMouth = (m: TunnelMouth) => {
             const mx = (m.a.x + m.b.x) / 2;
             const my = (m.a.y + m.b.y) / 2;
             const half = Math.hypot(m.b.x - m.a.x, m.b.y - m.a.y) / 2;
             const n = mouthNormal(m);
-            // local +Z → world (n.x, 0, n.y) so the barrel opening faces outward.
-            const yaw = Math.atan2(n.x, n.y);
+            const yaw = Math.atan2(n.x, n.y); // group local +Z → outward normal
             const gy = heightAtV(mx, my);
-            const cy = gy + half; // arch sits on the ground (bottom ≈ ground)
-            const ringGeo = track(new THREE.TorusGeometry(half, 1.2, 10, 22));
-            const ring = new THREE.Mesh(ringGeo, ringMat);
-            ring.position.set(wx(mx), cy, wz(my));
-            ring.rotation.y = yaw;
-            ring.castShadow = true;
-            scene.add(ring);
-            const discGeo = track(new THREE.CircleGeometry(half * 0.92, 22));
-            const disc = new THREE.Mesh(discGeo, holeDiscMat);
-            disc.position.set(wx(mx), cy, wz(my));
-            disc.rotation.y = yaw;
-            scene.add(disc);
+            const depth = Math.max(6, half * 1.6); // pipe length behind the opening
+            // A group carries the yaw so local +Z is the OUTWARD bore direction;
+            // raise it by the bore radius so the barrel sits ON the turf. The body
+            // extends BACK (−Z, into the mound); the rim opens flush at the front.
+            const g = new THREE.Group();
+            g.position.set(wx(mx), gy + half, wz(my));
+            g.rotation.y = yaw;
+            scene.add(g);
+            // Barrel wall — an open cylinder whose axis is the bore (+Y → +Z).
+            const wallGeo = track(new THREE.CylinderGeometry(half, half, depth, 24, 1, true));
+            const wall = new THREE.Mesh(wallGeo, barrelMat);
+            wall.rotation.x = Math.PI / 2;
+            wall.position.z = -depth / 2; // front rim at the mouth, body recedes
+            wall.castShadow = true;
+            wall.receiveShadow = true;
+            g.add(wall);
+            // Front lip ring (torus plane ⟂ bore) so the opening reads as a pipe.
+            const lipGeo = track(new THREE.TorusGeometry(half, Math.max(0.9, half * 0.16), 10, 24));
+            const lip = new THREE.Mesh(lipGeo, lipMat);
+            lip.castShadow = true;
+            g.add(lip);
+            // Dark cap deep in the bore so you look INTO darkness (reads as a hole
+            // to putt into), facing outward toward the opening.
+            const capGeo = track(new THREE.CircleGeometry(half * 0.96, 24));
+            const cap = new THREE.Mesh(capGeo, holeDiscMat);
+            cap.position.z = -depth + 0.2;
+            g.add(cap);
           };
           drawMouth(ob.mouthA);
           drawMouth(ob.mouthB);
