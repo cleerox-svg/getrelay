@@ -10,7 +10,8 @@ import type { RangeGameResult } from './RangeGame';
 import CourseGame from './CourseGame';
 import { api } from '../../lib/api';
 import { getCourse } from '../../lib/golf/courses';
-import { recordGolfGame, recordRangeGame } from '../../lib/golf/stats';
+import { getPuttCourse } from '../../lib/golf/puttCourses';
+import { recordGolfGame, recordRangeGame, setLastPuttCourseId } from '../../lib/golf/stats';
 import { HOLES as GOLF_HOLES, RANGE_BALLS } from '../../lib/golf/tuning';
 import { useStore } from '../../lib/store';
 import { useGameFlow } from '../../lib/games/useGameFlow';
@@ -29,6 +30,11 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
   // holeIdx means play the full round from hole 1.
   const [golfCourseId, setGolfCourseId] = useState<string | undefined>(undefined);
   const [golfHoleIdx, setGolfHoleIdx] = useState<number | undefined>(undefined);
+  // Which Mini-Golf course is loaded and (single-hole play) which hole to start
+  // on. Set from the golf menu's encoded putt arg; undefined holeIdx means play
+  // the full round from hole 1. Mirrors the Course-mode course/hole state above.
+  const [golfPuttCourseId, setGolfPuttCourseId] = useState<string | undefined>(undefined);
+  const [golfPuttHoleIdx, setGolfPuttHoleIdx] = useState<number | undefined>(undefined);
   const [golfResult, setGolfResult] = useState<GolfGameResult | null>(null);
   const [golfRangeResult, setGolfRangeResult] = useState<RangeGameResult | null>(null);
   const [serverBest, setServerBest] = useState<number | null>(null);
@@ -137,6 +143,16 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
       const holeCount = getCourse(courseId || undefined).holes.length;
       const validIdx = Number.isInteger(idx) && idx >= 0 && idx < holeCount;
       setGolfHoleIdx(validIdx ? idx : undefined);
+    } else if (mode === 'putt') {
+      // Same encoding as Course mode, but over the Mini-Golf registry:
+      // "<courseId>" = full round, "<courseId>#<holeIdx>" (0-based) = single hole.
+      const [courseId, holeStr] = (arg ?? '').split('#');
+      const resolved = getPuttCourse(courseId || undefined);
+      setGolfPuttCourseId(resolved.id);
+      setLastPuttCourseId(resolved.id);
+      const idx = holeStr != null && holeStr !== '' ? Number(holeStr) : NaN;
+      const validIdx = Number.isInteger(idx) && idx >= 0 && idx < resolved.holes.length;
+      setGolfPuttHoleIdx(validIdx ? idx : undefined);
     } else {
       setGolfClub(arg);
     }
@@ -172,6 +188,8 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
   if (screen === 'guess') {
     return (
       <GolfGame
+        course={getPuttCourse(golfPuttCourseId)}
+        startHole={golfPuttHoleIdx}
         paused={paused}
         // Same guard-entry contract as GuessGame.
         onResume={() => setPaused(false)}

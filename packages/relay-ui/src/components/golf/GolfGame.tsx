@@ -29,10 +29,12 @@ interface Props {
   paused: boolean;
   onResume: () => void;
   // The mini-golf course to play. Defaults to the registry's default course
-  // (GARDEN, 8 holes). Full course-picker wiring (menu/screen arg threading)
-  // lands in a later slice; a defaulted prop keeps this playable now while the
-  // round already iterates the course's ACTUAL hole count (<= 8).
+  // (GARDEN, 8 holes). Threaded from the menu's course picker via GolfScreen;
+  // the round iterates the course's ACTUAL hole count (<= 8).
   course?: PuttCourse;
+  // Single-hole play: start on (and finish after) this 0-based hole index. When
+  // undefined the full round plays from hole 1. Mirrors CourseGame's startHole.
+  startHole?: number;
 }
 
 type PerHole = GolfGameResult['perHole'];
@@ -89,18 +91,29 @@ function Spinner() {
 // mirroring RangeGame: the scene owns the viewport; the HUD is a display-only
 // top strip with only the End button interactive, so the whole centre stays a
 // clear drag zone over the ball.
-export function GolfGame({ onFinish, paused, onResume, course = getPuttCourse() }: Props) {
+export function GolfGame({
+  onFinish,
+  paused,
+  onResume,
+  course = getPuttCourse(),
+  startHole,
+}: Props) {
   const holeCount = course.holes.length;
+  // Single-hole play: start on (and finish after) startHole; otherwise play the
+  // full round from hole 0. Clamp to a valid index so a stray arg can't crash.
+  const single = startHole != null;
+  const firstHole =
+    single && startHole! >= 0 && startHole! < holeCount ? startHole! : 0;
   const perHoleRef = useRef<PerHole>([]);
   const strokesRef = useRef(0);
-  const holeIdxRef = useRef(0);
+  const holeIdxRef = useRef(firstHole);
   // Single "reported" gate consulted by every way a round can end —
   // natural finish, the End pill, the pause sheet's "End game" and the
   // unmount safety net — so a score is never recorded or submitted twice.
   const reportedRef = useRef(false);
   const advanceTimerRef = useRef<number | null>(null);
 
-  const [holeIdx, setHoleIdx] = useState(0);
+  const [holeIdx, setHoleIdx] = useState(firstHole);
   const [strokes, setStrokes] = useState(0);
   const [score, setScore] = useState(0);
   // True during the post-sink beat: an input-blocking veil covers the
@@ -201,7 +214,9 @@ export function GolfGame({ onFinish, paused, onResume, course = getPuttCourse() 
   // Commit the hole transition: finish the round on the last hole, else tee
   // the next one (a fresh sim + remounted scene).
   function doAdvance(next: number) {
-    if (next >= holeCount) {
+    // Single-hole play finishes after its one hole; a full round finishes once
+    // the last hole is done.
+    if (single || next >= holeCount) {
       finishRef.current();
       return;
     }
@@ -261,6 +276,9 @@ export function GolfGame({ onFinish, paused, onResume, course = getPuttCourse() 
             paused={paused}
             onEvent={(e) => {
               if (e.type === 'stroke') handleStroke();
+              // A water ball resets the shot and costs +1, exactly like a real
+              // penalty stroke; the ensuing replay putt is its own 'stroke'.
+              else if (e.type === 'penalty') handleStroke();
               else if (e.type === 'sink') handleSink();
             }}
           />
@@ -278,10 +296,26 @@ export function GolfGame({ onFinish, paused, onResume, course = getPuttCourse() 
           left: 12,
           right: 12,
           display: 'flex',
-          justifyContent: 'center',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 6,
           pointerEvents: 'none',
         }}
       >
+        {/* Which mini-golf course is in play (name + theme). */}
+        <div
+          className="text-[11px] font-bold"
+          style={{
+            color: 'var(--text)',
+            background: 'var(--card-bg)',
+            border: '1px solid var(--separator)',
+            borderRadius: 999,
+            padding: '3px 12px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.16)',
+          }}
+        >
+          {course.name}
+        </div>
         <div
           style={{
             display: 'flex',
@@ -294,7 +328,7 @@ export function GolfGame({ onFinish, paused, onResume, course = getPuttCourse() 
             boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
           }}
         >
-          {readout('HOLE', `${holeNo}/${holeCount}`)}
+          {readout('HOLE', single ? `${holeNo}` : `${holeNo}/${holeCount}`)}
           {readout('PAR', `${hole?.par ?? '—'}`)}
           {readout('STROKES', `${strokes}`)}
           {readout('PTS', score.toLocaleString())}
