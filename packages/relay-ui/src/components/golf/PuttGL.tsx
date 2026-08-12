@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { PuttSim } from '../../lib/golf/puttSim';
 import type { Green, Hole, PuttEvent, Wall } from '../../lib/golf/puttSim';
-import { puttHeightAt } from '../../lib/golf/puttField';
+import { puttHeightAt, puttGradientAt } from '../../lib/golf/puttField';
 import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
 import {
   addSkyDome,
@@ -181,6 +181,21 @@ export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
     const wz = (vy: number): number => vy - CZ;
     const heightAtV = (vx: number, vy: number): number => puttHeightAt(hole, vx, vy);
 
+    // Largest distance the aim indicator may reach from (vx,vy) along a UNIT
+    // direction (ax,ay) before it leaves the playfield — a ray/box exit against
+    // the play bounds inset by a rail margin. Keeps the full-power aim tip on the
+    // board instead of out over the dark rough surround (cosmetic; the shot power
+    // mapping is untouched — see the aim overlay below).
+    const AIM_MARGIN = 4;
+    const reachToBounds = (vx: number, vy: number, ax: number, ay: number): number => {
+      let t = Infinity;
+      if (ax > 1e-6) t = Math.min(t, (maxX - AIM_MARGIN - vx) / ax);
+      else if (ax < -1e-6) t = Math.min(t, (minX + AIM_MARGIN - vx) / ax);
+      if (ay > 1e-6) t = Math.min(t, (maxY - AIM_MARGIN - vy) / ay);
+      else if (ay < -1e-6) t = Math.min(t, (minY + AIM_MARGIN - vy) / ay);
+      return Math.max(0, t === Infinity ? 0 : t);
+    };
+
     // --- Renderer / scene / camera --------------------------------------
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -257,12 +272,14 @@ export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
       const py = (j: number) => gr.y + (j / nyi) * gr.h;
       let vi = 0;
       let ui = 0;
+      let gMax = -Infinity;
       for (let j = 0; j <= nyi; j++) {
         for (let i = 0; i <= nxi; i++) {
           const vxx = px(i);
           const vyy = py(j);
           const yy = heightAtV(vxx, vyy);
           if (yy < fieldMin) fieldMin = yy;
+          if (yy > gMax) gMax = yy;
           verts[vi] = wx(vxx);
           verts[vi + 1] = yy;
           verts[vi + 2] = wz(vyy);
@@ -271,6 +288,20 @@ export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
           vi += 3;
           ui += 2;
         }
+      }
+      // Contour SHADING (slope-read aid #1): darken the green by how far each
+      // vertex sits BELOW this green's high point — a subtle elevation gradient
+      // that MULTIPLIES the striped turf so a sub-3° tilt the angled camera
+      // otherwise swallows reads as shading, not just silhouette. Keyed straight
+      // to puttHeightAt (the field the sim breaks on), scaled by ABSOLUTE height
+      // delta so a gentle slope shades less than a steep one and a flat green
+      // (delta 0) stays uniform — no clutter. Floor at 0.7 so it never muddies.
+      const shade = new Float32Array((nyi + 1) * cols * 3);
+      for (let k = 0; k < shade.length / 3; k++) {
+        const f = Math.max(0.7, 1 - 0.06 * (gMax - (verts[k * 3 + 1] ?? gMax)));
+        shade[k * 3] = f;
+        shade[k * 3 + 1] = f;
+        shade[k * 3 + 2] = f;
       }
       // Cup aperture: drop the few triangles over the hole so the recessed liner
       // shows (the grid is coarse vs the small cup, so open a touch past the rim).
@@ -303,6 +334,7 @@ export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
       const geo = track(new THREE.BufferGeometry());
       geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
       geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+      geo.setAttribute('color', new THREE.BufferAttribute(shade, 3));
       geo.setIndex(idx);
       geo.computeVertexNormals();
       const col = track(turfColor.clone());
@@ -317,6 +349,7 @@ export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
           normalMap: nrm,
           normalScale: new THREE.Vector2(TURF_NORMAL_SCALE, TURF_NORMAL_SCALE),
           roughness: TURF_ROUGHNESS,
+          vertexColors: true,
         }),
       );
       const mesh = new THREE.Mesh(geo, mat);
@@ -335,6 +368,74 @@ export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
     rough.position.y = Math.min(0, fieldMin) - 2;
     rough.receiveShadow = true;
     scene.add(rough);
+
+    // --- Slope-read aid #2: downhill fall-line arrows -------------------------
+    // Flat triangular chevrons laid on the green, each pointing DOWNHILL — the
+    // direction the ball will break — so a pure 3–5% tilt (a sub-3° macro slope
+    // the striped turf + angled camera swallow) is legible as a directional cue.
+    // Derived straight from the physics field: puttGradientAt() is the local
+    // uphill slope vector, so downhill = -gradient (exactly the sense of
+    // puttSlopeAccel = -g·gradient the sim adds each substep). The arrow LENGTH
+    // and its cool→warm colour scale with the local GRADE, and anything below
+    // ~1.3% is skipped — so a flat green shows nothing and a steep break pops.
+    {
+      const ARROW_STEP = 11; // virtual units between samples
+      const MIN_GRADE = 0.013; // ~1.3% grade — below this the tilt is negligible
+      const HOT_GRADE = 0.06; // grade at which the arrow is fully "warm"
+      const gcLo = new THREE.Color(0xdaf0ff); // gentle: pale cool
+      const gcHi = new THREE.Color(0xffb347); // steep: warm amber (bank-rail hue)
+      const gc = new THREE.Color();
+      const aPos: number[] = [];
+      const aCol: number[] = [];
+      const aIdx: number[] = [];
+      const pushV = (vx: number, vy: number) => {
+        aPos.push(wx(vx), heightAtV(vx, vy) + 0.5, wz(vy));
+      };
+      for (const gr of hole.greens) {
+        for (let vy = gr.y + ARROW_STEP / 2; vy < gr.y + gr.h; vy += ARROW_STEP) {
+          for (let vx = gr.x + ARROW_STEP / 2; vx < gr.x + gr.w; vx += ARROW_STEP) {
+            if (!inRoundRect(gr, vx, vy)) continue;
+            // Keep clear of the cup aperture so an arrow never sits in the hole.
+            if (Math.hypot(vx - hole.cup.c.x, vy - hole.cup.c.y) < hole.cup.r * 2.2) continue;
+            const { gx, gy } = puttGradientAt(hole, vx, vy);
+            const grade = Math.hypot(gx, gy);
+            if (grade < MIN_GRADE) continue;
+            const inv = 1 / grade;
+            const dx = -gx * inv; // downhill unit direction (world XZ == virtual)
+            const dy = -gy * inv;
+            const px = -dy; // in-plane perpendicular (unit)
+            const py = dx;
+            const L = 4 + Math.min(grade, 0.08) * 90; // ~5 (gentle) → ~11 (steep)
+            const W = L * 0.4;
+            const base = aPos.length / 3;
+            pushV(vx + dx * L * 0.6, vy + dy * L * 0.6); // tip (downhill)
+            pushV(vx - dx * L * 0.4 + px * W, vy - dy * L * 0.4 + py * W); // back L
+            pushV(vx - dx * L * 0.4 - px * W, vy - dy * L * 0.4 - py * W); // back R
+            gc.copy(gcLo).lerp(gcHi, Math.min(1, (grade - MIN_GRADE) / (HOT_GRADE - MIN_GRADE)));
+            for (let k = 0; k < 3; k++) aCol.push(gc.r, gc.g, gc.b);
+            aIdx.push(base, base + 1, base + 2);
+          }
+        }
+      }
+      if (aIdx.length) {
+        const aGeo = track(new THREE.BufferGeometry());
+        aGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(aPos), 3));
+        aGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(aCol), 3));
+        aGeo.setIndex(aIdx);
+        const aMat = track(
+          new THREE.MeshBasicMaterial({
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.72,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+          }),
+        );
+        const arrows = new THREE.Mesh(aGeo, aMat);
+        arrows.frustumCulled = false;
+        scene.add(arrows);
+      }
+    }
 
     // --- Hazards (water/sand) — data-only in Phase 1 but drawn for parity ----
     let waterKit: WaterKit | null = null;
@@ -642,7 +743,10 @@ export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
       // Aim overlay while dragging — lifted just above the sloped turf.
       const st = sim.getState();
       if (st.aiming && st.power > 0.001) {
-        const reach = 4 + st.power * 34;
+        // Grows with power, but clamped so the dashed line + red tip stay on the
+        // board (never out past the rail on the rough). Power→shot mapping is in
+        // the sim and is NOT touched by this cosmetic cap.
+        const reach = Math.min(4 + st.power * 34, reachToBounds(b.pos.x, b.pos.y, st.aimX, st.aimY));
         const tvx = b.pos.x + st.aimX * reach;
         const tvy = b.pos.y + st.aimY * reach;
         aimPos[0] = wx(b.pos.x);
