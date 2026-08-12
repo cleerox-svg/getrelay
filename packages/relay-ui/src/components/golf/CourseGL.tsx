@@ -34,7 +34,7 @@ import {
   makeTurfColor,
   makeTurfNormalMap,
   makeWater,
-  FIRST_CUT,
+  FRINGE_BAND,
   GREEN_COLOR,
   STRIPE_HI,
   STRIPE_LO,
@@ -62,12 +62,20 @@ interface Props {
   paused?: boolean;
 }
 
-// Per-lie base albedo, the fairway↔rough first-cut width and the bold mow-stripe
-// scale/contrast now live in the shared scenery kit (SURFACE_RGB / FIRST_CUT /
+// Per-lie base albedo, the intermediate-cut band width and the bold mow-stripe
+// scale/contrast now live in the shared scenery kit (SURFACE_RGB / FRINGE_BAND /
 // STRIPE_YD / STRIPE_HI / STRIPE_LO) so the Range and Course cut the SAME grass;
 // makeSurfaceMap below consumes them. Fairway and rough stay far apart in
 // hue+value (rough darker, more olive) so the corridor edge reads as a hard
 // material change; green/fringe/tee/bunker/water are refined by overlay meshes.
+
+// Smoothstep in [0,1] between edges e0..e1 — used to anti-alias JUST the 1-texel
+// seam at each crisp surface-map boundary (a clean line, not a wide gradient).
+function smoothstep(e0: number, e1: number, x: number): number {
+  let t = (x - e0) / (e1 - e0);
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  return t * t * (3 - 2 * t);
+}
 
 // Cheap deterministic hash noise in [0,1) for the baked surface texture.
 function hashNoise(ix: number, iy: number): number {
@@ -138,13 +146,34 @@ function makeSurfaceMap(
   const g = c.getContext('2d')!;
   const img = g.createImageData(W, H);
   const data = img.data;
-  // STRIPE_YD (mow band period downrange) + FIRST_CUT (half-width of the
-  // fairway↔rough transition feather) are shared from scenery.ts so both scenes
-  // cut the same stripes / first cut; the feather straddles the corridor edge so
-  // the seam reads as intermediate-height grass (render-only; surfaceAt is
-  // unchanged), and it scales to any hole via corridorEdgeDist.
+  // STRIPE_YD (mow band period downrange) + FRINGE_BAND (width of the distinct
+  // intermediate cut) are shared from scenery.ts so both scenes cut the same
+  // stripes; the intermediate cut is a NARROW, CRISP band keyed off
+  // corridorEdgeDist — fairway | first cut | rough with clean lines, not a
+  // gradient (render-only; surfaceAt classification is unchanged), and it scales
+  // to any hole via corridorEdgeDist.
   const FAIR = SURFACE_RGB.fairway;
   const ROUGH = SURFACE_RGB.rough;
+  // Intermediate-cut ("first cut" / step cut) albedo: an EXPLICIT, UNIFORM mid-
+  // emerald — NOT a fairway↔rough blend (that read invisible against the fairway's
+  // own dark mow stripe). It's a cleaner, bluer green than the yellow-green
+  // fairway and clearly lighter/greener than the dark-olive rough, so the eye
+  // separates the collar from BOTH neighbours; its dead-uniform tone (no stripes,
+  // no long-grass streak) reads as a tightly-mown step cut. Tuned against the
+  // course screenshots. NOTE: render-only — surfaceAt classification is unchanged.
+  const CUT: readonly [number, number, number] = [0.23, 0.51, 0.26];
+  // Anti-alias half-width (yd) applied ONLY at the two colour seams so the lines
+  // read clean, not jaggy — roughly one surface-map texel (the hole spans ~120 yd
+  // across 512 texels ≈ 0.24 yd/texel), far narrower than FRINGE_BAND so the band
+  // itself stays a hard-edged strip, never a wide gradient.
+  const SEAM_AA = 0.18;
+  // A darker "mow line" pinstripe painted EXACTLY on each edge (fairway|cut and
+  // cut|rough) — the definite collar line a real course cuts. It survives the turf
+  // normal + oblique camera that washed out a pure colour step: LINE_HALF is the
+  // pinstripe half-width (yd) and LINE_DARK how far it darkens the albedo at the
+  // seam. Kept thin so the two lines frame the uniform band, not swamp it.
+  const LINE_HALF = 0.4;
+  const LINE_DARK = 0.42;
   const fair: [number, number, number] = [0, 0, 0];
   const rgh: [number, number, number] = [0, 0, 0];
   // Fairway albedo at (x,d): bold alternating mow stripes + a whisper of blade
@@ -188,19 +217,45 @@ function makeSurfaceMap(
       let gg: number;
       let b: number;
       if (surf === 'fairway' || surf === 'rough') {
-        // Band the mow stripes on centerline arc-length so they follow the
-        // corridor direction (and wrap a dogleg) instead of cutting across it.
+        // Three CRISP regions keyed off corridorEdgeDist (ed<0 inside the
+        // fairway, 0 on the mown edge, >0 in the rough):
+        //   ed < 0                    → fairway (mow stripes)
+        //   0 ≤ ed < FRINGE_BAND      → intermediate cut (uniform, no stripes)
+        //   ed ≥ FRINGE_BAND          → rough (long-grass streaks)
+        // Each boundary is a hard step anti-aliased across only ±SEAM_AA so the
+        // fairway|first-cut and first-cut|rough lines read clean, NOT a gradient.
+        // Render-only — surfaceAt still classifies fairway/rough here, so the lie
+        // the ball plays across this band is unchanged.
+        const ed = corridorEdgeDist(hole, d, x);
         fairwayRGB(x, d, centerlineArcYd(hole, d, x), fair);
         roughRGB(x, d, ROUGH, rgh);
-        // First cut: smoothstep-blend fairway→rough across ±FIRST_CUT of the
-        // corridor edge (ed<0 inside the fairway, >0 in the rough).
-        const ed = corridorEdgeDist(hole, d, x);
-        let t = (ed + FIRST_CUT) / (2 * FIRST_CUT);
-        t = t < 0 ? 0 : t > 1 ? 1 : t;
-        const s = t * t * (3 - 2 * t);
-        r = fair[0] + (rgh[0] - fair[0]) * s;
-        gg = fair[1] + (rgh[1] - fair[1]) * s;
-        b = fair[2] + (rgh[2] - fair[2]) * s;
+        // Only a WHISPER of blade speckle — the cut must stay near dead-uniform so
+        // it reads as manicured (a strong speckle would blur into the neighbours).
+        const blade = 0.98 + hashNoise(x * 3.1, d * 3.1) * 0.04;
+        const cutR = CUT[0] * blade;
+        const cutG = CUT[1] * blade;
+        const cutB = CUT[2] * blade;
+        // wLo: 0 in fairway → 1 in the first cut (seam at ed=0).
+        // wHi: 0 in the first cut → 1 in the rough (seam at ed=FRINGE_BAND).
+        const wLo = smoothstep(-SEAM_AA, SEAM_AA, ed);
+        const wHi = smoothstep(FRINGE_BAND - SEAM_AA, FRINGE_BAND + SEAM_AA, ed);
+        // fairway → first cut → rough (the two seams never overlap: SEAM_AA ≪
+        // FRINGE_BAND), so each transition is a clean line.
+        const fcR = fair[0] + (cutR - fair[0]) * wLo;
+        const fcG = fair[1] + (cutG - fair[1]) * wLo;
+        const fcB = fair[2] + (cutB - fair[2]) * wLo;
+        let rr = fcR + (rgh[0] - fcR) * wHi;
+        let gr = fcG + (rgh[1] - fcG) * wHi;
+        let br = fcB + (rgh[2] - fcB) * wHi;
+        // Dark mow-line pinstripe on each seam: darken within LINE_HALF of ed=0 or
+        // ed=FRINGE_BAND, full at the seam and fading out (anti-aliased outer edge)
+        // so the eye catches a definite collar line even through the turf normal at
+        // the grazing course camera. This is what makes the band actually READ.
+        const nearSeam = Math.min(Math.abs(ed), Math.abs(ed - FRINGE_BAND));
+        const line = 1 - LINE_DARK * (1 - smoothstep(LINE_HALF - SEAM_AA, LINE_HALF, nearSeam));
+        r = rr * line;
+        gg = gr * line;
+        b = br * line;
       } else if (surf === 'ob') {
         roughRGB(x, d, SURFACE_RGB.ob, rgh);
         r = rgh[0];
@@ -829,7 +884,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     // classifies — no more circle-vs-organic mismatch. Radial UV for the disc
     // textures. Ground-height (heightAt) sampled per vertex so a bunker cap sits
     // ON the basin bowl; water is a flat surface at its rim height.
-    // Shared animated water material (scenery.makeWater) — the SAME dual-wave
+    // Shared animated water material (scenery.makeWater) — the SAME multi-wave
     // scrolling normal + sun glint the Range uses, replacing the old static teal
     // disc. Created lazily on the first water hazard and shared across all of a
     // hole's water meshes (one material, one per-frame update). The geometry
@@ -1941,7 +1996,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       ballShadowMat.opacity = 0.9 * Math.max(0.12, 1 - alt / 8);
 
       // Water shimmer: shared per-frame hook scrolls the colour + ripple normal
-      // maps (dual-wave + sun glint), matching the range.
+      // maps (multi-wave + sun glint), matching the range.
       if (waterKit) waterKit.update(now / 1000);
 
       // Sim state (used for the tracer gate below and the aim-hide logic).

@@ -121,7 +121,7 @@ A data-driven **Range layout** picker (persisted, default `fairway`):
 | Course terrain data + "HOW TO AUTHOR A HOLE" contract (`heightAt`/`gradientAt`/`surfaceAt`; `TEE_R`/`corridorHalfAt`/`greenPadRadius`; organic edges `edgeNoise`/`edgeRadius`/`featureSeed` + `EDGE_WOBBLE`/`maxGreenPadRadius`; render-only `corridorEdgeDist` first-cut helper) | `packages/relay-ui/src/lib/golf/terrain.ts`, `courseData.ts` |
 | Course sim (terrain-aware; `snapshot`/`restore`/`predict`; putt power/speed; records) | `packages/relay-ui/src/lib/golf/courseSim.ts` |
 | Green + putting physics (Stimp → μ, roll-out, elliptic cup capture, BALL_R/CUP_R scale) | `packages/relay-ui/src/lib/golf/greenPhysics.ts` |
-| Course 3D scene (Three.js) — baked surface map, aim-holing pulse; `buildOrganicDisc`/`buildOrganicAnnulus` draw the green cap, fringe collar, bunkers and terrain-following water from the model's `edgeRadius`+`featureSeed`; long-grass rough, `corridorEdgeDist` first-cut albedo blend, textured tee (`makeTeeTurf`); all textures seeded (`mulberry32`) | `packages/relay-ui/src/components/golf/CourseGL.tsx` |
+| Course 3D scene (Three.js) — baked surface map, aim-holing pulse; `buildOrganicDisc`/`buildOrganicAnnulus` draw the green cap, fringe collar, bunkers and terrain-following water from the model's `edgeRadius`+`featureSeed`; long-grass rough, a crisp `corridorEdgeDist` first-cut band (uniform mown collar framed by dark mow lines), textured tee (`makeTeeTurf`); all textures seeded (`mulberry32`) | `packages/relay-ui/src/components/golf/CourseGL.tsx` |
 | Course HUD + records recap | `packages/relay-ui/src/components/golf/CourseGame.tsx` |
 | Putting sim / scene / round | `src/lib/golf/puttSim.ts`, `components/golf/PuttGL.tsx`, `GolfGame.tsx` |
 | Ball material (dimple normal map) | `packages/relay-ui/src/lib/golf/ballTexture.ts` |
@@ -370,8 +370,9 @@ Gameplay clean first, then the look, then the course — each step reuses the la
      that covers its full footprint — fixing a dark-crescent/faceted-seam bug where
      a flat water plane let the higher downrange basin rim poke through. Rough is
      retextured to read as long grass (stretched/warped streak noise); a smooth
-     "first cut" fairway↔rough albedo blend spans ±4 yd via the new read-only
-     `corridorEdgeDist` helper (render-only — physics classification is UNCHANGED);
+     "first cut" is a crisp, narrow fairway↔rough band (a uniform mown collar
+     framed by dark mow lines at each seam) via the read-only `corridorEdgeDist`
+     helper (render-only — physics classification is UNCHANGED);
      the tee box is textured (`makeTeeTurf`). All scene textures are seeded
      (`mulberry32`, no `Math.random`) for deterministic screenshots.
    • **Terminology:** the fairway↔rough intermediate is the "first cut"; the
