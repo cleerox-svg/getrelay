@@ -8,6 +8,8 @@
 // produce more, the server would silently clip it and the local "best"
 // would disagree with the leaderboard.
 
+import { greenRollDecel } from './greenPhysics';
+
 // --- Physics (all in the 100x125 virtual coordinate space) ---
 
 // Fixed-timestep cadence: the simulation advances in 1/120s substeps so
@@ -23,19 +25,81 @@ export const FRICTION = 0.97;
 // Wall bounce energy retention (<1 so a putt always settles).
 export const RESTITUTION = 0.7;
 
-// Below this speed (virtual units/sec) the ball is snapped to rest.
-export const REST_EPS = 1.5;
+// --- Banked rails ----------------------------------------------------------
+// A banked wall (Wall.bank) is a lively rail that keeps a ball moving ALONG it
+// rather than caroming off at the mirror angle. On contact it reflects the
+// inward velocity with a HIGHER restitution than a plain wall, then STEERS the
+// post-bounce velocity a fraction toward the rail's tangent (the direction the
+// ball is already travelling along the wall). The steer is a deterministic
+// slerp-by-blend of unit vectors, speed preserved — so the ball hugs and runs
+// the rail. BANK_STEER 0 = plain reflection; 1 = fully redirected along the rail.
+export const BANK_RESTITUTION = 0.88;
+export const BANK_STEER = 0.4;
 
-// A ball crossing the cup slower than this drops in; faster lips out.
-export const CAPTURE_SPEED = 60;
+// Below this speed (virtual units/sec) the ball is a candidate for rest — it is
+// only actually snapped to rest if the local slope is also shallow enough for
+// static friction to HOLD it (see PUTT_STATIC_HOLD). A dying putt rolls its
+// last inch before this trips.
+export const REST_EPS = 3.5;
 
 // Sideways/inward nudge felt over the cup rim on a lip-out, so a
 // too-fast ball visibly curls instead of rolling dead straight over it.
 export const LIP_KICK = 40;
 
 // Launch speed at full pull (virtual units/sec). Tuned so a full-power
-// putt can just cross the long axis of the board and overshoot.
+// putt can just cross the long axis of the board (tee→cup ≈ 80 units) and
+// overshoot: flat roll-out d = v²/(2·PUTT_DECEL) ≈ 240²/(2·192) ≈ 150 units.
 export const MAX_LAUNCH_SPEED = 240;
+
+// --- Mini-golf slope physics (the "real mini-put" engine) ------------------
+// The putting board is the 100x125 virtual space with CUP_R=2.8 (below). These
+// mirror the way the Course green is calibrated (greenPhysics.ts) but at
+// MINI-GOLF SCALE — the Course constants are yard-space (CUP_R=0.5, GRAVITY=16)
+// and must NOT be reused directly (~8× scale difference). greenPhysics's
+// FUNCTIONS are reused, its CONSTANTS are not.
+//
+// PUTT_GRAVITY is the sim's slope-gravity scale. It is not 9.8 (nor the
+// yard-space 16) — it is chosen together with PUTT_STIMP so the Coulomb roll
+// decel lands the full-power roll-out (~150 units) and gives a satisfyingly
+// strong break at mini-golf scale. Only two ratios actually drive feel, and
+// PUTT_GRAVITY cancels from BOTH:
+//   • break strength  = slopeAccel/decel = grade/μ   (independent of gravity);
+//   • max holdable grade = μ·STATIC_HOLD_FACTOR      (independent of gravity).
+// So PUTT_STIMP (→ μ) sets how hard a given grade breaks a putt and how steep a
+// slope can still hold a rest; PUTT_GRAVITY only sets the absolute time-scale of
+// the slope term against the launch speed / decel (i.e. the roll-out distance).
+export const PUTT_GRAVITY = 3150;
+
+// Green speed (Stimpmeter). μ = 0.611/stimp ≈ 0.0611 at 10 → a resting putt can
+// only hold where grade ≲ μ·STATIC_HOLD_FACTOR ≈ 7.9%. Mini-golf carpet is
+// quick, so 10 gives a lively break while still letting mild slopes settle.
+export const PUTT_STIMP = 10;
+
+// Coulomb constant roll deceleration (virtual units/s²), derived — NOT guessed —
+// from the shared Stimpmeter model: a = gravity·μ = greenRollDecel(g, stimp).
+// The ball's speed drops by PUTT_DECEL·h each substep (clamped at 0), so a
+// slower ball breaks MORE (constant decel while the slope-accel bends a shrinking
+// velocity) — the "a dying putt breaks hardest" behaviour, emergent, unscripted.
+export const PUTT_DECEL = greenRollDecel(PUTT_GRAVITY, PUTT_STIMP);
+
+// STATIC friction exceeds kinetic (a stopped ball resists starting more than a
+// moving one resists continuing). A ball rolls to rest at the kinetic-repose
+// contour, then static friction HOLDS it — so it does NOT creep forever down a
+// legit slope. The rest gate holds where |slopeAccel| ≤ PUTT_STATIC_HOLD; a
+// steeper bank keeps the ball rolling. ~1.3 is a typical grass static/kinetic
+// ratio (mirrors courseSim's STATIC_HOLD_FACTOR).
+export const STATIC_HOLD_FACTOR = 1.3;
+export const PUTT_STATIC_HOLD = PUTT_DECEL * STATIC_HOLD_FACTOR;
+
+// Cup capture (mini scale). A ball crossing the cup holes only if it is BOTH
+// slow enough AND within an effective radius that shrinks with speed — the
+// shared greenPhysics.cupCaptured() elliptic falloff. That helper's speed
+// threshold is yard-space (1.6 yd/s), so the sim rescales the mini speed by
+// CUP_CAPTURE_SPEED/PUTT_CAPTURE_SPEED before calling it: a putt at exactly
+// PUTT_CAPTURE_SPEED maps to the helper's limit (lips out), and anything slower
+// is captured within the elliptic radius. ~90 units/s ≈ a putt that would
+// overrun the cup by ~21 units still drops (forgiving but not a magnet).
+export const PUTT_CAPTURE_SPEED = 90;
 
 // Aim drag geometry, in CSS pixels of finger travel.
 export const MAX_PULL = 170;
