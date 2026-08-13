@@ -896,7 +896,11 @@ html.beta .composer-capsule {
 .golf-play:active {
   transform: translateY(0);
 }
-.golf-play .g-sheen {
+/* Shared animated sheen — the hero CTA and every sub-menu Fairway CTA reuse it
+   (one set of golfSheen keyframes, never duplicated). */
+.golf-play .g-sheen,
+.golf-cta .g-sheen,
+.challenge-confirm .g-sheen {
   position: absolute;
   top: 0;
   left: -60%;
@@ -936,6 +940,90 @@ html.beta .composer-capsule {
 .golf-change[aria-expanded='true'] {
   border-color: var(--golf-accent);
   color: var(--golf-accent);
+}
+
+/* ---- Fairway treatment for the sub-menus (course/mini/range pickers) ----
+   Green surfaces that echo the hero's .golf-play, reusing the golf-green tokens
+   already in scope on .golf-hub. Layout (padding/radius/flex/font) stays on the
+   inline/Tailwind classes at the call site; only COLOUR lives here. */
+
+/* Selectable course card — selected row gets the Fairway lift + accent bar. */
+.golf-course {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--separator);
+  background: var(--card-bg);
+  transition: border-color 0.18s, background 0.18s, box-shadow 0.18s;
+}
+.golf-course.is-active {
+  border: 1px solid color-mix(in srgb, var(--golf-accent) 60%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--golf-accent) 15%, var(--card-bg)),
+    var(--card-bg)
+  );
+  box-shadow: 0 12px 30px -18px rgba(47, 164, 87, 0.7);
+}
+.golf-course.is-active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(180deg, var(--golf-accent-2), var(--golf-accent));
+}
+
+/* Primary CTA (Full round / Target Challenge) — green fill + glow + sheen,
+   mirroring .golf-play. Radius/padding/font come from the call-site classes. */
+.golf-cta {
+  position: relative;
+  overflow: hidden;
+  border: 0;
+  cursor: pointer;
+  background: linear-gradient(180deg, var(--golf-accent-2), var(--golf-accent));
+  color: #fff;
+  box-shadow: 0 10px 22px -12px rgba(47, 164, 87, 0.65);
+  transition: transform 0.12s, box-shadow 0.18s;
+}
+.golf-cta:hover {
+  transform: translateY(-1px);
+}
+.golf-cta:active {
+  transform: translateY(0);
+}
+
+/* Secondary / armed toggle (Single hole) — neutral until armed, then a tinted
+   green outline. */
+.golf-toggle {
+  border: 1px solid var(--separator);
+  background: var(--card-bg);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.18s, color 0.18s, border-color 0.18s;
+}
+.golf-toggle.is-armed {
+  background: color-mix(in srgb, var(--golf-accent) 10%, var(--card-bg));
+  border-color: color-mix(in srgb, var(--golf-accent) 45%, transparent);
+  color: var(--golf-accent-2);
+}
+
+/* Selectable pill chips (hole numbers, starting clubs) — active = green fill. */
+.golf-chip {
+  border: 1px solid var(--separator);
+  background: var(--card-bg);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 5px 11px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.18s, color 0.18s, border-color 0.18s;
+}
+.golf-chip.is-on {
+  background: linear-gradient(180deg, var(--golf-accent-2), var(--golf-accent));
+  color: #fff;
+  border-color: transparent;
 }
 
 /* ---- stat strip (Play tab) ---- */
@@ -1335,11 +1423,17 @@ html.beta .composer-capsule {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .golf-play .g-sheen {
+  .golf-play .g-sheen,
+  .golf-cta .g-sheen,
+  .challenge-confirm .g-sheen {
     animation: none;
   }
   .golf-mode,
-  .golf-play {
+  .golf-play,
+  .golf-course,
+  .golf-cta,
+  .golf-toggle,
+  .golf-chip {
     transition: none;
   }
 }
@@ -1545,6 +1639,11 @@ html.beta .composer-capsule {
   animation: cc-fade 0.16s ease-out;
 }
 .challenge-picker-sheet {
+  /* This sheet also opens from the chat composer (NewChallengeSheet), which is
+     NOT under .golf-hub, so declare the golf-green tokens locally — same fixed
+     hex as .golf-hub — so the green chips/CTA resolve from either entry point. */
+  --golf-accent: #2fa457;
+  --golf-accent-2: #34c759;
   width: 100%;
   max-width: 520px;
   max-height: 70vh;
@@ -1600,7 +1699,7 @@ html.beta .composer-capsule {
 .challenge-len-chip {
   flex: 1;
   padding: 8px 10px;
-  border-radius: 12px;
+  border-radius: 999px;
   border: 1px solid var(--separator);
   background: var(--card-bg);
   color: var(--text);
@@ -1613,9 +1712,9 @@ html.beta .composer-capsule {
     border-color 0.15s;
 }
 .challenge-len-chip.is-on {
-  background: var(--accent);
+  background: linear-gradient(180deg, var(--golf-accent-2), var(--golf-accent));
   color: #ffffff;
-  border-color: var(--accent);
+  border-color: transparent;
 }
 .challenge-len-chip:disabled {
   opacity: 0.6;
@@ -1632,8 +1731,8 @@ html.beta .composer-capsule {
   border: 1px solid var(--separator);
   background: var(--card-bg);
   color: var(--text);
-  border-radius: 10px;
-  padding: 5px 9px;
+  border-radius: 999px;
+  padding: 5px 11px;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
@@ -1643,9 +1742,9 @@ html.beta .composer-capsule {
     border-color 0.15s;
 }
 .challenge-hole-chip.is-on {
-  background: var(--accent);
+  background: linear-gradient(180deg, var(--golf-accent-2), var(--golf-accent));
   color: #ffffff;
-  border-color: var(--accent);
+  border-color: transparent;
 }
 .challenge-hole-chip:disabled {
   opacity: 0.6;
@@ -1676,9 +1775,9 @@ html.beta .composer-capsule {
     border-color 0.15s;
 }
 .challenge-course-chip.is-on {
-  background: var(--accent);
+  background: linear-gradient(180deg, var(--golf-accent-2), var(--golf-accent));
   color: #ffffff;
-  border-color: var(--accent);
+  border-color: transparent;
 }
 .challenge-course-chip:disabled {
   opacity: 0.6;
@@ -1686,17 +1785,20 @@ html.beta .composer-capsule {
 }
 /* Confirm button on the shared challenge sheet. */
 .challenge-confirm {
+  position: relative;
+  overflow: hidden;
   margin-top: 4px;
   width: 100%;
   padding: 12px 14px;
   border: 0;
   border-radius: 14px;
-  background: var(--accent);
+  background: linear-gradient(180deg, var(--golf-accent-2), var(--golf-accent));
   color: #ffffff;
   font-size: 15px;
   font-weight: 700;
   cursor: pointer;
-  transition: opacity 0.15s;
+  box-shadow: 0 10px 22px -12px rgba(47, 164, 87, 0.65);
+  transition: opacity 0.15s, box-shadow 0.18s;
 }
 .challenge-confirm:disabled {
   opacity: 0.6;
@@ -1726,7 +1828,7 @@ html.beta .composer-capsule {
   background: var(--bubble-them);
 }
 .challenge-picker-row:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--golf-accent);
   outline-offset: -2px;
 }
 .challenge-picker-row:disabled {

@@ -187,6 +187,7 @@ export function NewChallengeSheet({
           disabled={creating}
           onClick={create}
         >
+          <span className="g-sheen" aria-hidden="true" />
           {creating ? 'Sending…' : 'Send challenge'}
         </button>
       </div>
