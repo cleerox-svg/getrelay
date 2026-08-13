@@ -220,13 +220,8 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
                       setSelectedCourseId(c.id);
                       setPickHoleFor(null);
                     }}
-                    className="flex flex-col text-left"
-                    style={{
-                      border: `1px solid ${active ? 'var(--accent)' : 'var(--separator)'}`,
-                      background: 'var(--card-bg)',
-                      borderRadius: 12,
-                      padding: 12,
-                    }}
+                    className={`golf-course flex flex-col text-left${active ? ' is-active' : ''}`}
+                    style={{ borderRadius: 12, padding: 12 }}
                   >
                     <div className="text-[14px] font-bold" style={{ color: 'var(--text)' }}>
                       {c.name}
@@ -246,20 +241,17 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
                       <div className="flex gap-2">
                         <button
                           type="button"
-                          className="flex-1 rounded-xl py-2.5 text-[14px] font-bold"
-                          style={{ background: 'var(--accent)', color: '#FFFFFF', border: 0 }}
+                          className="golf-cta flex-1 rounded-xl py-2.5 text-[14px] font-bold"
                           onClick={() => startFullRound(c)}
                         >
+                          <span className="g-sheen" aria-hidden="true" />
                           Full round
                         </button>
                         <button
                           type="button"
-                          className="flex-1 rounded-xl py-2.5 text-[14px] font-bold"
-                          style={{
-                            background: pickHoleFor === c.id ? 'var(--accent)' : 'var(--card-bg)',
-                            color: pickHoleFor === c.id ? '#FFFFFF' : 'var(--text)',
-                            border: '1px solid var(--separator)',
-                          }}
+                          className={`golf-toggle flex-1 rounded-xl py-2.5 text-[14px] font-bold${
+                            pickHoleFor === c.id ? ' is-armed' : ''
+                          }`}
                           onClick={() => setPickHoleFor((p) => (p === c.id ? null : c.id))}
                         >
                           Single hole
@@ -272,16 +264,8 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
                             <button
                               key={h.id}
                               type="button"
+                              className="golf-chip"
                               onClick={() => startSingleHole(c, i)}
-                              style={{
-                                border: '1px solid var(--separator)',
-                                background: 'var(--card-bg)',
-                                color: 'var(--text)',
-                                borderRadius: 10,
-                                padding: '5px 9px',
-                                fontSize: 12,
-                                fontWeight: 600,
-                              }}
                             >
                               {h.id}
                               {h.name ? <span style={{ opacity: 0.6 }}> · {h.name}</span> : null}
@@ -396,13 +380,8 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
                       setSelectedPuttCourseId(c.id);
                       setPickPuttHoleFor(null);
                     }}
-                    className="flex flex-col text-left"
-                    style={{
-                      border: `1px solid ${active ? 'var(--accent)' : 'var(--separator)'}`,
-                      background: 'var(--card-bg)',
-                      borderRadius: 12,
-                      padding: 12,
-                    }}
+                    className={`golf-course flex flex-col text-left${active ? ' is-active' : ''}`}
+                    style={{ borderRadius: 12, padding: 12 }}
                   >
                     <div className="text-[14px] font-bold" style={{ color: 'var(--text)' }}>
                       {c.name}
@@ -420,20 +399,17 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
                       <div className="flex gap-2">
                         <button
                           type="button"
-                          className="flex-1 rounded-xl py-2.5 text-[14px] font-bold"
-                          style={{ background: 'var(--accent)', color: '#FFFFFF', border: 0 }}
+                          className="golf-cta flex-1 rounded-xl py-2.5 text-[14px] font-bold"
                           onClick={() => startPuttRound(c)}
                         >
+                          <span className="g-sheen" aria-hidden="true" />
                           Full round
                         </button>
                         <button
                           type="button"
-                          className="flex-1 rounded-xl py-2.5 text-[14px] font-bold"
-                          style={{
-                            background: pickPuttHoleFor === c.id ? 'var(--accent)' : 'var(--card-bg)',
-                            color: pickPuttHoleFor === c.id ? '#FFFFFF' : 'var(--text)',
-                            border: '1px solid var(--separator)',
-                          }}
+                          className={`golf-toggle flex-1 rounded-xl py-2.5 text-[14px] font-bold${
+                            pickPuttHoleFor === c.id ? ' is-armed' : ''
+                          }`}
                           onClick={() =>
                             setPickPuttHoleFor((p) => (p === c.id ? null : c.id))
                           }
@@ -448,16 +424,8 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
                             <button
                               key={i}
                               type="button"
+                              className="golf-chip"
                               onClick={() => startPuttHole(c, i)}
-                              style={{
-                                border: '1px solid var(--separator)',
-                                background: 'var(--card-bg)',
-                                color: 'var(--text)',
-                                borderRadius: 10,
-                                padding: '5px 9px',
-                                fontSize: 12,
-                                fontWeight: 600,
-                              }}
                             >
                               {i + 1}
                               {h.name ? (
@@ -499,16 +467,8 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
                   <button
                     key={c.id}
                     type="button"
+                    className={`golf-chip${active ? ' is-on' : ''}`}
                     onClick={() => setClubId(c.id)}
-                    style={{
-                      border: '1px solid var(--separator)',
-                      background: active ? 'var(--accent)' : 'var(--card-bg)',
-                      color: active ? '#FFFFFF' : 'var(--text)',
-                      borderRadius: 999,
-                      padding: '5px 10px',
-                      fontSize: 12,
-                      fontWeight: 600,
-                    }}
                   >
                     {c.name}
                   </button>
@@ -520,10 +480,10 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
           <div className="flex gap-2">
             <button
               type="button"
-              className="flex-1 rounded-xl py-3 text-[15px] font-bold"
-              style={{ background: 'var(--accent)', color: '#FFFFFF', border: 0 }}
+              className="golf-cta flex-1 rounded-xl py-3 text-[15px] font-bold"
               onClick={() => onStart('range-challenge', clubId)}
             >
+              <span className="g-sheen" aria-hidden="true" />
               Target Challenge
             </button>
             <button
