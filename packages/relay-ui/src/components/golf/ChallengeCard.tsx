@@ -4,6 +4,7 @@ import { Avatar } from '../Avatar';
 import CourseGame from './CourseGame';
 import { api } from '../../lib/api';
 import { getCourse } from '../../lib/golf/courses';
+import { useEconomy } from '../../lib/golf/economy';
 import type { Challenge, ChallengeParticipant } from '../../lib/types';
 
 // Format a to-par relative to par: 0 → "E", positive → "+n", negative → "−n"
@@ -25,6 +26,10 @@ export function ChallengeCard({ id }: { id: string }) {
   // One-shot: a round's result is submitted at most once, even though
   // CourseGame's "Play round again" resets its own onRoundComplete guard.
   const submittedRef = useRef(false);
+  // Wallet refresh after a win-completing submit so the hub coin chip updates.
+  // Pulled as a stable action ref (no re-render subscription); degrades
+  // gracefully when the economy store is empty (unauthed / offline).
+  const ensureWallet = useEconomy((s) => s.ensureWallet);
 
   useEffect(() => {
     let cancelled = false;
@@ -81,6 +86,29 @@ export function ChallengeCard({ id }: { id: string }) {
 
   const outcomeClass = won ? 'is-win' : lost ? 'is-loss' : 'is-tie';
 
+  // Nominal stake on the LIVE card. Optional/additive from the worker — only
+  // surface the stake line when it's a positive number (older builds omit it).
+  const stake = ch.rewardCoins ?? 0;
+  const hasStake = stake > 0;
+
+  // Coins the viewer ACTUALLY got when it settled (0 on a loss or a daily-capped
+  // win). The completed headline reads THIS, not the nominal stake, so a capped
+  // win never shows a coin figure the player didn't receive.
+  const awarded = ch.rewardCoinsAwarded ?? 0;
+  const gotCoins = awarded > 0;
+
+  // Outcome headline: append the coins actually credited only when > 0. A loss
+  // never pays; a win or (paying) tie shows "+N coins".
+  const outcomeText = won
+    ? gotCoins
+      ? `You won  ·  +${awarded} coins`
+      : 'You win'
+    : lost
+      ? 'You lost'
+      : gotCoins
+        ? `Tie  ·  +${awarded} coins`
+        : 'Tie';
+
   // Shared one-shot submit for both the full-round (onRoundComplete) and the
   // single-hole (onHoleComplete) callbacks: record the challenge to-par,
   // optimistically clear "your turn", count the play on the golfcourse board,
@@ -114,7 +142,18 @@ export function ChallengeCard({ id }: { id: string }) {
     }
     Promise.allSettled(tasks)
       .then(() => api.getChallenge(id))
-      .then((res) => setCh(res.challenge))
+      .then((res) => {
+        setCh(res.challenge);
+        // If this submission SETTLED the match, the worker may have credited me
+        // coins — a win OR a tie both pay the viewer (a loss pays 0, but a
+        // refresh is harmless). The card only renders challenges I'm in, so any
+        // completion is a completion I participate in: force-refresh the wallet
+        // so the hub coin chip reflects the new balance. ensureWallet swallows
+        // its own errors, so this is a no-op when unauthed / offline.
+        if (res.challenge.status === 'complete') {
+          void ensureWallet(true);
+        }
+      })
       .catch(() => undefined)
       .finally(() => setPlaying(false));
   }
@@ -193,6 +232,13 @@ export function ChallengeCard({ id }: { id: string }) {
             {renderPlayer(otherSide, otherLabel)}
           </div>
 
+          {/* Stake line — the coins on the line while the match is live. */}
+          {!complete && hasStake ? (
+            <div className="challenge-stake">
+              <span aria-hidden="true">🏆</span> Playing for {stake} coins
+            </div>
+          ) : null}
+
           {myTurn ? (
             <button
               type="button"
@@ -207,7 +253,7 @@ export function ChallengeCard({ id }: { id: string }) {
             </div>
           ) : complete ? (
             <div className={`challenge-outcome ${outcomeClass}`}>
-              {won ? 'You win' : lost ? 'You lost' : 'Tie'}
+              {outcomeText}
             </div>
           ) : null}
         </div>
