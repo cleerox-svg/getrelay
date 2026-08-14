@@ -21,6 +21,16 @@ import { AccuracyBar } from './shared/AccuracyBar';
 import { ClubSelector } from './shared/ClubSelector';
 import { MuteButton } from './shared/MuteButton';
 import { TelemetryPanel, type ShotTelemetry } from './shared/TelemetryPanel';
+import {
+  frostedSurface,
+  FROST_RADIUS_CARD,
+  FROST_RADIUS_PILL,
+  FROST_RADIUS_CHIP,
+  FROST_TEXT,
+  FROST_DIM,
+  FROST_MINT,
+  MONO_NUM,
+} from './shared/frosted';
 
 // Lazy so `three` (in CourseGL) stays out of the main entry chunk.
 const CourseGL = lazy(() => import('./CourseGL'));
@@ -522,24 +532,32 @@ export default function CourseGame({
         <div className="flex-1 flex justify-start">
           <button
             onClick={onExit}
-            className="rounded-full bg-black/45 px-3 py-1 text-sm font-semibold"
-            style={{ pointerEvents: 'auto' }}
+            className="px-3 py-1 text-sm font-semibold"
+            style={{ pointerEvents: 'auto', color: FROST_TEXT, ...frostedSurface(FROST_RADIUS_CHIP) }}
           >
             ‹ Back
           </button>
         </div>
-        <div className="rounded-2xl bg-black/45 px-3 py-1.5 text-center">
-          <div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">
+        {/* Frosted hole card — broadcast hierarchy: eyebrow → context line → big
+            mono yardage → stroke/lie → thru±. All data bindings unchanged. */}
+        <div className="px-3.5 py-2 text-center" style={frostedSurface(FROST_RADIUS_CARD)}>
+          <div
+            className="text-[9px] font-bold uppercase leading-none"
+            style={{ letterSpacing: 2, color: FROST_DIM }}
+          >
             {course.name}
           </div>
-          <div className="text-[11px] opacity-80">
+          <div className="mt-1 text-[11px]" style={{ color: FROST_DIM }}>
             HOLE {sim.hole.id}
             {sim.hole.name ? ` · ${sim.hole.name}` : ''} · PAR {st.par}
           </div>
-          <div className="text-lg font-extrabold leading-tight">
+          <div
+            className="mt-0.5 text-2xl font-extrabold leading-tight"
+            style={{ color: FROST_TEXT, ...MONO_NUM }}
+          >
             {puttRead ? `${puttRead.ft} ft` : `${st.distToPin} yd`}
           </div>
-          <div className="text-[11px] opacity-80">
+          <div className="text-[11px]" style={{ color: FROST_DIM }}>
             {/* Show the stroke ABOUT TO BE PLAYED (strokes taken + 1), the golf
                 convention — so the tee reads "Stroke 1" and the shot after the
                 drive reads "Stroke 2". Showing raw strokes-taken here read
@@ -549,12 +567,16 @@ export default function CourseGame({
             Stroke {st.holed ? st.strokes : st.strokes + 1} · {lieLabel[st.lie] ?? st.lie}
           </div>
           {!single && (
-            <div className="text-[11px] font-semibold text-amber-200">
+            <div
+              className="text-[11px] font-semibold"
+              // Under par reads mint (the shared accent); level/over stays white.
+              style={{ color: scoreToPar < 0 ? FROST_MINT : FROST_TEXT }}
+            >
               Thru {card.length} · {toPar(scoreToPar)}
             </div>
           )}
           {puttRead && (
-            <div className="text-[11px] font-semibold text-emerald-200">
+            <div className="text-[11px] font-semibold" style={{ color: FROST_MINT }}>
               {puttRead.slope} · {puttRead.brk}
             </div>
           )}
@@ -592,13 +614,13 @@ export default function CourseGame({
             className="text-xs"
             style={{
               pointerEvents: 'auto',
-              background: 'var(--card-bg)',
-              border: '1px solid var(--separator)',
-              borderRadius: 12,
               padding: '6px 12px',
-              color: 'var(--text)',
+              color: FROST_TEXT,
               fontWeight: 700,
-              boxShadow: '0 2px 8px rgba(0,0,0,0.14)',
+              // Numerals go mono/tabular while aiming; the "Drag to aim" hint is
+              // plain text.
+              ...(st.aiming || st.armed ? MONO_NUM : null),
+              ...frostedSurface(FROST_RADIUS_PILL),
             }}
           >
             {st.aiming || st.armed ? `${Math.round(st.power * 100)}%` : 'Drag to aim'}

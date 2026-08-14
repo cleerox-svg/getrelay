@@ -7,7 +7,12 @@
 // slingshot straining against the band WITHOUT relying on haptics (iOS has none).
 // Dial ticks at 25/50/75% make the middle finely readable. Display-only
 // (pointer-transparent). Shared by the Range (always mounted) and the Course
-// (mounted only while aiming/armed) — visibility is a prop. Pure DOM / theme.
+// (mounted only while aiming/armed) — visibility is a prop. "Frosted Fairway"
+// skin: the track is frosted glass (shared tokens) so it matches the rest of the
+// HUD, but the powerRGB fill is preserved so meter ↔ turf-arrow never disagree.
+// Pure DOM — no `three`.
+
+import { FROST_BG, FROST_BORDER, FROST_BLUR, FROST_SHADOW } from './frosted';
 
 // Solid colour for a given power, interpolated green→amber→red (matches CourseGL/
 // RangeGL's aim arrow so the meter and the turf arrow never disagree).
@@ -50,11 +55,15 @@ export function PowerMeter({ power, visible = true }: { power: number; visible?:
         zIndex: 42,
       }}
     >
-      {/* Local keyframes for the near-max rubber-band throb. */}
+      {/* Local keyframes for the near-max rubber-band throb, applied via the
+          .pm-strain class so a media query can honour prefers-reduced-motion
+          (an inline `animation` couldn't be overridden by CSS). */}
       <style>{`@keyframes pmStrain {
-        0%,100% { transform: scaleX(1); box-shadow: 0 2px 8px rgba(0,0,0,0.25); }
+        0%,100% { transform: scaleX(1); box-shadow: ${FROST_SHADOW}; }
         50% { transform: scaleX(1.22); box-shadow: 0 0 16px rgba(255,60,40,0.75); }
-      }`}</style>
+      }
+      .pm-strain { animation: pmStrain 0.42s ease-in-out infinite; }
+      @media (prefers-reduced-motion: reduce) { .pm-strain { animation: none; } }`}</style>
       <div
         style={{
           fontSize: 15,
@@ -69,16 +78,18 @@ export function PowerMeter({ power, visible = true }: { power: number; visible?:
         {pct}%
       </div>
       <div
+        className={straining ? 'pm-strain' : undefined}
         style={{
           position: 'relative',
           width: 18,
           height: 210,
           borderRadius: 999,
-          background: 'rgba(16,24,36,0.55)',
-          border: '1px solid var(--separator)',
+          background: FROST_BG,
+          backdropFilter: FROST_BLUR,
+          WebkitBackdropFilter: FROST_BLUR,
+          border: FROST_BORDER,
           overflow: 'hidden',
-          animation: straining ? 'pmStrain 0.42s ease-in-out infinite' : undefined,
-          boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+          boxShadow: FROST_SHADOW,
         }}
       >
         {/* Dial ticks at 25 / 50 / 75% so the dialable middle is readable. */}

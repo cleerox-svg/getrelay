@@ -1,4 +1,5 @@
 import { useRef } from 'react';
+import { frostedSurface, FROST_RADIUS_CARD } from './frosted';
 
 // Circular "ball face" spin selector — the dot is the CONTACT POINT on the ball.
 // Strike LOW (drag down) = backspin; strike HIGH (drag up) = topspin; left/right
@@ -38,66 +39,76 @@ export function SpinPuck({
   };
 
   return (
+    // Frosted ring frame seats the white ball-face puck so it belongs to the
+    // "Frosted Fairway" set. The frame is display-only; the ball inside keeps the
+    // pointer capture + drag logic. The label moves onto the frame.
     <div
-      ref={ref}
-      onPointerDown={(e) => {
-        e.currentTarget.setPointerCapture(e.pointerId);
-        apply(e.clientX, e.clientY);
-      }}
-      onPointerMove={(e) => {
-        if (e.currentTarget.hasPointerCapture(e.pointerId)) apply(e.clientX, e.clientY);
-      }}
-      onPointerUp={(e) => {
-        if (e.currentTarget.hasPointerCapture(e.pointerId))
-          e.currentTarget.releasePointerCapture(e.pointerId);
-      }}
-      onDoubleClick={() => onChange(0, 0)}
       style={{
-        position: 'relative',
-        width: SIZE,
-        height: SIZE,
-        borderRadius: '50%',
-        background: 'radial-gradient(circle at 50% 42%, #ffffff, #d9dee4)',
-        border: '1px solid var(--separator)',
-        boxShadow: '0 2px 10px rgba(0,0,0,0.28)',
-        pointerEvents: 'auto',
-        touchAction: 'none',
-        cursor: 'grab',
+        display: 'inline-block',
+        padding: 8,
+        pointerEvents: 'none',
+        ...frostedSurface(FROST_RADIUS_CARD),
       }}
     >
-      {/* Cross-hair + label baked onto the ball face. */}
-      <div style={{ position: 'absolute', left: '50%', top: 4, bottom: 4, width: 1, background: 'rgba(0,0,0,0.10)' }} />
-      <div style={{ position: 'absolute', top: '50%', left: 4, right: 4, height: 1, background: 'rgba(0,0,0,0.10)' }} />
       <div
         style={{
-          position: 'absolute',
-          top: 4,
-          left: 0,
-          right: 0,
           textAlign: 'center',
           fontSize: 8,
           fontWeight: 800,
           letterSpacing: 1,
-          color: '#5a6472',
+          color: 'rgba(255,255,255,0.72)',
+          marginBottom: 5,
         }}
       >
         SPIN
       </div>
       <div
-        style={{
-          position: 'absolute',
-          left: dotX,
-          top: dotY,
-          width: 16,
-          height: 16,
-          marginLeft: -8,
-          marginTop: -8,
-          borderRadius: '50%',
-          background: 'var(--accent)',
-          border: '2px solid #fff',
-          boxShadow: '0 1px 4px rgba(0,0,0,0.35)',
+        ref={ref}
+        onPointerDown={(e) => {
+          e.currentTarget.setPointerCapture(e.pointerId);
+          apply(e.clientX, e.clientY);
         }}
-      />
+        onPointerMove={(e) => {
+          if (e.currentTarget.hasPointerCapture(e.pointerId)) apply(e.clientX, e.clientY);
+        }}
+        onPointerUp={(e) => {
+          if (e.currentTarget.hasPointerCapture(e.pointerId))
+            e.currentTarget.releasePointerCapture(e.pointerId);
+        }}
+        onDoubleClick={() => onChange(0, 0)}
+        style={{
+          position: 'relative',
+          width: SIZE,
+          height: SIZE,
+          borderRadius: '50%',
+          background: 'radial-gradient(circle at 50% 42%, #ffffff, #d9dee4)',
+          border: '1px solid var(--separator)',
+          boxShadow: '0 2px 10px rgba(0,0,0,0.28)',
+          pointerEvents: 'auto',
+          touchAction: 'none',
+          cursor: 'grab',
+        }}
+      >
+        {/* Cross-hair baked onto the ball face (the SPIN label now lives on the
+            frosted frame above). */}
+        <div style={{ position: 'absolute', left: '50%', top: 4, bottom: 4, width: 1, background: 'rgba(0,0,0,0.10)' }} />
+        <div style={{ position: 'absolute', top: '50%', left: 4, right: 4, height: 1, background: 'rgba(0,0,0,0.10)' }} />
+        <div
+          style={{
+            position: 'absolute',
+            left: dotX,
+            top: dotY,
+            width: 16,
+            height: 16,
+            marginLeft: -8,
+            marginTop: -8,
+            borderRadius: '50%',
+            background: 'var(--accent)',
+            border: '2px solid #fff',
+            boxShadow: '0 1px 4px rgba(0,0,0,0.35)',
+          }}
+        />
+      </div>
     </div>
   );
 }
