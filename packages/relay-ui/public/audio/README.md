@@ -19,8 +19,19 @@ synth — no call site changes. If the file is missing or fails to decode, it
 silently falls back to the synth, so an uncommented line without a file just
 means "keep the synth."
 
-The manifest ships **empty** (all lines commented) on purpose: with nothing
-uncommented there are **zero** audio network requests and the synth plays.
+The manifest starts mostly commented on purpose: with a line commented there are
+**zero** audio network requests for that sound and the synth plays.
+
+## Currently active
+
+Real samples are wired for **`swing`** (`swing.wav`) and **`putt`** (`putt.mp3`).
+Everything else is still synth. Two files are **staged but not enabled**:
+- `bounce.wav` (Mixkit) — a ~5.3s multi-bounce sequence. The engine fires `land`
+  on *every* ground contact, so this must be trimmed to a **single** bounce
+  before enabling (there's no ffmpeg in the build env to trim it here). Trim it,
+  then uncomment the `land` line.
+- `swing-impact.wav` (Mixkit "golf ball hit") — an alternate, punchier swing.
+  To A/B it, point the `swing` line at `swing-impact.wav`.
 
 ## Shopping list (target filenames)
 
@@ -65,8 +76,13 @@ The rest keep their synth.
 For every file you drop in, note its **source URL and license** here so we keep
 an audit trail (some Freesound clips require attribution). Suggested format:
 
-| File | Source URL | License | Author (if CC-BY) |
-|------|------------|---------|-------------------|
-| _e.g._ `putt.mp3` | https://pixabay.com/sound-effects/... | Pixabay | — |
+| File | Source | License | Attribution |
+|------|--------|---------|-------------|
+| `swing.wav` | Mixkit — "Golf ball swing" (sfx 2117) | Mixkit Free License | none required |
+| `swing-impact.wav` | Mixkit — "Golf ball hit" (sfx 2105) | Mixkit Free License | none required |
+| `bounce.wav` | Mixkit — "Golf ball bouncing" (sfx 2075) | Mixkit Free License | none required |
+| `putt.mp3` | Freesound (via Pixabay) — "putt" (70054) | Pixabay Content License | none required |
 
-(Leave this table until you actually add files.)
+Mixkit Free License and the Pixabay Content License both allow bundling in a
+commercial app with **no attribution required**; neither permits reselling the
+clips standalone. If any future clip is Freesound **CC-BY**, add the author here.

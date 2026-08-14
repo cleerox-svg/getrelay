@@ -50,9 +50,12 @@ export type SoundId =
 // file in packages/relay-ui/public/audio/ and UNCOMMENT its line here.
 const AUDIO_BASE = '/audio/';
 const SAMPLE_FILES: Partial<Record<SoundId | 'music', string>> = {
-  // swing: 'swing.mp3',
-  // putt: 'putt.mp3',
-  // land: 'bounce.mp3',
+  swing: 'swing.wav', // Mixkit "golf ball swing" — whoosh + contact
+  putt: 'putt.mp3', // Freesound (via Pixabay) soft putter tap
+  // land: 'bounce.wav', // STAGED: Mixkit bounce is a ~5s multi-bounce sequence;
+  //   our engine fires 'land' on every ground contact, so this needs trimming to
+  //   a single bounce before enabling (no ffmpeg in the build env to trim it).
+  // Alternate swing: 'swing-impact.wav' (Mixkit "golf ball hit") — swap above.
   // splash: 'splash.mp3',
   // sink: 'sink.mp3',
   // ding: 'ding.mp3',
