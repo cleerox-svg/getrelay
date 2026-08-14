@@ -59,6 +59,14 @@ function normalizeGame(v: unknown): GameId {
     : 'fog';
 }
 
+// The equipped avatar-frame cosmetic id for a leaderboard row. The economy's
+// `frame_none` sentinel (and a missing user_equipped row) both mean "no frame",
+// so we collapse them to null — the UI treats null as no frame and resolves any
+// non-null id against its client-side cosmetic catalog.
+function normalizeFrame(frame: string | null | undefined): string | null {
+  return frame == null || frame === 'frame_none' ? null : frame;
+}
+
 // ---- Golf best-shot records ----------------------------------------------
 //
 // One row per user in golf_records, upsert-on-improve. The DB column shape
@@ -551,8 +559,10 @@ export function gamesRoutes() {
 
     const rows = await c.env.DB.prepare(
       `SELECT u.id, u.display_name, u.pin, u.avatar_url, u.avatar_r2_key,
+              ufr.cosmetic_id AS frame,
               MAX(s.score) AS best, COUNT(*) AS games, MAX(s.created_at) AS last_played
        FROM game_scores s JOIN users u ON u.id = s.user_id
+       LEFT JOIN user_equipped ufr ON ufr.user_id = u.id AND ufr.slot = 'frame'
        WHERE s.game = ?
          AND (s.user_id = ? OR s.user_id IN (SELECT contact_id FROM contacts WHERE owner_id = ?))
          AND s.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = ?)
@@ -568,6 +578,7 @@ export function gamesRoutes() {
         pin: string;
         avatar_url: string | null;
         avatar_r2_key: string | null;
+        frame: string | null;
         best: number;
         games: number;
         last_played: number;
@@ -579,6 +590,7 @@ export function gamesRoutes() {
       displayName: r.display_name,
       pin: r.pin,
       avatarUrl: avatarUrlFor(origin, r),
+      frame: normalizeFrame(r.frame),
       best: r.best,
       games: r.games,
       mine: r.id === me.id,
@@ -1329,9 +1341,11 @@ export function gamesRoutes() {
 
     const rows = await c.env.DB.prepare(
       `SELECT u.id, u.display_name, u.pin, u.avatar_url, u.avatar_r2_key,
+              ufr.cosmetic_id AS frame,
               d.score AS score, d.to_par AS to_par, d.strokes AS strokes,
               d.updated_at AS last_played
        FROM daily_results d JOIN users u ON u.id = d.user_id
+       LEFT JOIN user_equipped ufr ON ufr.user_id = u.id AND ufr.slot = 'frame'
        WHERE d.date = ?
          AND (d.user_id = ? OR d.user_id IN (SELECT contact_id FROM contacts WHERE owner_id = ?))
          AND d.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = ?)
@@ -1345,6 +1359,7 @@ export function gamesRoutes() {
         pin: string;
         avatar_url: string | null;
         avatar_r2_key: string | null;
+        frame: string | null;
         score: number | null;
         to_par: number | null;
         strokes: number | null;
@@ -1357,6 +1372,7 @@ export function gamesRoutes() {
       displayName: r.display_name,
       pin: r.pin,
       avatarUrl: avatarUrlFor(origin, r),
+      frame: normalizeFrame(r.frame),
       score: r.score,
       toPar: r.to_par,
       strokes: r.strokes,
@@ -1613,8 +1629,10 @@ export function gamesRoutes() {
 
     const rows = await c.env.DB.prepare(
       `SELECT u.id, u.display_name, u.pin, u.avatar_url, u.avatar_r2_key,
+              ufr.cosmetic_id AS frame,
               t.score AS score, t.to_par AS to_par, t.strokes AS strokes
          FROM tournament_entries t JOIN users u ON u.id = t.user_id
+         LEFT JOIN user_equipped ufr ON ufr.user_id = u.id AND ufr.slot = 'frame'
         WHERE t.tournament_id = ?
           ${scopeClause}
           AND t.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = ?)
@@ -1628,6 +1646,7 @@ export function gamesRoutes() {
         pin: string;
         avatar_url: string | null;
         avatar_r2_key: string | null;
+        frame: string | null;
         score: number;
         to_par: number | null;
         strokes: number | null;
@@ -1639,6 +1658,7 @@ export function gamesRoutes() {
       displayName: r.display_name,
       pin: r.pin,
       avatarUrl: avatarUrlFor(origin, r),
+      frame: normalizeFrame(r.frame),
       score: r.score,
       toPar: r.to_par,
       strokes: r.strokes,

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Avatar } from '../Avatar';
 import { api } from '../../lib/api';
+import { useEconomy } from '../../lib/golf/economy';
+import { resolveFrameById } from '../../lib/golf/cosmetics';
 import { getCourse } from '../../lib/golf/courses';
 import type { GolfCourse } from '../../lib/golf/courses';
 import { synthTournamentCourse } from '../../lib/golf/tournamentCourse';
@@ -84,6 +86,14 @@ export function GolfTournaments({ onPlay, pendingResult, onResultConsumed }: Pro
   const [scope, setScope] = useState<'global' | 'friends'>('global');
   const [board, setBoard] = useState<TournamentLeaderboardEntry[] | null>(null);
   const [boardError, setBoardError] = useState(false);
+
+  // Load the cosmetics catalog once so any row's equipped frame id resolves to a
+  // visual. Degrades gracefully — no catalog yet → frames just don't render.
+  const catalog = useEconomy((s) => s.catalog);
+  const ensureCosmetics = useEconomy((s) => s.ensureCosmetics);
+  useEffect(() => {
+    void ensureCosmetics();
+  }, [ensureCosmetics]);
 
   // Live countdown. `deadline` is an absolute local timestamp derived from the
   // server's `msLeft` at fetch time (Date.now() + msLeft) so the tick is immune
@@ -424,7 +434,12 @@ export function GolfTournaments({ onPlay, pendingResult, onResultConsumed }: Pro
                   >
                     {i + 1}
                   </span>
-                  <Avatar src={e.avatarUrl} name={e.displayName} size={32} />
+                  <Avatar
+                    src={e.avatarUrl}
+                    name={e.displayName}
+                    size={32}
+                    frame={resolveFrameById(catalog, e.frame)}
+                  />
                   <span
                     className="flex-1 min-w-0 truncate text-sm font-semibold"
                     style={{ color: 'var(--text)' }}

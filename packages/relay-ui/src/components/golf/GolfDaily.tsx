@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Avatar } from '../Avatar';
 import { api } from '../../lib/api';
+import { useEconomy } from '../../lib/golf/economy';
+import { resolveFrameById } from '../../lib/golf/cosmetics';
 import { getCourse } from '../../lib/golf/courses';
 import type {
   DailyChallenge,
@@ -46,6 +48,14 @@ export function GolfDaily({ onPlay, pendingResult, onResultConsumed }: Props) {
 
   const [board, setBoard] = useState<DailyLeaderboardEntry[] | null>(null);
   const [boardError, setBoardError] = useState(false);
+
+  // Load the cosmetics catalog once so any row's equipped frame id resolves to a
+  // visual. Degrades gracefully — no catalog yet → frames just don't render.
+  const catalog = useEconomy((s) => s.catalog);
+  const ensureCosmetics = useEconomy((s) => s.ensureCosmetics);
+  useEffect(() => {
+    void ensureCosmetics();
+  }, [ensureCosmetics]);
 
   // Fetch today's challenge on mount / retry. Unauthed (401) or offline lands in
   // the "needs connection" state.
@@ -311,7 +321,12 @@ export function GolfDaily({ onPlay, pendingResult, onResultConsumed }: Props) {
                   >
                     {i + 1}
                   </span>
-                  <Avatar src={e.avatarUrl} name={e.displayName} size={32} />
+                  <Avatar
+                    src={e.avatarUrl}
+                    name={e.displayName}
+                    size={32}
+                    frame={resolveFrameById(catalog, e.frame)}
+                  />
                   <span
                     className="flex-1 min-w-0 truncate text-sm font-semibold"
                     style={{ color: 'var(--text)' }}

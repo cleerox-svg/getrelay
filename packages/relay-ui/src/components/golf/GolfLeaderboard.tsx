@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Avatar } from '../Avatar';
 import { api } from '../../lib/api';
+import { useEconomy } from '../../lib/golf/economy';
+import { resolveFrameById } from '../../lib/golf/cosmetics';
 import type { GameLeaderboardEntry } from '../../lib/types';
 
 interface Props {
@@ -25,6 +27,14 @@ export function GolfLeaderboard({ refreshKey = 0, game = 'golf' }: Props) {
   const [entries, setEntries] = useState<GameLeaderboardEntry[] | null>(null);
   const [error, setError] = useState(false);
   const [attempt, setAttempt] = useState(0);
+
+  // Load the cosmetics catalog once so any row's equipped frame id resolves to
+  // a visual. Degrades gracefully — no catalog yet → frames just don't render.
+  const catalog = useEconomy((s) => s.catalog);
+  const ensureCosmetics = useEconomy((s) => s.ensureCosmetics);
+  useEffect(() => {
+    void ensureCosmetics();
+  }, [ensureCosmetics]);
 
   useEffect(() => {
     let cancelled = false;
@@ -117,7 +127,12 @@ export function GolfLeaderboard({ refreshKey = 0, game = 'golf' }: Props) {
               >
                 {i + 1}
               </span>
-              <Avatar src={e.avatarUrl} name={e.displayName} size={32} />
+              <Avatar
+                src={e.avatarUrl}
+                name={e.displayName}
+                size={32}
+                frame={resolveFrameById(catalog, e.frame)}
+              />
               <span
                 className="flex-1 min-w-0 truncate text-sm font-semibold"
                 style={{ color: 'var(--text)' }}

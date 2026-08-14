@@ -13,6 +13,7 @@ import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTextur
 import type { GolfCosmetics } from '../../lib/golf/cosmetics';
 import {
   addSkyDome,
+  makeSkyEnvMap,
   makeTurfColor,
   makeTurfNormalMap,
   makeWater,
@@ -231,6 +232,10 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
     // Shared cloud/hill sky dome (deterministic, seeded) — parity with the other
     // golf scenes and reproducible for the screenshot harness.
     addSkyDome(scene, track);
+    // Cheap PMREM reflection env so metallic ball skins reflect the sky (not
+    // near-black). Assigned to the BALL material's envMap ONLY (below), NOT
+    // scene.environment — turf/trees/water pay no per-frame env cost.
+    const ballEnvMap = makeSkyEnvMap(renderer, track);
 
     // Angled overhead camera framing the WHOLE hole from the model: the tee (high
     // virtual y) sits toward +Z near the camera, the cup (low y) toward -Z far, so
@@ -738,6 +743,11 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
     const ballGeo = track(new THREE.SphereGeometry(BALL_R, 32, 24));
     const dimpleTex = track(makeDimpleNormalMap());
     const ballMat = track(makeBallMaterial(dimpleTex, cosmeticsRef.current?.ball));
+    // Only the ball reflects the sky PMREM (metallic skins shine; default white
+    // ball barely samples it). Scoped to the ball material so nothing else pays
+    // the per-frame env cost.
+    ballMat.envMap = ballEnvMap;
+    ballMat.envMapIntensity = 1;
     const ball = new THREE.Mesh(ballGeo, ballMat);
     ball.castShadow = true;
     scene.add(ball);

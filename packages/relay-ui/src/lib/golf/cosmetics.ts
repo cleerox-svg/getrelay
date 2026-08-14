@@ -56,14 +56,25 @@ export function resolveGolfCosmetics(
   return { ball, trail };
 }
 
+// Resolve ANY frame cosmetic id → overlay descriptor, or null for
+// frame_none / null / an unknown id / a colourless item. This is GENERIC (no
+// per-id logic) so it resolves the equipped frame of ANY player — the viewer's
+// own or another leaderboard row's — against the same shared catalog.
+export function resolveFrameById(
+  catalog: Cosmetic[],
+  frameId: string | null | undefined,
+): GolfFrame | null {
+  if (!frameId || frameId === 'frame_none') return null;
+  const item = find(catalog, frameId);
+  const color = item?.visual.color;
+  if (!color) return null;
+  return { color, style: item?.visual.style === 'glow' ? 'glow' : 'ring' };
+}
+
 // The equipped frame's overlay descriptor, or null for frame_none / unknown.
 export function resolveFrame(
   catalog: Cosmetic[],
   equipped: EquippedCosmetics,
 ): GolfFrame | null {
-  if (equipped.frame === 'frame_none') return null;
-  const item = find(catalog, equipped.frame);
-  const color = item?.visual.color;
-  if (!color) return null;
-  return { color, style: item?.visual.style === 'glow' ? 'glow' : 'ring' };
+  return resolveFrameById(catalog, equipped.frame);
 }

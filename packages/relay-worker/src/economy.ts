@@ -61,10 +61,12 @@ export const COSMETICS: readonly Cosmetic[] = [
   { id: 'ball_sky', slot: 'ball', name: 'Sky', rarity: 'common', price: 200, visual: { color: '#4FC3F7', metalness: 0, roughness: 0.4 } },
   { id: 'ball_crimson', slot: 'ball', name: 'Crimson', rarity: 'rare', price: 800, visual: { color: '#D32F2F', metalness: 0.1, roughness: 0.35 } },
   { id: 'ball_neon', slot: 'ball', name: 'Neon', rarity: 'rare', price: 800, visual: { color: '#39FF14', metalness: 0, roughness: 0.25 } },
-  // metalness kept moderate: the golf scenes have no environment map, so a
-  // fully-metallic ball reflects the absent (black) env and reads near-black.
-  // ~0.4 keeps a diffuse gold base with direct-light specular so it reads gold.
-  { id: 'ball_gold', slot: 'ball', name: 'Gold', rarity: 'epic', price: 2000, visual: { color: '#FFD700', metalness: 0.4, roughness: 0.22 } },
+  // Real metallic gold: the golf scenes now feed a cheap PMREM sky environment
+  // (scenery.addSkyEnvironment) to scene.environment, so a high-metalness ball
+  // reflects the sky and reads as shiny gold instead of the near-black an absent
+  // env used to give. Kept just under fully metallic with a low roughness for a
+  // crisp, bright specular.
+  { id: 'ball_gold', slot: 'ball', name: 'Gold', rarity: 'epic', price: 2000, visual: { color: '#FFD700', metalness: 0.85, roughness: 0.18 } },
   { id: 'ball_void', slot: 'ball', name: 'Void Black', rarity: 'epic', price: 2000, visual: { color: '#0B0B12', metalness: 0.6, roughness: 0.3 } },
 
   // --- trails ---

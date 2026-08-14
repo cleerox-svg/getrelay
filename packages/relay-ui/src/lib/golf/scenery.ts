@@ -155,6 +155,75 @@ export function addSkyDome(scene: THREE.Scene, track: Track): void {
   scene.add(new THREE.Mesh(geo, mat));
 }
 
+// --- Reflection environment (cheap PMREM) ----------------------------------
+// A high-metalness MeshStandardMaterial (the gold/chrome ball skins) has no
+// diffuse term and reflects its env map; with none set it reflects BLACK. This
+// builds a CHEAP prefiltered environment ONCE per scene so metals read as
+// reflecting the sky instead of near-black. It is assigned to the BALL MATERIAL
+// ONLY (ballMat.envMap = …) — NOT scene.environment — so ONLY the ball samples
+// the PMREM: turf/trees/water/sand pay no per-frame env cost (visual-QA confirmed
+// those non-ball materials look identical with the env off, so scene-wide IBL
+// bought nothing there — scoping to the ball is the on-device GPU win). The sky
+// dome / background visuals are untouched.
+//
+// Source is a TINY vertical-gradient equirect (sky above the horizon, a muted
+// lit-turf tone below) that matches the sky-dome palette; PMREM prefilters it at
+// low resolution. Both the generator and its source texture are disposed
+// immediately after generation (one-time cost); the resulting render target is
+// tracked so its GPU memory is released on scene teardown.
+
+// Small equirectangular gradient whose colours match the sky dome (deep blue →
+// hazy horizon) with a muted ground half below the horizon so downward metal
+// reflections read as turf, not white. Width is small (a pure vertical
+// gradient); height caps the prefilter resolution — kept low for low-end GPUs.
+function makeSkyEnvEquirect(): THREE.Texture {
+  const c = document.createElement('canvas');
+  c.width = 8;
+  c.height = 128;
+  const g = c.getContext('2d')!;
+  const grad = g.createLinearGradient(0, 0, 0, c.height);
+  // Upper hemisphere (zenith → horizon) — the sky-dome palette.
+  grad.addColorStop(0.0, '#1f6ec8'); // zenith
+  grad.addColorStop(0.32, '#3d8ed9');
+  grad.addColorStop(0.46, '#8ac6ea');
+  grad.addColorStop(0.5, '#dceff8'); // horizon haze
+  // Lower hemisphere (horizon → nadir) — muted, sunlit turf so metals reflect a
+  // plausible ground below, not a white void.
+  grad.addColorStop(0.54, '#7fa06a');
+  grad.addColorStop(1.0, '#40592f'); // nadir turf
+  g.fillStyle = grad;
+  g.fillRect(0, 0, c.width, c.height);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  return tex;
+}
+
+/**
+ * Generate a cheap PMREM reflection environment from a tiny sky/ground gradient
+ * and RETURN its prefiltered texture (does NOT set scene.environment — the caller
+ * assigns it to the BALL material's envMap so only the ball reflects the sky).
+ * The prefiltered render target is registered via `track()` so it's disposed on
+ * teardown; the PMREM generator + its source texture are one-time and disposed
+ * here. Call ONCE at scene build, after the renderer exists. Shared by all three
+ * golf scenes so metallic ball skins reflect the same sky.
+ */
+export function makeSkyEnvMap(
+  renderer: THREE.WebGLRenderer,
+  track: Track,
+): THREE.Texture {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const src = makeSkyEnvEquirect();
+  const rt = pmrem.fromEquirectangular(src);
+  // The source gradient + the generator's internal resources are one-time; free
+  // them now. The returned render target stays valid and holds the env texture,
+  // so it is the only thing tracked for teardown disposal.
+  src.dispose();
+  pmrem.dispose();
+  track(rt);
+  return rt.texture;
+}
+
 // --- Turf ------------------------------------------------------------------
 
 // Shared blade-streak + sun/shade-mottle detail painted over an existing turf

@@ -347,6 +347,23 @@ function getLeaderboardGame(cookie: string, game: string): Promise<Response> {
   return request(`/game/leaderboard?game=${game}`, { headers: { Cookie: cookie } });
 }
 
+// Equip a cosmetic in a slot for a user, straight into user_equipped (bypassing
+// the shop endpoint) so leaderboard frame surfacing can be exercised directly.
+async function equipCosmetic(
+  userId: string,
+  slot: string,
+  cosmeticId: string,
+): Promise<void> {
+  await testEnv.DB.prepare(
+    `INSERT INTO user_equipped (user_id, slot, cosmetic_id, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id, slot) DO UPDATE SET
+       cosmetic_id = excluded.cosmetic_id, updated_at = excluded.updated_at`,
+  )
+    .bind(userId, slot, cosmeticId, Date.now())
+    .run();
+}
+
 function postGolfRecords(cookie: string | null, body: unknown): Promise<Response> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (cookie) headers['Cookie'] = cookie;
@@ -802,6 +819,22 @@ describe('GET /game/daily/leaderboard', () => {
     const { entries } = (await res.json()) as { entries: { userId: string }[] };
     expect(entries.map((e) => e.userId)).toEqual([USERS.A.id]);
   });
+
+  it('surfaces each row equipped frame; frame_none and unequipped are null', async () => {
+    const today = utcDay(0);
+    await insertDaily(USERS.A.id, today, 2, 980, 5); // me — no equipped row
+    await insertDaily(USERS.B.id, today, -3, 1030, 3); // contact, best — equips a frame
+    await equipCosmetic(USERS.B.id, 'frame', 'frame_gold');
+
+    const res = await getDailyLeaderboard(cookies.A);
+    const { entries } = (await res.json()) as {
+      entries: { userId: string; frame: string | null }[];
+    };
+    // Order unchanged: B (1030) ahead of A (980).
+    expect(entries.map((e) => e.userId)).toEqual([USERS.B.id, USERS.A.id]);
+    expect(entries[0]).toMatchObject({ userId: USERS.B.id, frame: 'frame_gold' });
+    expect(entries[1]).toMatchObject({ userId: USERS.A.id, frame: null });
+  });
 });
 
 describe('POST /game/score', () => {
@@ -1205,6 +1238,34 @@ describe('GET /game/leaderboard', () => {
       [USERS.A.id, 1200],
       [USERS.B.id, 300],
     ]);
+  });
+
+  it('surfaces each row equipped frame; frame_none and unequipped are null', async () => {
+    const now = Date.now();
+    await insertScore(USERS.A.id, 800, now); // A: explicitly equips frame_none
+    await insertScore(USERS.B.id, 1500, now); // B: equips a real frame
+    await equipCosmetic(USERS.A.id, 'frame', 'frame_none');
+    await equipCosmetic(USERS.B.id, 'frame', 'frame_gold');
+    // A also equips a non-frame slot to prove the slot filter is exact.
+    await equipCosmetic(USERS.A.id, 'ball', 'ball_classic');
+
+    const res = await getLeaderboard(cookies.A);
+    const { entries } = (await res.json()) as {
+      entries: { userId: string; frame: string | null }[];
+    };
+    // Order unchanged: B (1500) ahead of A (800).
+    expect(entries.map((e) => e.userId)).toEqual([USERS.B.id, USERS.A.id]);
+    // B surfaces the real frame id; A's frame_none normalizes to null.
+    expect(entries[0]).toMatchObject({ userId: USERS.B.id, frame: 'frame_gold' });
+    expect(entries[1]).toMatchObject({ userId: USERS.A.id, frame: null });
+  });
+
+  it('reports frame null for a player with no user_equipped row', async () => {
+    await insertScore(USERS.A.id, 800, Date.now());
+    const res = await getLeaderboard(cookies.A);
+    const { entries } = (await res.json()) as { entries: { userId: string; frame: string | null }[] };
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ userId: USERS.A.id, frame: null });
   });
 });
 
@@ -1988,6 +2049,28 @@ describe('GET /game/tournament/leaderboard', () => {
       entries: { userId: string }[];
     };
     expect(global.entries.map((e) => e.userId)).not.toContain(USERS.C.id);
+  });
+
+  it('surfaces each row equipped frame; frame_none and unequipped are null', async () => {
+    await postTournamentResult(cookies.A, { toPar: -1, strokes: 14 }); // best — real frame
+    await postTournamentResult(cookies.B, { toPar: 2, strokes: 17 }); // frame_none -> null
+    await postTournamentResult(cookies.C, { toPar: 5, strokes: 20 }); // no equipped row
+    await equipCosmetic(USERS.A.id, 'frame', 'frame_gold');
+    await equipCosmetic(USERS.B.id, 'frame', 'frame_none');
+
+    const global = (await (await getTournamentLeaderboard(cookies.A)).json()) as {
+      entries: { userId: string; frame: string | null }[];
+    };
+    const byId = new Map(global.entries.map((e) => [e.userId, e.frame]));
+    expect(byId.get(USERS.A.id)).toBe('frame_gold');
+    expect(byId.get(USERS.B.id)).toBe(null);
+    expect(byId.get(USERS.C.id)).toBe(null);
+    // Ordering unchanged: A (-1) ahead of B (2) ahead of C (5).
+    expect(global.entries.map((e) => e.userId)).toEqual([
+      USERS.A.id,
+      USERS.B.id,
+      USERS.C.id,
+    ]);
   });
 });
 
