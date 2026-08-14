@@ -16,6 +16,7 @@ import { messagesRoutes } from './messages';
 import { pushRoutes } from './push';
 import { runSportsCron, sportsRoutes } from './sports';
 import { statusRoutes } from './status';
+import { runTournamentCron } from './tournaments';
 
 export { ChatRoom } from './do/chat-room';
 export { UserHub } from './do/user-hub';
@@ -92,6 +93,14 @@ export default {
     ctx.waitUntil(
       runSportsCron(env).catch((err) => {
         console.error('sports cron failed:', err);
+      }),
+    );
+    // Settle any closed Rapid Tournaments (award placements + trophies). Runs
+    // alongside the sports poll on the same one-minute cron; idempotent, so a
+    // missed or double tick is harmless.
+    ctx.waitUntil(
+      runTournamentCron(env).catch((err) => {
+        console.error('tournament cron failed:', err);
       }),
     );
   },

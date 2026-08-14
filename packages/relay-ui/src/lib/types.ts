@@ -499,6 +499,93 @@ export interface DailyLeaderboardEntry {
   mine: boolean;
 }
 
+// ---- Rapid Tournaments ----
+
+// One of the three holes of a tournament round. `course` is a real Course-mode
+// id (augusta | listowel-*), `hole` is 1-based within that course.
+export interface TournamentHoleRef {
+  course: string;
+  hole: number;
+}
+
+// The caller's current standing in a tournament: their round score (points,
+// higher is better), to-par (negative = under par), total strokes and rank.
+export interface TournamentEntry {
+  score: number;
+  toPar: number | null;
+  strokes: number;
+  rank: number;
+}
+
+// The live Rapid Tournament from GET /game/tournament. A fixed, seeded 3-hole
+// round shared by everyone; `msLeft` counts down to `closesAt` (ms epoch). The
+// UI ticks the countdown client-side from `msLeft` rather than trusting the
+// device clock against `closesAt`. `entry` is the caller's standing (null until
+// they play), `entrants` the field size.
+export interface Tournament {
+  // Numeric period index from the worker, not an opaque string.
+  id: number;
+  seed: number;
+  holes: TournamentHoleRef[];
+  openedAt: number;
+  closesAt: number;
+  msLeft: number;
+  entrants: number;
+  entry: TournamentEntry | null;
+}
+
+// POST /game/tournament/result response: the persisted standing (server keeps
+// the caller's best), the updated field size, and whether this round beat their
+// prior best for the event.
+export interface TournamentResultResponse {
+  entry: TournamentEntry;
+  entrants: number;
+  improved: boolean;
+}
+
+// One row of a tournament leaderboard (GET /game/tournament/leaderboard),
+// pre-ranked (higher score, then lower to-par), top 25. `mine` flags the
+// caller's own row. Same shape idiom as DailyLeaderboardEntry.
+export interface TournamentLeaderboardEntry {
+  userId: string;
+  displayName: string;
+  pin: string;
+  avatarUrl: string | null;
+  score: number;
+  toPar: number;
+  strokes: number;
+  mine: boolean;
+}
+
+// The caller's lifetime tournament trophy case (GET /game/tournament/me).
+// `bestRank` is null until they finish an event.
+export interface TournamentTrophies {
+  trophies: number;
+  golds: number;
+  podiums: number;
+  bestRank: number | null;
+  eventsPlayed: number;
+}
+
+// One past tournament placement, newest first. `rank` is the caller's finish,
+// `trophies` the trophies that placement earned; `closesAt`/`createdAt` are
+// epoch ms.
+export interface TournamentPlacement {
+  // Numeric period index from the worker, not an opaque string.
+  tournamentId: number;
+  rank: number;
+  trophies: number;
+  closesAt: number;
+  createdAt: number;
+}
+
+// The caller's tournament profile from GET /game/tournament/me: the aggregate
+// trophy case plus a list of recent placements.
+export interface TournamentMe {
+  trophies: TournamentTrophies;
+  placements: TournamentPlacement[];
+}
+
 // One side of an async golf challenge. `toPar` is null until that player has
 // submitted their result (lower to-par wins). Matches the worker's
 // readChallengeShaped() output in games.ts.

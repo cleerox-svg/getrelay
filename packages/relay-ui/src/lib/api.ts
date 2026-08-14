@@ -17,6 +17,10 @@ import type {
   SportsStatsResponse,
   SportsSub,
   SportsTeamLists,
+  Tournament,
+  TournamentLeaderboardEntry,
+  TournamentMe,
+  TournamentResultResponse,
 } from './types';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8787').replace(
@@ -373,6 +377,31 @@ export const api = {
   // flagged `mine`. Same shape idiom as getGameLeaderboard.
   getDailyLeaderboard: () =>
     request<{ entries: DailyLeaderboardEntry[] }>('/game/daily/leaderboard'),
+  // The live Rapid Tournament — a fixed, seeded 3-hole round shared by everyone,
+  // open until `closesAt`. Carries the 3 holes (course + 1-based hole no.), the
+  // countdown (`msLeft`), the field size and the caller's current standing
+  // (`entry`, null until they play). 401 if unauthed — callers degrade to a
+  // "needs connection" state rather than crashing.
+  getTournament: () => request<Tournament>('/game/tournament'),
+  // Submit the caller's finished 3-hole ROUND total (to-par + total strokes).
+  // The server keeps the caller's BEST for the event, so a replay is safe, and
+  // returns the persisted standing, the updated field size and whether this
+  // round improved. 409 tournament_closed once the event has ended;
+  // 400 invalid_result on a bad body.
+  postTournamentResult: (body: { toPar: number; strokes: number }) =>
+    request<TournamentResultResponse>('/game/tournament/result', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  // The tournament leaderboard — top 25, pre-ranked, each row flagged `mine`.
+  // `scope` picks the global board (default) or the caller's friends-only board.
+  getTournamentLeaderboard: (scope: 'global' | 'friends' = 'global') =>
+    request<{ entries: TournamentLeaderboardEntry[] }>(
+      `/game/tournament/leaderboard?scope=${scope}`,
+    ),
+  // The caller's lifetime tournament trophy case + recent placements. 401 if
+  // unauthed — callers must tolerate that and skip the trophies UI.
+  getTournamentMe: () => request<TournamentMe>('/game/tournament/me'),
   // Giphy Action Register pingback. Best-effort: failures are swallowed so
   // analytics never interferes with sending a GIF.
   registerGifAction: (url: string | undefined, randomId: string) => {

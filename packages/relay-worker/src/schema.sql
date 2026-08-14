@@ -361,3 +361,91 @@ CREATE TABLE IF NOT EXISTS daily_streaks (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+-- "Rapid" golf tournaments: a short seeded 3-hole stroke-play event that
+-- rotates every day or two. Everyone plays the SAME seeded holes; a player's
+-- BEST score within the open window counts toward a GLOBAL leaderboard (with a
+-- client-side friends filter). Joining = opting into the global board.
+--
+-- Like the Daily Challenge, an event's definition is DERIVED deterministically
+-- from a period index (no cron needed to create events). The `tournaments` row
+-- is created LAZILY on first entry so that settlement has a concrete row to
+-- rank against and to mark as awarded exactly once. `id` IS that period index,
+-- so a given event maps to exactly one row. `seed` is the shared RNG seed
+-- (INTEGER, matching game_challenges.seed / daily_results.seed). `holes` is a
+-- JSON array of {course, hole} objects (3 entries) so the exact hole set is
+-- pinned at open time even if hole-derivation logic later changes. `opened_at`
+-- / `closes_at` bound the entry window; settlement scans closed & unsettled
+-- events (idx_tournaments_closes_at), ranks their entries, awards, and flips
+-- `settled` to 1 so it never re-awards.
+CREATE TABLE IF NOT EXISTS tournaments (
+  id INTEGER PRIMARY KEY,             -- deterministic period index (the event id)
+  kind TEXT NOT NULL DEFAULT 'rapid', -- event family; 'rapid' for now
+  seed INTEGER NOT NULL,             -- shared RNG seed (matches game_challenges.seed)
+  holes TEXT NOT NULL,               -- JSON array of {course, hole}, 3 entries
+  opened_at INTEGER NOT NULL,         -- window open (ms epoch)
+  closes_at INTEGER NOT NULL,         -- window close (ms epoch)
+  settled INTEGER NOT NULL DEFAULT 0, -- 1 once placements + trophies awarded
+  created_at INTEGER NOT NULL
+);
+-- Settlement scans events past their close that haven't been awarded yet.
+CREATE INDEX IF NOT EXISTS idx_tournaments_closes_at ON tournaments(closes_at);
+
+-- One row per (tournament, user): that user's BEST entry for the event. The
+-- worker upserts on (tournament_id, user_id), replacing the row only when the
+-- new run beats the stored one (higher `score` / lower `to_par` / fewer
+-- `strokes`). `score` is derived leaderboard points (higher is better),
+-- mirroring the game_scores / daily_results points model; `to_par` is strokes
+-- relative to par across the 3 holes (negative = under); `strokes` is the raw
+-- total. `rounds_played` counts how many times the user replayed the event
+-- (best-of). Both FKs cascade: deleting the event or the account drops entries.
+CREATE TABLE IF NOT EXISTS tournament_entries (
+  id TEXT PRIMARY KEY,
+  tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  score INTEGER NOT NULL,            -- leaderboard points (higher is better)
+  to_par INTEGER,                    -- strokes relative to par (neg = under)
+  strokes INTEGER,                   -- raw total strokes across the 3 holes
+  rounds_played INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(tournament_id, user_id)     -- one best row per user per event
+);
+-- Global leaderboard read: rank an event's entries by points (higher better),
+-- with to_par as the tiebreak (lower better).
+CREATE INDEX IF NOT EXISTS idx_tournament_entries_board ON tournament_entries(tournament_id, score DESC);
+CREATE INDEX IF NOT EXISTS idx_tournament_entries_topar ON tournament_entries(tournament_id, to_par);
+
+-- Per-account cumulative trophy tally. One row per user (keyed on user_id, like
+-- golf_records / daily_streaks) so the worker can upsert-on-award with a single
+--   INSERT ... ON CONFLICT(user_id) DO UPDATE ...
+-- `trophies` is total trophy points earned across all events, `golds` counts
+-- 1st-place finishes, `podiums` counts top-3 finishes, `best_rank` is the
+-- lowest (best) rank number ever achieved, `events_played` counts settled
+-- events the user placed in.
+CREATE TABLE IF NOT EXISTS tournament_trophies (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  trophies INTEGER NOT NULL DEFAULT 0,       -- total trophy points
+  golds INTEGER NOT NULL DEFAULT 0,          -- 1st-place finishes
+  podiums INTEGER NOT NULL DEFAULT 0,        -- top-3 finishes
+  best_rank INTEGER,                         -- lowest/best rank number ever
+  events_played INTEGER NOT NULL DEFAULT 0,  -- settled events placed in
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+-- Per-event award history AND settlement idempotency guard. Settlement writes
+-- one row per placed user (rank + trophies awarded) inside the same pass that
+-- flips tournaments.settled to 1; the UNIQUE(tournament_id, user_id) makes a
+-- re-run a no-op. Keeps a permanent placement record for profile/history views
+-- without re-deriving from entries. Both FKs cascade.
+CREATE TABLE IF NOT EXISTS tournament_placements (
+  id TEXT PRIMARY KEY,
+  tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  rank INTEGER NOT NULL,             -- 1-based finishing rank in the event
+  trophies INTEGER NOT NULL,         -- trophy points awarded for this placement
+  created_at INTEGER NOT NULL,
+  UNIQUE(tournament_id, user_id)     -- one placement per user per event
+);
+CREATE INDEX IF NOT EXISTS idx_tournament_placements_user ON tournament_placements(user_id, created_at DESC);

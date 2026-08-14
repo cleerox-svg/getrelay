@@ -2,6 +2,12 @@ import { Hono } from 'hono';
 import type { Env } from './env';
 import { readAuthedUser } from './auth';
 import { avatarUrlFor } from './me';
+import {
+  currentPeriodIndex,
+  periodWindow,
+  tournamentHoles,
+  tournamentSeed,
+} from './tournaments';
 
 // Server-side clamps for the Fog mini game. Anti-cheat is intentionally
 // lightweight — it's a casual game, we just refuse values that couldn't
@@ -306,6 +312,42 @@ export function dailyChallengeFor(date: string) {
 //   score = max(0, round(1000 - toPar*10))  (higher is better, monotone in toPar).
 function dailyScoreFromToPar(toPar: number): number {
   return Math.max(0, Math.round(1000 - toPar * 10));
+}
+
+// The caller's live rank in a tournament: 1 + the number of entries strictly
+// AHEAD of them. "Ahead" mirrors the settlement ordering EXACTLY
+// (score DESC, to_par ASC, strokes ASC, created_at ASC) so the rank shown live
+// equals the placement they'll actually settle to. Any divergence would let
+// the UI promise a podium the settlement then denies.
+async function tournamentRank(
+  db: D1Database,
+  tournamentId: number,
+  e: { score: number; toPar: number | null; strokes: number | null; createdAt: number },
+): Promise<number> {
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM tournament_entries
+        WHERE tournament_id = ?
+          AND ( score > ?
+             OR (score = ? AND to_par < ?)
+             OR (score = ? AND to_par = ? AND strokes < ?)
+             OR (score = ? AND to_par = ? AND strokes = ? AND created_at < ?) )`,
+    )
+    .bind(
+      tournamentId,
+      e.score,
+      e.score,
+      e.toPar,
+      e.score,
+      e.toPar,
+      e.strokes,
+      e.score,
+      e.toPar,
+      e.strokes,
+      e.createdAt,
+    )
+    .first<{ n: number }>();
+  return (row?.n ?? 0) + 1;
 }
 
 export function gamesRoutes() {
@@ -1100,6 +1142,343 @@ export function gamesRoutes() {
       mine: r.id === me.id,
     }));
     return c.json({ entries });
+  });
+
+  // ---- Rapid Tournaments --------------------------------------------------
+  //
+  // Global seeded 3-hole stroke-play events that rotate every 2 days. The
+  // event definition (seed / holes / window) is DERIVED from the period index
+  // in tournaments.ts — no row exists until the first result materialises it
+  // lazily. Ranking is score DESC, to_par ASC; settlement (cron) awards
+  // trophies. See src/tournaments.ts + migration 0012.
+
+  // GET /game/tournament — the current event, derived without needing a row,
+  // plus the caller's entry (with live rank) and the total field size.
+  app.get('/game/tournament', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const now = Date.now();
+    const id = currentPeriodIndex(now);
+    const { openedAt, closesAt } = periodWindow(id);
+    const holes = tournamentHoles(id);
+
+    // The caller's best run for this event (null before they've played).
+    const entryRow = await c.env.DB.prepare(
+      `SELECT score, to_par AS toPar, strokes, created_at AS createdAt
+         FROM tournament_entries WHERE tournament_id = ? AND user_id = ?`,
+    )
+      .bind(id, me.id)
+      .first<{
+        score: number;
+        toPar: number | null;
+        strokes: number | null;
+        createdAt: number;
+      }>();
+
+    const entrantsRow = await c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM tournament_entries WHERE tournament_id = ?`,
+    )
+      .bind(id)
+      .first<{ n: number }>();
+    const entrants = entrantsRow?.n ?? 0;
+
+    let entry: {
+      score: number;
+      toPar: number | null;
+      strokes: number | null;
+      rank: number | null;
+    } | null = null;
+    if (entryRow) {
+      entry = {
+        score: entryRow.score,
+        toPar: entryRow.toPar,
+        strokes: entryRow.strokes,
+        rank: await tournamentRank(c.env.DB, id, entryRow),
+      };
+    }
+
+    return c.json({
+      id,
+      seed: tournamentSeed(id),
+      holes,
+      openedAt,
+      closesAt,
+      msLeft: Math.max(0, closesAt - now),
+      entrants,
+      entry,
+    });
+  });
+
+  // POST /game/tournament/result — submit a 3-hole round total. Body:
+  // { toPar, strokes }. Rejected 409 once the current event has closed. Lazily
+  // materialises the tournaments row, then upserts the caller's entry keeping
+  // the BETTER run (higher score, then lower to_par, then fewer strokes) while
+  // always counting the replay in rounds_played.
+  app.post('/game/tournament/result', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const body = await c.req
+      .json<{ toPar?: unknown; strokes?: unknown }>()
+      .catch(() => null);
+
+    // toPar: required integer within the golfcourse clamp.
+    if (
+      !Number.isInteger(body?.toPar) ||
+      (body!.toPar as number) < -MAX_TO_PAR ||
+      (body!.toPar as number) > MAX_TO_PAR
+    ) {
+      return c.json({ error: 'invalid_result' }, 400);
+    }
+    const toPar = body!.toPar as number;
+
+    // strokes: required small positive integer (1..200).
+    if (
+      !Number.isInteger(body?.strokes) ||
+      (body!.strokes as number) < 1 ||
+      (body!.strokes as number) > MAX_DAILY_STROKES
+    ) {
+      return c.json({ error: 'invalid_result' }, 400);
+    }
+    const strokes = body!.strokes as number;
+
+    const now = Date.now();
+    const id = currentPeriodIndex(now);
+    const { openedAt, closesAt } = periodWindow(id);
+
+    // Submissions to a closed event are rejected. The window bounding the
+    // current period is derived (openedAt..closesAt); when a row already
+    // exists we trust ITS pinned closes_at (identical in production, since it
+    // was set to the derived value at open time). A settled event is closed by
+    // definition.
+    const existing = await c.env.DB.prepare(
+      `SELECT closes_at AS closesAt, settled FROM tournaments WHERE id = ?`,
+    )
+      .bind(id)
+      .first<{ closesAt: number; settled: number }>();
+    const effectiveClosesAt = existing?.closesAt ?? closesAt;
+    if (now >= effectiveClosesAt || existing?.settled === 1) {
+      return c.json({ error: 'tournament_closed' }, 409);
+    }
+
+    const score = dailyScoreFromToPar(toPar);
+
+    // Lazily create the event row (no-op if a prior submission already did).
+    await c.env.DB.prepare(
+      `INSERT OR IGNORE INTO tournaments
+         (id, kind, seed, holes, opened_at, closes_at, settled, created_at)
+       VALUES (?, 'rapid', ?, ?, ?, ?, 0, ?)`,
+    )
+      .bind(
+        id,
+        tournamentSeed(id),
+        JSON.stringify(tournamentHoles(id)),
+        openedAt,
+        closesAt,
+        now,
+      )
+      .run();
+
+    // Close the settle-after-post race: a concurrent cron tick could have
+    // settled the event between the pre-check above and this point. Re-read
+    // `settled` now that the row is guaranteed to exist; if it's already
+    // awarded, refuse the entry so it can't land after placements were written
+    // and silently miss a trophy. (A sub-statement boundary race may remain,
+    // but it can't corrupt placements.)
+    const settledNow = await c.env.DB.prepare(
+      `SELECT settled FROM tournaments WHERE id = ?`,
+    )
+      .bind(id)
+      .first<{ settled: number }>();
+    if (settledNow?.settled === 1) {
+      return c.json({ error: 'tournament_closed' }, 409);
+    }
+
+    // Report whether this run beat the caller's stored best; the conditional
+    // upsert below re-checks the same ordering in SQL (settles concurrency).
+    const prior = await c.env.DB.prepare(
+      `SELECT score, to_par AS toPar, strokes
+         FROM tournament_entries WHERE tournament_id = ? AND user_id = ?`,
+    )
+      .bind(id, me.id)
+      .first<{ score: number; toPar: number | null; strokes: number | null }>();
+    const improved =
+      !prior ||
+      score > prior.score ||
+      (score === prior.score && toPar < (prior.toPar ?? Infinity)) ||
+      (score === prior.score &&
+        toPar === (prior.toPar ?? Infinity) &&
+        strokes < (prior.strokes ?? Infinity));
+
+    // Keep the better run per column; rounds_played always increments. The
+    // guard mirrors the board ordering: higher score, then lower to_par, then
+    // fewer strokes.
+    await c.env.DB.prepare(
+      `INSERT INTO tournament_entries
+         (id, tournament_id, user_id, score, to_par, strokes, rounds_played, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+       ON CONFLICT(tournament_id, user_id) DO UPDATE SET
+         score   = CASE WHEN <better> THEN excluded.score   ELSE tournament_entries.score   END,
+         to_par  = CASE WHEN <better> THEN excluded.to_par  ELSE tournament_entries.to_par  END,
+         strokes = CASE WHEN <better> THEN excluded.strokes ELSE tournament_entries.strokes END,
+         rounds_played = tournament_entries.rounds_played + 1,
+         updated_at    = excluded.updated_at`.replace(
+        /<better>/g,
+        `(excluded.score > tournament_entries.score
+           OR (excluded.score = tournament_entries.score
+               AND excluded.to_par < tournament_entries.to_par)
+           OR (excluded.score = tournament_entries.score
+               AND excluded.to_par = tournament_entries.to_par
+               AND excluded.strokes < tournament_entries.strokes))`,
+      ),
+    )
+      .bind(crypto.randomUUID(), id, me.id, score, toPar, strokes, now, now)
+      .run();
+
+    // Read-after-write: the persisted best may be a prior, better run. A row
+    // is guaranteed here — we just upserted one.
+    const entryRow = await c.env.DB.prepare(
+      `SELECT score, to_par AS toPar, strokes, created_at AS createdAt
+         FROM tournament_entries WHERE tournament_id = ? AND user_id = ?`,
+    )
+      .bind(id, me.id)
+      .first<{
+        score: number;
+        toPar: number | null;
+        strokes: number | null;
+        createdAt: number;
+      }>();
+
+    const rank = entryRow ? await tournamentRank(c.env.DB, id, entryRow) : 1;
+
+    const entrantsRow = await c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM tournament_entries WHERE tournament_id = ?`,
+    )
+      .bind(id)
+      .first<{ n: number }>();
+
+    return c.json({
+      entry: {
+        score: entryRow?.score ?? score,
+        toPar: entryRow?.toPar ?? toPar,
+        strokes: entryRow?.strokes ?? strokes,
+        rank,
+      },
+      entrants: entrantsRow?.n ?? 0,
+      improved,
+    });
+  });
+
+  // GET /game/tournament/leaderboard?scope=global|friends — top 25 for the
+  // current event, ordered score DESC, to_par ASC. Both scopes drop blocked
+  // users; `friends` additionally restricts to the caller + their contacts,
+  // `global` (default) shows everyone.
+  app.get('/game/tournament/leaderboard', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const friends = c.req.query('scope') === 'friends';
+    const id = currentPeriodIndex(Date.now());
+
+    // Contact-scope clause is present only for the friends board; the block
+    // filter applies to both.
+    const scopeClause = friends
+      ? `AND (t.user_id = ? OR t.user_id IN (SELECT contact_id FROM contacts WHERE owner_id = ?))`
+      : '';
+    const binds: unknown[] = [id];
+    if (friends) binds.push(me.id, me.id);
+    binds.push(me.id); // block filter
+
+    const rows = await c.env.DB.prepare(
+      `SELECT u.id, u.display_name, u.pin, u.avatar_url, u.avatar_r2_key,
+              t.score AS score, t.to_par AS to_par, t.strokes AS strokes
+         FROM tournament_entries t JOIN users u ON u.id = t.user_id
+        WHERE t.tournament_id = ?
+          ${scopeClause}
+          AND t.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = ?)
+        ORDER BY t.score DESC, t.to_par ASC, t.strokes ASC, t.created_at ASC
+        LIMIT 25`,
+    )
+      .bind(...binds)
+      .all<{
+        id: string;
+        display_name: string;
+        pin: string;
+        avatar_url: string | null;
+        avatar_r2_key: string | null;
+        score: number;
+        to_par: number | null;
+        strokes: number | null;
+      }>();
+
+    const origin = new URL(c.req.url).origin;
+    const entries = (rows.results ?? []).map((r) => ({
+      userId: r.id,
+      displayName: r.display_name,
+      pin: r.pin,
+      avatarUrl: avatarUrlFor(origin, r),
+      score: r.score,
+      toPar: r.to_par,
+      strokes: r.strokes,
+      mine: r.id === me.id,
+    }));
+    return c.json({ entries });
+  });
+
+  // GET /game/tournament/me — the caller's cumulative trophy tally (default
+  // zeros) plus their recent placements, for the profile page.
+  app.get('/game/tournament/me', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const tally = await c.env.DB.prepare(
+      `SELECT trophies, golds, podiums, best_rank AS bestRank, events_played AS eventsPlayed
+         FROM tournament_trophies WHERE user_id = ?`,
+    )
+      .bind(me.id)
+      .first<{
+        trophies: number;
+        golds: number;
+        podiums: number;
+        bestRank: number | null;
+        eventsPlayed: number;
+      }>();
+
+    const placementRows = await c.env.DB.prepare(
+      `SELECT p.tournament_id AS tournamentId, p.rank, p.trophies,
+              p.created_at AS createdAt, tt.closes_at AS closesAt
+         FROM tournament_placements p
+         JOIN tournaments tt ON tt.id = p.tournament_id
+        WHERE p.user_id = ?
+        ORDER BY p.created_at DESC
+        LIMIT 20`,
+    )
+      .bind(me.id)
+      .all<{
+        tournamentId: number;
+        rank: number;
+        trophies: number;
+        createdAt: number;
+        closesAt: number;
+      }>();
+
+    return c.json({
+      trophies: {
+        trophies: tally?.trophies ?? 0,
+        golds: tally?.golds ?? 0,
+        podiums: tally?.podiums ?? 0,
+        bestRank: tally?.bestRank ?? null,
+        eventsPlayed: tally?.eventsPlayed ?? 0,
+      },
+      placements: (placementRows.results ?? []).map((r) => ({
+        tournamentId: r.tournamentId,
+        rank: r.rank,
+        trophies: r.trophies,
+        closesAt: r.closesAt,
+        createdAt: r.createdAt,
+      })),
+    });
   });
 
   return app;

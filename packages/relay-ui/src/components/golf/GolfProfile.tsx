@@ -4,7 +4,7 @@ import { api } from '../../lib/api';
 import type { GolfRecords } from '../../lib/api';
 import { getCourse } from '../../lib/golf/courses';
 import { useStore } from '../../lib/store';
-import type { GolfStats } from '../../lib/types';
+import type { GolfStats, TournamentMe } from '../../lib/types';
 
 // ± to-par label. Negative (under par) is good and gets the accent colour.
 function fmtToPar(n: number | null | undefined): string {
@@ -24,6 +24,22 @@ function fmtToParDec(n: number | null | undefined): string {
 // the uncategorized / mini-golf pile; getCourse() resolves real course ids.
 function courseName(id: string | null): string {
   return id == null ? 'Mini-golf' : getCourse(id).name;
+}
+
+// Ordinal rank label ("1st", "2nd", "3rd", "12th").
+function fmtRank(n: number): string {
+  const t = n % 100;
+  if (t >= 11 && t <= 13) return `${n}th`;
+  switch (n % 10) {
+    case 1:
+      return `${n}st`;
+    case 2:
+      return `${n}nd`;
+    case 3:
+      return `${n}rd`;
+    default:
+      return `${n}th`;
+  }
 }
 
 // Compact relative time for recent rounds.
@@ -55,6 +71,7 @@ export function GolfProfile() {
   const [puttStats, setPuttStats] = useState<GolfStats | null>(null);
   const [rangeStats, setRangeStats] = useState<GolfStats | null>(null);
   const [records, setRecords] = useState<GolfRecords | null>(null);
+  const [tourney, setTourney] = useState<TournamentMe | null>(null);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -67,12 +84,14 @@ export function GolfProfile() {
         .getGolfRecords()
         .then((r) => r.records)
         .catch(() => null),
-    ]).then(([course, putt, range, rec]) => {
+      api.getTournamentMe().catch(() => null),
+    ]).then(([course, putt, range, rec, tm]) => {
       if (cancelled) return;
       setCourseStats(course);
       setPuttStats(putt);
       setRangeStats(range);
       setRecords(rec);
+      setTourney(tm);
       setLoaded(true);
     });
     return () => {
@@ -116,9 +135,13 @@ export function GolfProfile() {
     (records.longestDrive != null ||
       records.closestToPin != null ||
       records.longestPutt != null);
+  const trophies = tourney?.trophies ?? null;
+  const placements = tourney?.placements ?? [];
+  const playedTourneys = (trophies?.eventsPlayed ?? 0) > 0;
   const hasAnything =
     courseRounds > 0 ||
     anyRecord ||
+    playedTourneys ||
     (puttStats?.gamesPlayed ?? 0) > 0 ||
     (rangeStats?.gamesPlayed ?? 0) > 0;
 
@@ -198,6 +221,21 @@ export function GolfProfile() {
               <b>{bestStreak != null ? `×${bestStreak}` : '—'}</b>
               <small>under-par holes</small>
             </div>
+            {/* Tournament trophies — spans the full row so the 5th tile reads
+                intentionally rather than orphaned. */}
+            <div className="golf-tile" style={{ gridColumn: '1 / -1' }}>
+              <span>Tournament trophies</span>
+              <b>
+                <span aria-hidden="true">🏆</span> {trophies?.trophies ?? 0}
+              </b>
+              <small>
+                {trophies && trophies.eventsPlayed > 0
+                  ? `${trophies.golds} gold · ${trophies.podiums} podium${
+                      trophies.podiums === 1 ? '' : 's'
+                    }${trophies.bestRank != null ? ` · best ${fmtRank(trophies.bestRank)}` : ''}`
+                  : 'play a Rapid Tournament'}
+              </small>
+            </div>
           </div>
 
           {/* ---- Trophy shelf ---- */}
@@ -223,6 +261,37 @@ export function GolfProfile() {
               </div>
             ))}
           </div>
+
+          {/* ---- Recent tournament finishes ---- */}
+          {placements.length > 0 ? (
+            <>
+              <h3 className="golf-shelf-h">Tournament finishes</h3>
+              <div className="golf-rows">
+                {placements.map((p) => {
+                  const podium = p.rank <= 3;
+                  return (
+                    <div key={p.tournamentId} className="golf-row">
+                      <span
+                        className={'g-cd' + (podium ? '' : ' over')}
+                        aria-hidden="true"
+                      />
+                      <div className="g-rn">
+                        <b>{fmtRank(p.rank)} place</b>
+                        <span>
+                          {p.trophies} trophy{p.trophies === 1 ? '' : 's'} ·{' '}
+                          {relTime(p.closesAt)}
+                        </span>
+                      </div>
+                      <span className={'g-sc' + (podium ? ' under' : '')}>
+                        <span aria-hidden="true">🏆</span>
+                        {p.trophies}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : null}
 
           {/* ---- Per-course breakdown ---- */}
           {perCourse.length > 0 ? (

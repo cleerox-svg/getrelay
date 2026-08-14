@@ -1,0 +1,482 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Avatar } from '../Avatar';
+import { api } from '../../lib/api';
+import { getCourse } from '../../lib/golf/courses';
+import type { GolfCourse } from '../../lib/golf/courses';
+import { synthTournamentCourse } from '../../lib/golf/tournamentCourse';
+import type {
+  Tournament,
+  TournamentLeaderboardEntry,
+} from '../../lib/types';
+
+// Medal colours for the top three, self-contained so they read both inside the
+// .golf-hub layer and on the standalone results screens (mirrors GolfLeaderboard).
+const MEDALS = ['#C9A227', '#9AA0A6', '#B0763A'];
+
+// ± to-par label: 0 → "E", positive → "+n", negative → "−n" (true minus sign).
+function fmtToPar(n: number | null | undefined): string {
+  if (n == null) return '—';
+  if (n === 0) return 'E';
+  return n > 0 ? `+${n}` : `−${Math.abs(n)}`;
+}
+
+// Ordinal-ish rank label ("1st", "2nd", "3rd", "12th").
+function fmtRank(n: number): string {
+  const t = n % 100;
+  if (t >= 11 && t <= 13) return `${n}th`;
+  switch (n % 10) {
+    case 1:
+      return `${n}st`;
+    case 2:
+      return `${n}nd`;
+    case 3:
+      return `${n}rd`;
+    default:
+      return `${n}th`;
+  }
+}
+
+// Format a countdown (ms) as "Hh Mm" / "Mm Ss" / "Ss". Clamps at 0.
+function fmtCountdown(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${String(sec).padStart(2, '0')}s`;
+  return `${sec}s`;
+}
+
+// Friendly "Course · Hole n" line for one of the three tournament holes. The
+// course id resolves to a real Course-mode name; the 1-based hole no. is shown
+// as authored.
+function holeLabel(courseId: string, hole: number): { course: string; hole: number; par?: number } {
+  const c = getCourse(courseId);
+  const h = c.holes[hole - 1];
+  return { course: c.name, hole, par: h?.par };
+}
+
+interface Props {
+  // Launch the seeded 3-hole tournament round. GolfScreen plays the synthesized
+  // course as a full round (NO startHole) through its existing Course free-screen
+  // path, and reports the finished ROUND total back via pendingResult below.
+  onPlay: (course: GolfCourse, seed: number) => void;
+  // Set by GolfScreen when a tournament round finishes (the round's to-par +
+  // total strokes). We POST it here, show the updated rank / "improved!" state,
+  // then call onResultConsumed so it isn't submitted twice.
+  pendingResult: { toPar: number; strokes: number } | null;
+  onResultConsumed: () => void;
+}
+
+// The Tournaments sub-tab of the golf hub. Fetches the live event on mount, lets
+// the player launch it as a seeded 3-hole round, submits the finishing round
+// total, and shows the global/friends leaderboard. Every request degrades
+// gracefully — a failed fetch shows a "needs connection" state rather than
+// crashing.
+export function GolfTournaments({ onPlay, pendingResult, onResultConsumed }: Props) {
+  const [tourney, setTourney] = useState<Tournament | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+
+  const [improved, setImproved] = useState<boolean | null>(null);
+  const [submitState, setSubmitState] = useState<'idle' | 'saving' | 'done' | 'error'>('idle');
+
+  const [scope, setScope] = useState<'global' | 'friends'>('global');
+  const [board, setBoard] = useState<TournamentLeaderboardEntry[] | null>(null);
+  const [boardError, setBoardError] = useState(false);
+
+  // Live countdown. `deadline` is an absolute local timestamp derived from the
+  // server's `msLeft` at fetch time (Date.now() + msLeft) so the tick is immune
+  // to any device-clock skew against `closesAt`. `now` ticks each second.
+  const [now, setNow] = useState(() => Date.now());
+  const deadlineRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!tourney) return;
+    deadlineRef.current = Date.now() + tourney.msLeft;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [tourney]);
+  const msLeft = deadlineRef.current != null ? deadlineRef.current - now : (tourney?.msLeft ?? 0);
+  const closed = msLeft <= 0;
+
+  // Fetch the live event on mount / retry. Unauthed (401) or offline lands in the
+  // "needs connection" state.
+  useEffect(() => {
+    let cancelled = false;
+    setTourney(null);
+    setLoadError(false);
+    setSubmitState('idle');
+    setImproved(null);
+    setBoard(null);
+    api
+      .getTournament()
+      .then((t) => {
+        if (!cancelled) setTourney(t);
+      })
+      .catch(() => {
+        if (!cancelled) setLoadError(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [attempt]);
+
+  const loadBoard = useCallback((s: 'global' | 'friends') => {
+    setBoardError(false);
+    setBoard(null);
+    api
+      .getTournamentLeaderboard(s)
+      .then((r) => setBoard(r.entries))
+      .catch(() => setBoardError(true));
+  }, []);
+
+  // Load the leaderboard once the player has an entry (fetched or just
+  // submitted), and whenever the scope toggle changes.
+  const hasEntry = tourney?.entry != null;
+  useEffect(() => {
+    if (hasEntry) loadBoard(scope);
+  }, [hasEntry, scope, loadBoard]);
+
+  // Submit a finished round total. Keeps the server's read-after-write standing
+  // and badges "improved!"; refreshes the leaderboard. Retryable on failure.
+  const submitPending = useCallback(
+    (res: { toPar: number; strokes: number }) => {
+      setSubmitState('saving');
+      api
+        .postTournamentResult(res)
+        .then((r) => {
+          setTourney((prev) =>
+            prev ? { ...prev, entry: r.entry, entrants: r.entrants } : prev,
+          );
+          setImproved(r.improved);
+          setSubmitState('done');
+          loadBoard(scope);
+          onResultConsumed();
+        })
+        .catch(() => setSubmitState('error'));
+    },
+    [loadBoard, scope, onResultConsumed],
+  );
+
+  // Fire the submit exactly once per pending result object (identity-guarded so a
+  // re-render doesn't re-POST). GolfScreen clears pendingResult via
+  // onResultConsumed on success, so a failed submit leaves it for the Retry.
+  const submittingRef = useRef<{ toPar: number; strokes: number } | null>(null);
+  useEffect(() => {
+    if (pendingResult && submittingRef.current !== pendingResult) {
+      submittingRef.current = pendingResult;
+      submitPending(pendingResult);
+    }
+  }, [pendingResult, submitPending]);
+
+  // ---- Loading / needs-connection states ----
+  if (loadError) {
+    return (
+      <div className="golf-empty">
+        <b>Tournaments need a connection.</b>
+        <br />
+        Couldn’t reach the live event.
+        <br />
+        <button
+          type="button"
+          className="mt-2 font-semibold"
+          style={{ color: 'var(--golf-accent)', background: 'transparent', border: 0 }}
+          onClick={() => setAttempt((a) => a + 1)}
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+  if (!tourney) {
+    return <div className="golf-empty">Loading the live event…</div>;
+  }
+
+  const entry = tourney.entry;
+
+  function launch() {
+    if (!tourney || closed) return;
+    const course = synthTournamentCourse(tourney.id, tourney.holes);
+    if (course) onPlay(course, tourney.seed);
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* ---- Event card ---- */}
+      <div
+        className="rounded-2xl overflow-hidden"
+        style={{ background: 'var(--card-bg)', border: '1px solid var(--separator)' }}
+      >
+        <div className="flex items-start justify-between gap-3 p-4">
+          <div className="min-w-0">
+            <div
+              className="text-[10px] font-bold uppercase tracking-wider"
+              style={{ color: 'var(--text-dim)' }}
+            >
+              Rapid Tournament · 3 holes
+            </div>
+            <div className="text-lg font-extrabold" style={{ color: 'var(--text)' }}>
+              {closed ? 'Event closed' : 'Live now'}
+            </div>
+            <div className="text-[13px]" style={{ color: 'var(--text-dim)' }}>
+              {tourney.entrants} entrant{tourney.entrants === 1 ? '' : 's'}
+            </div>
+          </div>
+          {/* Countdown pill — turns dim once the event has closed. */}
+          <div
+            className="shrink-0 flex flex-col items-center rounded-xl px-3 py-1.5"
+            style={{
+              background: closed
+                ? 'var(--bubble-them)'
+                : 'color-mix(in srgb, var(--golf-accent) 18%, transparent)',
+            }}
+            title={closed ? 'This event has closed' : 'Time left to enter'}
+          >
+            <span className="text-lg font-extrabold tabular-nums" style={{ color: 'var(--text)' }}>
+              {closed ? '—' : fmtCountdown(msLeft)}
+            </span>
+            <span className="text-[10px] font-semibold" style={{ color: 'var(--text-dim)' }}>
+              {closed ? 'closed' : 'left'}
+            </span>
+          </div>
+        </div>
+
+        {/* The three holes. */}
+        <div
+          className="grid grid-cols-3 divide-x px-4 py-3"
+          style={{ borderTop: '1px solid var(--separator)', borderColor: 'var(--separator)' }}
+        >
+          {tourney.holes.map((ref, i) => {
+            const h = holeLabel(ref.course, ref.hole);
+            return (
+              <div key={i} className="flex flex-col items-center px-1 text-center">
+                <span
+                  className="text-[10px] font-bold uppercase tracking-wider"
+                  style={{ color: 'var(--text-dim)' }}
+                >
+                  Hole {i + 1}
+                </span>
+                <span
+                  className="text-[13px] font-extrabold leading-tight"
+                  style={{ color: 'var(--text)' }}
+                >
+                  {h.course}
+                </span>
+                <span className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
+                  #{h.hole}
+                  {h.par ? ` · Par ${h.par}` : ''}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Your current standing (once you've entered). */}
+        {entry ? (
+          <div
+            className="grid grid-cols-3 divide-x px-4 py-3"
+            style={{ borderTop: '1px solid var(--separator)', borderColor: 'var(--separator)' }}
+          >
+            <TourneyStat label="Rank" value={fmtRank(entry.rank)} />
+            <TourneyStat
+              label="To par"
+              value={fmtToPar(entry.toPar)}
+              accent={entry.toPar != null && entry.toPar < 0}
+            />
+            <TourneyStat label="Strokes" value={`${entry.strokes}`} />
+          </div>
+        ) : null}
+
+        {/* Submit feedback. */}
+        {submitState === 'done' && improved ? (
+          <div className="px-4 pb-2 text-[13px] font-bold" style={{ color: 'var(--golf-accent)' }}>
+            🏆 New best — you’re {entry ? fmtRank(entry.rank) : 'on the board'}!
+          </div>
+        ) : null}
+        {submitState === 'done' && improved === false ? (
+          <div className="px-4 pb-2 text-[13px]" style={{ color: 'var(--text-dim)' }}>
+            Kept your earlier best for this event.
+          </div>
+        ) : null}
+        {submitState === 'saving' ? (
+          <div className="px-4 pb-2 text-[13px]" style={{ color: 'var(--text-dim)' }}>
+            Saving your round…
+          </div>
+        ) : null}
+        {submitState === 'error' && pendingResult ? (
+          <div className="px-4 pb-2 text-[13px]" style={{ color: 'var(--ping)' }}>
+            Couldn’t submit.
+            <button
+              type="button"
+              className="ml-2 font-semibold"
+              style={{ color: 'var(--golf-accent)', background: 'transparent', border: 0 }}
+              onClick={() => submitPending(pendingResult)}
+            >
+              Retry
+            </button>
+          </div>
+        ) : null}
+
+        {/* Play / Replay CTA. Server keeps the BEST, so replay is safe. Disabled
+            once the event has closed — a new event appears on the next fetch. */}
+        <div className="px-4 pb-4 pt-1">
+          <button
+            type="button"
+            className="golf-cta w-full rounded-xl py-3 text-[15px] font-bold"
+            disabled={closed}
+            style={closed ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+            onClick={launch}
+          >
+            <span className="g-sheen" aria-hidden="true" />
+            {closed ? 'Event closed' : entry ? 'Play again' : 'Play the 3 holes'}
+          </button>
+          {closed ? (
+            <div className="pt-2 text-center text-[12px]" style={{ color: 'var(--text-dim)' }}>
+              A new event opens shortly —
+              <button
+                type="button"
+                className="ml-1 font-semibold"
+                style={{ color: 'var(--golf-accent)', background: 'transparent', border: 0 }}
+                onClick={() => setAttempt((a) => a + 1)}
+              >
+                refresh
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {/* ---- Leaderboard (once the player has entered) ---- */}
+      {hasEntry ? (
+        <div className="flex flex-col gap-2">
+          {/* Global / Friends segmented toggle — same idiom as GolfLeaderboard. */}
+          <div
+            className="flex rounded-[10px] p-[3px] gap-[3px]"
+            style={{ background: 'var(--bubble-them)' }}
+          >
+            {(
+              [
+                ['global', 'Global'],
+                ['friends', 'Friends'],
+              ] as const
+            ).map(([key, label]) => {
+              const active = scope === key;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setScope(key)}
+                  className="flex-1 rounded-lg py-[6px] text-[13px] font-bold"
+                  style={{
+                    border: 'none',
+                    background: active ? 'var(--accent)' : 'transparent',
+                    color: active ? '#FFFFFF' : 'var(--text)',
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+
+          {boardError ? (
+            <div className="text-center py-6 text-sm" style={{ color: 'var(--text-dim)' }}>
+              Couldn’t load the leaderboard.
+              <button
+                type="button"
+                className="block mx-auto mt-2 font-semibold"
+                style={{ color: 'var(--golf-accent)', background: 'transparent', border: 0 }}
+                onClick={() => loadBoard(scope)}
+              >
+                Retry
+              </button>
+            </div>
+          ) : board === null ? (
+            <div className="text-center py-6 text-sm" style={{ color: 'var(--text-dim)' }}>
+              Loading…
+            </div>
+          ) : board.length === 0 ? (
+            <div className="text-center py-6 text-sm" style={{ color: 'var(--text-dim)' }}>
+              {scope === 'friends'
+                ? 'None of your friends have entered yet.'
+                : 'You’re first on the board.'}
+            </div>
+          ) : (
+            <div
+              className="rounded-2xl overflow-hidden"
+              style={{ background: 'var(--card-bg)', border: '1px solid var(--separator)' }}
+            >
+              {board.map((e, i) => (
+                <div
+                  key={e.userId}
+                  className="flex items-center gap-3 px-3 py-2"
+                  style={{
+                    borderTop: i > 0 ? '1px solid var(--separator)' : undefined,
+                    background: e.mine
+                      ? 'color-mix(in srgb, var(--golf-accent) 12%, transparent)'
+                      : undefined,
+                  }}
+                >
+                  <span
+                    className="w-6 text-center text-sm font-bold tabular-nums shrink-0"
+                    style={{ color: i < 3 ? MEDALS[i] : 'var(--text-dim)' }}
+                  >
+                    {i + 1}
+                  </span>
+                  <Avatar src={e.avatarUrl} name={e.displayName} size={32} />
+                  <span
+                    className="flex-1 min-w-0 truncate text-sm font-semibold"
+                    style={{ color: 'var(--text)' }}
+                  >
+                    {e.displayName}
+                    {e.mine ? (
+                      <span
+                        className="text-xs font-normal ml-1"
+                        style={{ color: 'var(--text-dim)' }}
+                      >
+                        (you)
+                      </span>
+                    ) : null}
+                  </span>
+                  <span
+                    className="text-sm font-bold tabular-nums w-10 text-right"
+                    style={{ color: e.toPar < 0 ? 'var(--golf-accent)' : 'var(--text)' }}
+                  >
+                    {fmtToPar(e.toPar)}
+                  </span>
+                  <span
+                    className="text-xs tabular-nums w-14 text-right shrink-0"
+                    style={{ color: 'var(--text-dim)' }}
+                  >
+                    {e.strokes} stroke{e.strokes === 1 ? '' : 's'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// One stat cell in the "your standing" strip.
+function TourneyStat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div className="flex flex-col items-center px-1 text-center">
+      <span
+        className="text-[10px] font-bold uppercase tracking-wider"
+        style={{ color: 'var(--text-dim)' }}
+      >
+        {label}
+      </span>
+      <span
+        className="text-xl font-extrabold tabular-nums"
+        style={{ color: accent ? 'var(--golf-accent)' : 'var(--text)' }}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
