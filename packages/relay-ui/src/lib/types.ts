@@ -685,6 +685,14 @@ export interface Challenge {
   winnerId: string | null;
   mine: 'challenger' | 'opponent';
   createdAt: number;
+  // Nominal stake: coins on the line for the winner (worker-set). Shown on the
+  // LIVE card as the stake. Optional/additive: older worker builds omit it, so
+  // the card hides the stake line rather than showing "0 coins".
+  rewardCoins?: number;
+  // Coins the viewer ACTUALLY received when the match settled (0 if they lost or
+  // hit the daily cap). Present on completed challenges only; the outcome
+  // headline reads THIS, not the nominal stake, so a capped win isn't a lie.
+  rewardCoinsAwarded?: number;
 }
 
 export interface ReplyPreview {
