@@ -907,11 +907,12 @@ export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
           spawnBurst(cupX, cupTopY, cupZ, 0xffe27a);
           play('sink');
         } else if (ev.type === 'stroke') {
-          // Putter contact, brightened by stroke power. Power is reset to 0 on
-          // launch, so read it from the launch speed the sim set on the ball.
+          // Putter contact — a soft low "tock". Power is reset to 0 on launch, so
+          // read it from the launch speed the sim set on the ball; putts scale
+          // only slightly with power.
           const spd = Math.hypot(sim.ball.vel.x, sim.ball.vel.y);
           const p01 = Math.max(0, Math.min(1, spd / MAX_LAUNCH_SPEED));
-          play('strike', { rate: 0.8 + 0.4 * p01, gain: 0.4 + 0.4 * p01 });
+          play('putt', { rate: 0.95 + 0.1 * p01, gain: 0.4 + 0.2 * p01 });
         } else if (ev.type === 'penalty') {
           play('penalty');
         } else if (ev.type === 'rest') {

@@ -2162,11 +2162,21 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       const st = sim.getState();
 
       // --- SFX (render-side only; the sim is never touched) ----------------
-      // Shot fire: inFlight rises false→true (covers both a swing and a putt).
-      // Strike brightness/level scale with launch power (ballSpeed / fastest club).
+      // Shot fire: inFlight rises false→true. This covers BOTH a lofted swing and
+      // a green putt (a course putt also sets inFlight — it's a grounded roll, so
+      // the flight-only bounce/land detectors below simply never trigger for it).
+      // Distinguish the two by st.putting: the sim reports putting===true exactly
+      // when the ball's lie is the green, i.e. the stroke just fired is a putt.
+      // Swing = airy whoosh scaled by launch power; putt = soft low tock, quiet
+      // and near-constant (putts vary little in power).
       if (st.inFlight && !sfxWasInFlight) {
-        const p01 = Math.max(0, Math.min(1, st.ballSpeed / MAX_CLUB_SPEED));
-        play('strike', { rate: 0.85 + 0.55 * p01, gain: 0.55 + 0.55 * p01 });
+        if (st.putting) {
+          const q01 = Math.max(0, Math.min(1, st.ballSpeed / MAX_CLUB_SPEED));
+          play('putt', { rate: 0.95 + 0.1 * q01, gain: 0.45 + 0.2 * q01 });
+        } else {
+          const p01 = Math.max(0, Math.min(1, st.ballSpeed / MAX_CLUB_SPEED));
+          play('swing', { rate: 0.85 + 0.55 * p01, gain: 0.55 + 0.55 * p01 });
+        }
         sfxLastVh = b.vh;
         sfxBounces = 0;
         sfxLastRollAt = 0;

@@ -35,8 +35,9 @@ describe('audio prefs snapshot stability', () => {
     // Repeated reads with nothing changed → SAME reference (the crash guard).
     expect(getAudioPrefs()).toBe(a);
     expect(getAudioPrefs()).toBe(a);
-    // Defaults: effects + music on, not muted.
-    expect(a).toEqual({ sfx: true, music: true, muted: false });
+    // Defaults: effects on, MUSIC OFF (synth bed is a fallback until a real
+    // track is dropped in), not muted.
+    expect(a).toEqual({ sfx: true, music: false, muted: false });
 
     setAudioPrefs({ muted: true });
     const b = getAudioPrefs();

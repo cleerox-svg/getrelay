@@ -12,21 +12,26 @@
 //
 // HYBRID-READY, SYNTH-FIRST registry
 // ----------------------------------
-// Each SoundId maps to a SoundDef with an OPTIONAL procedural `synth` AND an
-// OPTIONAL `src` (a file URL). v1 ships synth-only (no binary assets to
-// source/license mid-build). To upgrade a sound to a real royalty-free file
-// later, add `src: '/audio/strike.mp3'` to its registry entry — nothing at any
-// call site changes:
-//   • on unlock() every entry with a `src` is fetched + decoded once into an
+// Each SoundId maps to a SoundDef with a procedural `synth`. v1 ships
+// synth-only (no binary assets to source/license mid-build). Real royalty-free
+// files are opted in ONE place — the SAMPLE_FILES manifest below — never at a
+// call site:
+//   • SAMPLE_FILES maps a SoundId (or 'music') to a filename under /audio/. It
+//     ships EMPTY, so NO fetch/decode happens (zero network, zero 404s) until
+//     the user drops a file in and uncomments its line.
+//   • on unlock() every manifest entry is fetched + decoded once into an
 //     AudioBuffer cache (decode-on-first-gesture);
 //   • play() prefers a decoded buffer over the synth, applying {rate, gain}
 //     via playbackRate + a per-shot gain node exactly as the synth path does.
-// So `src` transparently shadows `synth`; drop files in, no code churn.
+// So a manifest entry transparently shadows the synth; drop files in, no code
+// churn. A missing/failed file silently falls back to the synth.
+// See public/audio/README.md for the drop-in shopping list.
 
 import { getAudioPrefs, subscribeAudioPrefs, type AudioPrefs } from './prefs';
 
 export type SoundId =
-  | 'strike' // club/putter contact — brightness+level scale with shot power
+  | 'swing' // lofted club contact — airy whoosh + crisp crack; scales with power
+  | 'putt' // putter contact — soft low "tock"; quiet, minimal power scaling
   | 'land' // ball's first ground contact / a bounce
   | 'roll' // ball rolling on turf (subtle, throttled)
   | 'splash' // ball into water
@@ -38,6 +43,24 @@ export type SoundId =
   | 'ui-club' // club selector change
   | 'ui-tick' // small UI tick (armed / stepper)
   | 'ui-power'; // power meter feedback
+
+// Sample drop-in manifest (the ONE opt-in place for real audio). Maps a SoundId
+// (or the 'music' loop) to a filename served from /audio/ on Pages. START EMPTY
+// so nothing is fetched until a file is added. To activate a sound: drop the
+// file in packages/relay-ui/public/audio/ and UNCOMMENT its line here.
+const AUDIO_BASE = '/audio/';
+const SAMPLE_FILES: Partial<Record<SoundId | 'music', string>> = {
+  swing: 'swing.wav', // Mixkit "golf ball swing" — whoosh + contact
+  putt: 'putt.mp3', // Freesound (via Pixabay) soft putter tap
+  // land: 'bounce.wav', // STAGED: Mixkit bounce is a ~5s multi-bounce sequence;
+  //   our engine fires 'land' on every ground contact, so this needs trimming to
+  //   a single bounce before enabling (no ffmpeg in the build env to trim it).
+  // Alternate swing: 'swing-impact.wav' (Mixkit "golf ball hit") — swap above.
+  // splash: 'splash.mp3',
+  // sink: 'sink.mp3',
+  // ding: 'ding.mp3',
+  // music: 'music.mp3', // a seamless ~30–90s loop
+};
 
 export interface PlayOpts {
   // Playback rate multiplier (buffer path) / synth pitch scale (synth path).
@@ -56,9 +79,6 @@ type SynthFn = (
 interface SoundDef {
   id: SoundId;
   synth?: SynthFn;
-  // Asset seam — set to a file URL to back this sound with a decoded
-  // AudioBuffer instead of the synth (see the module header).
-  src?: string;
 }
 
 // Bus levels. The sfx/music prefs gate these to 0 when off; master mute gates
@@ -141,16 +161,34 @@ function ensureContext(): boolean {
   }
 }
 
-// Kick off decode of any file-backed sounds (asset seam). Fire-and-forget; a
-// failed fetch/decode leaves the synth fallback in place.
+// Kick off decode of any file-backed sounds declared in SAMPLE_FILES (the ONE
+// opt-in place). With the manifest empty this loops zero times → no network at
+// all. Fire-and-forget; a failed fetch/decode leaves the synth (or, for music,
+// the synth bed) fallback in place. The 'music' key decodes to musicBuffer,
+// which startMusic prefers over the synth bed.
 function decodeAssets(): void {
   if (!ctx) return;
-  for (const def of Object.values(REGISTRY)) {
-    if (!def.src || buffers.has(def.id)) continue;
-    void fetch(def.src)
+  for (const [key, name] of Object.entries(SAMPLE_FILES) as [SoundId | 'music', string][]) {
+    if (!name) continue;
+    const url = AUDIO_BASE + name;
+    if (key === 'music') {
+      if (musicBuffer) continue;
+      void fetch(url)
+        .then((r) => r.arrayBuffer())
+        .then((ab) => ctx!.decodeAudioData(ab))
+        .then((buf) => {
+          musicBuffer = buf;
+        })
+        .catch(() => {
+          /* keep synth-bed fallback */
+        });
+      continue;
+    }
+    if (buffers.has(key)) continue;
+    void fetch(url)
       .then((r) => r.arrayBuffer())
       .then((ab) => ctx!.decodeAudioData(ab))
-      .then((buf) => buffers.set(def.id, buf))
+      .then((buf) => buffers.set(key, buf))
       .catch(() => {
         /* keep synth fallback */
       });
@@ -205,43 +243,85 @@ export function play(id: SoundId, opts: PlayOpts = {}): void {
   }
 }
 
-// --- Music (bus wired; a placeholder synth pad until real tracks land) ------
-// A soft two-oscillator drone pad on the music bus. `track` is stored for the
-// future file-backed swap (same seam as SFX) but the stub renders the same pad
-// for every track; menu-vs-round is expressed by ducking (duckMusic).
+// --- Music -----------------------------------------------------------------
+// Two backends, transparently: a decoded REAL looping track (drop-in — add
+// SAMPLE_FILES['music'] and it wins), or a soft synth chord BED fallback. The
+// old "root+fifth drone" read as a hum; the bed is a warm major voicing where
+// each voice breathes on its own slow tremolo (never a static drone), kept low.
+// Menu-vs-round is expressed by ducking (duckMusic).
 //
 // AUTOPLAY POLICY: music must NEVER create/resume the AudioContext on its own —
 // that would log the "AudioContext was not allowed to start" warning. So
-// startMusic only records the DESIRED track and starts the pad if audio is
+// startMusic only records the DESIRED track and starts playback if audio is
 // already unlocked; otherwise unlockAudio() starts it the moment the first user
 // gesture arrives. stopMusic clears the desire so a later unlock won't revive it.
-const MUSIC_FULL = 0.5; // pad level in the menu/hub
+const MUSIC_FULL = 0.5; // level in the menu/hub
 const MUSIC_DUCK = 0.16; // ducked level during active play
-let musicNodes: { osc: OscillatorNode[]; gain: GainNode } | null = null;
+let musicNodes: { sources: AudioScheduledSourceNode[]; gain: GainNode } | null = null;
 let desiredMusicTrack: string | null = null; // non-null ⇒ music is wanted
 let musicDucked = false;
+// Decoded real track (drop-in). When present, startMusic loops it instead of the
+// synth bed. Populated by decodeAssets from SAMPLE_FILES['music'].
+let musicBuffer: AudioBuffer | null = null;
+
+// Build the soft synth chord bed into `dest`, pushing every node onto `sources`
+// so stopMusicNodes can stop them. A warm A-major-ish voicing (A2 C#3 E3 B3)
+// behind a lowpass, each voice on a very slow, staggered tremolo LFO so the bed
+// SHIMMERS rather than hums. Deliberately low level (this is only a fallback).
+function buildMusicBed(dest: GainNode, sources: AudioScheduledSourceNode[]): void {
+  if (!ctx) return;
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 950;
+  lp.Q.value = 0.4;
+  lp.connect(dest);
+  const voices = [110, 138.59, 164.81, 246.94];
+  voices.forEach((f, i) => {
+    const o = ctx!.createOscillator();
+    o.type = i === 0 ? 'sine' : 'triangle';
+    o.frequency.value = f;
+    const vg = ctx!.createGain();
+    vg.gain.value = 0.15 - i * 0.02; // upper voices softer
+    // Per-voice slow tremolo — the bed breathes instead of droning.
+    const lfo = ctx!.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.value = 0.05 + i * 0.019; // very slow, staggered per voice
+    const lfoGain = ctx!.createGain();
+    lfoGain.gain.value = 0.05;
+    lfo.connect(lfoGain);
+    lfoGain.connect(vg.gain);
+    o.connect(vg);
+    vg.connect(lp);
+    o.start();
+    lfo.start();
+    sources.push(o, lfo);
+  });
+}
 
 function actuallyStartMusic(): void {
   // Honor the music pref at the NODE level too: don't run oscillators when music
   // is off (the bus would silence them, but idle oscillators are wasteful). The
-  // pref-change subscription (re)starts the pad when music is turned back on.
+  // pref-change subscription (re)starts music when it's turned back on.
   if (!ctx || !musicBus || musicNodes || !prefs.music) return;
   try {
     const g = ctx.createGain();
     g.gain.value = 0.0001;
     g.connect(musicBus);
-    // Root + fifth drone (A2 + E3). Fades in to avoid a click.
-    const freqs = [110, 164.81];
-    const osc = freqs.map((f) => {
-      const o = ctx!.createOscillator();
-      o.type = 'sine';
-      o.frequency.value = f;
-      o.connect(g);
-      o.start();
-      return o;
-    });
+    const sources: AudioScheduledSourceNode[] = [];
+    if (musicBuffer) {
+      // Real track — seamless loop on the music bus.
+      const src = ctx.createBufferSource();
+      src.buffer = musicBuffer;
+      src.loop = true;
+      src.connect(g);
+      src.start();
+      sources.push(src);
+    } else {
+      buildMusicBed(g, sources);
+    }
+    // Fade in to avoid a click.
     g.gain.setTargetAtTime(musicDucked ? MUSIC_DUCK : MUSIC_FULL, ctx.currentTime, 1.5);
-    musicNodes = { osc, gain: g };
+    musicNodes = { sources, gain: g };
   } catch {
     /* ignore */
   }
@@ -261,14 +341,15 @@ export function duckMusic(ducked: boolean): void {
   }
 }
 
-// Fade + stop the live pad nodes WITHOUT clearing the desired track, so a
-// music-pref toggle can silence and later revive the same request.
+// Fade + stop the live music nodes WITHOUT clearing the desired track, so a
+// music-pref toggle can silence and later revive the same request. Works for
+// both the real-track BufferSource and the synth-bed oscillators/LFOs.
 function stopMusicNodes(): void {
   if (!ctx || !musicNodes) return;
   try {
-    const { osc, gain } = musicNodes;
+    const { sources, gain } = musicNodes;
     gain.gain.setTargetAtTime(0, ctx.currentTime, 0.3);
-    for (const o of osc) o.stop(ctx.currentTime + 1.2);
+    for (const s of sources) s.stop(ctx.currentTime + 1.2);
   } catch {
     /* ignore */
   }
@@ -338,16 +419,56 @@ function noise(
 }
 
 const REGISTRY: Record<SoundId, SoundDef> = {
-  // Club/putter contact. `rate` (from shot power) brightens the click and the
-  // thump; the caller also passes a matching `gain`. rate 1 ≈ full swing.
-  strike: {
-    id: 'strike',
+  // Lofted club contact (Range launch + Course full swings). A crisp contact
+  // CRACK layered under an airy trailing WHOOSH (club/ball through air). `rate`
+  // (from shot power) brightens both; the caller passes a matching `gain`.
+  // rate 1 ≈ full swing.
+  swing: {
+    id: 'swing',
     synth: (ctx, out, when, opts) => {
       const r = opts.rate ?? 1;
-      // Bright transient "click".
-      noise(ctx, out, when, 0.045, 0.5, 'highpass', 1400 + 1600 * r);
-      // Low "thwack" body — pitch and level rise with power.
-      blip(ctx, out, when, 'triangle', 150 + 90 * r, 0.09, 0.6, 70 + 30 * r);
+      // Crisp contact crack — immediate + bright, scales with power.
+      noise(ctx, out, when, 0.03, 0.6, 'highpass', 2200 + 2000 * r);
+      blip(ctx, out, when, 'triangle', 200 + 120 * r, 0.055, 0.5, 80 + 40 * r);
+      // Airy trailing whoosh — bandpassed noise that swells then falls, sweeping
+      // brighter with power. This is what makes a swing read differently from a
+      // putt: a woosh of air, not just a click.
+      const dur = 0.24;
+      const src = ctx.createBufferSource();
+      src.buffer = getNoise(ctx);
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.Q.value = 0.8;
+      bp.frequency.setValueAtTime(900 + 700 * r, when);
+      bp.frequency.exponentialRampToValueAtTime(2200 + 2600 * r, when + dur * 0.45);
+      bp.frequency.exponentialRampToValueAtTime(700 + 400 * r, when + dur);
+      const g = ctx.createGain();
+      // Floor the gain at `when` (not later) — a GainNode holds its default
+      // .value (1.0) for all times before the first scheduled event, which
+      // would leak a full-scale click for the first frames of the whoosh.
+      g.gain.setValueAtTime(0.0001, when);
+      g.gain.exponentialRampToValueAtTime(0.34, when + 0.08); // swell
+      g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+      src.connect(bp);
+      bp.connect(g);
+      g.connect(out);
+      src.start(when);
+      src.stop(when + dur + 0.02);
+    },
+  },
+  // Putter contact (Mini-Golf strokes + Course putts). A soft, low, short wooden
+  // "tock" — quieter than a swing, NO whoosh, minimal power scaling (putts vary
+  // little). Deliberately dull + rounded so it never sounds like a full swing.
+  putt: {
+    id: 'putt',
+    synth: (ctx, out, when, opts) => {
+      const r = opts.rate ?? 1;
+      // Low rounded body — the "tock".
+      blip(ctx, out, when, 'sine', 190 + 30 * r, 0.07, 0.42, 110);
+      // A gentle click edge so the contact reads, but soft (triangle, low).
+      blip(ctx, out, when, 'triangle', 340, 0.028, 0.14);
+      // A whisper of mid noise for the felt-on-ball texture.
+      noise(ctx, out, when, 0.012, 0.1, 'bandpass', 1500);
     },
   },
   // First ground contact / a bounce. Soft lowpassed thud.
