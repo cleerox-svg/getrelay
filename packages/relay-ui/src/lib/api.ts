@@ -3,6 +3,9 @@ import type {
   Chat,
   Contact,
   ContactStatus,
+  DailyChallenge,
+  DailyLeaderboardEntry,
+  DailyResultResponse,
   FeedEvent,
   GameLeaderboardEntry,
   GolfStats,
@@ -352,6 +355,24 @@ export const api = {
   // Fetch a challenge the caller participates in (404 otherwise).
   getChallenge: (id: string) =>
     request<{ challenge: Challenge }>(`/game/challenge/${encodeURIComponent(id)}`),
+  // Today's Daily Challenge — a single seeded Course hole derived from the UTC
+  // date server-side, plus the caller's best attempt today (null if unplayed)
+  // and their streak. 401 if unauthed — callers degrade to a "needs connection"
+  // state rather than crashing.
+  getDaily: () => request<DailyChallenge>('/game/daily'),
+  // Submit today's finished hole: strokes + to-par. The server trusts its own
+  // UTC day (omit the date) and keeps the caller's BEST for the day, so a replay
+  // is safe. Returns the persisted best, the updated streak, and whether this
+  // attempt improved it. 400 invalid_result on a bad body.
+  postDailyResult: (body: { strokes: number; toPar: number }) =>
+    request<DailyResultResponse>('/game/daily/result', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  // Today's Daily Challenge leaderboard — contact-scoped, pre-ranked, each row
+  // flagged `mine`. Same shape idiom as getGameLeaderboard.
+  getDailyLeaderboard: () =>
+    request<{ entries: DailyLeaderboardEntry[] }>('/game/daily/leaderboard'),
   // Giphy Action Register pingback. Best-effort: failures are swallowed so
   // analytics never interferes with sending a GIF.
   registerGifAction: (url: string | undefined, randomId: string) => {

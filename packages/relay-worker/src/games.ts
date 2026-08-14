@@ -231,6 +231,83 @@ export const FEED_MAX_EVENTS_PER_USER_PER_DAY = 3;
 // Overall ceiling on game events in one /feed response.
 export const FEED_MAX_GAME_EVENTS = 60;
 
+// ---- Daily Challenge -------------------------------------------------------
+//
+// One seeded golf hole per UTC day, shared by everyone. The challenge is
+// DERIVED from the date (no stored challenge row): the same date always maps to
+// the same seed / course / hole. Results upsert to the caller's BEST for the
+// day; a per-user streak advances at most once per consecutive day played.
+
+// Rotation of { course, hole } the daily cycles through, indexed by
+// days-since-epoch modulo its length. Course ids are the real Relay Course-mode
+// ids (see relay-ui GOLF_COURSES). Hole counts DIFFER per course: augusta has
+// 18 holes (1..18), each listowel-* course has only 9 (1..9) — every hole below
+// must be within its own course's count (guarded by a games.test.ts test). UI
+// agent: confirm these ids/holes still match the client course registry.
+export const DAILY_ROTATION: readonly { course: string; hole: number }[] = [
+  { course: 'augusta', hole: 12 },
+  { course: 'listowel-vintage', hole: 7 },
+  { course: 'augusta', hole: 16 },
+  { course: 'listowel-heritage', hole: 3 },
+  { course: 'listowel-millennium', hole: 9 },
+  { course: 'augusta', hole: 18 },
+  { course: 'listowel-vintage', hole: 5 },
+] as const;
+
+// The daily plays a single golf hole; it shares the golfcourse points model.
+const DAILY_GAME: GameId = 'golfcourse';
+
+// Strokes on the day's hole, when supplied, is a small positive integer. There
+// is no existing strokes clamp, so we bound it by MAX_TO_PAR's magnitude — big
+// enough for any real single-hole score, small enough to reject tampering.
+export const MAX_DAILY_STROKES = MAX_TO_PAR;
+
+const DAY_MS = 24 * 3600 * 1000;
+
+// Deterministic 32-bit hash of a 'YYYY-MM-DD' string -> stable non-negative
+// seed. FNV-1a over the date bytes, folded to 0..2^31-1 so it matches the
+// game_challenges.seed range. Same date in -> same seed out, always.
+export function dailySeed(date: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < date.length; i++) {
+    h ^= date.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0) % 0x80000000;
+}
+
+// The UTC calendar day ('YYYY-MM-DD') for an epoch-ms instant.
+function utcDate(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+// Whole UTC days since the Unix epoch for a 'YYYY-MM-DD' — the rotation index
+// source (stable and monotonic across days).
+function daysSinceEpoch(date: string): number {
+  return Math.floor(Date.parse(`${date}T00:00:00Z`) / DAY_MS);
+}
+
+// Derive the whole challenge (course/hole/seed/game) from a UTC date. Pure and
+// deterministic — the single source of truth for both endpoints and the UI.
+export function dailyChallengeFor(date: string) {
+  const len = DAILY_ROTATION.length;
+  const idx = ((daysSinceEpoch(date) % len) + len) % len;
+  const rot = DAILY_ROTATION[idx]!;
+  return {
+    date,
+    game: DAILY_GAME,
+    course: rot.course,
+    hole: rot.hole,
+    seed: dailySeed(date),
+  };
+}
+
+// The golfcourse leaderboard points model, reused verbatim for the daily:
+//   score = max(0, round(1000 - toPar*10))  (higher is better, monotone in toPar).
+function dailyScoreFromToPar(toPar: number): number {
+  return Math.max(0, Math.round(1000 - toPar * 10));
+}
+
 export function gamesRoutes() {
   const app = new Hono<{ Bindings: Env }>();
 
@@ -803,6 +880,226 @@ export function gamesRoutes() {
     const challenge = await readChallengeShaped(c.env.DB, origin, c.req.param('id'), me.id);
     if (!challenge || challenge.mine === null) return c.json({ error: 'not_found' }, 404);
     return c.json({ challenge });
+  });
+
+  // GET /game/daily — today's Daily Challenge plus the caller's status. The
+  // challenge is derived from the UTC date (deterministic; no stored row), and
+  // we return the caller's best result for today (null if unplayed) and their
+  // streak (defaulting to zeros before their first daily).
+  app.get('/game/daily', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const today = utcDate(Date.now());
+    const challenge = dailyChallengeFor(today);
+
+    const result = await c.env.DB.prepare(
+      `SELECT strokes, to_par AS toPar, score
+         FROM daily_results WHERE user_id = ? AND date = ?`,
+    )
+      .bind(me.id, today)
+      .first<{ strokes: number | null; toPar: number | null; score: number | null }>();
+
+    const streak = await c.env.DB.prepare(
+      `SELECT current, best FROM daily_streaks WHERE user_id = ?`,
+    )
+      .bind(me.id)
+      .first<{ current: number; best: number }>();
+
+    return c.json({
+      date: challenge.date,
+      game: challenge.game,
+      course: challenge.course,
+      hole: challenge.hole,
+      seed: challenge.seed,
+      today: result
+        ? { strokes: result.strokes, toPar: result.toPar, score: result.score }
+        : null,
+      streak: { current: streak?.current ?? 0, best: streak?.best ?? 0 },
+    });
+  });
+
+  // POST /game/daily/result — submit today's attempt. Body: { strokes, toPar }
+  // (and optionally date, which must equal the SERVER's today). toPar and
+  // strokes are clamped; the leaderboard points are derived with the golfcourse
+  // formula. We upsert the day's row keeping the BETTER attempt (higher score),
+  // then advance the streak at most once per day. Returns the persisted best
+  // for today, the updated streak, and whether this attempt improved it.
+  app.post('/game/daily/result', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const body = await c.req
+      .json<{ strokes?: unknown; toPar?: unknown; date?: unknown }>()
+      .catch(() => null);
+
+    // toPar: required integer within the golfcourse clamp.
+    if (
+      !Number.isInteger(body?.toPar) ||
+      (body!.toPar as number) < -MAX_TO_PAR ||
+      (body!.toPar as number) > MAX_TO_PAR
+    ) {
+      return c.json({ error: 'invalid_result' }, 400);
+    }
+    const toPar = body!.toPar as number;
+
+    // strokes: required small positive integer.
+    if (
+      !Number.isInteger(body?.strokes) ||
+      (body!.strokes as number) < 1 ||
+      (body!.strokes as number) > MAX_DAILY_STROKES
+    ) {
+      return c.json({ error: 'invalid_result' }, 400);
+    }
+    const strokes = body!.strokes as number;
+
+    const now = Date.now();
+    const today = utcDate(now);
+
+    // The server's today is the single source of truth. If the client echoes a
+    // date it must match, else the attempt is for a stale day — reject it.
+    if (body?.date !== undefined && body?.date !== today) {
+      return c.json({ error: 'stale_date' }, 409);
+    }
+
+    const challenge = dailyChallengeFor(today);
+    const score = dailyScoreFromToPar(toPar);
+
+    // Read the prior attempt so we can report whether this one improved it; the
+    // conditional upsert below re-checks the guard in SQL (settles concurrency).
+    const prior = await c.env.DB.prepare(
+      `SELECT score FROM daily_results WHERE user_id = ? AND date = ?`,
+    )
+      .bind(me.id, today)
+      .first<{ score: number | null }>();
+    const improved = !prior || score > (prior.score ?? -Infinity);
+
+    // Upsert the day's row, keeping the better attempt. Higher score is better,
+    // and score is monotone in to_par, so score alone orders the attempts.
+    await c.env.DB.prepare(
+      `INSERT INTO daily_results
+         (id, user_id, date, game, course, hole, seed, strokes, to_par, score, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id, date) DO UPDATE SET
+         strokes    = excluded.strokes,
+         to_par     = excluded.to_par,
+         score      = excluded.score,
+         updated_at = excluded.updated_at
+       WHERE excluded.score > daily_results.score`,
+    )
+      .bind(
+        crypto.randomUUID(),
+        me.id,
+        today,
+        challenge.game,
+        challenge.course,
+        challenge.hole,
+        challenge.seed,
+        strokes,
+        toPar,
+        score,
+        now,
+        now,
+      )
+      .run();
+
+    // Streak recompute — advance at most once per UTC day. If the streak was
+    // already counted today (a retry) leave `current` as is; if it was last
+    // counted yesterday extend it; otherwise (first-ever or a gap) restart at 1.
+    const yesterday = utcDate(now - DAY_MS);
+    const streakRow = await c.env.DB.prepare(
+      `SELECT current, best, last_date FROM daily_streaks WHERE user_id = ?`,
+    )
+      .bind(me.id)
+      .first<{ current: number; best: number; last_date: string | null }>();
+
+    let current: number;
+    if (streakRow?.last_date === today) {
+      current = streakRow.current; // already counted today — retry, leave as is
+    } else if (streakRow?.last_date === yesterday) {
+      current = streakRow.current + 1; // consecutive day — extend
+    } else {
+      current = 1; // first daily ever, or a gap — restart
+    }
+    const best = Math.max(streakRow?.best ?? 0, current);
+
+    await c.env.DB.prepare(
+      `INSERT INTO daily_streaks (user_id, current, best, last_date, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET
+         current    = excluded.current,
+         best       = excluded.best,
+         last_date  = excluded.last_date,
+         updated_at = excluded.updated_at`,
+    )
+      .bind(me.id, current, best, today, now, now)
+      .run();
+
+    // Read-after-write so `today` reflects the persisted best (not necessarily
+    // this attempt, when a prior one was better). A row is guaranteed here: we
+    // just inserted (or kept a prior) one for (me, today).
+    const final = await c.env.DB.prepare(
+      `SELECT strokes, to_par AS toPar, score
+         FROM daily_results WHERE user_id = ? AND date = ?`,
+    )
+      .bind(me.id, today)
+      .first<{ strokes: number; toPar: number; score: number }>();
+
+    return c.json({
+      today: final
+        ? { strokes: final.strokes, toPar: final.toPar, score: final.score }
+        : { strokes, toPar, score },
+      streak: { current, best },
+      improved,
+    });
+  });
+
+  // GET /game/daily/leaderboard — today's board, contact-scoped and
+  // block-filtered exactly like /game/leaderboard, ordered by points (higher
+  // better) then to_par (lower better). One row per player per day, so no
+  // GROUP BY is needed. Top 25, each row carrying a `mine` flag.
+  app.get('/game/daily/leaderboard', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    const today = utcDate(Date.now());
+
+    const rows = await c.env.DB.prepare(
+      `SELECT u.id, u.display_name, u.pin, u.avatar_url, u.avatar_r2_key,
+              d.score AS score, d.to_par AS to_par, d.strokes AS strokes,
+              d.updated_at AS last_played
+       FROM daily_results d JOIN users u ON u.id = d.user_id
+       WHERE d.date = ?
+         AND (d.user_id = ? OR d.user_id IN (SELECT contact_id FROM contacts WHERE owner_id = ?))
+         AND d.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = ?)
+       ORDER BY d.score DESC, d.to_par ASC, last_played ASC
+       LIMIT 25`,
+    )
+      .bind(today, me.id, me.id, me.id)
+      .all<{
+        id: string;
+        display_name: string;
+        pin: string;
+        avatar_url: string | null;
+        avatar_r2_key: string | null;
+        score: number | null;
+        to_par: number | null;
+        strokes: number | null;
+        last_played: number;
+      }>();
+
+    const origin = new URL(c.req.url).origin;
+    const entries = (rows.results ?? []).map((r) => ({
+      userId: r.id,
+      displayName: r.display_name,
+      pin: r.pin,
+      avatarUrl: avatarUrlFor(origin, r),
+      score: r.score,
+      toPar: r.to_par,
+      strokes: r.strokes,
+      mine: r.id === me.id,
+    }));
+    return c.json({ entries });
   });
 
   return app;
