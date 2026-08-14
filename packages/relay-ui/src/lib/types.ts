@@ -89,37 +89,89 @@ export interface ContactStatus {
   mine: boolean;
 }
 
-// Why a Fog run made it into the feed. The worker only surfaces notable
-// runs, and reports the single most interesting reason that applies.
-export type GameFeedBadge = 'first' | 'best' | 'perfect' | 'streak';
+// Every game whose activity can appear in the feed. Widened past Fog so
+// the Updates tab can surface golf runs, challenges and records too.
+export type GameId = 'fog' | 'tune' | 'golf' | 'golfrange' | 'golfcourse';
 
-interface FeedEventBase {
-  // Stable across refetches: `status:<userId>` or `game:<scoreId>`.
-  id: string;
+// Why a game run made it into the feed. The worker only surfaces notable
+// runs, and reports the single most interesting reason that applies.
+// `underpar` is golf-only (a scored round under par).
+export type GameFeedBadge = 'first' | 'best' | 'underpar' | 'perfect' | 'streak';
+
+// Which longest-shot record a golf `record` event celebrates.
+export type RecordMetric = 'drive' | 'closest' | 'putt';
+
+// The person an event belongs to. Carried on status / game / record events.
+// Challenge events omit it — they carry `challenger`/`opponent` instead.
+export interface FeedActor {
   userId: string;
   displayName: string;
   pin: string;
   avatarUrl: string | null;
   mine: boolean;
+}
+
+// One side of a head-to-head challenge feed event. `toPar` is null when that
+// player hasn't submitted (lower to-par wins).
+export interface FeedChallenger {
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  toPar: number | null;
+}
+
+interface FeedEventBase {
+  // Stable across refetches: `status:<userId>`, `game:<scoreId>`, etc.
+  id: string;
   // ms epoch; the feed is sorted on this, newest first.
   at: number;
 }
 
-export interface StatusFeedEvent extends FeedEventBase {
+export interface StatusFeedEvent extends FeedActor, FeedEventBase {
   kind: 'status';
   statusMessage: string;
 }
 
-export interface GameFeedEvent extends FeedEventBase {
+export interface GameFeedEvent extends FeedActor, FeedEventBase {
   kind: 'game';
-  game: 'fog';
+  game: GameId;
   score: number;
   rounds: number;
   bestStreak: number;
+  // Golf-family rounds carry a to-par (relative to par); null for fog/tune.
+  // Optional so an older worker's game events (which omit it) still render.
+  toPar?: number | null;
   badge: GameFeedBadge;
 }
 
-export type FeedEvent = StatusFeedEvent | GameFeedEvent;
+// A settled async golf challenge between two contacts. No actor identity of
+// its own — the two participants ride in `challenger`/`opponent`, and `mine`
+// says whether the viewer is one of them. `winnerId` null means a tie.
+export interface ChallengeFeedEvent extends FeedEventBase {
+  kind: 'challenge';
+  mine: boolean;
+  challengeId: string;
+  game: GameId;
+  course: string | null;
+  hole: number | null;
+  challenger: FeedChallenger;
+  opponent: FeedChallenger;
+  winnerId: string | null;
+}
+
+// A new longest-shot record (driving range / course).
+export interface RecordFeedEvent extends FeedActor, FeedEventBase {
+  kind: 'record';
+  metric: RecordMetric;
+  valueYards: number;
+  hole: number | null;
+}
+
+export type FeedEvent =
+  | StatusFeedEvent
+  | GameFeedEvent
+  | ChallengeFeedEvent
+  | RecordFeedEvent;
 
 export interface SportsTeam {
   abbr: string;

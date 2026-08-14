@@ -72,6 +72,7 @@ export function ChallengeCard({ id }: { id: string }) {
   const myTurn = mySide.toPar == null;
   const waiting = mySide.toPar != null && otherSide.toPar == null && ch.status !== 'complete';
   const complete = ch.status === 'complete';
+  const winnerId = ch.winnerId;
 
   // Outcome (complete only): win = I hold the winnerId, tie = no winnerId.
   const won = complete && ch.winnerId != null && ch.winnerId === mySide.userId;
@@ -118,6 +119,17 @@ export function ChallengeCard({ id }: { id: string }) {
       .finally(() => setPlaying(false));
   }
 
+  // Colour the mono score chip by state: pending "—" is dim; a submitted score
+  // reads neutral (even) until the match settles, then the winner's score is
+  // emerald (good) and the loser's salmon (bad); a tie leaves both even.
+  function scoreState(p: ChallengeParticipant): 'good' | 'even' | 'bad' | 'pend' {
+    if (p.toPar == null) return 'pend';
+    if (complete && winnerId != null) {
+      return p.userId === winnerId ? 'good' : 'bad';
+    }
+    return 'even';
+  }
+
   function renderPlayer(p: ChallengeParticipant, label: string) {
     return (
       <div className="challenge-player">
@@ -126,12 +138,22 @@ export function ChallengeCard({ id }: { id: string }) {
           <span className="challenge-player-name">{p.displayName}</span>
           <span className="challenge-player-role">{label}</span>
         </div>
-        <span className="challenge-player-score">
+        <span className={`challenge-player-score is-${scoreState(p)}`}>
           {p.toPar == null ? '—' : fmtToPar(p.toPar)}
         </span>
       </div>
     );
   }
+
+  // State pill: my move → "Your turn", I've played and I'm waiting → "Waiting",
+  // settled → "Final". Mirrors the myTurn/waiting/complete derivation above.
+  const stateText = myTurn ? 'Your turn' : waiting ? 'Waiting' : complete ? 'Final' : '';
+  const stateClass = myTurn ? 'is-turn' : waiting ? 'is-wait' : 'is-done';
+
+  // The opponent has locked in a score while the match is still open (the usual
+  // async flow: challenger plays first, then it's my turn) — surface that.
+  const otherLabel =
+    otherSide.toPar != null && !complete ? 'Played · locked in' : 'Opponent';
 
   return (
     // Stop clicks/taps from bubbling to the chat bubble's onClick (which opens
@@ -140,44 +162,55 @@ export function ChallengeCard({ id }: { id: string }) {
     // unplayable.
     <div className="challenge-card-wrap" onClick={(e) => e.stopPropagation()}>
       <div className="challenge-card" role="group" aria-label="Golf challenge">
-        <div className="challenge-card-head">
-          <span className="challenge-card-flag" aria-hidden="true">
-            ⛳
-          </span>
-          <div className="challenge-card-titles">
-            <span className="challenge-card-eyebrow">Golf challenge</span>
-            <span className="challenge-card-course">{holeLabel}</span>
+        <div className="challenge-turf" aria-hidden="true">
+          <div className="challenge-fair" />
+          <span className="challenge-turf-flag">⛳</span>
+        </div>
+
+        <div className="challenge-pad">
+          <div className="challenge-card-head">
+            <div className="challenge-card-titles">
+              <span className="challenge-card-eyebrow">Golf challenge</span>
+              <span className="challenge-card-course">{holeLabel}</span>
+            </div>
+            {stateText ? (
+              <span className={`challenge-state ${stateClass}`}>{stateText}</span>
+            ) : null}
           </div>
-        </div>
 
-        <div className="challenge-players">
-          {renderPlayer(mySide, 'You')}
-          <span className="challenge-vs" aria-hidden="true">
-            vs
-          </span>
-          {renderPlayer(otherSide, 'Opponent')}
-        </div>
-
-        {myTurn ? (
-          <button
-            type="button"
-            className="challenge-play"
-            onClick={() => setPlaying(true)}
-          >
-            Play your round
-          </button>
-        ) : waiting ? (
-          <div className="challenge-status">
-            Waiting for {otherSide.displayName}…
-            <span className="challenge-status-score">
-              Your round · {mySide.toPar == null ? '—' : fmtToPar(mySide.toPar)}
+          <div className="challenge-meta">
+            <span className="challenge-meta-chip">Match play</span>
+            <span className="challenge-meta-chip">
+              Seed <span className="challenge-meta-mono">#{ch.seed}</span>
             </span>
           </div>
-        ) : complete ? (
-          <div className={`challenge-outcome ${outcomeClass}`}>
-            {won ? 'You win' : lost ? 'You lost' : 'Tie'}
+
+          <div className="challenge-players">
+            {renderPlayer(mySide, 'You')}
+            <span className="challenge-vs" aria-hidden="true">
+              vs
+            </span>
+            {renderPlayer(otherSide, otherLabel)}
           </div>
-        ) : null}
+
+          {myTurn ? (
+            <button
+              type="button"
+              className="challenge-play"
+              onClick={() => setPlaying(true)}
+            >
+              <span aria-hidden="true">⛳</span> Play your round
+            </button>
+          ) : waiting ? (
+            <div className="challenge-wait">
+              Waiting for {otherSide.displayName}…
+            </div>
+          ) : complete ? (
+            <div className={`challenge-outcome ${outcomeClass}`}>
+              {won ? 'You win' : lost ? 'You lost' : 'Tie'}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {playing

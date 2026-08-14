@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Avatar } from '../components/Avatar';
 import { GroupAvatar } from '../components/GroupAvatar';
+import { lastMessagePreview } from '../lib/messagePreview';
 import { useStore } from '../lib/store';
 import type { Chat } from '../lib/types';
 
@@ -145,14 +146,7 @@ export function LegacyChats() {
           {visible.map((c) => {
             const isGroup = c.type === 'group';
             const peerOnline = c.peer ? presence[c.peer.id]?.online ?? false : false;
-            const last = c.lastMessage;
-            const lastPreview = last?.deletedAt
-              ? 'Message recalled'
-              : last?.messageType === 'ping'
-                ? 'sent a PING!!'
-                : last?.messageType === 'image'
-                  ? '📷 Photo'
-                  : (last?.body ?? '');
+            const lastPreview = lastMessagePreview(c.lastMessage);
             // Classic rows show the contact's current status under their
             // name. Fall back to the last-message preview when they haven't
             // set one (or for groups, where status doesn't apply).
