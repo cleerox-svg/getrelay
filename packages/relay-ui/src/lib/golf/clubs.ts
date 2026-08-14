@@ -50,6 +50,12 @@ export const CLUBS: Club[] = [
 
 export const DEFAULT_CLUB_ID = 'driver';
 
+// The fastest full-power launch speed in the bag (the driver today). Derived
+// from CLUBS so it can't drift when club tuning changes. The render-layer strike
+// SFX normalize shot power against this (loudness/brightness ∝ launchSpeed / max)
+// in RangeGL/CourseGL — the yard-space counterpart to puttSim's MAX_LAUNCH_SPEED.
+export const MAX_CLUB_SPEED = Math.max(...CLUBS.map((c) => c.baseSpeed));
+
 export function clubById(id: string): Club {
   return CLUBS.find((c) => c.id === id) ?? CLUBS[0]!;
 }

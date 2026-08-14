@@ -37,6 +37,7 @@ import {
 } from '../lib/native-push';
 import { useStore } from '../lib/store';
 import { getTheme, setTheme, type ThemeMode } from '../lib/theme';
+import { useAudioPrefs } from '../lib/audio';
 
 export function Profile() {
   const me = useStore((s) => s.me);
@@ -71,6 +72,7 @@ export function Profile() {
     }[]
   >([]);
   const uiMode = useUiMode();
+  const [audioPrefs, setAudio] = useAudioPrefs();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const nav = useNavigate();
 
@@ -562,6 +564,66 @@ export function Profile() {
               : uiMode === 'modern'
                 ? 'Modern — iOS-native styling via Konsta. The default.'
                 : 'Beta — preview of the upcoming look: every chat row and message bubble gets the lifted-card treatment from /sports. Try it before we replace Modern.'}
+          </div>
+        </div>
+      </Block>
+
+      <BlockTitle>Sound</BlockTitle>
+      <Block strong inset className="!py-4">
+        <div className="flex items-center justify-between gap-3" style={{ minHeight: 32 }}>
+          <div>
+            <div className="font-medium">Mute all</div>
+            <div className="text-xs" style={{ color: 'var(--text-dim)' }}>
+              {audioPrefs.muted
+                ? 'Relay is silent. Sound effects and music are turned off.'
+                : 'Silence every sound at once without losing your effect and music choices.'}
+            </div>
+          </div>
+          <PillToggle
+            on={audioPrefs.muted}
+            onChange={(next) => setAudio({ muted: next })}
+            onLabel="Muted"
+            offLabel="Mute"
+          />
+        </div>
+        <div
+          className="mt-4 pt-3"
+          style={{ borderTop: '1px solid var(--separator, rgba(0,0,0,0.08))' }}
+        >
+          <div className="flex items-center justify-between gap-3" style={{ minHeight: 32 }}>
+            <div style={{ opacity: audioPrefs.muted ? 0.5 : 1 }}>
+              <div className="font-medium">Sound effects</div>
+              <div className="text-xs" style={{ color: 'var(--text-dim)' }}>
+                Sound effects in games.
+              </div>
+            </div>
+            <PillToggle
+              on={audioPrefs.sfx}
+              disabled={audioPrefs.muted}
+              onChange={(next) => setAudio({ sfx: next })}
+              onLabel="On"
+              offLabel="Off"
+            />
+          </div>
+        </div>
+        <div
+          className="mt-4 pt-3"
+          style={{ borderTop: '1px solid var(--separator, rgba(0,0,0,0.08))' }}
+        >
+          <div className="flex items-center justify-between gap-3" style={{ minHeight: 32 }}>
+            <div style={{ opacity: audioPrefs.muted ? 0.5 : 1 }}>
+              <div className="font-medium">Music</div>
+              <div className="text-xs" style={{ color: 'var(--text-dim)' }}>
+                Background music in games.
+              </div>
+            </div>
+            <PillToggle
+              on={audioPrefs.music}
+              disabled={audioPrefs.muted}
+              onChange={(next) => setAudio({ music: next })}
+              onLabel="On"
+              offLabel="Off"
+            />
           </div>
         </div>
       </Block>

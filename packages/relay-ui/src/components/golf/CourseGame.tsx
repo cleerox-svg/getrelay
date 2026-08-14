@@ -11,12 +11,14 @@ import { CourseSim, type CourseState } from '../../lib/golf/courseSim';
 import type { GolfCourse } from '../../lib/golf/courses';
 import { api } from '../../lib/api';
 import type { GolfRecords, GolfRecordsImproved } from '../../lib/api';
+import { play } from '../../lib/audio';
 import { makeWind, mulberry32 } from '../../lib/golf/wind';
 import { WindChip } from './shared/WindChip';
 import { PowerMeter } from './shared/PowerMeter';
 import { SpinPuck } from './shared/SpinPuck';
 import { AccuracyBar } from './shared/AccuracyBar';
 import { ClubSelector } from './shared/ClubSelector';
+import { MuteButton } from './shared/MuteButton';
 import { TelemetryPanel, type ShotTelemetry } from './shared/TelemetryPanel';
 
 // Lazy so `three` (in CourseGL) stays out of the main entry chunk.
@@ -458,7 +460,10 @@ export default function CourseGame({
     resetHoleBookkeeping();
   };
 
-  const club = (dir: 1 | -1) => sim.cycleClub(dir);
+  const club = (dir: 1 | -1) => {
+    play('ui-club');
+    sim.cycleClub(dir);
+  };
 
   // Putt read (on the green): distance in feet + uphill/downhill + break, from
   // the slope under the ball relative to the line to the cup. World: x lateral
@@ -549,8 +554,10 @@ export default function CourseGame({
             </div>
           )}
         </div>
-        {/* Round wind compass — same chip the Range shows, read from the sim. */}
-        <div className="flex-1 flex justify-end">
+        {/* Round wind compass — same chip the Range shows, read from the sim —
+            plus a compact quick-mute (Course has no pause sheet). */}
+        <div className="flex-1 flex justify-end items-start gap-1.5">
+          <MuteButton variant="icon" />
           <WindChip along={st.windAlong} cross={st.windCross} />
         </div>
       </div>

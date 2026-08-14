@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { RangeSim } from '../../lib/golf/rangeSim';
 import type { RangeEvent } from '../../lib/golf/rangeSim';
+import { play, unlockAudio } from '../../lib/audio';
 import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
 import {
   addSkyDome,
@@ -26,6 +27,7 @@ import {
   surfaceAt,
 } from '../../lib/golf/rangeTargets';
 import type { Pin, RangeLayout } from '../../lib/golf/rangeTargets';
+import { MAX_CLUB_SPEED } from '../../lib/golf/clubs';
 import { FIXED_MS } from '../../lib/golf/tuning';
 
 // Real-time 3D driving range (Three.js). Owns the WebGL renderer, scene and
@@ -916,6 +918,9 @@ export default function RangeGL({
       // Step 2 is a tap on the DOM accuracy bar, not a canvas drag.
       if (pausedRef.current || activePointer != null || sim.ball.inFlight || sim.armed)
         return;
+      // First user gesture in the mode — satisfies the autoplay policy so SFX
+      // can play. Idempotent; safe to call on every pointer-down.
+      unlockAudio();
       activePointer = e.pointerId;
       canvas.setPointerCapture(e.pointerId);
       lastPulseBucket = -1;
@@ -997,6 +1002,18 @@ export default function RangeGL({
     let last = performance.now();
     let running = false;
 
+    // Render-side bounce/roll SFX detection (no discrete sim events for these).
+    // A bounce = the ball's vertical velocity flips from falling to rising while
+    // airborne; rolling = grounded + moving above a speed floor, throttled. All
+    // read from the snapshot state we already render — the sim is never touched.
+    // The sim emits ONE 'land' event on first ground contact (voiced loud in the
+    // drain); `suppressBounceSfx` swallows the detector's FIRST sign-flip so that
+    // first contact isn't double-voiced — the detector then handles only the
+    // SUBSEQUENT (quieter) bounces.
+    let lastVh = 0;
+    let lastRollAt = 0;
+    let suppressBounceSfx = false;
+
     const frame = (now: number) => {
       const dtMs = Math.min(now - last, 100);
       last = now;
@@ -1025,6 +1042,19 @@ export default function RangeGL({
           ball.visible = true;
           ballMat.opacity = 1;
           ballMat.transparent = false;
+          // Strike SFX, brightened + loudened by shot power. Power resets to 0
+          // on fire, so derive it from the launch speed the sim just set on the
+          // ball (normalized by the fastest club, MAX_CLUB_SPEED). Render-layer
+          // only — the sim is untouched. lastVh is seeded so the first bounce
+          // reads clean.
+          {
+            const bb = sim.ball;
+            const p01 = Math.max(0, Math.min(1, Math.hypot(bb.vd, bb.vx, bb.vh) / MAX_CLUB_SPEED));
+            play('strike', { rate: 0.85 + 0.55 * p01, gain: 0.55 + 0.55 * p01 });
+            lastVh = bb.vh;
+            lastRollAt = 0;
+            suppressBounceSfx = false;
+          }
         } else if (ev.type === 'land') {
           // First ground contact: a subtle turf divot on grass/island only
           // (water landings are handled by the splash below).
@@ -1034,6 +1064,10 @@ export default function RangeGL({
               spawnDivot(ev.x, -ev.d, surf === 'island');
             }
           }
+          // First ground contact thud. Arm the detector to swallow its matching
+          // sign-flip so this contact isn't voiced twice (it handles later bounces).
+          play('land', { gain: 0.7 });
+          suppressBounceSfx = true;
         } else if (ev.type === 'splash') {
           if (ev.d != null && ev.x != null) {
             spawnSplash(ev.x, -ev.d);
@@ -1041,10 +1075,15 @@ export default function RangeGL({
             sinkStart = now;
           }
           revertAt = now + 1600;
+          play('splash');
         } else if (ev.type === 'rest') {
           revertAt = now + 1300;
+          play('rest');
         } else if (ev.type === 'fence') {
           revertAt = now + 1100;
+          play('fence');
+        } else if (ev.type === 'arm') {
+          play('ui-tick');
         }
         onEventRef.current?.(ev);
       }
@@ -1062,6 +1101,27 @@ export default function RangeGL({
         ballMat.transparent = false;
       }
       if (teed) ball.visible = true;
+
+      // Bounce/roll SFX from the render snapshot only (no sim events for these).
+      // Bounce: vertical velocity crosses from down (<0) to up (>0) mid-flight
+      // and the ball is low to the ground — a subtle secondary thud, quieter
+      // than the sim's first-contact 'land'. Roll: grounded + horizontal speed
+      // above a floor, played as short throttled ticks that fade with speed.
+      if (b.inFlight) {
+        if (lastVh < -1 && b.vh > 0 && b.h < 2.5) {
+          // The first sign-flip after the sim's 'land' event is that same first
+          // contact — swallow it once; only later bounces get the quiet thud.
+          if (suppressBounceSfx) suppressBounceSfx = false;
+          else play('land', { gain: 0.28, rate: 1.15 });
+        }
+        lastVh = b.vh;
+      } else if (b.grounded && !b.resting) {
+        const hs = Math.hypot(b.vx, b.vd);
+        if (hs > 3 && now - lastRollAt > 90) {
+          lastRollAt = now;
+          play('roll', { gain: Math.min(0.16, 0.03 + hs * 0.004), rate: 0.9 + Math.min(0.5, hs * 0.02) });
+        }
+      }
 
       // Ball spin: rotate the mesh to reflect motion. The rolling rate is
       // speed/radius; SPIN_VIS scales it down to a legible (non-strobing) rate.

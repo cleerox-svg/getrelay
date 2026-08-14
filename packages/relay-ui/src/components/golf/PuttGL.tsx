@@ -20,7 +20,8 @@ import {
   TURF_ROUGHNESS,
   type WaterKit,
 } from '../../lib/golf/scenery';
-import { FIXED_MS } from '../../lib/golf/tuning';
+import { FIXED_MS, MAX_LAUNCH_SPEED } from '../../lib/golf/tuning';
+import { play, unlockAudio } from '../../lib/audio';
 
 // Real-time 3D mini-golf (Three.js). Owns the WebGL renderer, scene and
 // camera; drives the headless PuttSim on a fixed-timestep loop; renders the
@@ -832,6 +833,8 @@ export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
     const onDown = (e: PointerEvent) => {
       if (pausedRef.current || activePointer != null) return;
       if (!sim.ball.resting) return;
+      // First user gesture in the mode — unlock audio for the autoplay policy.
+      unlockAudio();
       const p = local(e);
       const bs = ballScreen();
       if (Math.hypot(p.x - bs.x, p.y - bs.y) > grabRadius()) return;
@@ -879,6 +882,9 @@ export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
     let running = false;
     let sunk = false;
     let sinkY = cupTopY + BALL_R;
+    // Render-side rolling SFX: subtle, throttled ticks while the ball rolls. No
+    // discrete sim event — read from the snapshot state we already render.
+    let lastRollAt = 0;
 
     const frame = (now: number) => {
       const dtMs = Math.min(now - last, 100);
@@ -899,6 +905,17 @@ export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
         if (ev.type === 'sink') {
           sunk = true;
           spawnBurst(cupX, cupTopY, cupZ, 0xffe27a);
+          play('sink');
+        } else if (ev.type === 'stroke') {
+          // Putter contact, brightened by stroke power. Power is reset to 0 on
+          // launch, so read it from the launch speed the sim set on the ball.
+          const spd = Math.hypot(sim.ball.vel.x, sim.ball.vel.y);
+          const p01 = Math.max(0, Math.min(1, spd / MAX_LAUNCH_SPEED));
+          play('strike', { rate: 0.8 + 0.4 * p01, gain: 0.4 + 0.4 * p01 });
+        } else if (ev.type === 'penalty') {
+          play('penalty');
+        } else if (ev.type === 'rest') {
+          play('rest');
         }
         onEventRef.current?.(ev);
       }
@@ -911,6 +928,16 @@ export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
         ball.position.set(cupX, sinkY, cupZ);
       } else {
         ball.position.set(wx(b.pos.x), heightAtV(b.pos.x, b.pos.y) + BALL_R, wz(b.pos.y));
+        // Rolling turf tick — throttled, gain/rate scale with roll speed. Render
+        // layer only; the sim is untouched.
+        if (!b.resting) {
+          const spd = Math.hypot(b.vel.x, b.vel.y);
+          if (spd > 4 && now - lastRollAt > 100) {
+            lastRollAt = now;
+            const s01 = Math.min(1, spd / MAX_LAUNCH_SPEED);
+            play('roll', { gain: 0.05 + 0.12 * s01, rate: 0.9 + 0.4 * s01 });
+          }
+        }
       }
 
       // Aim overlay while dragging — lifted just above the sloped turf.

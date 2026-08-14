@@ -8,6 +8,8 @@
 
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
+import { play, unlockAudio } from '../../lib/audio';
+import { MAX_CLUB_SPEED } from '../../lib/golf/clubs';
 import { FIXED_MS } from '../../lib/golf/tuning';
 import {
   heightAt,
@@ -2069,6 +2071,8 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     };
     const onDown = (e: PointerEvent) => {
       if (pausedRef.current) return;
+      // First user gesture in the mode — unlock audio for the autoplay policy.
+      unlockAudio();
       canvas.setPointerCapture?.(e.pointerId);
       applyPull(); // re-measure the room for THIS lie/camera before aiming
       lastPulseBucket = -1;
@@ -2110,6 +2114,18 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     let acc = 0;
     let last = performance.now();
     let raf = 0;
+
+    // Render-side SFX detection — Course has NO sim event bus (adding one risks
+    // the snapshot/predict determinism contract), so we derive audio purely from
+    // the getState() poll + the ball snapshot we already read to render. Nothing
+    // here is called from the sim. Trackers seed off the address state.
+    let sfxWasInFlight = false;
+    let sfxWasResting = true;
+    let sfxWasHoled = false;
+    let sfxLastVh = 0;
+    let sfxBounces = 0; // bounces since launch (first is louder than the rest)
+    let sfxLastRollAt = 0;
+
     const frame = (now: number) => {
       raf = requestAnimationFrame(frame);
       let dt = (now - last) / 1000;
@@ -2144,6 +2160,49 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
 
       // Sim state (used for the tracer gate below and the aim-hide logic).
       const st = sim.getState();
+
+      // --- SFX (render-side only; the sim is never touched) ----------------
+      // Shot fire: inFlight rises false→true (covers both a swing and a putt).
+      // Strike brightness/level scale with launch power (ballSpeed / fastest club).
+      if (st.inFlight && !sfxWasInFlight) {
+        const p01 = Math.max(0, Math.min(1, st.ballSpeed / MAX_CLUB_SPEED));
+        play('strike', { rate: 0.85 + 0.55 * p01, gain: 0.55 + 0.55 * p01 });
+        sfxLastVh = b.vh;
+        sfxBounces = 0;
+        sfxLastRollAt = 0;
+      }
+      // Bounces: vertical velocity flips down→up close to the ground while
+      // airborne. The FIRST contact is a firm thud; later bounces are quieter.
+      if (b.inFlight && !b.grounded) {
+        if (sfxLastVh < -1 && b.vh > 0 && alt < 2.5) {
+          sfxBounces += 1;
+          play('land', sfxBounces === 1 ? { gain: 0.7 } : { gain: 0.28, rate: 1.15 });
+        }
+        sfxLastVh = b.vh;
+      } else if (b.grounded && !b.resting) {
+        // Rolling on turf/green: throttled ticks, gain/rate rising with speed.
+        const hs = Math.hypot(b.vx, b.vd);
+        if (hs > 3 && now - sfxLastRollAt > 90) {
+          sfxLastRollAt = now;
+          play('roll', {
+            gain: Math.min(0.16, 0.03 + hs * 0.004),
+            rate: 0.9 + Math.min(0.5, hs * 0.02),
+          });
+        }
+      }
+      // Settle: resting rises false→true. Branch on the result — water splashes,
+      // OB buzzes a penalty, a normal lie gives a soft rest. Hole-out is handled
+      // by the sink latch below (so it never doubles as a 'rest').
+      if (st.resting && !sfxWasResting) {
+        if (st.lastResult === 'water') play('splash');
+        else if (st.lastResult === 'ob') play('penalty');
+        else if (st.lastResult !== 'holed') play('rest');
+      }
+      // Hole-out: the holed latch rises once per hole-out → the cup sink sound.
+      if (st.holed && !sfxWasHoled) play('sink');
+      sfxWasInFlight = st.inFlight;
+      sfxWasResting = st.resting;
+      sfxWasHoled = st.holed;
 
       // Tracer from the sim trail. Drawn ONLY while the ball is moving (in flight
       // or rolling); once it comes to rest we clear it. A spent trail left rising
