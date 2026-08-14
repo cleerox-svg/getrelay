@@ -15,6 +15,16 @@ import {
   dailyChallengeFor,
   dailySeed,
 } from '../src/games';
+import {
+  TOURNEY_ROTATION,
+  TOURNEY_PERIOD_MS,
+  currentPeriodIndex,
+  periodWindow,
+  tournamentSeed,
+  tournamentHoles,
+  trophyAward,
+  runTournamentCron,
+} from '../src/tournaments';
 
 const testEnv = env as unknown as Env;
 
@@ -121,6 +131,51 @@ const DDL = [
      created_at INTEGER NOT NULL,
      updated_at INTEGER NOT NULL
    )`,
+  `CREATE TABLE IF NOT EXISTS tournaments (
+     id INTEGER PRIMARY KEY,
+     kind TEXT NOT NULL DEFAULT 'rapid',
+     seed INTEGER NOT NULL,
+     holes TEXT NOT NULL,
+     opened_at INTEGER NOT NULL,
+     closes_at INTEGER NOT NULL,
+     settled INTEGER NOT NULL DEFAULT 0,
+     created_at INTEGER NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_tournaments_closes_at ON tournaments(closes_at)`,
+  `CREATE TABLE IF NOT EXISTS tournament_entries (
+     id TEXT PRIMARY KEY,
+     tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     score INTEGER NOT NULL,
+     to_par INTEGER,
+     strokes INTEGER,
+     rounds_played INTEGER NOT NULL DEFAULT 1,
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL,
+     UNIQUE(tournament_id, user_id)
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_tournament_entries_board ON tournament_entries(tournament_id, score DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_tournament_entries_topar ON tournament_entries(tournament_id, to_par)`,
+  `CREATE TABLE IF NOT EXISTS tournament_trophies (
+     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+     trophies INTEGER NOT NULL DEFAULT 0,
+     golds INTEGER NOT NULL DEFAULT 0,
+     podiums INTEGER NOT NULL DEFAULT 0,
+     best_rank INTEGER,
+     events_played INTEGER NOT NULL DEFAULT 0,
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL
+   )`,
+  `CREATE TABLE IF NOT EXISTS tournament_placements (
+     id TEXT PRIMARY KEY,
+     tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     rank INTEGER NOT NULL,
+     trophies INTEGER NOT NULL,
+     created_at INTEGER NOT NULL,
+     UNIQUE(tournament_id, user_id)
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_tournament_placements_user ON tournament_placements(user_id, created_at DESC)`,
 ];
 
 const USERS = {
@@ -1250,5 +1305,493 @@ describe('game challenges', () => {
 
     // A missing id is a 404 too.
     expect((await getChallenge(cookies.A, 'nope')).status).toBe(404);
+  });
+});
+
+// ---- Rapid Tournaments ----------------------------------------------------
+
+function getTournament(cookie: string | null): Promise<Response> {
+  const headers: Record<string, string> = {};
+  if (cookie) headers['Cookie'] = cookie;
+  return request('/game/tournament', { headers });
+}
+
+function postTournamentResult(cookie: string | null, body: unknown): Promise<Response> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (cookie) headers['Cookie'] = cookie;
+  return request('/game/tournament/result', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+}
+
+function getTournamentLeaderboard(cookie: string, scope?: string): Promise<Response> {
+  const qs = scope ? `?scope=${scope}` : '';
+  return request(`/game/tournament/leaderboard${qs}`, { headers: { Cookie: cookie } });
+}
+
+function getTournamentMe(cookie: string): Promise<Response> {
+  return request('/game/tournament/me', { headers: { Cookie: cookie } });
+}
+
+// Directly seed a closed, unsettled event + its entries so the settlement
+// pass (runTournamentCron) has something concrete to rank. `id` is a
+// synthetic period index chosen well clear of the live one.
+async function seedClosedTournament(id: number): Promise<void> {
+  const now = Date.now();
+  await testEnv.DB.prepare(
+    `INSERT INTO tournaments (id, kind, seed, holes, opened_at, closes_at, settled, created_at)
+     VALUES (?, 'rapid', ?, ?, ?, ?, 0, ?)`,
+  )
+    .bind(id, tournamentSeed(id), JSON.stringify(tournamentHoles(id)), now - 2000, now - 1000, now - 2000)
+    .run();
+}
+
+async function seedEntry(
+  tournamentId: number,
+  userId: string,
+  score: number,
+  toPar: number,
+  strokes: number,
+): Promise<void> {
+  const now = Date.now();
+  await testEnv.DB.prepare(
+    `INSERT INTO tournament_entries
+       (id, tournament_id, user_id, score, to_par, strokes, rounds_played, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+  )
+    .bind(crypto.randomUUID(), tournamentId, userId, score, toPar, strokes, now, now)
+    .run();
+}
+
+describe('Tournament derivation', () => {
+  const HOLE_COUNTS: Record<string, number> = {
+    augusta: 18,
+    'listowel-vintage': 9,
+    'listowel-heritage': 9,
+    'listowel-millennium': 9,
+  };
+
+  it('rotation references only holes that exist on their course', () => {
+    for (const { course, hole } of TOURNEY_ROTATION) {
+      const count = HOLE_COUNTS[course];
+      expect(count, `unknown course '${course}' in TOURNEY_ROTATION`).toBeDefined();
+      expect(Number.isInteger(hole)).toBe(true);
+      expect(hole).toBeGreaterThanOrEqual(1);
+      expect(hole, `${course} hole ${hole} exceeds its ${count}-hole count`).toBeLessThanOrEqual(
+        count!,
+      );
+    }
+  });
+
+  it('period index + window are deterministic and consecutive', () => {
+    const t = Date.UTC(2026, 7, 14, 12, 0, 0);
+    const idx = currentPeriodIndex(t);
+    expect(currentPeriodIndex(t)).toBe(idx);
+    const w = periodWindow(idx);
+    expect(w.openedAt).toBeLessThanOrEqual(t);
+    expect(w.closesAt).toBeGreaterThan(t);
+    expect(w.closesAt - w.openedAt).toBe(TOURNEY_PERIOD_MS);
+    // The next period opens exactly where this one closes.
+    expect(periodWindow(idx + 1).openedAt).toBe(w.closesAt);
+  });
+
+  it('derives a stable seed + 3 valid holes per index', () => {
+    const idx = 123;
+    expect(tournamentSeed(idx)).toBe(tournamentSeed(idx));
+    expect(tournamentSeed(idx)).toBeGreaterThanOrEqual(0);
+    expect(tournamentSeed(idx)).toBeLessThanOrEqual(2 ** 31 - 1);
+    const holes = tournamentHoles(idx);
+    expect(holes).toHaveLength(3);
+    for (const h of holes) {
+      const count = HOLE_COUNTS[h.course];
+      expect(count).toBeDefined();
+      expect(h.hole).toBeGreaterThanOrEqual(1);
+      expect(h.hole).toBeLessThanOrEqual(count!);
+    }
+    // Pure function of the index.
+    expect(tournamentHoles(idx)).toEqual(holes);
+  });
+
+  it('trophyAward follows the tier table', () => {
+    expect(trophyAward(1, 100)).toBe(100);
+    expect(trophyAward(2, 100)).toBe(60);
+    expect(trophyAward(3, 100)).toBe(60);
+    expect(trophyAward(4, 100)).toBe(30);
+    expect(trophyAward(10, 100)).toBe(30);
+    expect(trophyAward(11, 100)).toBe(10);
+    expect(trophyAward(50, 100)).toBe(10);
+    expect(trophyAward(51, 100)).toBe(5);
+  });
+});
+
+describe('GET /game/tournament', () => {
+  it('requires a session cookie', async () => {
+    expect((await getTournament(null)).status).toBe(401);
+  });
+
+  it('derives the current event with no entry before playing', async () => {
+    const res = await getTournament(cookies.A);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      id: number;
+      seed: number;
+      holes: { course: string; hole: number }[];
+      openedAt: number;
+      closesAt: number;
+      msLeft: number;
+      entrants: number;
+      entry: unknown;
+    };
+    const idx = currentPeriodIndex(Date.now());
+    expect(body.id).toBe(idx);
+    expect(body.seed).toBe(tournamentSeed(idx));
+    expect(body.holes).toEqual(tournamentHoles(idx));
+    expect(body.closesAt).toBeGreaterThan(body.openedAt);
+    expect(body.msLeft).toBeGreaterThan(0);
+    expect(body.entry).toBeNull();
+  });
+
+  it('returns the caller entry with a live rank once played', async () => {
+    // B posts a worse round, A a better one -> A ranks 1, B ranks 2.
+    await postTournamentResult(cookies.B, { toPar: 5, strokes: 20 });
+    await postTournamentResult(cookies.A, { toPar: -2, strokes: 13 });
+
+    const aBody = (await (await getTournament(cookies.A)).json()) as {
+      entrants: number;
+      entry: { score: number; toPar: number; strokes: number; rank: number };
+    };
+    expect(aBody.entrants).toBe(2);
+    expect(aBody.entry.rank).toBe(1);
+    expect(aBody.entry.toPar).toBe(-2);
+
+    const bBody = (await (await getTournament(cookies.B)).json()) as {
+      entry: { rank: number };
+    };
+    expect(bBody.entry.rank).toBe(2);
+  });
+
+  it('breaks equal score/to_par ties by strokes, consistently with the board', async () => {
+    // Equal to_par -> equal derived score; the lower-strokes run must rank
+    // ahead everywhere (live rank AND leaderboard order), matching the
+    // tiebreak settlement uses so the displayed standing == the awarded one.
+    await postTournamentResult(cookies.A, { toPar: -2, strokes: 12 });
+    await postTournamentResult(cookies.B, { toPar: -2, strokes: 14 });
+
+    const aRank = (
+      (await (await getTournament(cookies.A)).json()) as { entry: { rank: number } }
+    ).entry.rank;
+    const bRank = (
+      (await (await getTournament(cookies.B)).json()) as { entry: { rank: number } }
+    ).entry.rank;
+    expect(aRank).toBe(1);
+    expect(bRank).toBe(2);
+
+    const board = (await (await getTournamentLeaderboard(cookies.A)).json()) as {
+      entries: { userId: string }[];
+    };
+    expect(board.entries[0]!.userId).toBe(USERS.A.id);
+    expect(board.entries[1]!.userId).toBe(USERS.B.id);
+  });
+});
+
+describe('POST /game/tournament/result', () => {
+  it('requires a session cookie', async () => {
+    expect((await postTournamentResult(null, { toPar: 0, strokes: 12 })).status).toBe(401);
+  });
+
+  it('rejects an out-of-clamp toPar or strokes', async () => {
+    expect((await postTournamentResult(cookies.A, { toPar: 999, strokes: 12 })).status).toBe(400);
+    expect((await postTournamentResult(cookies.A, { toPar: 0, strokes: 0 })).status).toBe(400);
+    expect((await postTournamentResult(cookies.A, { toPar: 1.5, strokes: 12 })).status).toBe(400);
+  });
+
+  it('keeps the better run and counts rounds_played', async () => {
+    // First a strong run, then a weaker one: the entry must stay on the strong
+    // run, improved=false on the second, and rounds_played increments.
+    const first = await postTournamentResult(cookies.A, { toPar: -4, strokes: 11 });
+    const firstBody = (await first.json()) as {
+      entry: { score: number; toPar: number; rank: number };
+      improved: boolean;
+    };
+    expect(firstBody.improved).toBe(true);
+    expect(firstBody.entry.toPar).toBe(-4);
+
+    const second = await postTournamentResult(cookies.A, { toPar: 6, strokes: 21 });
+    const secondBody = (await second.json()) as {
+      entry: { toPar: number };
+      improved: boolean;
+    };
+    expect(secondBody.improved).toBe(false);
+    // Persisted best is still the -4 run, not the weaker resubmit.
+    expect(secondBody.entry.toPar).toBe(-4);
+
+    const idx = currentPeriodIndex(Date.now());
+    const row = await testEnv.DB.prepare(
+      `SELECT rounds_played, to_par FROM tournament_entries WHERE tournament_id = ? AND user_id = ?`,
+    )
+      .bind(idx, USERS.A.id)
+      .first<{ rounds_played: number; to_par: number }>();
+    expect(row?.rounds_played).toBe(2);
+    expect(row?.to_par).toBe(-4);
+  });
+
+  it('rejects submissions to a closed event with 409', async () => {
+    // A first submission materialises the current event's row (control: 200).
+    const ok = await postTournamentResult(cookies.A, { toPar: 0, strokes: 12 });
+    expect(ok.status).toBe(200);
+
+    // Force the pinned window into the past — the endpoint trusts the row's
+    // closes_at once a row exists, so the next submission is rejected.
+    const idx = currentPeriodIndex(Date.now());
+    await testEnv.DB.prepare(`UPDATE tournaments SET closes_at = ? WHERE id = ?`)
+      .bind(Date.now() - 1000, idx)
+      .run();
+    const closed = await postTournamentResult(cookies.B, { toPar: 0, strokes: 12 });
+    expect(closed.status).toBe(409);
+
+    // A settled event is likewise closed.
+    await testEnv.DB.prepare(`UPDATE tournaments SET closes_at = ?, settled = 1 WHERE id = ?`)
+      .bind(Date.now() + 60_000, idx)
+      .run();
+    const settled = await postTournamentResult(cookies.B, { toPar: 0, strokes: 12 });
+    expect(settled.status).toBe(409);
+  });
+});
+
+describe('GET /game/tournament/leaderboard', () => {
+  it('friends scope hides strangers; global shows them', async () => {
+    // A (self) + B (contact of A) + C (stranger) all post.
+    await postTournamentResult(cookies.A, { toPar: -1, strokes: 14 });
+    await postTournamentResult(cookies.B, { toPar: 2, strokes: 17 });
+    await postTournamentResult(cookies.C, { toPar: -3, strokes: 12 });
+
+    const friends = (await (await getTournamentLeaderboard(cookies.A, 'friends')).json()) as {
+      entries: { userId: string }[];
+    };
+    const friendIds = friends.entries.map((e) => e.userId);
+    expect(friendIds).toContain(USERS.A.id);
+    expect(friendIds).toContain(USERS.B.id);
+    expect(friendIds).not.toContain(USERS.C.id);
+
+    const global = (await (await getTournamentLeaderboard(cookies.A)).json()) as {
+      entries: { userId: string; toPar: number }[];
+    };
+    const globalIds = global.entries.map((e) => e.userId);
+    expect(globalIds).toContain(USERS.C.id);
+    // Ordered score DESC, to_par ASC -> C (-3) first.
+    expect(global.entries[0]!.userId).toBe(USERS.C.id);
+  });
+
+  it('drops blocked users from the global board', async () => {
+    await postTournamentResult(cookies.A, { toPar: 0, strokes: 12 });
+    await postTournamentResult(cookies.C, { toPar: -5, strokes: 10 });
+    // A blocks C.
+    await testEnv.DB.prepare(
+      `INSERT INTO user_blocks (blocker_id, blocked_id, created_at) VALUES (?, ?, ?)`,
+    )
+      .bind(USERS.A.id, USERS.C.id, Date.now())
+      .run();
+
+    const global = (await (await getTournamentLeaderboard(cookies.A)).json()) as {
+      entries: { userId: string }[];
+    };
+    expect(global.entries.map((e) => e.userId)).not.toContain(USERS.C.id);
+  });
+});
+
+describe('Tournament settlement (runTournamentCron)', () => {
+  it('ranks entries, awards tiered trophies, and bumps tallies', async () => {
+    const id = 990001;
+    await seedClosedTournament(id);
+    // A best, B second, C third.
+    await seedEntry(id, USERS.A.id, 1040, -4, 11);
+    await seedEntry(id, USERS.B.id, 1000, 0, 15);
+    await seedEntry(id, USERS.C.id, 960, 4, 19);
+
+    await runTournamentCron(testEnv);
+
+    // Event marked settled.
+    const t = await testEnv.DB.prepare(`SELECT settled FROM tournaments WHERE id = ?`)
+      .bind(id)
+      .first<{ settled: number }>();
+    expect(t?.settled).toBe(1);
+
+    // Placements: ranks 1..3 with tier awards (1st=100, 2nd/3rd=60).
+    const places = await testEnv.DB.prepare(
+      `SELECT user_id, rank, trophies FROM tournament_placements WHERE tournament_id = ? ORDER BY rank`,
+    )
+      .bind(id)
+      .all<{ user_id: string; rank: number; trophies: number }>();
+    expect(places.results).toEqual([
+      { user_id: USERS.A.id, rank: 1, trophies: 100 },
+      { user_id: USERS.B.id, rank: 2, trophies: 60 },
+      { user_id: USERS.C.id, rank: 3, trophies: 60 },
+    ]);
+
+    // Winner's tally: gold + podium + best_rank 1.
+    const aTally = await testEnv.DB.prepare(
+      `SELECT trophies, golds, podiums, best_rank, events_played FROM tournament_trophies WHERE user_id = ?`,
+    )
+      .bind(USERS.A.id)
+      .first<{
+        trophies: number;
+        golds: number;
+        podiums: number;
+        best_rank: number;
+        events_played: number;
+      }>();
+    expect(aTally).toEqual({
+      trophies: 100,
+      golds: 1,
+      podiums: 1,
+      best_rank: 1,
+      events_played: 1,
+    });
+
+    // Second place: no gold, a podium, best_rank 2.
+    const bTally = await testEnv.DB.prepare(
+      `SELECT golds, podiums, best_rank FROM tournament_trophies WHERE user_id = ?`,
+    )
+      .bind(USERS.B.id)
+      .first<{ golds: number; podiums: number; best_rank: number }>();
+    expect(bTally).toEqual({ golds: 0, podiums: 1, best_rank: 2 });
+  });
+
+  it('is idempotent: running twice yields identical tallies', async () => {
+    const id = 990002;
+    await seedClosedTournament(id);
+    await seedEntry(id, USERS.A.id, 1030, -3, 12);
+    await seedEntry(id, USERS.B.id, 990, 1, 16);
+
+    await runTournamentCron(testEnv);
+    const after1 = await testEnv.DB.prepare(
+      `SELECT user_id, trophies, golds, podiums, best_rank, events_played
+         FROM tournament_trophies ORDER BY user_id`,
+    ).all();
+    const places1 = await testEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM tournament_placements WHERE tournament_id = ?`,
+    )
+      .bind(id)
+      .first<{ n: number }>();
+
+    // Re-run: settled events are skipped, and the placements UNIQUE guards any
+    // partial retry -> no double counting.
+    await runTournamentCron(testEnv);
+    const after2 = await testEnv.DB.prepare(
+      `SELECT user_id, trophies, golds, podiums, best_rank, events_played
+         FROM tournament_trophies ORDER BY user_id`,
+    ).all();
+    const places2 = await testEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM tournament_placements WHERE tournament_id = ?`,
+    )
+      .bind(id)
+      .first<{ n: number }>();
+
+    expect(after2.results).toEqual(after1.results);
+    expect(places2?.n).toBe(places1?.n);
+  });
+
+  it('does not double-award when a partial settlement is resumed', async () => {
+    // Simulate a settlement interrupted after A's placement + trophy bump were
+    // written but before `settled` flipped: A already has a placement row and a
+    // populated tally, the event is still settled=0. Re-running the cron must
+    // NOT re-bump A (the meta.changes===1 guard) while still awarding B.
+    const id = 990004;
+    await seedClosedTournament(id);
+    await seedEntry(id, USERS.A.id, 1040, -4, 11); // rank 1
+    await seedEntry(id, USERS.B.id, 1000, 0, 15); // rank 2
+
+    const now = Date.now();
+    await testEnv.DB.prepare(
+      `INSERT INTO tournament_placements (id, tournament_id, user_id, rank, trophies, created_at)
+       VALUES (?, ?, ?, 1, 100, ?)`,
+    )
+      .bind(crypto.randomUUID(), id, USERS.A.id, now)
+      .run();
+    await testEnv.DB.prepare(
+      `INSERT INTO tournament_trophies
+         (user_id, trophies, golds, podiums, best_rank, events_played, created_at, updated_at)
+       VALUES (?, 100, 1, 1, 1, 1, ?, ?)`,
+    )
+      .bind(USERS.A.id, now, now)
+      .run();
+
+    await runTournamentCron(testEnv);
+
+    // A unchanged — the existing placement made the INSERT OR IGNORE a no-op,
+    // so the trophy bump was skipped (no 200 total).
+    const aTally = await testEnv.DB.prepare(
+      `SELECT trophies, golds, podiums, best_rank, events_played FROM tournament_trophies WHERE user_id = ?`,
+    )
+      .bind(USERS.A.id)
+      .first<{
+        trophies: number;
+        golds: number;
+        podiums: number;
+        best_rank: number;
+        events_played: number;
+      }>();
+    expect(aTally).toEqual({
+      trophies: 100,
+      golds: 1,
+      podiums: 1,
+      best_rank: 1,
+      events_played: 1,
+    });
+
+    // B — the finisher whose placement had NOT been written — is awarded now.
+    const bTally = await testEnv.DB.prepare(
+      `SELECT trophies, podiums, best_rank, events_played FROM tournament_trophies WHERE user_id = ?`,
+    )
+      .bind(USERS.B.id)
+      .first<{ trophies: number; podiums: number; best_rank: number; events_played: number }>();
+    expect(bTally).toEqual({ trophies: 60, podiums: 1, best_rank: 2, events_played: 1 });
+
+    // Exactly one placement per finisher, and the event is now settled.
+    const places = await testEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM tournament_placements WHERE tournament_id = ?`,
+    )
+      .bind(id)
+      .first<{ n: number }>();
+    expect(places?.n).toBe(2);
+    const t = await testEnv.DB.prepare(`SELECT settled FROM tournaments WHERE id = ?`)
+      .bind(id)
+      .first<{ settled: number }>();
+    expect(t?.settled).toBe(1);
+  });
+
+  it('reflects settled placements in GET /game/tournament/me', async () => {
+    const id = 990003;
+    await seedClosedTournament(id);
+    await seedEntry(id, USERS.A.id, 1020, -2, 13);
+    await runTournamentCron(testEnv);
+
+    const body = (await (await getTournamentMe(cookies.A)).json()) as {
+      trophies: {
+        trophies: number;
+        golds: number;
+        podiums: number;
+        bestRank: number | null;
+        eventsPlayed: number;
+      };
+      placements: { tournamentId: number; rank: number; trophies: number; closesAt: number }[];
+    };
+    expect(body.trophies.golds).toBe(1);
+    expect(body.trophies.bestRank).toBe(1);
+    const mine = body.placements.find((p) => p.tournamentId === id);
+    expect(mine).toBeDefined();
+    expect(mine!.rank).toBe(1);
+    expect(mine!.trophies).toBe(100);
+  });
+
+  it('GET /game/tournament/me defaults to zeros before any event', async () => {
+    const body = (await (await getTournamentMe(cookies.C)).json()) as {
+      trophies: { trophies: number; golds: number; eventsPlayed: number };
+      placements: unknown[];
+    };
+    expect(body.trophies).toMatchObject({ trophies: 0, golds: 0, eventsPlayed: 0 });
+    expect(body.placements).toEqual([]);
   });
 });

@@ -14,6 +14,7 @@ itself lives in `../src/schema.sql` and is applied on every worker deploy.
 | `0007_golf_records.sql` | Create `golf_records` for the in-app golf Course game (one row per user holding personal-best longest drive / closest-to-pin / longest putt; worker upserts a column only when the new value beats the stored one). Idempotent. | Same as above, with `file: 0007_golf_records.sql` |
 | `0010_chat_keys.sql` | Create `chat_keys` for envelope encryption of message bodies at rest (one row per chat holding the chat's DEK wrapped under the root KEK, plus the wrap IV and KEK version). Idempotent. | Same as above, with `file: 0010_chat_keys.sql` |
 | `0011_daily_challenge.sql` | Create `daily_results` (one row per user per day, best attempt at the server-seeded golf Daily Challenge; contact-scoped leaderboards computed on read from `(date, score)`) and `daily_streaks` (per-user consecutive-day streak state). Idempotent. | Same as above, with `file: 0011_daily_challenge.sql` |
+| `0012_tournaments.sql` | Create `tournaments` (one lazily-created row per seeded 3-hole "rapid" golf event, keyed on the deterministic period index), `tournament_entries` (best entry per user per event, `UNIQUE(tournament_id, user_id)`, global leaderboard ranked by `score DESC`), `tournament_trophies` (per-user cumulative trophy tally, one row per user) and `tournament_placements` (per-event award history + settlement idempotency guard). Idempotent. | Same as above, with `file: 0012_tournaments.sql` |
 
 ## Columns are added by the deploy probe, not by a numbered file
 

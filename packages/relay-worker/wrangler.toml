@@ -138,3 +138,12 @@ class_name = "ChatRoom"
 [[env.production.durable_objects.bindings]]
 name = "USER_HUB"
 class_name = "UserHub"
+
+# ----- Cron triggers (production) -----
+# Cloudflare env blocks do NOT inherit the top-level [triggers], and the
+# production deploy runs `wrangler deploy --env production` (see
+# deploy-worker.yml). Redeclare the same every-minute cadence here so the
+# scheduled() handler actually fires in prod — it drives the sports poll and
+# golf tournament settlement (now vs closes_at each tick).
+[env.production.triggers]
+crons = ["* * * * *"]

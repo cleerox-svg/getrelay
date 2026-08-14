@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { GolfGame } from './GolfGame';
 import type { GolfGameResult } from './GolfGame';
 import { GolfDaily } from './GolfDaily';
+import { GolfTournaments } from './GolfTournaments';
 import { GolfLeaderboard } from './GolfLeaderboard';
 import { GolfMenu } from './GolfMenu';
 import type { GolfSubMode } from './GolfMenu';
@@ -11,6 +12,7 @@ import type { RangeGameResult } from './RangeGame';
 import CourseGame from './CourseGame';
 import { api } from '../../lib/api';
 import { getCourse } from '../../lib/golf/courses';
+import type { GolfCourse } from '../../lib/golf/courses';
 import { getPuttCourse } from '../../lib/golf/puttCourses';
 import { recordGolfGame, recordRangeGame, setLastPuttCourseId } from '../../lib/golf/stats';
 import { HOLES as GOLF_HOLES, RANGE_BALLS } from '../../lib/golf/tuning';
@@ -41,8 +43,11 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
   const [golfRangeResult, setGolfRangeResult] = useState<RangeGameResult | null>(null);
   const [serverBest, setServerBest] = useState<number | null>(null);
   const [lbKey, setLbKey] = useState(0);
-  // Golf hub sub-tab (Daily / Play / Profile / Ranks) and the Ranks board selector.
-  const [subTab, setSubTab] = useState<'daily' | 'play' | 'profile' | 'ranks'>('play');
+  // Golf hub sub-tab (Daily / Tournaments / Play / Profile / Ranks) and the Ranks
+  // board selector.
+  const [subTab, setSubTab] = useState<
+    'daily' | 'tourneys' | 'play' | 'profile' | 'ranks'
+  >('play');
   const [board, setBoard] = useState<'golf' | 'golfcourse' | 'golfrange'>('golfcourse');
 
   // Daily Challenge play. When active, the Course free-screen path plays the
@@ -57,6 +62,20 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
   >(null);
   const [dailyStreak, setDailyStreak] = useState<number | null>(null);
   const [dailyRefresh, setDailyRefresh] = useState(0);
+
+  // Rapid Tournament play. When active, the Course free-screen path plays the
+  // SYNTHESIZED 3-hole course (see synthTournamentCourse) as a FULL round (no
+  // startHole → round mode + scorecard) with the event's seed, and reports the
+  // finished ROUND total via onRoundComplete. tourneyPendingResult is handed to
+  // GolfTournaments, which POSTs it and shows the updated rank; tourneyOpen feeds
+  // the small 🏆 chip on the tab.
+  const [tourneyActive, setTourneyActive] = useState(false);
+  const [tourneyCourse, setTourneyCourse] = useState<GolfCourse | null>(null);
+  const [tourneySeed, setTourneySeed] = useState<number | undefined>(undefined);
+  const [tourneyPendingResult, setTourneyPendingResult] = useState<
+    { toPar: number; strokes: number } | null
+  >(null);
+  const [tourneyOpen, setTourneyOpen] = useState(false);
   const submittedGolfRef = useRef<GolfGameResult | null>(null);
   const submittedGolfRangeRef = useRef<RangeGameResult | null>(null);
 
@@ -165,6 +184,22 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
     };
   }, [dailyRefresh]);
 
+  // Lightweight tournament read for the tab's 🏆 chip: highlight when there's a
+  // live event the player hasn't entered yet (msLeft>0 && no entry). Best-effort
+  // (unauthed / offline just leaves it false → no chip); re-read after a round.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getTournament()
+      .then((t) => {
+        if (!cancelled) setTourneyOpen(t.msLeft > 0 && t.entry == null);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [dailyRefresh, tourneyPendingResult]);
+
   function play() {
     setGolfResult(null);
     setGolfRangeResult(null);
@@ -190,6 +225,25 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
   function consumeDailyResult() {
     setDailyPendingResult(null);
     setDailyRefresh((k) => k + 1);
+  }
+
+  // Launch the seeded 3-hole tournament round through the Course free-screen
+  // path. `course` is the SYNTHESIZED 3-hole GolfCourse (built in
+  // GolfTournaments); playing it with NO startHole triggers full-round mode +
+  // scorecard, and tourneyActive rewires the round-complete callback to capture
+  // the ROUND total instead of posting to the golfcourse board.
+  function startTournament(course: GolfCourse, seed: number) {
+    setTourneyActive(true);
+    setGolfMode('course');
+    setTourneyCourse(course);
+    setTourneySeed(seed);
+    startFree();
+  }
+
+  // GolfTournaments consumed a submitted result — clear it so it can't re-POST,
+  // and refresh the tab chip.
+  function consumeTournamentResult() {
+    setTourneyPendingResult(null);
   }
 
   // Golf mode picker → the right flow. Putting and the range Target
@@ -277,38 +331,43 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
     // so the in-HUD back button takes the place of the boxed back link.
     return golfMode === 'course' ? (
       <CourseGame
-        course={getCourse(golfCourseId)}
-        startHole={golfHoleIdx}
-        // Daily round: replay the SAME conditions via the date-derived seed
-        // (wind), and report the finished hole to GolfDaily via onHoleComplete
-        // (single-hole). A normal Course round leaves seed undefined (random
-        // wind) and reports full rounds to the golfcourse board below.
-        seed={dailyActive ? dailySeed : undefined}
+        // Tournament: play the SYNTHESIZED 3-hole course; otherwise the selected
+        // (or daily's) real course.
+        course={tourneyActive && tourneyCourse ? tourneyCourse : getCourse(golfCourseId)}
+        // Tournament plays a FULL round (no startHole → round mode + scorecard);
+        // daily/normal keep their single-hole/round selection.
+        startHole={tourneyActive ? undefined : golfHoleIdx}
+        // Daily/tournament rounds replay the SAME conditions via the seed (wind).
+        // The daily reports the finished hole via onHoleComplete (single-hole);
+        // the tournament and normal rounds report the full round below.
+        seed={dailyActive ? dailySeed : tourneyActive ? tourneySeed : undefined}
         onHoleComplete={
           dailyActive
             ? (r) => setDailyPendingResult({ strokes: r.strokes, toPar: r.toPar })
             : undefined
         }
-        // Full-round completion → submit to the golfcourse board. The server
-        // derives the golfcourse score from toPar (we send score:0). The
-        // callback fires exactly once per round, so no extra guard is needed.
-        // Skipped for the daily (single hole, its own board).
+        // Full-round completion. Tournament → capture the ROUND total for
+        // GolfTournaments to POST (NOT the golfcourse board, so no double-post).
+        // Otherwise → submit to the golfcourse board (server derives the score
+        // from toPar; we send score:0). Skipped for the daily (single hole).
         onRoundComplete={
-          dailyActive
-            ? undefined
-            : (r) => {
-                api
-                  .submitGameScore({
-                    game: 'golfcourse',
-                    course: r.courseId,
-                    toPar: r.toPar,
-                    rounds: r.holes,
-                    bestStreak: 0,
-                    score: 0,
-                  })
-                  .then(() => setLbKey((k) => k + 1))
-                  .catch(() => undefined);
-              }
+          tourneyActive
+            ? (r) => setTourneyPendingResult({ toPar: r.toPar, strokes: r.strokes })
+            : dailyActive
+              ? undefined
+              : (r) => {
+                  api
+                    .submitGameScore({
+                      game: 'golfcourse',
+                      course: r.courseId,
+                      toPar: r.toPar,
+                      rounds: r.holes,
+                      bestStreak: 0,
+                      score: 0,
+                    })
+                    .then(() => setLbKey((k) => k + 1))
+                    .catch(() => undefined);
+                }
         }
         onExit={() => {
           setScreen('menu');
@@ -316,6 +375,10 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
           // Returning from a daily round → back to the Daily tab; clear the
           // active flag so a subsequent normal Course round wires correctly.
           if (dailyActive) setDailyActive(false);
+          // Returning from a tournament round → clear the active flag so a
+          // subsequent normal Course round wires correctly (GolfTournaments,
+          // which remounts on the Tournaments tab, POSTs the captured result).
+          if (tourneyActive) setTourneyActive(false);
         }}
       />
     ) : (
@@ -509,6 +572,7 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
         {(
           [
             ['daily', 'Daily'],
+            ['tourneys', 'Tournaments'],
             ['play', 'Play'],
             ['profile', 'Profile'],
             ['ranks', 'Ranks'],
@@ -534,6 +598,19 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
                 {dailyStreak}
               </span>
             ) : null}
+            {/* Subtle 🏆 chip when a live event awaits the player's entry. */}
+            {key === 'tourneys' && tourneyOpen ? (
+              <span
+                className="ml-1 rounded-full px-1 text-[11px] font-bold"
+                style={{
+                  background: 'color-mix(in srgb, var(--golf-accent) 22%, transparent)',
+                  color: 'var(--text)',
+                }}
+                aria-label="Live event"
+              >
+                <span aria-hidden="true">🏆</span>
+              </span>
+            ) : null}
           </button>
         ))}
       </div>
@@ -543,6 +620,14 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
           onPlay={startDaily}
           pendingResult={dailyPendingResult}
           onResultConsumed={consumeDailyResult}
+        />
+      ) : null}
+
+      {subTab === 'tourneys' ? (
+        <GolfTournaments
+          onPlay={startTournament}
+          pendingResult={tourneyPendingResult}
+          onResultConsumed={consumeTournamentResult}
         />
       ) : null}
 
