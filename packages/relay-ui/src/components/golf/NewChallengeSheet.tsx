@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { GOLF_COURSES, getCourse } from '../../lib/golf/courses';
 import { ApiError, api } from '../../lib/api';
 import { useStore } from '../../lib/store';
+import { HoleThumb } from './HoleThumb';
 
 interface Props {
   // Who we're challenging.
@@ -161,21 +162,46 @@ export function NewChallengeSheet({
         </div>
 
         {mode === 'single' ? (
-          <div className="challenge-holes" role="radiogroup" aria-label="Choose a hole">
-            {course.holes.map((h, i) => (
-              <button
-                key={h.id}
-                type="button"
-                role="radio"
-                aria-checked={holeIdx === i}
-                className={`challenge-hole-chip${holeIdx === i ? ' is-on' : ''}`}
-                disabled={creating}
-                onClick={() => setHoleIdx(i)}
-              >
-                {h.id}
-                {h.name ? <span className="challenge-hole-name"> · {h.name}</span> : null}
-              </button>
-            ))}
+          <div className="golf-holegrid" role="radiogroup" aria-label="Choose a hole">
+            {course.holes.map((h, i) => {
+              const sel = holeIdx === i;
+              const hasWater = h.hazards.some((z) => z.kind === 'water');
+              const hasSand = h.hazards.some((z) => z.kind === 'bunker');
+              return (
+                <button
+                  key={h.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={sel}
+                  className={`golf-holecard${sel ? ' is-sel' : ''}`}
+                  disabled={creating}
+                  onClick={() => setHoleIdx(i)}
+                >
+                  <span className="golf-holecard-thumb">
+                    <HoleThumb hole={h} size={112} detail />
+                    <span className="golf-holecard-num">{h.id}</span>
+                    {hasWater || hasSand ? (
+                      <span className="golf-holecard-hzs">
+                        {hasSand ? (
+                          <span className="golf-holecard-hz sand" title="Bunker" />
+                        ) : null}
+                        {hasWater ? (
+                          <span className="golf-holecard-hz water" title="Water hazard" />
+                        ) : null}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="golf-holecard-cap">
+                    <span className="golf-holecard-name">
+                      {h.name ?? `Hole ${h.id}`}
+                    </span>
+                    <span className="golf-holecard-meta">
+                      Par {h.par} · {h.yards} yd
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
           </div>
         ) : null}
 

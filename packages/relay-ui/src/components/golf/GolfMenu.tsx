@@ -14,6 +14,7 @@ import type { GolfCourse } from '../../lib/golf/courses';
 import { PUTT_COURSES } from '../../lib/golf/puttCourses';
 import type { PuttCourse } from '../../lib/golf/puttCourses';
 import { Avatar } from '../Avatar';
+import { HoleThumb } from './HoleThumb';
 import { NewChallengeSheet } from './NewChallengeSheet';
 import { useStore } from '../../lib/store';
 import type { Contact } from '../../lib/types';
@@ -55,6 +56,10 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
     return last && GOLF_COURSES.some((c) => c.id === last) ? last : GOLF_COURSES[0]!.id;
   });
   const [pickHoleFor, setPickHoleFor] = useState<string | null>(null);
+  // The hole map-card the user last picked (course single-hole grid), purely for
+  // the selected/Fairway highlight + radio aria-checked; picking still starts the
+  // hole immediately (behavior unchanged from the old chips).
+  const [pickedHoleIdx, setPickedHoleIdx] = useState<number | null>(null);
 
   // Mini-Golf course picker — mirrors the Course-mode picker above but over
   // PUTT_COURSES, with its OWN expand toggle, highlighted course (seeded from
@@ -219,6 +224,7 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
                     onClick={() => {
                       setSelectedCourseId(c.id);
                       setPickHoleFor(null);
+                      setPickedHoleIdx(null);
                     }}
                     className={`golf-course flex flex-col text-left${active ? ' is-active' : ''}`}
                     style={{ borderRadius: 12, padding: 12 }}
@@ -252,25 +258,68 @@ export function GolfMenu({ onStart, refreshKey }: Props) {
                           className={`golf-toggle flex-1 rounded-xl py-2.5 text-[14px] font-bold${
                             pickHoleFor === c.id ? ' is-armed' : ''
                           }`}
-                          onClick={() => setPickHoleFor((p) => (p === c.id ? null : c.id))}
+                          onClick={() => {
+                            setPickedHoleIdx(null);
+                            setPickHoleFor((p) => (p === c.id ? null : c.id));
+                          }}
                         >
                           Single hole
                         </button>
                       </div>
 
                       {pickHoleFor === c.id ? (
-                        <div className="flex flex-wrap gap-1.5">
-                          {c.holes.map((h, i) => (
-                            <button
-                              key={h.id}
-                              type="button"
-                              className="golf-chip"
-                              onClick={() => startSingleHole(c, i)}
-                            >
-                              {h.id}
-                              {h.name ? <span style={{ opacity: 0.6 }}> · {h.name}</span> : null}
-                            </button>
-                          ))}
+                        <div
+                          className="golf-holegrid"
+                          role="radiogroup"
+                          aria-label={`Choose a hole on ${c.name}`}
+                        >
+                          {c.holes.map((h, i) => {
+                            const sel = pickedHoleIdx === i;
+                            const hasWater = h.hazards.some((z) => z.kind === 'water');
+                            const hasSand = h.hazards.some((z) => z.kind === 'bunker');
+                            return (
+                              <button
+                                key={h.id}
+                                type="button"
+                                role="radio"
+                                aria-checked={sel}
+                                className={`golf-holecard${sel ? ' is-sel' : ''}`}
+                                onClick={() => {
+                                  setPickedHoleIdx(i);
+                                  startSingleHole(c, i);
+                                }}
+                              >
+                                <span className="golf-holecard-thumb">
+                                  <HoleThumb hole={h} size={112} detail />
+                                  <span className="golf-holecard-num">{h.id}</span>
+                                  {hasWater || hasSand ? (
+                                    <span className="golf-holecard-hzs">
+                                      {hasSand ? (
+                                        <span
+                                          className="golf-holecard-hz sand"
+                                          title="Bunker"
+                                        />
+                                      ) : null}
+                                      {hasWater ? (
+                                        <span
+                                          className="golf-holecard-hz water"
+                                          title="Water hazard"
+                                        />
+                                      ) : null}
+                                    </span>
+                                  ) : null}
+                                </span>
+                                <span className="golf-holecard-cap">
+                                  <span className="golf-holecard-name">
+                                    {h.name ?? `Hole ${h.id}`}
+                                  </span>
+                                  <span className="golf-holecard-meta">
+                                    Par {h.par} · {h.yards} yd
+                                  </span>
+                                </span>
+                              </button>
+                            );
+                          })}
                         </div>
                       ) : null}
                     </div>
