@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Env } from './env';
 import { readAuthedUser } from './auth';
 import { avatarUrlFor } from './me';
+import { addXp, awardCoins } from './economy';
 import {
   currentPeriodIndex,
   periodWindow,
@@ -15,6 +16,11 @@ import {
 // MAX_POINTS_PER_ROUND per round over at most MAX_ROUNDS rounds).
 export const MAX_ROUNDS = 8;
 export const MAX_POINTS_PER_ROUND = 2000;
+
+// Economy anti-farm: a client can submit arbitrarily many arcade rounds, so the
+// per-round coin/XP reward is capped to this many credited rounds per UTC day.
+// Rounds past the cap still record their score — they just stop minting coins.
+export const MAX_ROUND_REWARDS_PER_DAY = 20;
 
 // Games that share the game_scores table (and its leaderboard). The
 // column defaults to 'fog', so an omitted/unknown value maps back to fog
@@ -440,12 +446,13 @@ export function gamesRoutes() {
       if (trimmed.length > 0 && trimmed.length <= MAX_COURSE_LEN) course = trimmed;
     }
 
+    const gameScoreId = crypto.randomUUID();
     await c.env.DB.prepare(
       `INSERT INTO game_scores (id, user_id, game, score, rounds, best_streak, course, to_par, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
       .bind(
-        crypto.randomUUID(),
+        gameScoreId,
         me.id,
         game,
         score,
@@ -456,6 +463,27 @@ export function gamesRoutes() {
         Date.now(),
       )
       .run();
+
+    // Economy earn: a completed round credits a small flat coin + XP reward.
+    // ref = the game_scores row id, so each distinct round credits exactly once
+    // (a replay of the SAME row is a no-op). Capped per UTC day to stop a client
+    // farming coins by spamming rounds. The whole block is best-effort: an
+    // economy failure must never fail the already-persisted score submission.
+    try {
+      const startOfDay = Date.parse(`${utcDate(Date.now())}T00:00:00Z`);
+      const credited = await c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM currency_ledger
+          WHERE user_id = ? AND reason = 'round_reward' AND created_at >= ?`,
+      )
+        .bind(me.id, startOfDay)
+        .first<{ n: number }>();
+      if ((credited?.n ?? 0) < MAX_ROUND_REWARDS_PER_DAY) {
+        await awardCoins(c.env, me.id, 10, 'round_reward', gameScoreId);
+        await addXp(c.env, me.id, 10, 'round_reward', gameScoreId);
+      }
+    } catch (err) {
+      console.error('round_reward economy hook failed:', err);
+    }
 
     const row = await c.env.DB.prepare(
       `SELECT MAX(score) AS best FROM game_scores WHERE user_id = ? AND game = ?`,
@@ -1076,6 +1104,17 @@ export function gamesRoutes() {
     )
       .bind(me.id, current, best, today, now, now)
       .run();
+
+    // Economy earn: completing the day's challenge credits coins + XP once per
+    // UTC day. ref = today's date, so a same-day retry is a no-op (ledger
+    // idempotency guard). Placed AFTER the streak recompute and wrapped so an
+    // economy failure can neither skip the streak nor fail the primary submit.
+    try {
+      await awardCoins(c.env, me.id, 50, 'daily_reward', today);
+      await addXp(c.env, me.id, 50, 'daily_reward', today);
+    } catch (err) {
+      console.error('daily_reward economy hook failed:', err);
+    }
 
     // Read-after-write so `today` reflects the persisted best (not necessarily
     // this attempt, when a prior one was better). A row is guaranteed here: we
