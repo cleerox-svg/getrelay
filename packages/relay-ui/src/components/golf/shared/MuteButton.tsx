@@ -1,4 +1,5 @@
 import { useAudioPrefs } from '../../../lib/audio';
+import { frostedSurface, FROST_RADIUS_CHIP, FROST_TEXT, FROST_DIM } from './frosted';
 
 // A quick-mute control shared by the golf HUDs. It toggles the master `muted`
 // audio pref (persisted via lib/audio/prefs, read live by the engine so the
@@ -29,14 +30,11 @@ export function MuteButton({ variant = 'sheet' }: { variant?: 'sheet' | 'icon' }
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          borderRadius: 999,
           fontSize: 15,
           lineHeight: 1,
-          background: 'var(--card-bg)',
-          color: muted ? 'var(--text-dim)' : 'var(--text)',
-          border: '1px solid var(--separator)',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.16)',
+          color: muted ? FROST_DIM : FROST_TEXT,
           pointerEvents: 'auto',
+          ...frostedSurface(FROST_RADIUS_CHIP),
         }}
       >
         {muted ? '🔇' : '🔈'}
