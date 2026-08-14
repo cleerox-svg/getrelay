@@ -693,3 +693,98 @@ export const HOLE_1: CourseHole = {
 };
 
 export const COURSE_HOLES: CourseHole[] = [HOLE_1];
+
+// --- Trees (deterministic data: rendered AND collided) ---------------------
+// Trees are DATA derived from the hole, so the trunk the player SEES (CourseGL
+// renders from courseTrees) is exactly the trunk the ball HITS (courseSim
+// collides against the SAME list) — the see-what-you-play rule extended to
+// obstacles. A tree is a vertical TRUNK cylinder (trunkR, from the ground up to
+// `height`) the ball ricochets off, wearing a CANOPY sphere (canopyR at canopyH
+// above the base) whose leaves lightly brush — slow — a ball passing through it.
+// Placement lines the corridor just beyond the OB edge (roughHalf + a margin),
+// exactly reproducing the inline grove CourseGL used to build, so the visual is
+// unchanged. Pure data (no three, no Math.random) → both consumers agree and the
+// screenshot harness stays reproducible.
+export interface CourseTree {
+  d: number;
+  x: number;
+  kind: 'pine' | 'broadleaf';
+  scale: number; // render scale (feeds the shared tree kit)
+  seed: number; // render RNG seed (feeds the shared tree kit)
+  ground: number; // ground elevation (yd) at the base — convenience for the renderer
+  trunkR: number; // trunk cylinder radius (yd) — the ricochet surface
+  height: number; // trunk-top height (yd above the base) up to which a trunk hit reflects
+  canopyR: number; // canopy sphere radius (yd)
+  canopyH: number; // canopy-sphere centre height (yd above the base)
+}
+
+// The framed downrange extent CourseGL meshes to — MUST match the renderer so a
+// tree at the far end lands at the same d (renderer: dMax = max(pin.d, centerline
+// max d) + MARGIN(30) + 80). Kept here so the tree loop is self-contained.
+function treeSpanMaxD(hole: CourseHole): number {
+  let clMaxD = hole.pin.d;
+  for (const p of hole.centerline) clMaxD = Math.max(clMaxD, p.d);
+  return Math.max(hole.pin.d, clMaxD) + 30 + 80;
+}
+
+// Centerline x at downrange d (linear between vertices; clamped past the ends).
+function centerlineXAt(hole: CourseHole, d: number): number {
+  const cl = hole.centerline;
+  for (let s = 0; s < cl.length - 1; s++) {
+    const a = cl[s]!;
+    const b = cl[s + 1]!;
+    if (d >= a.d && d <= b.d) return a.x + ((b.x - a.x) * (d - a.d)) / (b.d - a.d || 1);
+  }
+  return cl[cl.length - 1]!.x;
+}
+
+// The tree grove for a hole. Deterministic in the hole (integer d steps, no RNG).
+export function courseTrees(hole: CourseHole): CourseTree[] {
+  const out: CourseTree[] = [];
+  const dMax = treeSpanMaxD(hole);
+  const off = hole.roughHalf + 8;
+  const push = (kind: 'pine' | 'broadleaf', x: number, d: number, scale: number, seed: number) => {
+    // Per-species trunk/canopy dimensions (yd), scaled with the render scale so the
+    // collision volumes track the DRAWN tree (see-what-you-play). Trunk radius ≈
+    // the tree kit's trunk-cylinder base radius (scenery.ts: broadleaf 0.45→0.85,
+    // pine 0.32→0.6). The ricochet cylinder tops out at the DRAWN trunk-top height
+    // — the tree kit centres each trunk mesh at local y 2.5, so a broadleaf trunk
+    // (height 5.5) tops at 2.5 + 5.5/2 = 5.25·scale and a pine trunk (height 5) at
+    // 2.5 + 5/2 = 5.0·scale — so a carom only happens where the visible trunk is.
+    // The canopy sphere (canopyH) covers the leaves ABOVE that.
+    const trunkR = (kind === 'pine' ? 0.55 : 0.8) * scale;
+    const canopyR = (kind === 'pine' ? 2.9 : 3.4) * scale;
+    const canopyH = 7 * scale;
+    const height = (kind === 'pine' ? 5.0 : 5.25) * scale;
+    out.push({
+      d,
+      x,
+      kind,
+      scale,
+      seed,
+      ground: heightAt(hole, d, x),
+      trunkR,
+      height,
+      canopyR,
+      canopyH,
+    });
+  };
+  for (let d = 20; d < dMax - 20; d += 26) {
+    const cx = centerlineXAt(hole, d);
+    const lx = cx - off - (d % 3) * 2;
+    const ld = d + (d % 7) - 3;
+    const rx = cx + off + (d % 4) * 2;
+    const rd = d + (d % 5) - 2;
+    // Front line: broadleaves, every third step a pine for variety (same as the
+    // old inline grove so the look is byte-for-byte unchanged).
+    push(d % 3 === 0 ? 'pine' : 'broadleaf', lx, ld, 1.7 + (d % 5) * 0.12, 5000 + d);
+    push(d % 3 === 1 ? 'pine' : 'broadleaf', rx, rd, 1.65 + (d % 4) * 0.14, 9000 + d);
+    // A receding, still-sizable pine further out each side for a layered line.
+    if (d % 2 === 0) {
+      const ox = off + 14;
+      push('pine', cx - ox, ld - 6, 1.35, 3000 + d);
+      push('pine', cx + ox, rd + 6, 1.4, 4000 + d);
+    }
+  }
+  return out;
+}

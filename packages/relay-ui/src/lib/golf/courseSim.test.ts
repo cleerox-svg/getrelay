@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { CourseSim } from './courseSim';
-import { HOLE_1, surfaceAt, type CourseHole } from './terrain';
+import { HOLE_1, courseTrees, surfaceAt, type CourseHole } from './terrain';
 import { CLUBS } from './clubs';
 import { GRAVITY } from './rangeSim';
 import { BALL_R, CUP_R, greenRollDecel, rollOutDistance } from './greenPhysics';
@@ -929,6 +929,126 @@ describe('course sim — per-hole best-shot records', () => {
 // (drops) or CAROMS off if too fast (stays out, pace killed, direction reversed);
 // a ball that never reaches the pole zone is untouched. These pin the three cases
 // on a DEAD-FLAT green (FLAT) so the roll tracks straight with no break.
+// --- Tree collision (trunk ricochet + canopy brush) --------------------------
+// Trees are DETERMINISTIC DATA (terrain.courseTrees) shared by the renderer and
+// the sim, so the trunk you see is the trunk you hit. A trunk hit REFLECTS the
+// horizontal velocity about the contact normal (central → back, glancing → aside)
+// and loses pace; the canopy lightly slows an airborne ball passing through the
+// leaves — "just a little", not a hard stop. Exercised AIRBORNE (the trees line
+// the OB edge, and an airborne ball doesn't stop on OB until it lands, so the
+// carom is isolated from the OB terminator).
+describe('course sim — tree collision (trunk ricochet + canopy brush)', () => {
+  const trees = courseTrees(HOLE_1);
+
+  it('the grove is deterministic data with sane trunk/canopy dimensions', () => {
+    expect(trees.length).toBeGreaterThan(0);
+    for (const t of trees) {
+      expect(t.trunkR).toBeGreaterThan(0);
+      expect(t.canopyR).toBeGreaterThan(t.trunkR);
+      expect(Number.isFinite(t.d) && Number.isFinite(t.x) && Number.isFinite(t.ground)).toBe(true);
+    }
+    // Same list every call (no RNG) — the renderer and sim can never disagree.
+    expect(JSON.stringify(courseTrees(HOLE_1))).toBe(JSON.stringify(trees));
+  });
+
+  // Fly a low liner straight at trunk `t` from `back` yards short of it, offset
+  // `aimX` laterally, at height `relH` above the base (below the trunk top). Track
+  // whether the downrange velocity reverses (a carom back), the speed at that
+  // reversal, and the greatest lateral speed picked up (a glancing deflection).
+  function fireAtTrunk(t: (typeof trees)[number], back: number, aimX: number, relH: number) {
+    const s = new CourseSim(HOLE_1);
+    const b = s.ball;
+    b.d = t.d - back;
+    b.x = t.x + aimX;
+    b.h = t.ground + relH;
+    b.vd = 40;
+    b.vx = 0;
+    b.vh = 0;
+    b.inFlight = true;
+    b.grounded = false;
+    b.resting = false;
+    const v0 = Math.hypot(b.vd, b.vx);
+    let reversed = false;
+    let speedAtReversal = Infinity;
+    let maxVx = 0;
+    let prevVd = b.vd;
+    let steps = 0;
+    while (b.inFlight && steps < 60) {
+      s.substep(1 / 120);
+      if (prevVd > 0 && b.vd < 0) {
+        reversed = true;
+        speedAtReversal = Math.hypot(b.vd, b.vx);
+      }
+      maxVx = Math.max(maxVx, Math.abs(b.vx));
+      prevVd = b.vd;
+      steps++;
+    }
+    return { reversed, speedAtReversal, maxVx, v0, ball: b };
+  }
+
+  it('a ball fired dead-centre into a trunk ricochets BACK and loses speed', () => {
+    const t = trees[0]!;
+    const r = fireAtTrunk(t, 4, 0, 1.2); // centre strike, low, well below the trunk top
+    expect(r.reversed).toBe(true); // the trunk turned it around
+    expect(r.speedAtReversal).toBeLessThan(r.v0); // pace killed by the knock
+  });
+
+  it('a GLANCING trunk hit deflects to the side (based on where it hit)', () => {
+    const t = trees[0]!;
+    // Aimed at the +x flank of the trunk: the contact normal has a +x component, so
+    // the ball is kicked sideways (gains lateral speed it launched without).
+    const r = fireAtTrunk(t, 4, t.trunkR * 0.7, 1.2);
+    expect(r.maxVx).toBeGreaterThan(1); // clearly deflected laterally off the flank
+  });
+
+  it('a ball flying OVER the trunk top is not caromed by the trunk', () => {
+    const t = trees[0]!;
+    // Same central line but ABOVE the trunk top: no trunk hit, so the downrange
+    // velocity never reverses (it sails on / brushes canopy only).
+    const r = fireAtTrunk(t, 4, 0, t.height + 3);
+    expect(r.reversed).toBe(false);
+  });
+
+  it('a ball passing THROUGH a canopy is slowed slightly vs clear air', () => {
+    const t = trees[0]!;
+    // Same launch, integrated the same number of substeps: one through the canopy
+    // (just above the trunk top so it's the LEAVES, not the trunk), one clear above
+    // the whole tree. Horizontal air drag is identical, so any extra speed loss is
+    // the canopy brush.
+    const run = (relH: number) => {
+      const s = new CourseSim(HOLE_1);
+      const b = s.ball;
+      b.d = t.d - (t.canopyR + 2);
+      b.x = t.x;
+      b.h = t.ground + relH;
+      b.vd = 30;
+      b.vx = 0;
+      b.vh = 0;
+      b.inFlight = true;
+      b.grounded = false;
+      b.resting = false;
+      for (let i = 0; i < 24 && b.inFlight; i++) s.substep(1 / 120);
+      return Math.hypot(b.vd, b.vx);
+    };
+    const through = run(t.height + t.canopyR * 0.4); // above the trunk, inside the leaves
+    const clear = run(t.canopyH + t.canopyR + 25); // well above the tree
+    expect(through).toBeLessThan(clear); // leaves brushed pace off — measurably slower
+    expect(through).toBeGreaterThan(clear * 0.95); // but only a LITTLE (a few %), a gentle brush
+  });
+
+  it('a straight fairway drive with no trees in its path is UNAFFECTED', () => {
+    // The invariant: adding trees must not perturb a shot that never nears one.
+    // A full driver down the drive line stays in the corridor (trees line the OB
+    // edge ~48 yd out), so its rest is identical with the collision code present.
+    const m = sim().simulateShot({ clubId: 'driver', power: 1 });
+    expect(['fairway', 'rough', 'green', 'fringe', 'bunker', 'cartpath', 'tee']).toContain(
+      m.result,
+    );
+    // Its lateral rest stays well inside the tree line — proof it never caromed.
+    expect(Math.abs(m.restX)).toBeLessThan(HOLE_1.roughHalf);
+  });
+});
+
 describe('course sim — flagstick (pin) collision', () => {
   const p = HOLE_1.pin; // { d: 512, x: 18 }, at the cup centre
 

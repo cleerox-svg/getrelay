@@ -36,8 +36,8 @@ import {
   TERRAIN,
   type Terrain,
 } from './rangeSim';
-import { gradientAt, heightAt, slopeAccel, surfaceAt } from './terrain';
-import type { CourseHole, Surface } from './terrain';
+import { courseTrees, gradientAt, heightAt, slopeAccel, surfaceAt } from './terrain';
+import type { CourseHole, CourseTree, Surface } from './terrain';
 import {
   BALL_R,
   CUP_R,
@@ -183,6 +183,28 @@ function puttSpeedForPower(power: number): number {
   const p = Math.max(0, Math.min(1, power));
   return PUTT_MIN_SPEED + p * p * (PUTT_MAX_SPEED - PUTT_MIN_SPEED);
 }
+
+// --- Tree collision (trunk ricochet + canopy brush) ------------------------
+// Trees are deterministic DATA (terrain.courseTrees) shared with the renderer, so
+// the trunk the player sees is the trunk the ball hits. A trunk is a vertical
+// cylinder the ball CAROMS off (reflect the inbound normal component, restitution
+// < 1 → a central hit comes back, a glancing hit deflects); the canopy is a soft
+// sphere that lightly DAMPS an airborne ball passing through it — leaves brushing
+// it, not a hard stop.
+//
+// Restitution of a trunk carom (reflected normal component kept fraction). Lower
+// than a fibreglass pin — a tree trunk deadens the knock — but lively enough to
+// clearly kick the ball away.
+const TRUNK_RESTITUTION = 0.55;
+// Extra pace shed by the whole velocity on a trunk knock (a little speed killed
+// regardless of angle), applied on top of the normal-component restitution.
+const TRUNK_SPEED_KEEP = 0.85;
+// Fraction of speed KEPT per second an airborne ball spends inside a canopy — the
+// leaf BRUSH, "just a little" (the user's words). Close to 1 so a typical
+// fly-through (~0.1–0.15 s in the leaves) sheds only a couple of percent; a slow
+// lob dwelling ~0.4 s near the top still loses only ~4%. dt-scaled so it's a
+// gentle brush, not a catch, and identical live + headless.
+const CANOPY_KEEP_PER_SEC = 0.9;
 
 // Where a shot ended up. The solid lies double as the resting-lie readout; the
 // terminal ones end the shot.
@@ -371,6 +393,11 @@ export class CourseSim {
   readonly hole: CourseHole;
   readonly ball: CourseBall;
   readonly trail: CourseTrailPt[] = [];
+  // The tree grove — DETERMINISTIC DATA derived from the static hole (same list
+  // the renderer draws), so the trunk you see is the trunk you hit. Immutable
+  // after construction, so it needs no CourseSnapshot entry: predict() reads but
+  // never mutates it, leaving the snapshot round-trip guard byte-identical.
+  private readonly trees: CourseTree[];
 
   private clubId: string;
   private spinBack = 0;
@@ -433,6 +460,7 @@ export class CourseSim {
   constructor(hole: CourseHole, clubId = DEFAULT_CLUB_ID) {
     this.hole = hole;
     this.par = hole.par;
+    this.trees = courseTrees(hole);
     this.clubId = clubId;
     this.windAlong = hole.wind.along;
     this.windCross = hole.wind.cross;
@@ -877,6 +905,11 @@ export class CourseSim {
       }
       b.d += b.vd * dt;
       b.x += b.vx * dt;
+      // Trunk ricochet (swept) BEFORE the water/ob stop, so a carom off a tree can
+      // send a wide ball back toward play instead of dying where it rolled. relH=0
+      // grounded, so the ball is always below the trunk top. Reposition + reflect
+      // happen inside; re-sample the ground under the (possibly nudged) position.
+      this.hitTrunk(b.d - b.vd * dt, b.x - b.vx * dt, 0);
       b.h = this.ground(b.d, b.x);
       this.total = this.origin2D(b.d, b.x);
       const surf = this.lieAt(b.d, b.x);
@@ -924,7 +957,7 @@ export class CourseSim {
     if (above > this.apex) this.apex = above;
     this.pushTrail();
 
-    const ground = this.ground(b.d, b.x);
+    let ground = this.ground(b.d, b.x);
     // Flagstick strike IN FLIGHT: a descending shot that reaches the pin while
     // below the flag top can hole (a soft dart that catches the pin) or carom off
     // the pole. Gated on b.vh < 0 (descending) AND the ball being within the
@@ -937,6 +970,19 @@ export class CourseSim {
       // so a descending liner can't tunnel the pin at speed.
       if (this.hitPin(b.d - b.vd * dt, b.x - b.vx * dt, speed)) return this.stop('holed');
     }
+    // Trees IN FLIGHT: a trunk ricochet (below the trunk top) reflects the
+    // horizontal velocity; the canopy brush lightly damps a ball flying through
+    // the leaves. Trunk first (uses the unmodified pre-brush velocity for the swept
+    // prev), then the brush. Both leave vh/h to the airborne integrator (trunk) or
+    // scale it a touch (canopy).
+    const relH = b.h - ground;
+    if (this.hitTrunk(b.d - b.vd * dt, b.x - b.vx * dt, relH)) {
+      // Nudged to the trunk edge — re-sample the ground under the new position so
+      // the landing test below reads the post-nudge lie (the nudge is sub-yard, so
+      // relH for the canopy brush stays accurate enough).
+      ground = this.ground(b.d, b.x);
+    }
+    this.brushCanopy(relH, dt);
     // Land on descent (h dropping to the surface), OR when a still-climbing liner
     // has clearly PENETRATED rising terrain — the latter catches a low shot that
     // would otherwise tunnel through an upslope. The penetration MARGIN keeps a
@@ -1031,6 +1077,66 @@ export class CourseSim {
     b.d = p.d + sw.n1 * clear;
     b.x = p.x + sw.n2 * clear;
     return false;
+  }
+
+  // Trunk ricochet — SWEPT over this substep's horizontal motion (prev→cur) against
+  // each tree's vertical trunk cylinder (trunkR), so a fast ball can't tunnel a
+  // trunk. When the swept path passes within trunkR + BALL_R of a trunk WHILE the
+  // ball is below the trunk top AND moving toward it, the HORIZONTAL velocity is
+  // REFLECTED about the trunk-surface normal (trunk centre → contact point) with
+  // TRUNK_RESTITUTION (a central hit comes back, a glancing hit deflects) and a
+  // little pace is shed (TRUNK_SPEED_KEEP). vh/h are untouched — consistent with
+  // the flagstick carom. The ball is nudged just OUTSIDE the collision radius so
+  // the next substep starts clear. `relH` is the ball height above the LOCAL
+  // ground (0 when grounded); a ball above the trunk top clears it. Stateless
+  // beyond the ball's own fields (snapshot guard safe). Reflects the FIRST trunk
+  // struck. Returns true on a strike.
+  private hitTrunk(prevD: number, prevX: number, relH: number): boolean {
+    const b = this.ball;
+    for (const t of this.trees) {
+      if (relH > t.height) continue; // ball is over the trunk top — no trunk hit
+      const R = t.trunkR + BALL_R;
+      // Broad phase: skip a trunk whose centre lies outside the swept segment's
+      // AABB inflated by R (exact — a hit can't occur outside it). predict() runs
+      // this ×3 per aim frame, so pruning the poleSweep cost is worthwhile.
+      if (t.d < Math.min(prevD, b.d) - R || t.d > Math.max(prevD, b.d) + R) continue;
+      if (t.x < Math.min(prevX, b.x) - R || t.x > Math.max(prevX, b.x) + R) continue;
+      const sw = poleSweep(prevD, prevX, b.d, b.x, t.d, t.x, R);
+      if (sw.minDist > R || !sw.approaching) continue;
+      const r = poleDeflect(b.vd, b.vx, sw.n1, sw.n2, TRUNK_RESTITUTION);
+      b.vd = r.v1 * TRUNK_SPEED_KEEP;
+      b.vx = r.v2 * TRUNK_SPEED_KEEP;
+      const clear = R + 1e-3;
+      b.d = t.d + sw.n1 * clear;
+      b.x = t.x + sw.n2 * clear;
+      return true;
+    }
+    return false;
+  }
+
+  // Canopy brush — an airborne ball whose centre lies inside a tree's canopy
+  // sphere (radius canopyR centred canopyH above the base) has its velocity
+  // LIGHTLY damped this substep: leaves brushing it, "just a little", never a hard
+  // stop. dt-scaled (Math.pow(keep, dt)) so a quick pass loses little and a longer
+  // dwell loses a bit more, emergent, and identical live + headless. Only scales
+  // the ball's own velocity (snapshot guard safe). `relH` = height above local
+  // ground; brushes the FIRST canopy entered.
+  private brushCanopy(relH: number, dt: number): void {
+    const b = this.ball;
+    for (const t of this.trees) {
+      const dd = b.d - t.d;
+      if (dd > t.canopyR || dd < -t.canopyR) continue; // broad phase (cheap axis reject)
+      const dh = relH - t.canopyH;
+      if (dh > t.canopyR || dh < -t.canopyR) continue;
+      const dx = b.x - t.x;
+      if (dd * dd + dx * dx + dh * dh <= t.canopyR * t.canopyR) {
+        const k = Math.pow(CANOPY_KEEP_PER_SEC, dt);
+        b.vd *= k;
+        b.vx *= k;
+        b.vh *= k;
+        return;
+      }
+    }
   }
 
   // Capture / restore the FULL mutable simulation state in ONE place. predict()

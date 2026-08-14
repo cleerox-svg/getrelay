@@ -18,6 +18,7 @@ import {
   corridorHalfAt,
   corridorEdgeDist,
   centerlineArcYd,
+  courseTrees,
   edgeRadius,
   featureSeed,
   type CourseHole,
@@ -691,9 +692,22 @@ function buildFirstCutBand(
   const nS = Math.max(2, Math.ceil(total / STEP));
   const INNER_OVERLAP = 0.8; // pull the inner edge this far INTO the fairway so it
   // always covers the baked fairway→rough seam (incl. the small dogleg bevel trim)
-  // Stop the band before the green pad so it never overlaps the fringe collar.
+  // Trim the band to the green PAD radius so the mown approach corridor runs right
+  // up to — and OVERLAPS — the greenside fringe collar's apron (which reaches
+  // padR + APRON), instead of stopping several yards short and leaving a ring of
+  // bare ROUGH between the corridor mouth and the green (the reported gap). The
+  // band is CUT (== fringe) colour and draws above the apron (higher lift +
+  // polygonOffset), so the overlap reads as one continuous mown apron. The
+  // distance trim ALONE does NOT keep the band off the putting surface — the
+  // ORGANIC green cap bulges to green.r·(1+EDGE_WOBBLE) (17.25 > padR 16 on
+  // HOLE_1), so a band vertex just outside padR could still overlap the cap and,
+  // via its polygonOffset, draw a fringe tongue ONTO the green. So the band is
+  // ALSO clipped against the green-cap footprint below (quadClear), making it
+  // correct BY CONSTRUCTION: the band reaches the cap's exact wavy edge and stops.
+  // Physics classification (surfaceAt) is untouched — render only.
   const g = hole.green;
-  const trimDist = greenPadRadius(hole) + firstCutW + 6;
+  const gSeed = featureSeed(g.d, g.x);
+  const trimDist = greenPadRadius(hole);
 
   // Per-sample world position + up-to-date corridor half-width; the tangent is a
   // central difference of the sampled positions (rotates smoothly through bends).
@@ -748,6 +762,36 @@ function buildFirstCutBand(
     put(base + 2, s.x - nx * inOff, s.d - nd * inOff);
     put(base + 3, s.x - nx * outOff, s.d - nd * outOff);
   }
+  // A band vertex/quad that falls inside a bunker or pond footprint is CLIPPED, so
+  // the mown first cut never draws a green tongue THROUGH the sand/water (the
+  // reported bug: the corridor band caroming over a fairway bunker). The footprint
+  // is the SAME organic outline the ball plays and the sand/water caps draw
+  // (edgeRadius + the feature's featureSeed), inflated a hair (1.03×) so the band
+  // recedes just UNDER the cap edge and the cap (drawn on top) hides the cut end —
+  // no green sliver at the rim. Render-only; surfaceAt is unchanged.
+  const inHazard = (wx: number, wd: number): boolean => {
+    for (const hz of hole.hazards) {
+      const ang = Math.atan2(wd - hz.d, wx - hz.x);
+      const rr = edgeRadius(featureSeed(hz.d, hz.x), ang, hz.r) * 1.03;
+      if (Math.hypot(wx - hz.x, wd - hz.d) <= rr) return true;
+    }
+    return false;
+  };
+  // Inside the ORGANIC green-cap outline (same gSeed/edgeRadius the cap draws +
+  // the ball plays)? Then the band would sit on the putting surface — clip it, so
+  // the band stops at the cap's exact wavy edge and never tongues onto the green.
+  const inGreenCap = (wx: number, wd: number): boolean => {
+    const ang = Math.atan2(wd - g.d, wx - g.x);
+    return Math.hypot(wx - g.x, wd - g.d) <= edgeRadius(gSeed, ang, g.r);
+  };
+  const blocked = (wx: number, wd: number): boolean => inHazard(wx, wd) || inGreenCap(wx, wd);
+  const wx = (vi: number) => pos[vi * 3]!;
+  const wd = (vi: number) => -pos[vi * 3 + 2]!;
+  const quadClear = (i0: number, i1: number, i2: number, i3: number): boolean =>
+    !blocked(wx(i0), wd(i0)) &&
+    !blocked(wx(i1), wd(i1)) &&
+    !blocked(wx(i2), wd(i2)) &&
+    !blocked(wx(i3), wd(i3));
   const idx: number[] = [];
   for (let k = 0; k < nS; k++) {
     if (!(samp[k]!.keep && samp[k + 1]!.keep)) continue;
@@ -762,9 +806,15 @@ function buildFirstCutBand(
     // Fix: wind BOTH strips so their front face points UP (+Y). The left strip is
     // reversed (inner_k → inner_{k+1} → outer_k …); the right strip already winds
     // up. Now the +Y normal attribute lights both evenly and FrontSide culls the
-    // (never-seen) underside.
-    idx.push(a + 0, b + 0, a + 1, a + 1, b + 0, b + 1);
-    idx.push(a + 2, a + 3, b + 2, b + 2, a + 3, b + 3);
+    // (never-seen) underside. Each side is clipped independently where it crosses a
+    // hazard, so one bank of the corridor can be interrupted by a bunker while the
+    // other runs on.
+    if (quadClear(a + 0, b + 0, a + 1, b + 1)) {
+      idx.push(a + 0, b + 0, a + 1, a + 1, b + 0, b + 1);
+    }
+    if (quadClear(a + 2, a + 3, b + 2, b + 3)) {
+      idx.push(a + 2, a + 3, b + 2, b + 2, a + 3, b + 3);
+    }
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
@@ -1038,6 +1088,13 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     let waterKit: ReturnType<typeof makeWater> | null = null;
     const sandTex = track(makeSand());
     sandTex.repeat.set(3, 3);
+    // A defined bunker LIP: a thin, darker "shaded sand wall" ring drawn right at
+    // the sand outline (same organic edge) and lifted a hair proud of the sand cap,
+    // so the sand→grass boundary reads as a CRISP raked lip line instead of fading
+    // softly into the grass (the reported fuzzy edge). Shared across all bunkers.
+    const lipMat = track(
+      new THREE.MeshStandardMaterial({ color: 0xb89a63, roughness: 1, side: THREE.DoubleSide }),
+    );
     const radialUV: UVFn = (_wx, _wd, ang, frac) => [
       0.5 + Math.cos(ang) * frac * 0.5,
       0.5 + Math.sin(ang) * frac * 0.5,
@@ -1085,19 +1142,12 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
       } else if (hz.kind === 'bunker') {
         // A DISHED sand cap that samples the heightfield (the basin bowl) along
         // the ORGANIC outline, so a ball — which rests on the terrain height —
-        // sits ON the sand, and the sand's wavy edge matches the played bunker.
+        // sits ON the sand, and the sand's wavy edge matches the played bunker. 72
+        // segments (was 48) so the wavy rim is a crisp polygonal line, not a coarse
+        // fan that anti-aliases into a fuzzy edge.
+        const bGroundY = (d: number, x: number) => heightAt(hole, d, x);
         const sGeo = track(
-          buildOrganicDisc(
-            hzSeed,
-            hz.d,
-            hz.x,
-            hz.r,
-            (d, x) => heightAt(hole, d, x),
-            0.05,
-            radialUV,
-            6,
-            48,
-          ),
+          buildOrganicDisc(hzSeed, hz.d, hz.x, hz.r, bGroundY, 0.05, radialUV, 6, 72),
         );
         // DoubleSide so a downward-facing fan normal can't cull the sand away.
         const sMat = track(
@@ -1106,6 +1156,16 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
         const sand = new THREE.Mesh(sGeo, sMat);
         sand.receiveShadow = true;
         scene.add(sand);
+        // The crisp LIP: a thin organic annulus (SAME hzSeed → nests exactly on the
+        // sand edge) hugging the outline from 0.9·r to the edge, lifted just above
+        // the sand so it draws on top and defines a sharp raked lip line where the
+        // sand meets the grass. Follows the SAME edgeRadius outline the ball plays.
+        const lipGeo = track(
+          buildOrganicAnnulus(hzSeed, hz.d, hz.x, hz.r * 0.9, hz.r, bGroundY, 0.07, radialUV, 2, 72),
+        );
+        const lip = new THREE.Mesh(lipGeo, lipMat);
+        lip.receiveShadow = false;
+        scene.add(lip);
       }
     }
 
@@ -1916,42 +1976,14 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
 
 
     // Trees — the range's two-species grove (broadleaf + pine, 5-tone palette),
-    // shared from scenery.ts. Placement stays course-specific: a line down each
-    // side of the corridor, each tree lifted onto the terrain (heightAt) and, for
-    // depth, a pine woven in behind. World z = −d.
+    // shared from scenery.ts. Placement is now DETERMINISTIC DATA (terrain.
+    // courseTrees) shared with the sim, so the trunk drawn here is exactly the
+    // trunk the ball ricochets off and the canopy it brushes through (see-what-
+    // you-play). We render straight FROM that list — position, species, scale,
+    // seed and terrain height all come from the data. World z = −d.
     const trees = createTreeKit(scene, track);
-    const clX = (d: number): number => {
-      const cl = hole.centerline;
-      for (let s = 0; s < cl.length - 1; s++) {
-        const a = cl[s]!;
-        const b = cl[s + 1]!;
-        if (d >= a.d && d <= b.d) return a.x + ((b.x - a.x) * (d - a.d)) / (b.d - a.d || 1);
-      }
-      return cl[cl.length - 1]!.x;
-    };
-    for (let d = 20; d < dMax - 20; d += 26) {
-      const cx = clX(d);
-      const off = hole.roughHalf + 8;
-      const lx = cx - off - (d % 3) * 2;
-      const ld = d + (d % 7) - 3;
-      const rx = cx + off + (d % 4) * 2;
-      const rd = d + (d % 5) - 2;
-      // Front line: broadleaves. Every third step swap to a pine for variety.
-      const leftPine = d % 3 === 0;
-      const rightPine = d % 3 === 1;
-      // Bigger trees (~1.6×) so the tree line reads with presence, not toy shrubs.
-      (leftPine ? trees.addPine : trees.addBroadleaf)(
-        lx, -ld, 1.7 + (d % 5) * 0.12, 5000 + d, heightAt(hole, ld, lx),
-      );
-      (rightPine ? trees.addPine : trees.addBroadleaf)(
-        rx, -rd, 1.65 + (d % 4) * 0.14, 9000 + d, heightAt(hole, rd, rx),
-      );
-      // A receding, still-sizable pine further out each side for a layered line.
-      if (d % 2 === 0) {
-        const ox = off + 14;
-        trees.addPine(cx - ox, -(ld - 6), 1.35, 3000 + d, heightAt(hole, ld - 6, cx - ox));
-        trees.addPine(cx + ox, -(rd + 6), 1.4, 4000 + d, heightAt(hole, rd + 6, cx + ox));
-      }
+    for (const t of courseTrees(hole)) {
+      (t.kind === 'pine' ? trees.addPine : trees.addBroadleaf)(t.x, -t.d, t.scale, t.seed, t.ground);
     }
 
     // --- Camera ---------------------------------------------------------
