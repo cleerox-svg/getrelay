@@ -1042,7 +1042,7 @@ export default function RangeGL({
           ball.visible = true;
           ballMat.opacity = 1;
           ballMat.transparent = false;
-          // Strike SFX, brightened + loudened by shot power. Power resets to 0
+          // Swing SFX, brightened + loudened by shot power. Power resets to 0
           // on fire, so derive it from the launch speed the sim just set on the
           // ball (normalized by the fastest club, MAX_CLUB_SPEED). Render-layer
           // only — the sim is untouched. lastVh is seeded so the first bounce
@@ -1050,7 +1050,7 @@ export default function RangeGL({
           {
             const bb = sim.ball;
             const p01 = Math.max(0, Math.min(1, Math.hypot(bb.vd, bb.vx, bb.vh) / MAX_CLUB_SPEED));
-            play('strike', { rate: 0.85 + 0.55 * p01, gain: 0.55 + 0.55 * p01 });
+            play('swing', { rate: 0.85 + 0.55 * p01, gain: 0.55 + 0.55 * p01 });
             lastVh = bb.vh;
             lastRollAt = 0;
             suppressBounceSfx = false;

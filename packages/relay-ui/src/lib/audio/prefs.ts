@@ -1,7 +1,7 @@
 // Audio preferences — localStorage-backed, mirroring lib/theme.ts's
 // get/set/init pattern. Three independent booleans:
 //   relay.audio.sfx    — sound effects on/off        (default ON)
-//   relay.audio.music  — background music on/off      (default ON)
+//   relay.audio.music  — background music on/off      (default OFF)
 //   relay.audio.muted  — master mute (overrides both) (default OFF)
 //
 // The engine (lib/audio/engine.ts) reads these to size its gain buses and
@@ -25,8 +25,9 @@ const KEY_SFX = 'relay.audio.sfx';
 const KEY_MUSIC = 'relay.audio.music';
 const KEY_MUTED = 'relay.audio.muted';
 
-// Defaults: effects and music enabled, not muted.
-const DEFAULTS: AudioPrefs = { sfx: true, music: true, muted: false };
+// Defaults: effects enabled, MUSIC OFF (the synth bed is a fallback until a real
+// looping track is dropped in — see engine.ts SAMPLE_FILES), not muted.
+const DEFAULTS: AudioPrefs = { sfx: true, music: false, muted: false };
 
 // A boolean pref stored by deviation-from-default (mirrors theme's 'auto'
 // removeItem). `def` is the value assumed when the key is absent.
