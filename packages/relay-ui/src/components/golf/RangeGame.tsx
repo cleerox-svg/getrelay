@@ -11,6 +11,7 @@ import {
   writeStoredLayout,
 } from '../../lib/golf/rangeTargets';
 import type { Pin, RangeLayout } from '../../lib/golf/rangeTargets';
+import { play } from '../../lib/audio';
 import { recordRangeGame } from '../../lib/golf/stats';
 import { MAX_HOLE_POINTS, RANGE_BALLS } from '../../lib/golf/tuning';
 import { makeWind } from '../../lib/golf/wind';
@@ -19,6 +20,7 @@ import { PowerMeter } from './shared/PowerMeter';
 import { SpinPuck } from './shared/SpinPuck';
 import { AccuracyBar } from './shared/AccuracyBar';
 import { ClubSelector } from './shared/ClubSelector';
+import { MuteButton } from './shared/MuteButton';
 import { TelemetryPanel, type ShotTelemetry } from './shared/TelemetryPanel';
 
 // Lazy-load the whole Three.js scene so it lands in its own chunk and never
@@ -494,6 +496,7 @@ export function RangeGame({
   }
 
   function selectClub(id: string) {
+    play('ui-club');
     sim.selectClub(id);
     setReadout((r) => (r ? { ...r, clubId: id } : r));
   }
@@ -860,6 +863,7 @@ export function RangeGame({
             >
               Resume
             </button>
+            <MuteButton />
             <button
               type="button"
               onClick={finishNow}

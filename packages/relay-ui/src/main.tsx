@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { initAudio } from './lib/audio/prefs';
 import { initLegacyUi } from './lib/legacy';
 import { CHUNK_RECOVER_KEY, hardRecover } from './lib/recover';
 import { registerServiceWorker } from './lib/register-sw';
@@ -10,6 +11,7 @@ import './styles/global.css';
 import './styles/legacy.css';
 
 initTheme();
+initAudio();
 initLegacyUi();
 
 // Self-heal stale clients. When a lazy chunk fails to load — e.g. an older

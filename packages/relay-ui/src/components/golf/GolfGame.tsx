@@ -4,6 +4,7 @@ import { getPuttCourse, type PuttCourse } from '../../lib/golf/puttCourses';
 import { PuttSim } from '../../lib/golf/puttSim';
 import { recordGolfGame } from '../../lib/golf/stats';
 import { holePoints } from '../../lib/golf/tuning';
+import { MuteButton } from './shared/MuteButton';
 
 // Lazy-load the whole Three.js scene so it lands in its own chunk (shared
 // with the range's vendor chunk) and never bloats the main entry — the
@@ -475,6 +476,7 @@ export function GolfGame({
             >
               Resume
             </button>
+            <MuteButton />
             <button
               type="button"
               onClick={finishNow}

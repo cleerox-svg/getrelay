@@ -15,6 +15,7 @@ import { recordGolfGame, recordRangeGame, setLastPuttCourseId } from '../../lib/
 import { HOLES as GOLF_HOLES, RANGE_BALLS } from '../../lib/golf/tuning';
 import { useStore } from '../../lib/store';
 import { useGameFlow } from '../../lib/games/useGameFlow';
+import { startMusic, stopMusic, duckMusic } from '../../lib/audio';
 
 export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
   const { screen, setScreen, paused, setPaused, startGame, startFree, consumeHistoryEntry } =
@@ -58,6 +59,20 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
     setImmersive(immersive);
     return () => setImmersive(false);
   }, [immersive, setImmersive]);
+
+  // Background music. Active play is the immersive 3D scenes: the scored guess
+  // screen (putt / range-challenge) and the free screen (course / range-
+  // practice). The hub/menu + results screens get the fuller menu track; during
+  // play we DUCK the same pad so it sits under the SFX. The engine only actually
+  // sounds after an unlock gesture (deferred start), so this logs no autoplay
+  // warning even though it runs on mount. Leaving golf unmounts this component →
+  // the cleanup stops the music (covers onExitToHub and any exit path).
+  const inRound = screen === 'guess' || screen === 'free';
+  useEffect(() => {
+    startMusic(inRound ? 'round' : 'menu');
+    duckMusic(inRound);
+  }, [inRound]);
+  useEffect(() => () => stopMusic(), []);
 
   // Golf twin of Fog's submit effect. Records to golf stats and submits
   // with game:'golf'. Same exactly-once guard, same partial-run rules
