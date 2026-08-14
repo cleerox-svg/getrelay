@@ -1544,9 +1544,14 @@ html.beta .composer-capsule {
   cursor: pointer;
   letter-spacing: 0.02em;
 }
-.golf-seg button[aria-pressed='true'] {
+.golf-seg button[aria-pressed='true'],
+.golf-seg button[aria-selected='true'] {
   background: var(--golf-accent);
   color: #fff;
+}
+.golf-seg button:focus-visible {
+  outline: 2px solid var(--golf-accent-2);
+  outline-offset: 2px;
 }
 
 @media (prefers-reduced-motion: reduce) {
