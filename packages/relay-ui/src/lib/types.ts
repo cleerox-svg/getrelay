@@ -410,6 +410,10 @@ export interface GameLeaderboardEntry {
   best: number;
   games: number;
   mine: boolean;
+  // The player's equipped avatar-frame cosmetic id (e.g. `frame_gold`), or
+  // null / `frame_none` for no frame. Resolved to a visual via the economy
+  // catalog when rendering the row's Avatar.
+  frame?: string | null;
 }
 
 // One per-course row from GET /game/golf-stats. `course` is null for the
@@ -570,6 +574,9 @@ export interface DailyLeaderboardEntry {
   toPar: number;
   strokes: number;
   mine: boolean;
+  // Equipped avatar-frame cosmetic id (or null / `frame_none`); resolved to a
+  // visual via the economy catalog when rendering the row's Avatar.
+  frame?: string | null;
 }
 
 // ---- Rapid Tournaments ----
@@ -628,6 +635,9 @@ export interface TournamentLeaderboardEntry {
   toPar: number;
   strokes: number;
   mine: boolean;
+  // Equipped avatar-frame cosmetic id (or null / `frame_none`); resolved to a
+  // visual via the economy catalog when rendering the row's Avatar.
+  frame?: string | null;
 }
 
 // The caller's lifetime tournament trophy case (GET /game/tournament/me).

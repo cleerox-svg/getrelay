@@ -32,6 +32,7 @@ import {
 } from '../../lib/golf/courseData';
 import {
   addSkyDome,
+  makeSkyEnvMap,
   createTreeKit,
   makeContactShadowTexture,
   makeFog,
@@ -883,6 +884,11 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
     // Cloud + distant-hill sky dome (shared with the range) — replaces the old
     // flat 3-stop background so the sky reads with depth, not a painted wall.
     addSkyDome(scene, track);
+    // Cheap PMREM reflection env (sky above, muted turf below) so metallic ball
+    // skins (gold/chrome) reflect the sky instead of near-black. Assigned to the
+    // BALL material's envMap ONLY (below) — NOT scene.environment — so turf/trees/
+    // water pay no per-frame env cost. Background/sky visuals unchanged.
+    const ballEnvMap = makeSkyEnvMap(renderer, track);
 
     const hemi = new THREE.HemisphereLight(0xcdeaff, 0x4f7d3f, 1.05);
     scene.add(hemi);
@@ -1650,6 +1656,11 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
     // Dimpled ball material shared with the range (ballTexture.ts) — a dimple
     // normal map so the sun catches the surface, instead of a plain smooth sphere.
     const ballMat = track(makeBallMaterial(track(makeDimpleNormalMap()), cosmeticsRef.current?.ball));
+    // Only the ball reflects the sky PMREM (metallic skins shine; default white
+    // ball barely samples it). Scoped to the ball material so nothing else pays
+    // the per-frame env cost.
+    ballMat.envMap = ballEnvMap;
+    ballMat.envMapIntensity = 1;
     const ball = new THREE.Mesh(ballGeo, ballMat);
     ball.castShadow = true;
     scene.add(ball);
