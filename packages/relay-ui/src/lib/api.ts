@@ -3,6 +3,8 @@ import type {
   Chat,
   Contact,
   ContactStatus,
+  CosmeticSlot,
+  CosmeticsResponse,
   DailyChallenge,
   DailyLeaderboardEntry,
   DailyResultResponse,
@@ -17,10 +19,13 @@ import type {
   SportsStatsResponse,
   SportsSub,
   SportsTeamLists,
+  SeasonReward,
+  SeasonResponse,
   Tournament,
   TournamentLeaderboardEntry,
   TournamentMe,
   TournamentResultResponse,
+  WalletResponse,
 } from './types';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8787').replace(
@@ -402,6 +407,45 @@ export const api = {
   // The caller's lifetime tournament trophy case + recent placements. 401 if
   // unauthed — callers must tolerate that and skip the trophies UI.
   getTournamentMe: () => request<TournamentMe>('/game/tournament/me'),
+  // ---- Golf economy (coins wallet, cosmetics, season) -------------------
+  // The caller's coin wallet: current balance + newest 20 ledger entries.
+  // 401 if unauthed — callers degrade to a hidden/empty wallet.
+  getWallet: () => request<WalletResponse>('/economy/wallet'),
+  // The full cosmetics catalog plus which the caller owns + has equipped per
+  // slot. Defaults (ball_classic / trail_none / frame_none) are always owned.
+  getCosmetics: () => request<CosmeticsResponse>('/economy/cosmetics'),
+  // Buy a cosmetic with coins. 400 unknown_cosmetic | already_owned |
+  // insufficient_funds. Returns the new balance so the wallet can update.
+  purchaseCosmetic: (cosmeticId: string) =>
+    request<{ ok: true; cosmeticId: string; balance: number }>(
+      '/economy/cosmetics/purchase',
+      { method: 'POST', body: JSON.stringify({ cosmeticId }) },
+    ),
+  // Equip an OWNED cosmetic into its slot. 400 unknown_cosmetic | wrong_slot |
+  // not_owned. Returns the full equipped map (all three slots).
+  equipCosmetic: (slot: CosmeticSlot, cosmeticId: string) =>
+    request<{ ok: true; equipped: { ball: string; trail: string; frame: string } }>(
+      '/economy/cosmetics/equip',
+      { method: 'POST', body: JSON.stringify({ slot, cosmeticId }) },
+    ),
+  // The current season track: XP, tier ladder, which tiers are claimed /
+  // claimable, and the season end (`endsAt`). 401 if unauthed.
+  getSeason: () => request<SeasonResponse>('/economy/season'),
+  // Claim a claimable season tier's reward (coins or a cosmetic). 400
+  // unknown_tier | tier_locked | already_claimed. Returns the updated
+  // claimed/claimable sets and the new balance (for a coin reward).
+  claimSeasonTier: (tier: number) =>
+    request<{
+      ok: true;
+      tier: number;
+      reward: SeasonReward;
+      claimed: number[];
+      claimable: number[];
+      balance: number;
+    }>('/economy/season/claim', {
+      method: 'POST',
+      body: JSON.stringify({ tier }),
+    }),
   // Giphy Action Register pingback. Best-effort: failures are swallowed so
   // analytics never interferes with sending a GIF.
   registerGifAction: (url: string | undefined, randomId: string) => {

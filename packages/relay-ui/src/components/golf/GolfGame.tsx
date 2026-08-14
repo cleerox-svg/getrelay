@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/api';
 import { getPuttCourse, type PuttCourse } from '../../lib/golf/puttCourses';
+import type { GolfCosmetics } from '../../lib/golf/cosmetics';
 import { PuttSim } from '../../lib/golf/puttSim';
 import { recordGolfGame } from '../../lib/golf/stats';
 import { holePoints } from '../../lib/golf/tuning';
@@ -36,6 +37,9 @@ interface Props {
   // Single-hole play: start on (and finish after) this 0-based hole index. When
   // undefined the full round plays from hole 1. Mirrors CourseGame's startHole.
   startHole?: number;
+  // Equipped ball skin (golf economy), forwarded into the GL scene. Mini-golf
+  // has no tracer, so only the ball colour applies.
+  cosmetics?: GolfCosmetics;
 }
 
 type PerHole = GolfGameResult['perHole'];
@@ -98,6 +102,7 @@ export function GolfGame({
   onResume,
   course = getPuttCourse(),
   startHole,
+  cosmetics,
 }: Props) {
   const holeCount = course.holes.length;
   // Single-hole play: start on (and finish after) startHole; otherwise play the
@@ -275,6 +280,7 @@ export function GolfGame({
             sim={sim}
             hole={hole}
             paused={paused}
+            cosmetics={cosmetics}
             onEvent={(e) => {
               if (e.type === 'stroke') handleStroke();
               // A water ball resets the shot and costs +1, exactly like a real

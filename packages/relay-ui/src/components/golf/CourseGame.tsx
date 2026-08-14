@@ -9,6 +9,7 @@
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { CourseSim, type CourseState } from '../../lib/golf/courseSim';
 import type { GolfCourse } from '../../lib/golf/courses';
+import type { GolfCosmetics } from '../../lib/golf/cosmetics';
 import { api } from '../../lib/api';
 import type { GolfRecords, GolfRecordsImproved } from '../../lib/api';
 import { play } from '../../lib/audio';
@@ -148,9 +149,13 @@ export default function CourseGame({
   onExit,
   onRoundComplete,
   onHoleComplete,
+  cosmetics,
 }: {
   course: GolfCourse;
   startHole?: number;
+  // Equipped ball skin + trail (golf economy), forwarded straight into the GL
+  // scene. Optional — omitted → the stock look.
+  cosmetics?: GolfCosmetics;
   // Optional deterministic round seed. When provided, the round wind is derived
   // from it (makeWind(mulberry32(seed))) at mount AND on "Play round again", so
   // an async challenge replays the SAME conditions for both players. When
@@ -494,7 +499,7 @@ export default function CourseGame({
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#000', zIndex: 30 }}>
       <Suspense fallback={<div style={{ position: 'fixed', inset: 0, background: '#0a1a0a' }} />}>
-        <CourseGL key={resetKey} sim={sim} paused={armed || st.holed} onArm={() => setArmed(true)} />
+        <CourseGL key={resetKey} sim={sim} paused={armed || st.holed} onArm={() => setArmed(true)} cosmetics={cosmetics} />
       </Suspense>
 
       {/* Top HUD */}

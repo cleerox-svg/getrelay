@@ -11,6 +11,7 @@ import {
   writeStoredLayout,
 } from '../../lib/golf/rangeTargets';
 import type { Pin, RangeLayout } from '../../lib/golf/rangeTargets';
+import type { GolfCosmetics } from '../../lib/golf/cosmetics';
 import { play } from '../../lib/audio';
 import { recordRangeGame } from '../../lib/golf/stats';
 import { MAX_HOLE_POINTS, RANGE_BALLS } from '../../lib/golf/tuning';
@@ -57,6 +58,8 @@ interface Props {
   initialClubId?: string;
   // Practice only: leave the full-bleed range back to the golf menu.
   onExit?: () => void;
+  // Equipped ball skin + tracer (golf economy), forwarded into the GL scene.
+  cosmetics?: GolfCosmetics;
 }
 
 // Scoring: full points landing on the pin, fading to 0 by SCORE_RADIUS yards
@@ -217,6 +220,7 @@ export function RangeGame({
   onFinish,
   initialClubId,
   onExit,
+  cosmetics,
 }: Props) {
   const isChallenge = mode === 'challenge';
 
@@ -554,6 +558,7 @@ export function RangeGame({
           targetId={isChallenge ? (target?.id ?? null) : null}
           paused={paused}
           onEvent={(e) => onEvent(e.type)}
+          cosmetics={cosmetics}
         />
       </Suspense>
 

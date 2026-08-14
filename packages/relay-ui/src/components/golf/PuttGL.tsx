@@ -10,6 +10,7 @@ import {
 } from '../../lib/golf/puttObstacles';
 import { puttHeightAt, puttGradientAt } from '../../lib/golf/puttField';
 import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
+import type { GolfCosmetics } from '../../lib/golf/cosmetics';
 import {
   addSkyDome,
   makeTurfColor,
@@ -73,6 +74,9 @@ interface Props {
   hole: Hole;
   paused?: boolean;
   onEvent?: (e: PuttEvent) => void;
+  // Equipped ball skin (golf economy). Mini-golf has no flight tracer, so only
+  // the ball colour applies; default equip → stock white ball, unchanged.
+  cosmetics?: GolfCosmetics;
 }
 
 // --- Procedural canvas textures (no binary assets) ------------------------
@@ -141,7 +145,9 @@ function inRoundRect(g: Green, x: number, y: number): boolean {
   return (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r;
 }
 
-export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
+export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }: Props) {
+  const cosmeticsRef = useRef(cosmetics);
+  cosmeticsRef.current = cosmetics;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
@@ -731,7 +737,7 @@ export default function PuttGL({ sim, hole, paused = false, onEvent }: Props) {
     // --- Ball -----------------------------------------------------------
     const ballGeo = track(new THREE.SphereGeometry(BALL_R, 32, 24));
     const dimpleTex = track(makeDimpleNormalMap());
-    const ballMat = track(makeBallMaterial(dimpleTex));
+    const ballMat = track(makeBallMaterial(dimpleTex, cosmeticsRef.current?.ball));
     const ball = new THREE.Mesh(ballGeo, ballMat);
     ball.castShadow = true;
     scene.add(ball);

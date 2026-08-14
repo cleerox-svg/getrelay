@@ -449,6 +449,79 @@ export interface GolfStats {
   recent: GolfRecentRound[];
 }
 
+// ---- Golf economy (coins, cosmetics, season) ----------------------------
+// Shapes match the worker's /economy/* endpoints. `visual` is rendered
+// GENERICALLY (no per-id logic): ball → {color,metalness?,roughness?},
+// trail → {color}, frame → {color,style:'ring'|'glow'}. The default items
+// (ball_classic / trail_none / frame_none) are always owned.
+export type CosmeticSlot = 'ball' | 'trail' | 'frame';
+export type CosmeticRarity = 'common' | 'rare' | 'epic';
+
+// A single generic visual descriptor; only the keys relevant to the slot are
+// present, but they're all optional so one type covers every slot.
+export interface CosmeticVisual {
+  color?: string;
+  metalness?: number;
+  roughness?: number;
+  style?: 'ring' | 'glow';
+}
+
+export interface Cosmetic {
+  id: string;
+  slot: CosmeticSlot;
+  name: string;
+  rarity: CosmeticRarity;
+  price: number;
+  visual: CosmeticVisual;
+}
+
+// The equipped item id per slot. Always one of the owned ids (defaults are
+// always owned), so these are never empty.
+export interface EquippedCosmetics {
+  ball: string;
+  trail: string;
+  frame: string;
+}
+
+export interface CosmeticsResponse {
+  catalog: Cosmetic[];
+  owned: string[];
+  equipped: EquippedCosmetics;
+}
+
+export interface WalletLedgerEntry {
+  delta: number;
+  reason: string;
+  ref: string | null;
+  balanceAfter: number;
+  createdAt: number;
+}
+
+export interface WalletResponse {
+  balance: number;
+  // Newest 20, server-ordered newest-first.
+  ledger: WalletLedgerEntry[];
+}
+
+// A tier reward is EITHER coins or a cosmetic id — never both.
+export type SeasonReward = { coins: number } | { cosmetic: string };
+
+export interface SeasonTier {
+  tier: number;
+  xpRequired: number;
+  reward: SeasonReward;
+}
+
+export interface SeasonResponse {
+  seasonId: string;
+  endsAt: number;
+  xp: number;
+  currentTier: number;
+  tiers: SeasonTier[];
+  claimed: number[];
+  claimable: number[];
+}
+
 // The caller's best attempt on today's Daily Challenge (null until they play).
 // Matches the `today` payload of GET /game/daily and POST /game/daily/result.
 export interface DailyResult {
