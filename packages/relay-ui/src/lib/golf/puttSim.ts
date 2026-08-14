@@ -54,7 +54,15 @@ import {
   PORTAL_COOLDOWN,
   PUTT_SAND_DECEL_MULT,
 } from './tuning';
-import { cupCaptured, CUP_CAPTURE_SPEED } from './greenPhysics';
+import {
+  cupCaptured,
+  CUP_CAPTURE_SPEED,
+  CUP_R as GREEN_CUP_R,
+  POLE_R,
+  POLE_RESTITUTION,
+  poleDeflect,
+  poleSweep,
+} from './greenPhysics';
 import { puttSlopeAccel, type Ramp, type SlopePlane } from './puttField';
 import {
   obstacleSegments,
@@ -167,6 +175,12 @@ const EMPTY_EVENTS: readonly PuttEvent[] = Object.freeze([]);
 // Rescale a mini-scale speed into the yard-space band greenPhysics.cupCaptured
 // expects, so PUTT_CAPTURE_SPEED maps onto the helper's internal limit.
 const CAPTURE_SPEED_SCALE = CUP_CAPTURE_SPEED / PUTT_CAPTURE_SPEED;
+
+// The shared flagstick pole radius POLE_R is yard-space (against CUP_R=0.5). The
+// mini board's cup is ~8× bigger, so scale the pole by the SAME cup ratio and the
+// pole/cup proportion is identical to the course — the two sims can't drift. (A
+// per-hole cup.r feeds through in substep, but every authored hole uses CUP_R.)
+const POLE_R_SCALE = 1 / GREEN_CUP_R; // multiply by the hole's cup.r for mini units
 
 // Minimal Vec math (subset of the retired engine's helpers).
 const add = (a: Vec, b: Vec): Vec => ({ x: a.x + b.x, y: a.y + b.y });
@@ -392,9 +406,38 @@ export class PuttSim {
         this.events.push({ type: 'sink' });
         return;
       }
-      const depth = (this.hole.cup.r - cupDist) / this.hole.cup.r;
-      const toCenter = cupDist > 1e-6 ? scale(dc, 1 / cupDist) : { x: 0, y: 0 };
-      ball.vel = add(ball.vel, scale(toCenter, LIP_KICK * depth * (h * 60)));
+      // Not captured → it's a firm strike. If it reaches the FLAGSTICK (the pole
+      // at the cup centre) it caroms off and stays out; otherwise it's merely
+      // over the rim, so it feels the lip-out tug and curls. The pole radius is
+      // the shared POLE_R scaled to this cup (see POLE_R_SCALE).
+      // Flagstick strike, SWEPT over this substep's motion (prevPos→pos) so a fast
+      // putt can't tunnel the pin. The pole radius is the shared POLE_R scaled to
+      // this cup (POLE_R_SCALE), keeping the pole/cup ratio identical to the course.
+      const R = POLE_R * POLE_R_SCALE * this.hole.cup.r + ball.r;
+      const sw = poleSweep(
+        prevPos.x,
+        prevPos.y,
+        ball.pos.x,
+        ball.pos.y,
+        this.hole.cup.c.x,
+        this.hole.cup.c.y,
+        R,
+      );
+      if (sw.minDist <= R && sw.approaching) {
+        // Carom off the pole (an inbound strike too fast to be captured).
+        const r = poleDeflect(ball.vel.x, ball.vel.y, sw.n1, sw.n2, POLE_RESTITUTION);
+        ball.vel = { x: r.v1, y: r.v2 };
+        // Nudge just outside the collision radius so the next substep starts clear.
+        const clear = R + 1e-3;
+        ball.pos = { x: this.hole.cup.c.x + sw.n1 * clear, y: this.hole.cup.c.y + sw.n2 * clear };
+      } else if (dot(ball.vel, dc) > 0) {
+        // Lip-out tug — ONLY while the ball is moving INBOUND toward the cup
+        // centre (dc points ball→centre). A ball caroming outward past the pole
+        // zone but still inside the rim must NOT be tugged back toward the hole.
+        const depth = (this.hole.cup.r - cupDist) / this.hole.cup.r;
+        const toCenter = cupDist > 1e-6 ? scale(dc, 1 / cupDist) : { x: 0, y: 0 };
+        ball.vel = add(ball.vel, scale(toCenter, LIP_KICK * depth * (h * 60)));
+      }
     }
 
     // ONE static-rest rule (mirrors courseSim): settle only when the ball is

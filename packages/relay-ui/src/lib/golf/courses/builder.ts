@@ -33,7 +33,7 @@ function dist(a: { d: number; x: number }, b: { d: number; x: number }): number 
 
 // Default-filler for a CourseHole so the data files only spell out what makes a
 // hole distinctive. Sensible defaults: tee at d=0/x=0, a 16-yd fairway half-
-// width, roughHalf = fairwayHalf + 22, a 4-yd fringe collar, no hazards, no
+// width, roughHalf = fairwayHalf + 22, a 1-yd fringe collar, no hazards, no
 // wind. Anything provided in `h` overrides. (roughHalf's default reads h's
 // fairwayHalf, so a hole that widens/narrows the fairway still gets a sane rough
 // band unless it sets roughHalf explicitly.)
@@ -62,7 +62,7 @@ export function hole(h: HoleInput): CourseHole {
     tee: { d: 0, x: 0 },
     fairwayHalf,
     roughHalf: h.roughHalf ?? fairwayHalf + 22,
-    fringeW: 2,
+    fringeW: 1,
     hazards: [],
     wind: { along: 0, cross: 0 },
     ...h,

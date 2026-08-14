@@ -11,6 +11,10 @@ import {
   greenRollDecel,
   launchSpeedForRoll,
   rollOutDistance,
+  POLE_R,
+  POLE_RESTITUTION,
+  poleDeflect,
+  poleSweep,
 } from './greenPhysics';
 
 describe('green physics — Stimpmeter friction', () => {
@@ -77,5 +81,73 @@ describe('green physics — speed-dependent cup capture', () => {
     expect(dist).toBeLessThan(rElliptic);
     expect(cupCaptured(dist, speed, cupR)).toBe(true); // new: drops
     expect(dist > rLinearOld).toBe(true); // old linear model: would have rejected
+  });
+});
+
+describe('green physics — flagstick pole deflection', () => {
+  it('POLE_R is a small positive radius, smaller than the cup', () => {
+    expect(POLE_R).toBeGreaterThan(0);
+    expect(POLE_R).toBeLessThan(0.5); // < CUP_R — the pole is a sliver at the centre
+  });
+
+  it('a head-on strike reverses the normal component and damps it by the restitution', () => {
+    // Ball moving in −d straight into a pin that is dead ahead: normal points
+    // pin→ball = +d (1,0), velocity is (−v,0). The normal component reverses and
+    // is scaled by POLE_RESTITUTION; the (zero) tangential is preserved.
+    const v = 10;
+    const r = poleDeflect(-v, 0, 1, 0);
+    expect(r.v1).toBeCloseTo(POLE_RESTITUTION * v, 9); // bounced back, pace killed
+    expect(r.v2).toBe(0);
+    expect(Math.abs(r.v1)).toBeLessThan(v); // energy lost to the pole
+  });
+
+  it('preserves the tangential glide, reversing only the inbound normal', () => {
+    // Normal +x (1,0); velocity has an inbound −x part and a +y glide. Only the
+    // x (normal) part reverses+damps; the y (tangential) part is untouched.
+    const r = poleDeflect(-6, 4, 1, 0);
+    expect(r.v1).toBeCloseTo(POLE_RESTITUTION * 6, 9);
+    expect(r.v2).toBe(4); // tangential glide unchanged
+  });
+
+  it('a custom restitution scales the rebound (a livelier or deader pole)', () => {
+    expect(poleDeflect(-10, 0, 1, 0, 0.2).v1).toBeCloseTo(2, 9);
+    expect(poleDeflect(-10, 0, 1, 0, 0.8).v1).toBeCloseTo(8, 9);
+  });
+});
+
+describe('green physics — swept pin collision (poleSweep)', () => {
+  it('a segment that steps OVER the pin still registers (no tunneling)', () => {
+    // prev and cur BOTH sit outside R on opposite sides of the pin, but the
+    // segment passes through the centre — a single-endpoint point test would miss
+    // it entirely; the swept closest-approach catches it (minDist ≈ 0).
+    const R = 0.28;
+    const sw = poleSweep(-1, 0, 1, 0, 0, 0, R);
+    expect(Math.hypot(-1, 0)).toBeGreaterThan(R); // prev outside the zone
+    expect(Math.hypot(1, 0)).toBeGreaterThan(R); // cur outside the zone
+    expect(sw.minDist).toBeCloseTo(0, 9); // …yet the sweep found the pin
+    expect(sw.approaching).toBe(true);
+    // The contact normal is the ENTRY side (−x), a real inbound normal for a
+    // meaningful bounce (not the near-tangent normal at closest approach).
+    expect(sw.n1).toBeCloseTo(-1, 6);
+    expect(sw.n2).toBeCloseTo(0, 6);
+  });
+
+  it('reports the true closest approach for a glancing pass', () => {
+    const R = 0.5;
+    const sw = poleSweep(-2, 0.3, 2, 0.3, 0, 0, R); // passes 0.3 above the pin
+    expect(sw.minDist).toBeCloseTo(0.3, 6);
+    expect(sw.approaching).toBe(true);
+  });
+
+  it('a miss (closest approach beyond R) reports minDist > R', () => {
+    const R = 0.28;
+    const sw = poleSweep(-2, 1, 2, 1, 0, 0, R); // passes 1 unit clear
+    expect(sw.minDist).toBeGreaterThan(R);
+  });
+
+  it('a segment moving AWAY from the pin is not approaching', () => {
+    const R = 0.5;
+    const sw = poleSweep(0, 0, 1, 0, 0, 0, R); // starts at the centre, moves out
+    expect(sw.approaching).toBe(false);
   });
 });

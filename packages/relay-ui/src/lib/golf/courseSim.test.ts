@@ -713,10 +713,14 @@ describe('course sim — play-test fixes (interactive fire path)', () => {
     s.ball.x = g.x;
     s.ball.h = 0;
     fireStraight(s, 0.4);
-    // The shot fired BACKWARD toward the pin — its downrange position dropped by
-    // more than the 28yd gap, carrying it back past the cup. The old clamped
-    // bearing snapped sideways/away and could never turn the shot around.
-    expect(s.ball.d).toBeLessThan(g.d); // ended up on the pin's side, not behind
+    // The shot fired BACKWARD toward the pin: from 28yd behind it travelled all
+    // the way back to the cup, where the flagstick (now a solid pole) stops a
+    // dead-centre runner right AT the hole instead of letting it run through. This
+    // still guards the old bug (a clamped bearing that snapped the shot sideways/
+    // away and could never turn it around): d must drop sharply toward the pin and
+    // x must stay on line.
+    expect(g.d + 28 - s.ball.d).toBeGreaterThan(20); // came ~27yd back to the pin
+    expect(s.ball.d).toBeLessThan(g.d + 2); // stopped at the pin (the flag caught it)
     expect(s.ball.x).toBeCloseTo(g.x, 0); // and stayed on line (didn't snap sideways)
   });
 });
@@ -916,5 +920,105 @@ describe('course sim — per-hole best-shot records', () => {
     const s = sim();
     s.simulateShot({ clubId: 'driver', power: 1 });
     expect(s.longestPuttYards).toBeNull();
+  });
+});
+
+// --- Flagstick (pin) collision ------------------------------------------------
+// The pin is always in the hole (no in/out toggle) and now has a physical pole
+// (POLE_R). A ball reaching the pole at the cup centre is CAPTURED if slow enough
+// (drops) or CAROMS off if too fast (stays out, pace killed, direction reversed);
+// a ball that never reaches the pole zone is untouched. These pin the three cases
+// on a DEAD-FLAT green (FLAT) so the roll tracks straight with no break.
+describe('course sim — flagstick (pin) collision', () => {
+  const p = HOLE_1.pin; // { d: 512, x: 18 }, at the cup centre
+
+  // Roll a grounded ball straight at the pin (+d) from `back` yards below it at
+  // the given ground speed on the flat hole, integrating to rest. Records whether
+  // it holed, whether the downrange velocity ever reversed (a carom), and the
+  // speed at that reversal.
+  function atPin(speed: number, back: number) {
+    const s = new CourseSim(FLAT);
+    const b = s.ball;
+    b.d = p.d - back;
+    b.x = p.x;
+    b.h = 0;
+    b.vd = speed;
+    b.vx = 0;
+    b.inFlight = true;
+    b.grounded = true;
+    b.resting = false;
+    let reversed = false;
+    let speedAtReversal = Infinity;
+    let prevVd = b.vd;
+    let steps = 0;
+    while (b.inFlight && steps < 100000) {
+      s.substep(1 / 120);
+      if (prevVd > 0 && b.vd < 0) {
+        reversed = true;
+        speedAtReversal = Math.hypot(b.vd, b.vx);
+      }
+      prevVd = b.vd;
+      steps++;
+    }
+    return { ball: b, result: s.getState().lastResult, reversed, speedAtReversal };
+  }
+
+  it('a SLOW strike straight at the pin drops (holes out)', () => {
+    // A gentle roll that arrives at the cup dead weight: the pin is at the centre,
+    // so it is captured and holes — a slow strike drops.
+    const r = atPin(1.8, 1.2);
+    expect(r.result).toBe('holed');
+  });
+
+  it('a FAST strike deflects: stays out, pace killed, direction reversed', () => {
+    // The same line hit far too hard reaches the pole still fast, so it caroms off
+    // the flagstick instead of dropping: it never holes, its downrange velocity
+    // reverses at reduced pace, and it ends OUTSIDE the cup on the near side.
+    const r = atPin(8, 1.2);
+    expect(r.result).not.toBe('holed');
+    expect(r.reversed).toBe(true); // the pole turned it around
+    expect(r.speedAtReversal).toBeLessThan(8); // pace killed by the carom
+    expect(r.ball.d).toBeLessThan(p.d); // bounced back down the green
+    expect(Math.hypot(r.ball.d - p.d, r.ball.x - p.x)).toBeGreaterThan(CUP_R);
+  });
+
+  it('a VERY FAST strike is caught by the SWEPT test (no tunneling through the pin)', () => {
+    // At 100 yd/s the ball steps ~0.83yd per 1/120s substep — well over the
+    // ~0.56yd pin zone — so a single-point per-substep test would let it step
+    // clean over the pin and tunnel through undeflected. The swept segment test
+    // catches it: it still deflects (never holes) and its downrange velocity
+    // reverses at reduced pace. (This is the regime the reviewer flagged as the
+    // "all other club/shot types" case — a powered liner straight at the flag.)
+    const r = atPin(100, 2);
+    expect(r.result).not.toBe('holed');
+    expect(r.reversed).toBe(true); // the pole turned it around (didn't pass through)
+    expect(r.speedAtReversal).toBeLessThan(100);
+  });
+
+  it('a ball that MISSES the pin is untouched (no phantom deflection)', () => {
+    // Rolls parallel to and 1yd left of the pin — always outside the pole zone
+    // (POLE_R + BALL_R ≈ 0.28yd) — so the flagstick never acts: it tracks dead
+    // straight (vx stays exactly 0 on the flat green) and holes nothing, exactly
+    // as before the pin existed.
+    const s = new CourseSim(FLAT);
+    const b = s.ball;
+    b.d = p.d - 4;
+    b.x = p.x + 1; // a yard off the pin line
+    b.h = 0;
+    b.vd = 5;
+    b.vx = 0;
+    b.inFlight = true;
+    b.grounded = true;
+    b.resting = false;
+    let maxVx = 0;
+    let steps = 0;
+    while (b.inFlight && steps < 100000) {
+      s.substep(1 / 120);
+      maxVx = Math.max(maxVx, Math.abs(b.vx));
+      steps++;
+    }
+    expect(s.getState().lastResult).not.toBe('holed');
+    expect(maxVx).toBe(0); // never nudged sideways by the pin
+    expect(b.x).toBeCloseTo(p.x + 1, 6); // stayed on its line
   });
 });

@@ -84,3 +84,114 @@ export function cupCaptured(distToCup: number, speed: number, cupR: number): boo
   const rEff = cupR * Math.sqrt(1 - ratio * ratio);
   return distToCup <= rEff;
 }
+
+// --- Flagstick (pin) collision --------------------------------------------
+//
+// The pin is ALWAYS in the hole (no in/out toggle). Its pole has a real physical
+// radius — much smaller than the RENDER radius (render-only, per scene) but big
+// enough that a firm strike catches it. When a ball's horizontal distance to the
+// pin centre is within POLE_R + ball radius it has STRUCK the flagstick:
+//   • a slow strike DROPS (the pin sits at the cup centre, so the ordinary
+//     cupCaptured() rule holes it — a dead-weight putt/approach that catches the
+//     pin dead-centre falls in); a strike is right over the cup, so the capture
+//     window is at its widest.
+//   • a faster strike DEFLECTS off the pole (poleDeflect below) and stays out —
+//     the classic "rattled the flagstick and bounced away".
+// A yard-space radius (~cup/6). The Mini-Golf sim rescales it by its own cup
+// radius so the pole/cup RATIO is identical at mini scale (course + putt can't
+// drift). Distinct from — and slightly larger than — the thin decorative render
+// pole, so the ball reliably feels the pin instead of tunnelling the sub-inch
+// true pole.
+export const POLE_R = 0.08;
+
+// Coefficient of restitution for a flagstick carom. A real fibreglass pin kills
+// a lot of pace — the ball reverses only a fraction of its INBOUND (normal)
+// speed and keeps its tangential glide. ~0.45 reads as a firm knock that clearly
+// stays out without pinging away like a wall.
+export const POLE_RESTITUTION = 0.45;
+
+// Reflect a 2D velocity (v1,v2) about a unit normal (n1,n2) with restitution e:
+// the component ALONG the normal reverses and is scaled by e (pace lost to the
+// pole), the tangential component is preserved (the ball glances on). Returns the
+// post-carom velocity components. Axis-agnostic — the caller names the axes
+// (courseSim: d/x; puttSim: x/y). Pure math: no sim state, stays deterministic.
+export function poleDeflect(
+  v1: number,
+  v2: number,
+  n1: number,
+  n2: number,
+  restitution: number = POLE_RESTITUTION,
+): { v1: number; v2: number } {
+  const vn = v1 * n1 + v2 * n2; // inbound speed along the normal (< 0 = approaching)
+  const j = (1 + restitution) * vn;
+  return { v1: v1 - j * n1, v2: v2 - j * n2 };
+}
+
+// SWEPT collision of a moving point (the ball's centre travelling prev→cur this
+// substep) against the pin, treated as a circle of radius R = POLE_R + ball
+// radius centred at (c1,c2). A single per-substep POINT test (dist(cur,pin) ≤ R)
+// misses a fast strike: at > ~2R·stepRate the ball steps clean OVER the ~0.56-yd
+// pin zone in one substep and tunnels through undeflected. This tests the whole
+// segment instead, so the pin is live for powered approach shots / liners too.
+// Returns:
+//   • minDist    — the closest the segment passes to the pin centre (the hit
+//                  test is minDist ≤ R, and the capture test reads this distance);
+//   • approaching — was the point moving TOWARD the pin at the start of the
+//                  segment (d/dt |P−pin|² < 0)? Only carom when true, so a ball
+//                  sitting at / leaving the pin isn't shoved by a pole it's
+//                  departing (the inbound guard, generalised to the swept case);
+//   • (n1,n2)    — the unit contact NORMAL (pin→first-contact point, i.e. where
+//                  the segment first crosses radius R) for the reflection, so the
+//                  bounce uses a real inbound normal instead of the near-tangent
+//                  normal at closest approach.
+// Pure geometry; both sims share it. Axis-agnostic (course d/x, putt x/y).
+export interface PoleSweep {
+  minDist: number;
+  approaching: boolean;
+  n1: number;
+  n2: number;
+}
+export function poleSweep(
+  prev1: number,
+  prev2: number,
+  cur1: number,
+  cur2: number,
+  c1: number,
+  c2: number,
+  R: number,
+): PoleSweep {
+  const e1 = prev1 - c1; // prev − centre
+  const e2 = prev2 - c2;
+  const d1 = cur1 - prev1; // travel this substep
+  const d2 = cur2 - prev2;
+  const A = d1 * d1 + d2 * d2;
+  const ed = e1 * d1 + e2 * d2;
+  // Closest approach: minimise |e + t·d| over t∈[0,1] → t = −(e·d)/|d|².
+  let tC = A > 1e-12 ? -ed / A : 0;
+  tC = tC < 0 ? 0 : tC > 1 ? 1 : tC;
+  const cp1 = e1 + tC * d1;
+  const cp2 = e2 + tC * d2;
+  const minDist = Math.hypot(cp1, cp2);
+  const approaching = ed < 0; // distance to the centre decreasing at t=0
+  // First contact: smallest t with |e + t·d| = R (the entry to the pin circle).
+  // If prev already sits inside R (C ≤ 0) the entry is at/behind t=0 → use t=0.
+  const C = e1 * e1 + e2 * e2 - R * R;
+  let tHit = 0;
+  if (C > 0 && A > 1e-12) {
+    const B = 2 * ed;
+    const disc = Math.max(0, B * B - 4 * A * C);
+    tHit = (-B - Math.sqrt(disc)) / (2 * A);
+    tHit = tHit < 0 ? 0 : tHit > 1 ? 1 : tHit;
+  }
+  let n1 = e1 + tHit * d1;
+  let n2 = e2 + tHit * d2;
+  const nl = Math.hypot(n1, n2);
+  if (nl > 1e-6) {
+    n1 /= nl;
+    n2 /= nl;
+  } else {
+    n1 = 1;
+    n2 = 0;
+  }
+  return { minDist, approaching, n1, n2 };
+}
