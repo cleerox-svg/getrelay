@@ -4,6 +4,7 @@ import { RangeSim } from '../../lib/golf/rangeSim';
 import type { RangeEvent } from '../../lib/golf/rangeSim';
 import { play, unlockAudio } from '../../lib/audio';
 import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
+import type { GolfCosmetics } from '../../lib/golf/cosmetics';
 import {
   addSkyDome,
   createTreeKit,
@@ -67,6 +68,9 @@ interface Props {
   targetId?: string | null;
   paused?: boolean;
   onEvent?: (e: RangeEvent) => void;
+  // Equipped ball skin + tracer colour (golf economy). Read once at scene
+  // build; default equip → stock white ball + red Toptracer, unchanged.
+  cosmetics?: GolfCosmetics;
 }
 
 // --- Procedural canvas textures (no binary assets) ------------------------
@@ -146,10 +150,14 @@ export default function RangeGL({
   targetId,
   paused = false,
   onEvent,
+  cosmetics,
 }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
+  // Snapshot the equipped skin for the mount effect (ball material + tracer).
+  const cosmeticsRef = useRef(cosmetics);
+  cosmeticsRef.current = cosmetics;
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
   // Live target id for the flag-highlight effect below.
@@ -466,7 +474,7 @@ export default function RangeGL({
 
     const ballGeo = track(new THREE.SphereGeometry(BALL_R, 32, 24));
     const dimpleTex = track(makeDimpleNormalMap());
-    const ballMat = track(makeBallMaterial(dimpleTex));
+    const ballMat = track(makeBallMaterial(dimpleTex, cosmeticsRef.current?.ball));
     const ball = new THREE.Mesh(ballGeo, ballMat);
     ball.castShadow = true;
     scene.add(ball);
@@ -737,7 +745,7 @@ export default function RangeGL({
     const tracerAttr = new THREE.BufferAttribute(tracerPos, 3);
     tracerGeo.setAttribute('position', tracerAttr);
     const tracerMat = track(
-      new THREE.LineBasicMaterial({ color: 0xff4d4d, transparent: true, opacity: 0.9, fog: false }),
+      new THREE.LineBasicMaterial({ color: cosmeticsRef.current?.trail?.color ?? 0xff4d4d, transparent: true, opacity: 0.9, fog: false }),
     );
     const tracer = new THREE.Line(tracerGeo, tracerMat);
     tracer.frustumCulled = false;

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { GolfGame } from './GolfGame';
 import type { GolfGameResult } from './GolfGame';
 import { GolfDaily } from './GolfDaily';
@@ -7,10 +7,15 @@ import { GolfLeaderboard } from './GolfLeaderboard';
 import { GolfMenu } from './GolfMenu';
 import type { GolfSubMode } from './GolfMenu';
 import { GolfProfile } from './GolfProfile';
+import { GolfLocker } from './GolfLocker';
+import { CoinBalance } from './CoinBalance';
+import { Avatar } from '../Avatar';
 import { RangeGame } from './RangeGame';
 import type { RangeGameResult } from './RangeGame';
 import CourseGame from './CourseGame';
 import { api } from '../../lib/api';
+import { useEconomy, useEquippedFrame } from '../../lib/golf/economy';
+import { resolveGolfCosmetics } from '../../lib/golf/cosmetics';
 import { getCourse } from '../../lib/golf/courses';
 import type { GolfCourse } from '../../lib/golf/courses';
 import { getPuttCourse } from '../../lib/golf/puttCourses';
@@ -46,9 +51,30 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
   // Golf hub sub-tab (Daily / Tournaments / Play / Profile / Ranks) and the Ranks
   // board selector.
   const [subTab, setSubTab] = useState<
-    'daily' | 'tourneys' | 'play' | 'profile' | 'ranks'
+    'daily' | 'tourneys' | 'play' | 'locker' | 'profile' | 'ranks'
   >('play');
   const [board, setBoard] = useState<'golf' | 'golfcourse' | 'golfrange'>('golfcourse');
+
+  // Golf economy: cache the equipped cosmetics + wallet once so the render seam
+  // (below) and the hub header chip are ready before the first round. The
+  // resolved GolfCosmetics is memoised on [catalog, equipped] for a STABLE
+  // identity — the GL scenes read it once at build, so a new object each render
+  // would needlessly churn. Default equip → an empty object → the stock look.
+  const me = useStore((s) => s.me);
+  const catalog = useEconomy((s) => s.catalog);
+  const equipped = useEconomy((s) => s.equipped);
+  const balance = useEconomy((s) => s.balance);
+  const ensureCosmetics = useEconomy((s) => s.ensureCosmetics);
+  const ensureWallet = useEconomy((s) => s.ensureWallet);
+  const frame = useEquippedFrame();
+  const cosmetics = useMemo(
+    () => resolveGolfCosmetics(catalog, equipped),
+    [catalog, equipped],
+  );
+  useEffect(() => {
+    void ensureCosmetics();
+    void ensureWallet();
+  }, [ensureCosmetics, ensureWallet]);
 
   // Daily Challenge play. When active, the Course free-screen path plays the
   // daily's seeded single hole (reusing the friend-challenge wiring: CourseGame
@@ -288,6 +314,7 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
         mode="challenge"
         initialClubId={golfClub}
         paused={paused}
+        cosmetics={cosmetics}
         // Same guard-entry contract as GuessGame.
         onResume={() => setPaused(false)}
         onFinish={(r) => {
@@ -310,6 +337,7 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
         course={getPuttCourse(golfPuttCourseId)}
         startHole={golfPuttHoleIdx}
         paused={paused}
+        cosmetics={cosmetics}
         // Same guard-entry contract as GuessGame.
         onResume={() => setPaused(false)}
         onFinish={(r) => {
@@ -331,6 +359,7 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
     // so the in-HUD back button takes the place of the boxed back link.
     return golfMode === 'course' ? (
       <CourseGame
+        cosmetics={cosmetics}
         // Tournament: play the SYNTHESIZED 3-hole course; otherwise the selected
         // (or daily's) real course.
         course={tourneyActive && tourneyCourse ? tourneyCourse : getCourse(golfCourseId)}
@@ -385,6 +414,7 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
       <RangeGame
         mode="practice"
         initialClubId={golfClub}
+        cosmetics={cosmetics}
         onExit={() => {
           setScreen('menu');
           consumeHistoryEntry('free');
@@ -565,6 +595,25 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
         ‹ Games
       </button>
 
+      {/* Hub header chip: the player's framed golf avatar + coin balance,
+          surfaced across every tab so coins are always visible. Tapping the
+          balance jumps to the Locker (shop/season/wallet). The frame is the
+          VIEWER's own equipped frame. */}
+      <div className="golf-idbar">
+        <Avatar src={me?.avatarUrl} name={me?.displayName} size={34} frame={frame} />
+        <div className="golf-idbar-name">
+          <b>{me?.displayName ?? 'Relay golfer'}</b>
+        </div>
+        <button
+          type="button"
+          className="golf-idbar-coins"
+          onClick={() => setSubTab('locker')}
+          aria-label="Open locker"
+        >
+          <CoinBalance balance={balance} size="sm" />
+        </button>
+      </div>
+
       {/* Sub-tab bar (Daily / Play / Profile / Ranks). The Daily tab carries a
           small 🔥N chip when the player has a live streak, so a returning player
           notices it without opening the tab. */}
@@ -572,8 +621,9 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
         {(
           [
             ['daily', 'Daily'],
-            ['tourneys', 'Tournaments'],
+            ['tourneys', 'Events'],
             ['play', 'Play'],
+            ['locker', 'Locker'],
             ['profile', 'Profile'],
             ['ranks', 'Ranks'],
           ] as const
@@ -632,6 +682,8 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
       ) : null}
 
       {subTab === 'play' ? <GolfMenu onStart={startGolf} refreshKey={lbKey} /> : null}
+
+      {subTab === 'locker' ? <GolfLocker /> : null}
 
       {subTab === 'profile' ? <GolfProfile /> : null}
 
