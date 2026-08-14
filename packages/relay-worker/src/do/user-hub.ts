@@ -556,6 +556,16 @@ async function buildPushPayload(
   // Stickers ride the type='image' rail with a media_url at /stickers/*.svg;
   // detect that URL pattern to use the sticker preview instead of "GIF".
   const trimmed = (ev.body ?? '').trim();
+  if (trimmed.startsWith('relay://challenge/')) {
+    return {
+      title: isGroup ? groupName : senderName,
+      body: isGroup
+        ? `${senderName} sent a golf challenge`
+        : 'sent you a golf challenge',
+      chatId,
+      tag,
+    };
+  }
   let preview: string;
   if (trimmed.length > 0) {
     preview = trimmed.slice(0, 140);

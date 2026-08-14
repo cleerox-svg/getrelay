@@ -485,7 +485,9 @@ export class ChatRoom implements DurableObject {
             : '📷 Photo'
         : row.message_type === 'ping'
           ? 'PING!!'
-          : truncate(bodyPlain ?? '', 80);
+          : bodyPlain?.startsWith('relay://challenge/')
+            ? '⛳ Golf challenge'
+            : truncate(bodyPlain ?? '', 80);
     return {
       id: row.id,
       from: row.sender_id,

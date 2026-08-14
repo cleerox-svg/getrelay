@@ -17,6 +17,7 @@ import { Avatar } from '../components/Avatar';
 import { BrandTitle } from '../components/BrandTitle';
 import { GroupAvatar } from '../components/GroupAvatar';
 import { useBetaUi } from '../lib/legacy';
+import { lastMessagePreview } from '../lib/messagePreview';
 import { useStore } from '../lib/store';
 import type { Chat } from '../lib/types';
 
@@ -152,12 +153,7 @@ export function Chats() {
                 const peerOnline = c.peer
                   ? presence[c.peer.id]?.online ?? false
                   : false;
-                const last = c.lastMessage;
-                const preview = last?.deletedAt
-                  ? 'Message recalled'
-                  : last?.messageType === 'ping'
-                    ? 'sent a PING!!'
-                    : (last?.body ?? '');
+                const preview = lastMessagePreview(c.lastMessage);
                 return (
                   <button
                     key={c.id}
@@ -223,12 +219,7 @@ export function Chats() {
             {visible.map((c) => {
               const isGroup = c.type === 'group';
             const peerOnline = c.peer ? presence[c.peer.id]?.online ?? false : false;
-            const last = c.lastMessage;
-            const preview = last?.deletedAt
-              ? 'Message recalled'
-              : last?.messageType === 'ping'
-                ? 'sent a PING!!'
-                : (last?.body ?? '');
+            const preview = lastMessagePreview(c.lastMessage);
             return (
               <ListItem
                 key={c.id}

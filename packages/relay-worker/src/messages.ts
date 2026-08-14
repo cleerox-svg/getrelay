@@ -181,7 +181,9 @@ export function messagesRoutes() {
             ? srcBody && srcBody.trim() ? truncate(srcBody, 80) : '📷 Photo'
             : row.message_type === 'ping'
               ? 'PING!!'
-              : truncate(srcBody ?? '', 80);
+              : srcBody?.startsWith('relay://challenge/')
+                ? '⛳ Golf challenge'
+                : truncate(srcBody ?? '', 80);
         replyPreviewById.set(row.id, {
           id: row.id,
           from: row.sender_id,

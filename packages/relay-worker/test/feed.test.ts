@@ -68,7 +68,39 @@ const DDL = [
      score INTEGER NOT NULL,
      rounds INTEGER NOT NULL,
      best_streak INTEGER NOT NULL DEFAULT 0,
-     created_at INTEGER NOT NULL
+     created_at INTEGER NOT NULL,
+     course TEXT,
+     to_par INTEGER
+   )`,
+  `CREATE TABLE IF NOT EXISTS golf_records (
+     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+     longest_drive_yards REAL,
+     longest_drive_hole INTEGER,
+     longest_drive_at INTEGER,
+     closest_to_pin_yards REAL,
+     closest_to_pin_hole INTEGER,
+     closest_to_pin_at INTEGER,
+     longest_putt_yards REAL,
+     longest_putt_hole INTEGER,
+     longest_putt_at INTEGER,
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL
+   )`,
+  `CREATE TABLE IF NOT EXISTS game_challenges (
+     id TEXT PRIMARY KEY,
+     game TEXT NOT NULL,
+     course TEXT,
+     hole INTEGER,
+     seed INTEGER NOT NULL,
+     challenger_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     opponent_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     challenger_score INTEGER,
+     opponent_score INTEGER,
+     winner_id TEXT,
+     status TEXT NOT NULL DEFAULT 'pending',
+     chat_id TEXT,
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL
    )`,
 ];
 
@@ -126,15 +158,27 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
 
 interface FeedEventJson {
   id: string;
-  kind: 'status' | 'game';
-  userId: string;
+  kind: 'status' | 'game' | 'challenge' | 'record';
+  userId?: string;
   at: number;
   mine: boolean;
   statusMessage?: string;
+  game?: string;
   score?: number;
   rounds?: number;
   bestStreak?: number;
+  toPar?: number | null;
   badge?: string;
+  // challenge
+  challengeId?: string;
+  course?: string | null;
+  hole?: number | null;
+  challenger?: { userId: string; toPar: number | null };
+  opponent?: { userId: string; toPar: number | null };
+  winnerId?: string | null;
+  // record
+  metric?: string;
+  valueYards?: number;
 }
 
 async function getFeed(cookie: string): Promise<FeedEventJson[]> {
@@ -164,6 +208,88 @@ async function insertScore(
       opts.bestStreak ?? 2,
       createdAt,
     )
+    .run();
+}
+
+// A run of an arbitrary game, optionally carrying a to_par (golf modes).
+async function insertGameScore(
+  userId: string,
+  game: string,
+  score: number,
+  createdAt: number,
+  opts: { rounds?: number; bestStreak?: number; toPar?: number | null } = {},
+): Promise<void> {
+  await testEnv.DB.prepare(
+    `INSERT INTO game_scores (id, user_id, game, score, rounds, best_streak, to_par, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+    .bind(
+      crypto.randomUUID(),
+      userId,
+      game,
+      score,
+      opts.rounds ?? 5,
+      opts.bestStreak ?? 2,
+      opts.toPar ?? null,
+      createdAt,
+    )
+    .run();
+}
+
+async function insertChallenge(
+  opts: {
+    challenger: string;
+    opponent: string;
+    challengerToPar: number;
+    opponentToPar: number;
+    winnerId: string | null;
+    updatedAt: number;
+    game?: string;
+    course?: string | null;
+    hole?: number | null;
+  },
+): Promise<string> {
+  const id = crypto.randomUUID();
+  await testEnv.DB.prepare(
+    `INSERT INTO game_challenges
+       (id, game, course, hole, seed, challenger_id, opponent_id,
+        challenger_score, opponent_score, winner_id, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 'complete', ?, ?)`,
+  )
+    .bind(
+      id,
+      opts.game ?? 'golf',
+      opts.course ?? null,
+      opts.hole ?? null,
+      opts.challenger,
+      opts.opponent,
+      opts.challengerToPar,
+      opts.opponentToPar,
+      opts.winnerId,
+      opts.updatedAt,
+      opts.updatedAt,
+    )
+    .run();
+  return id;
+}
+
+async function insertDriveRecord(
+  userId: string,
+  yards: number,
+  hole: number | null,
+  at: number,
+): Promise<void> {
+  await testEnv.DB.prepare(
+    `INSERT INTO golf_records
+       (user_id, longest_drive_yards, longest_drive_hole, longest_drive_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET
+       longest_drive_yards = excluded.longest_drive_yards,
+       longest_drive_hole  = excluded.longest_drive_hole,
+       longest_drive_at    = excluded.longest_drive_at,
+       updated_at          = excluded.updated_at`,
+  )
+    .bind(userId, yards, hole, at, at, at)
     .run();
 }
 
@@ -311,6 +437,173 @@ describe('GET /feed', () => {
     await insertScore(USERS.B.id, 1500, Date.now() - (FEED_WINDOW_DAYS + 1) * DAY);
     const games = (await getFeed(cookies.A)).filter((e) => e.kind === 'game');
     expect(games).toEqual([]);
+  });
+
+  it('surfaces notable runs for a non-fog game and carries its game id', async () => {
+    await insertGameScore(USERS.B.id, 'tune', 900, Date.now() - 1000); // first tune run
+    const games = (await getFeed(cookies.A)).filter((e) => e.kind === 'game');
+    expect(games).toHaveLength(1);
+    expect(games[0]?.game).toBe('tune');
+    expect(games[0]?.badge).toBe('first');
+  });
+
+  it('badges an under-par golf round and carries toPar', async () => {
+    const now = Date.now();
+    // First golf round (game_no 1) is a 'first'; the second, under par but
+    // not a new best score, earns 'underpar'.
+    await insertGameScore(USERS.B.id, 'golf', 1000, now - 2000, { toPar: 2 });
+    await insertGameScore(USERS.B.id, 'golf', 1000, now - 1000, { toPar: -3 });
+    const games = (await getFeed(cookies.A)).filter((e) => e.kind === 'game');
+    expect(games.map((e) => e.badge)).toEqual(['underpar', 'first']);
+    expect(games[0]?.game).toBe('golf');
+    expect(games[0]?.toPar).toBe(-3);
+  });
+
+  it('does not apply arcade perfect/streak badges to golf rounds', async () => {
+    const now = Date.now();
+    await insertGameScore(USERS.B.id, 'golf', 500, now - 2000); // first, surfaces
+    // Over par, worse score, no new best-to-par, long streak — none of which
+    // is notable for a golf round (streak is arcade-only).
+    await insertGameScore(USERS.B.id, 'golf', 100, now - 1000, {
+      rounds: MAX_ROUNDS,
+      bestStreak: MAX_ROUNDS,
+      toPar: 5,
+    });
+    const games = (await getFeed(cookies.A)).filter((e) => e.kind === 'game');
+    expect(games).toHaveLength(1);
+    expect(games[0]?.badge).toBe('first');
+  });
+
+  it('surfaces a completed challenge between me and a visible contact with both participants and the winner', async () => {
+    const now = Date.now();
+    // A (me) challenged B (my contact, sharing) and won — both sides visible.
+    await insertChallenge({
+      challenger: USERS.A.id,
+      opponent: USERS.B.id,
+      challengerToPar: -2,
+      opponentToPar: 1,
+      winnerId: USERS.A.id,
+      updatedAt: now - 1000,
+      course: 'augusta',
+      hole: 7,
+    });
+    const events = await getFeed(cookies.A);
+    const chal = events.filter((e) => e.kind === 'challenge');
+    expect(chal).toHaveLength(1);
+    expect(chal[0]?.challenger?.userId).toBe(USERS.A.id);
+    expect(chal[0]?.opponent?.userId).toBe(USERS.B.id);
+    expect(chal[0]?.winnerId).toBe(USERS.A.id);
+    expect(chal[0]?.course).toBe('augusta');
+    expect(chal[0]?.hole).toBe(7);
+    expect(chal[0]?.mine).toBe(true);
+  });
+
+  it('omits a challenge whose opponent is a stranger to me (privacy re-scope)', async () => {
+    // B (my contact) challenged C (a stranger to me). Because C is not
+    // visible, the whole challenge — and C's identity/score — must NOT leak
+    // into my feed, even though B is my contact.
+    await insertChallenge({
+      challenger: USERS.B.id,
+      opponent: USERS.C.id,
+      challengerToPar: -2,
+      opponentToPar: 1,
+      winnerId: USERS.B.id,
+      updatedAt: Date.now() - 1000,
+    });
+    const chal = (await getFeed(cookies.A)).filter((e) => e.kind === 'challenge');
+    expect(chal).toEqual([]);
+  });
+
+  it('omits a challenge whose opponent I have blocked', async () => {
+    // Make C my contact so only the block — not "stranger" — excludes them.
+    await testEnv.DB.prepare(
+      `INSERT INTO contacts (owner_id, contact_id, added_at) VALUES (?, ?, ?)`,
+    )
+      .bind(USERS.A.id, USERS.C.id, Date.now())
+      .run();
+    await testEnv.DB.prepare(
+      `INSERT INTO user_blocks (blocker_id, blocked_id, created_at) VALUES (?, ?, ?)`,
+    )
+      .bind(USERS.A.id, USERS.C.id, Date.now())
+      .run();
+    // B (visible) challenged C (blocked by me) — omitted.
+    await insertChallenge({
+      challenger: USERS.B.id,
+      opponent: USERS.C.id,
+      challengerToPar: 0,
+      opponentToPar: 2,
+      winnerId: USERS.C.id,
+      updatedAt: Date.now() - 1000,
+    });
+    const chal = (await getFeed(cookies.A)).filter((e) => e.kind === 'challenge');
+    expect(chal).toEqual([]);
+  });
+
+  it('omits a challenge whose opponent opted out of the game feed, even when it is mine', async () => {
+    // B opted out (game_feed_shared = 0). A (me) is the challenger, so the
+    // challenge is "mine" — but B's opt-out still suppresses it entirely.
+    await testEnv.DB.prepare(
+      `UPDATE users SET game_feed_shared = 0 WHERE id = ?`,
+    )
+      .bind(USERS.B.id)
+      .run();
+    await insertChallenge({
+      challenger: USERS.A.id,
+      opponent: USERS.B.id,
+      challengerToPar: -1,
+      opponentToPar: 3,
+      winnerId: USERS.A.id,
+      updatedAt: Date.now() - 1000,
+    });
+    const chal = (await getFeed(cookies.A)).filter((e) => e.kind === 'challenge');
+    expect(chal).toEqual([]);
+  });
+
+  it('marks a challenge mine when I am a participant and dedups both branches', async () => {
+    // A challenged B: both sides are visible to A, so the UNION would match
+    // the same row twice — it must appear exactly once, flagged mine.
+    await insertChallenge({
+      challenger: USERS.A.id,
+      opponent: USERS.B.id,
+      challengerToPar: 0,
+      opponentToPar: 0,
+      winnerId: null, // tie
+      updatedAt: Date.now() - 1000,
+    });
+    const chal = (await getFeed(cookies.A)).filter((e) => e.kind === 'challenge');
+    expect(chal).toHaveLength(1);
+    expect(chal[0]?.mine).toBe(true);
+    expect(chal[0]?.winnerId).toBeNull();
+  });
+
+  it('omits challenges completed before the feed window', async () => {
+    await insertChallenge({
+      challenger: USERS.B.id,
+      opponent: USERS.C.id,
+      challengerToPar: -1,
+      opponentToPar: 2,
+      winnerId: USERS.B.id,
+      updatedAt: Date.now() - (FEED_WINDOW_DAYS + 1) * DAY,
+    });
+    const chal = (await getFeed(cookies.A)).filter((e) => e.kind === 'challenge');
+    expect(chal).toEqual([]);
+  });
+
+  it('surfaces a recently-set golf record and skips stale ones', async () => {
+    const now = Date.now();
+    await insertDriveRecord(USERS.B.id, 305, 4, now - 1000);
+    const rec = (await getFeed(cookies.A)).filter((e) => e.kind === 'record');
+    expect(rec).toHaveLength(1);
+    expect(rec[0]?.metric).toBe('drive');
+    expect(rec[0]?.valueYards).toBe(305);
+    expect(rec[0]?.hole).toBe(4);
+    expect(rec[0]?.userId).toBe(USERS.B.id);
+  });
+
+  it('omits golf records set before the feed window', async () => {
+    await insertDriveRecord(USERS.B.id, 305, 4, Date.now() - (FEED_WINDOW_DAYS + 1) * DAY);
+    const rec = (await getFeed(cookies.A)).filter((e) => e.kind === 'record');
+    expect(rec).toEqual([]);
   });
 });
 
