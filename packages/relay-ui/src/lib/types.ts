@@ -449,6 +449,56 @@ export interface GolfStats {
   recent: GolfRecentRound[];
 }
 
+// The caller's best attempt on today's Daily Challenge (null until they play).
+// Matches the `today` payload of GET /game/daily and POST /game/daily/result.
+export interface DailyResult {
+  strokes: number;
+  toPar: number;
+  score: number;
+}
+
+// The caller's Daily Challenge streak: consecutive days played (`current`) and
+// their all-time longest (`best`). Zeros before their first daily.
+export interface DailyStreak {
+  current: number;
+  best: number;
+}
+
+// Today's Daily Challenge from GET /game/daily. The challenge is derived from
+// the UTC date server-side (deterministic course/hole/seed); `today` is the
+// caller's best attempt so far (null if unplayed) and `streak` their run.
+export interface DailyChallenge {
+  date: string;
+  game: 'golfcourse';
+  course: string;
+  hole: number;
+  seed: number;
+  today: DailyResult | null;
+  streak: DailyStreak;
+}
+
+// POST /game/daily/result response: the persisted best for today, the updated
+// streak, and whether this attempt beat the caller's prior best for the day.
+export interface DailyResultResponse {
+  today: DailyResult;
+  streak: DailyStreak;
+  improved: boolean;
+}
+
+// One row of today's Daily Challenge leaderboard (GET /game/daily/leaderboard),
+// contact-scoped and pre-ranked (higher score, then lower to-par). `mine` flags
+// the caller's own row.
+export interface DailyLeaderboardEntry {
+  userId: string;
+  displayName: string;
+  pin: string;
+  avatarUrl: string | null;
+  score: number;
+  toPar: number;
+  strokes: number;
+  mine: boolean;
+}
+
 // One side of an async golf challenge. `toPar` is null until that player has
 // submitted their result (lower to-par wins). Matches the worker's
 // readChallengeShaped() output in games.ts.

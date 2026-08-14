@@ -8,7 +8,13 @@ import { createExecutionContext, env, waitOnExecutionContext } from 'cloudflare:
 import worker from '../src/index';
 import type { Env } from '../src/env';
 import { signJwt } from '../src/lib/jwt';
-import { MAX_POINTS_PER_ROUND, MAX_ROUNDS } from '../src/games';
+import {
+  MAX_POINTS_PER_ROUND,
+  MAX_ROUNDS,
+  DAILY_ROTATION,
+  dailyChallengeFor,
+  dailySeed,
+} from '../src/games';
 
 const testEnv = env as unknown as Env;
 
@@ -89,6 +95,29 @@ const DDL = [
      winner_id TEXT,
      status TEXT NOT NULL DEFAULT 'pending',
      chat_id TEXT,
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL
+   )`,
+  `CREATE TABLE IF NOT EXISTS daily_results (
+     id TEXT PRIMARY KEY,
+     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     date TEXT NOT NULL,
+     game TEXT NOT NULL,
+     course TEXT,
+     hole INTEGER,
+     seed INTEGER NOT NULL,
+     strokes INTEGER,
+     to_par INTEGER,
+     score INTEGER,
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL,
+     UNIQUE(user_id, date)
+   )`,
+  `CREATE TABLE IF NOT EXISTS daily_streaks (
+     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+     current INTEGER NOT NULL DEFAULT 0,
+     best INTEGER NOT NULL DEFAULT 0,
+     last_date TEXT,
      created_at INTEGER NOT NULL,
      updated_at INTEGER NOT NULL
    )`,
@@ -257,7 +286,318 @@ type ChallengeBody = {
   };
 };
 
+// ---- Daily Challenge helpers ----------------------------------------------
+
+// The server's notion of today/other UTC days, mirrored so tests can seed rows
+// and streak state relative to it.
+function utcDay(offsetDays = 0): string {
+  return new Date(Date.now() + offsetDays * DAY).toISOString().slice(0, 10);
+}
+
+function getDaily(cookie: string | null): Promise<Response> {
+  const headers: Record<string, string> = {};
+  if (cookie) headers['Cookie'] = cookie;
+  return request('/game/daily', { headers });
+}
+
+function postDailyResult(cookie: string | null, body: unknown): Promise<Response> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (cookie) headers['Cookie'] = cookie;
+  return request('/game/daily/result', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+}
+
+function getDailyLeaderboard(cookie: string | null): Promise<Response> {
+  const headers: Record<string, string> = {};
+  if (cookie) headers['Cookie'] = cookie;
+  return request('/game/daily/leaderboard', { headers });
+}
+
+// Insert a daily_results row directly (bypassing the endpoint) for a given day.
+async function insertDaily(
+  userId: string,
+  date: string,
+  toPar: number,
+  score: number,
+  strokes: number,
+): Promise<void> {
+  const now = Date.now();
+  await testEnv.DB.prepare(
+    `INSERT INTO daily_results
+       (id, user_id, date, game, course, hole, seed, strokes, to_par, score, created_at, updated_at)
+     VALUES (?, ?, ?, 'golfcourse', 'augusta', 1, 123, ?, ?, ?, ?, ?)`,
+  )
+    .bind(crypto.randomUUID(), userId, date, strokes, toPar, score, now, now)
+    .run();
+}
+
+// Seed the caller's streak state directly.
+async function setStreak(
+  userId: string,
+  current: number,
+  best: number,
+  lastDate: string | null,
+): Promise<void> {
+  const now = Date.now();
+  await testEnv.DB.prepare(
+    `INSERT INTO daily_streaks (user_id, current, best, last_date, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET
+       current = excluded.current, best = excluded.best,
+       last_date = excluded.last_date, updated_at = excluded.updated_at`,
+  )
+    .bind(userId, current, best, lastDate, now, now)
+    .run();
+}
+
 beforeAll(seed);
+
+describe('Daily Challenge rotation', () => {
+  // Hole counts per real Relay Course-mode course. augusta is 18 holes; every
+  // listowel-* course has only 9. A rotation entry pointing past its course's
+  // count makes that day unplayable, so guard against reintroducing one.
+  const HOLE_COUNTS: Record<string, number> = {
+    augusta: 18,
+    'listowel-vintage': 9,
+    'listowel-heritage': 9,
+    'listowel-millennium': 9,
+  };
+
+  it('references only holes that exist on their course', () => {
+    for (const { course, hole } of DAILY_ROTATION) {
+      const count = HOLE_COUNTS[course];
+      expect(count, `unknown course '${course}' in DAILY_ROTATION`).toBeDefined();
+      expect(Number.isInteger(hole)).toBe(true);
+      expect(hole).toBeGreaterThanOrEqual(1);
+      expect(hole, `${course} hole ${hole} exceeds its ${count}-hole count`).toBeLessThanOrEqual(
+        count!,
+      );
+    }
+  });
+});
+
+describe('Daily Challenge derivation', () => {
+  it('is deterministic: same date -> same seed/course/hole', () => {
+    const a = dailyChallengeFor('2026-08-14');
+    const b = dailyChallengeFor('2026-08-14');
+    expect(a).toEqual(b);
+    expect(a.game).toBe('golfcourse');
+    expect(Number.isInteger(a.seed)).toBe(true);
+    expect(a.seed).toBeGreaterThanOrEqual(0);
+    expect(a.seed).toBeLessThanOrEqual(2 ** 31 - 1);
+    // dailySeed is a pure function of the string.
+    expect(dailySeed('2026-08-14')).toBe(a.seed);
+  });
+
+  it('rotates course/hole by day and differs across dates', () => {
+    const d1 = dailyChallengeFor('2026-08-14');
+    const d2 = dailyChallengeFor('2026-08-15');
+    // Different days pull the next rotation slot (7-long rotation) and a
+    // different seed.
+    expect(d1.seed).not.toBe(d2.seed);
+    expect({ course: d1.course, hole: d1.hole }).not.toEqual({
+      course: d2.course,
+      hole: d2.hole,
+    });
+    // Exactly one rotation length later lands on the same slot again.
+    const d8 = dailyChallengeFor('2026-08-21');
+    expect({ course: d1.course, hole: d1.hole }).toEqual({
+      course: d8.course,
+      hole: d8.hole,
+    });
+  });
+});
+
+describe('GET /game/daily', () => {
+  it('requires a session cookie', async () => {
+    const res = await getDaily(null);
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: 'unauthorized' });
+  });
+
+  it('returns todays challenge, a null result and zero streak before play', async () => {
+    const res = await getDaily(cookies.C);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      date: string;
+      game: string;
+      course: string;
+      hole: number;
+      seed: number;
+      today: unknown;
+      streak: { current: number; best: number };
+    };
+    const expected = dailyChallengeFor(utcDay(0));
+    expect(body.date).toBe(expected.date);
+    expect(body.game).toBe('golfcourse');
+    expect(body.course).toBe(expected.course);
+    expect(body.hole).toBe(expected.hole);
+    expect(body.seed).toBe(expected.seed);
+    expect(body.today).toBeNull();
+    expect(body.streak).toEqual({ current: 0, best: 0 });
+  });
+
+  it('surfaces the callers result and streak once played', async () => {
+    await insertDaily(USERS.A.id, utcDay(0), -3, 1030, 3);
+    await setStreak(USERS.A.id, 4, 9, utcDay(0));
+
+    const res = await getDaily(cookies.A);
+    const body = (await res.json()) as {
+      today: { strokes: number; toPar: number; score: number } | null;
+      streak: { current: number; best: number };
+    };
+    expect(body.today).toEqual({ strokes: 3, toPar: -3, score: 1030 });
+    expect(body.streak).toEqual({ current: 4, best: 9 });
+  });
+});
+
+describe('POST /game/daily/result', () => {
+  it('requires a session cookie', async () => {
+    const res = await postDailyResult(null, { strokes: 3, toPar: -2 });
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects invalid strokes/toPar with 400', async () => {
+    const bad = [
+      { strokes: 3, toPar: 2.5 }, // non-integer toPar
+      { strokes: 3, toPar: 9999 }, // toPar past clamp
+      { strokes: 0, toPar: 0 }, // strokes below 1
+      { strokes: 2.5, toPar: 0 }, // non-integer strokes
+      { toPar: 0 }, // strokes missing
+      { strokes: 3 }, // toPar missing
+    ];
+    for (const body of bad) {
+      const res = await postDailyResult(cookies.A, body);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid_result' });
+    }
+  });
+
+  it('rejects a client date that is not the server today (409)', async () => {
+    const res = await postDailyResult(cookies.A, {
+      strokes: 3,
+      toPar: -1,
+      date: '2000-01-01',
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'stale_date' });
+  });
+
+  it('derives score from toPar and starts a streak at 1 on the first daily', async () => {
+    const res = await postDailyResult(cookies.A, { strokes: 3, toPar: -4 });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      today: { strokes: number; toPar: number; score: number };
+      streak: { current: number; best: number };
+      improved: boolean;
+    };
+    // score = max(0, round(1000 - (-4)*10)) = 1040.
+    expect(body.today).toEqual({ strokes: 3, toPar: -4, score: 1040 });
+    expect(body.streak).toEqual({ current: 1, best: 1 });
+    expect(body.improved).toBe(true);
+  });
+
+  it('keeps the BETTER attempt and never overwrites with a worse one', async () => {
+    // First: a modest score.
+    const first = await postDailyResult(cookies.A, { strokes: 5, toPar: 2 }); // score 980
+    expect(((await first.json()) as { improved: boolean }).improved).toBe(true);
+
+    // Worse attempt (higher to_par) must not replace the stored best.
+    const worse = await postDailyResult(cookies.A, { strokes: 7, toPar: 6 }); // score 940
+    const worseBody = (await worse.json()) as {
+      today: { toPar: number; score: number };
+      improved: boolean;
+    };
+    expect(worseBody.improved).toBe(false);
+    expect(worseBody.today).toEqual({ strokes: 5, toPar: 2, score: 980 });
+
+    // Better attempt (lower to_par) replaces it.
+    const better = await postDailyResult(cookies.A, { strokes: 3, toPar: -1 }); // score 1010
+    const betterBody = (await better.json()) as {
+      today: { toPar: number; score: number };
+      improved: boolean;
+    };
+    expect(betterBody.improved).toBe(true);
+    expect(betterBody.today).toEqual({ strokes: 3, toPar: -1, score: 1010 });
+  });
+
+  it('extends the streak on a consecutive day', async () => {
+    await setStreak(USERS.A.id, 3, 5, utcDay(-1)); // last counted yesterday
+    const res = await postDailyResult(cookies.A, { strokes: 4, toPar: 0 });
+    const body = (await res.json()) as { streak: { current: number; best: number } };
+    expect(body.streak).toEqual({ current: 4, best: 5 }); // extended, best unchanged
+  });
+
+  it('bumps best when the extended streak exceeds it', async () => {
+    await setStreak(USERS.A.id, 5, 5, utcDay(-1));
+    const res = await postDailyResult(cookies.A, { strokes: 4, toPar: 0 });
+    const body = (await res.json()) as { streak: { current: number; best: number } };
+    expect(body.streak).toEqual({ current: 6, best: 6 });
+  });
+
+  it('resets the streak to 1 after a gap', async () => {
+    await setStreak(USERS.A.id, 8, 8, utcDay(-3)); // last counted 3 days ago
+    const res = await postDailyResult(cookies.A, { strokes: 4, toPar: 0 });
+    const body = (await res.json()) as { streak: { current: number; best: number } };
+    expect(body.streak).toEqual({ current: 1, best: 8 }); // reset, best preserved
+  });
+
+  it('does not double-count the streak on a same-day retry', async () => {
+    await setStreak(USERS.A.id, 4, 6, utcDay(0)); // already counted today
+    const res = await postDailyResult(cookies.A, { strokes: 4, toPar: 1 });
+    const body = (await res.json()) as { streak: { current: number; best: number } };
+    expect(body.streak).toEqual({ current: 4, best: 6 }); // unchanged on retry
+  });
+});
+
+describe('GET /game/daily/leaderboard', () => {
+  it('requires a session cookie', async () => {
+    const res = await getDailyLeaderboard(null);
+    expect(res.status).toBe(401);
+  });
+
+  it('is scoped to today, to contacts, and orders by score DESC then to_par ASC', async () => {
+    const today = utcDay(0);
+    await insertDaily(USERS.A.id, today, 2, 980, 5); // me
+    await insertDaily(USERS.B.id, today, -3, 1030, 3); // contact, best
+    await insertDaily(USERS.C.id, today, -10, 1100, 1); // stranger — hidden
+    await insertDaily(USERS.A.id, utcDay(-1), -20, 1200, 1); // yesterday — excluded
+
+    const res = await getDailyLeaderboard(cookies.A);
+    expect(res.status).toBe(200);
+    const { entries } = (await res.json()) as {
+      entries: {
+        userId: string;
+        score: number;
+        toPar: number;
+        strokes: number;
+        mine: boolean;
+        pin: string;
+      }[];
+    };
+    expect(entries.map((e) => e.userId)).toEqual([USERS.B.id, USERS.A.id]);
+    expect(entries[0]).toMatchObject({ score: 1030, toPar: -3, mine: false, pin: USERS.B.pin });
+    expect(entries[1]).toMatchObject({ score: 980, toPar: 2, mine: true });
+  });
+
+  it('drops blocked users even when they are contacts', async () => {
+    const today = utcDay(0);
+    await insertDaily(USERS.A.id, today, 0, 1000, 4);
+    await insertDaily(USERS.B.id, today, -5, 1050, 2);
+    await testEnv.DB.prepare(
+      `INSERT INTO user_blocks (blocker_id, blocked_id, created_at) VALUES (?, ?, ?)`,
+    )
+      .bind(USERS.A.id, USERS.B.id, Date.now())
+      .run();
+
+    const res = await getDailyLeaderboard(cookies.A);
+    const { entries } = (await res.json()) as { entries: { userId: string }[] };
+    expect(entries.map((e) => e.userId)).toEqual([USERS.A.id]);
+  });
+});
 
 describe('POST /game/score', () => {
   it('rejects requests without a session cookie', async () => {

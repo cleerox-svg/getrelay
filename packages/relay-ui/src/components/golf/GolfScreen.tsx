@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { GolfGame } from './GolfGame';
 import type { GolfGameResult } from './GolfGame';
+import { GolfDaily } from './GolfDaily';
 import { GolfLeaderboard } from './GolfLeaderboard';
 import { GolfMenu } from './GolfMenu';
 import type { GolfSubMode } from './GolfMenu';
@@ -40,9 +41,22 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
   const [golfRangeResult, setGolfRangeResult] = useState<RangeGameResult | null>(null);
   const [serverBest, setServerBest] = useState<number | null>(null);
   const [lbKey, setLbKey] = useState(0);
-  // Golf hub sub-tab (Play / Profile / Ranks) and the Ranks board selector.
-  const [subTab, setSubTab] = useState<'play' | 'profile' | 'ranks'>('play');
+  // Golf hub sub-tab (Daily / Play / Profile / Ranks) and the Ranks board selector.
+  const [subTab, setSubTab] = useState<'daily' | 'play' | 'profile' | 'ranks'>('play');
   const [board, setBoard] = useState<'golf' | 'golfcourse' | 'golfrange'>('golfcourse');
+
+  // Daily Challenge play. When active, the Course free-screen path plays the
+  // daily's seeded single hole (reusing the friend-challenge wiring: CourseGame
+  // gets course + startHole + seed) and reports the finished score via
+  // onHoleComplete. dailyPendingResult is handed to GolfDaily, which POSTs it and
+  // shows the updated streak; dailyStreak feeds the small 🔥 chip on the tab.
+  const [dailyActive, setDailyActive] = useState(false);
+  const [dailySeed, setDailySeed] = useState<number | undefined>(undefined);
+  const [dailyPendingResult, setDailyPendingResult] = useState<
+    { strokes: number; toPar: number } | null
+  >(null);
+  const [dailyStreak, setDailyStreak] = useState<number | null>(null);
+  const [dailyRefresh, setDailyRefresh] = useState(0);
   const submittedGolfRef = useRef<GolfGameResult | null>(null);
   const submittedGolfRangeRef = useRef<RangeGameResult | null>(null);
 
@@ -135,11 +149,47 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
       .catch(() => undefined);
   }, [screen, golfMode, golfRangeResult]);
 
+  // Lightweight streak read for the Daily tab's 🔥 chip so a returning player
+  // sees their run before opening the tab. Best-effort (unauthed / offline just
+  // leaves it null → no chip); re-read after a daily round is submitted.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getDaily()
+      .then((d) => {
+        if (!cancelled) setDailyStreak(d.streak.current);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [dailyRefresh]);
+
   function play() {
     setGolfResult(null);
     setGolfRangeResult(null);
     setServerBest(null);
     startGame();
+  }
+
+  // Launch the daily's seeded Course hole through the existing Course free-screen
+  // path. holeIdx is the 0-based index into the course's holes. dailyActive
+  // rewires that path to report via onHoleComplete (single-hole) instead of the
+  // golfcourse-board onRoundComplete.
+  function startDaily(courseId: string, holeIdx: number, seed: number) {
+    setDailyActive(true);
+    setGolfMode('course');
+    setGolfCourseId(courseId);
+    setGolfHoleIdx(holeIdx);
+    setDailySeed(seed);
+    startFree();
+  }
+
+  // GolfDaily consumed a submitted result — clear it so it can't re-POST, and
+  // refresh the tab's streak chip.
+  function consumeDailyResult() {
+    setDailyPendingResult(null);
+    setDailyRefresh((k) => k + 1);
   }
 
   // Golf mode picker → the right flow. Putting and the range Target
@@ -229,25 +279,43 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
       <CourseGame
         course={getCourse(golfCourseId)}
         startHole={golfHoleIdx}
+        // Daily round: replay the SAME conditions via the date-derived seed
+        // (wind), and report the finished hole to GolfDaily via onHoleComplete
+        // (single-hole). A normal Course round leaves seed undefined (random
+        // wind) and reports full rounds to the golfcourse board below.
+        seed={dailyActive ? dailySeed : undefined}
+        onHoleComplete={
+          dailyActive
+            ? (r) => setDailyPendingResult({ strokes: r.strokes, toPar: r.toPar })
+            : undefined
+        }
         // Full-round completion → submit to the golfcourse board. The server
         // derives the golfcourse score from toPar (we send score:0). The
         // callback fires exactly once per round, so no extra guard is needed.
-        onRoundComplete={(r) => {
-          api
-            .submitGameScore({
-              game: 'golfcourse',
-              course: r.courseId,
-              toPar: r.toPar,
-              rounds: r.holes,
-              bestStreak: 0,
-              score: 0,
-            })
-            .then(() => setLbKey((k) => k + 1))
-            .catch(() => undefined);
-        }}
+        // Skipped for the daily (single hole, its own board).
+        onRoundComplete={
+          dailyActive
+            ? undefined
+            : (r) => {
+                api
+                  .submitGameScore({
+                    game: 'golfcourse',
+                    course: r.courseId,
+                    toPar: r.toPar,
+                    rounds: r.holes,
+                    bestStreak: 0,
+                    score: 0,
+                  })
+                  .then(() => setLbKey((k) => k + 1))
+                  .catch(() => undefined);
+              }
+        }
         onExit={() => {
           setScreen('menu');
           consumeHistoryEntry('free');
+          // Returning from a daily round → back to the Daily tab; clear the
+          // active flag so a subsequent normal Course round wires correctly.
+          if (dailyActive) setDailyActive(false);
         }}
       />
     ) : (
@@ -434,10 +502,13 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
         ‹ Games
       </button>
 
-      {/* Sub-tab bar (Play / Profile / Ranks). */}
+      {/* Sub-tab bar (Daily / Play / Profile / Ranks). The Daily tab carries a
+          small 🔥N chip when the player has a live streak, so a returning player
+          notices it without opening the tab. */}
       <div className="golf-subtabs" role="tablist" aria-label="Golf">
         {(
           [
+            ['daily', 'Daily'],
             ['play', 'Play'],
             ['profile', 'Profile'],
             ['ranks', 'Ranks'],
@@ -451,9 +522,29 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
             onClick={() => setSubTab(key)}
           >
             {label}
+            {key === 'daily' && dailyStreak != null && dailyStreak > 0 ? (
+              <span
+                className="ml-1 rounded-full px-1.5 text-[11px] font-bold tabular-nums"
+                style={{
+                  background: 'color-mix(in srgb, #f0842e 22%, transparent)',
+                  color: 'var(--text)',
+                }}
+              >
+                <span aria-hidden="true">🔥</span>
+                {dailyStreak}
+              </span>
+            ) : null}
           </button>
         ))}
       </div>
+
+      {subTab === 'daily' ? (
+        <GolfDaily
+          onPlay={startDaily}
+          pendingResult={dailyPendingResult}
+          onResultConsumed={consumeDailyResult}
+        />
+      ) : null}
 
       {subTab === 'play' ? <GolfMenu onStart={startGolf} refreshKey={lbKey} /> : null}
 
