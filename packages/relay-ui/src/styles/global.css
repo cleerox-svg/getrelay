@@ -1026,6 +1026,133 @@ html.beta .composer-capsule {
   border-color: transparent;
 }
 
+/* ---- Overhead hole picker: 3-wide grid of map cards --------------------------
+   Course single-hole selection as small top-view HoleThumb maps. Shared by the
+   GolfMenu course picker AND the NewChallengeSheet (which declares the same
+   --golf-accent tokens locally). Selected card = the green "Fairway" treatment,
+   mirroring .golf-course.is-active. Fixed square thumb + 2-line caption clamp so
+   every card is the same height and the grid has no gaps. */
+.golf-holegrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding-bottom: 4px;
+}
+/* More columns only when there's clearly room; stays 3-wide on phones. */
+@media (min-width: 560px) {
+  .golf-holegrid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+.golf-holecard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  text-align: left;
+  border: 1px solid var(--separator);
+  border-radius: 12px;
+  background: var(--card-bg);
+  cursor: pointer;
+  transition: border-color 0.18s, background 0.18s, box-shadow 0.18s, transform 0.12s;
+}
+.golf-holecard:hover {
+  transform: translateY(-1px);
+}
+.golf-holecard:disabled {
+  opacity: 0.6;
+  cursor: default;
+  transform: none;
+}
+.golf-holecard:focus-visible {
+  outline: 2px solid var(--golf-accent-2);
+  outline-offset: 2px;
+}
+.golf-holecard.is-sel {
+  border-color: color-mix(in srgb, var(--golf-accent) 60%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--golf-accent) 15%, var(--card-bg)),
+    var(--card-bg)
+  );
+  box-shadow: 0 12px 30px -18px color-mix(in srgb, var(--golf-accent) 70%, transparent);
+}
+.golf-holecard-thumb {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 8px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--golf-accent) 6%, var(--card-bg));
+}
+.golf-holecard-thumb svg {
+  width: 100%;
+  height: 100%;
+}
+.golf-holecard-num {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.golf-holecard-hzs {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  gap: 3px;
+}
+.golf-holecard-hz {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+.golf-holecard-hz.water {
+  background: rgb(36, 107, 168);
+}
+.golf-holecard-hz.sand {
+  background: rgb(230, 209, 153);
+}
+.golf-holecard-cap {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 2px 2px;
+}
+.golf-holecard-name {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.2;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 2.4em;
+}
+.golf-holecard-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  line-height: 1.2;
+}
+
 /* ---- stat strip (Play tab) ---- */
 .golf-statstrip {
   display: grid;
@@ -1433,6 +1560,7 @@ html.beta .composer-capsule {
   .golf-course,
   .golf-cta,
   .golf-toggle,
+  .golf-holecard,
   .golf-chip {
     transition: none;
   }
@@ -1834,39 +1962,8 @@ html.beta .composer-capsule {
   opacity: 0.6;
   cursor: default;
 }
-/* Hole picker chips (single-hole challenge). */
-.challenge-holes {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding-bottom: 10px;
-}
-.challenge-hole-chip {
-  border: 1px solid var(--separator);
-  background: var(--card-bg);
-  color: var(--text);
-  border-radius: 999px;
-  padding: 5px 11px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition:
-    background 0.15s,
-    color 0.15s,
-    border-color 0.15s;
-}
-.challenge-hole-chip.is-on {
-  background: linear-gradient(180deg, var(--golf-accent-2), var(--golf-accent));
-  color: #ffffff;
-  border-color: transparent;
-}
-.challenge-hole-chip:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-.challenge-hole-name {
-  opacity: 0.6;
-}
+/* (Single-hole challenge picker now uses the shared .golf-holegrid / .golf-holecard
+   overhead map cards; the old .challenge-hole-chip pill styles were removed.) */
 /* Course picker chips (shared challenge sheet). */
 .challenge-courses {
   display: flex;
@@ -1980,7 +2077,7 @@ html.beta .composer-capsule {
   .golf-challenge-cta,
   .challenge-picker-row,
   .challenge-len-chip,
-  .challenge-hole-chip,
+  .golf-holecard,
   .challenge-course-chip,
   .challenge-confirm {
     transition: none;
