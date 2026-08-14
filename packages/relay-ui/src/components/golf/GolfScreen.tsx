@@ -7,7 +7,9 @@ import { GolfLeaderboard } from './GolfLeaderboard';
 import { GolfMenu } from './GolfMenu';
 import type { GolfSubMode } from './GolfMenu';
 import { GolfProfile } from './GolfProfile';
-import { GolfLocker } from './GolfLocker';
+import { GolfShop } from './GolfShop';
+import { GolfSeason } from './GolfSeason';
+import { GolfWallet } from './GolfWallet';
 import { CoinBalance } from './CoinBalance';
 import { Avatar } from '../Avatar';
 import { RangeGame } from './RangeGame';
@@ -48,11 +50,16 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
   const [golfRangeResult, setGolfRangeResult] = useState<RangeGameResult | null>(null);
   const [serverBest, setServerBest] = useState<number | null>(null);
   const [lbKey, setLbKey] = useState(0);
-  // Golf hub sub-tab (Daily / Tournaments / Play / Profile / Ranks) and the Ranks
-  // board selector.
-  const [subTab, setSubTab] = useState<
-    'daily' | 'tourneys' | 'play' | 'locker' | 'profile' | 'ranks'
-  >('play');
+  // Golf hub top-level tab (Play / Arena / Clubhouse) plus the inner segmented
+  // controls for the two grouped tabs, and the Ranks board selector.
+  //  • Arena groups everything timed/ranked: Daily / Events / Ranks.
+  //  • Clubhouse groups the player's identity + economy: Profile / Locker (the
+  //    cosmetics shop) / Season / Wallet — dissolving the old standalone Locker.
+  const [subTab, setSubTab] = useState<'play' | 'arena' | 'clubhouse'>('play');
+  const [arenaSeg, setArenaSeg] = useState<'daily' | 'events' | 'ranks'>('daily');
+  const [clubSeg, setClubSeg] = useState<'profile' | 'locker' | 'season' | 'wallet'>(
+    'profile',
+  );
   const [board, setBoard] = useState<'golf' | 'golfcourse' | 'golfrange'>('golfcourse');
 
   // Golf economy: cache the equipped cosmetics + wallet once so the render seam
@@ -194,7 +201,7 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
       .catch(() => undefined);
   }, [screen, golfMode, golfRangeResult]);
 
-  // Lightweight streak read for the Daily tab's 🔥 chip so a returning player
+  // Lightweight streak read for the Arena tab's 🔥 chip so a returning player
   // sees their run before opening the tab. Best-effort (unauthed / offline just
   // leaves it null → no chip); re-read after a daily round is submitted.
   useEffect(() => {
@@ -401,13 +408,22 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
         onExit={() => {
           setScreen('menu');
           consumeHistoryEntry('free');
-          // Returning from a daily round → back to the Daily tab; clear the
+          // Returning from a daily round → land back on Arena / Daily; clear the
           // active flag so a subsequent normal Course round wires correctly.
-          if (dailyActive) setDailyActive(false);
-          // Returning from a tournament round → clear the active flag so a
-          // subsequent normal Course round wires correctly (GolfTournaments,
-          // which remounts on the Tournaments tab, POSTs the captured result).
-          if (tourneyActive) setTourneyActive(false);
+          if (dailyActive) {
+            setDailyActive(false);
+            setSubTab('arena');
+            setArenaSeg('daily');
+          }
+          // Returning from a tournament round → land back on Arena / Events;
+          // clear the active flag so a subsequent normal Course round wires
+          // correctly (GolfTournaments, which remounts on the Events segment,
+          // POSTs the captured result).
+          if (tourneyActive) {
+            setTourneyActive(false);
+            setSubTab('arena');
+            setArenaSeg('events');
+          }
         }}
       />
     ) : (
@@ -580,7 +596,7 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
 
   // menu — the golf hub, scoped under .golf-hub so the games-only visual
   // layer (green accent, gold records, painted hero) never touches messenger
-  // theming. Three sub-tabs: Play / Profile / Ranks.
+  // theming. Three top tabs: Play / Arena / Clubhouse.
   return (
     <div className="px-4 golf-hub">
       {/* Back to the chiclet grid. Pure state — hub↔menu doesn't
@@ -597,8 +613,8 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
 
       {/* Hub header chip: the player's framed golf avatar + coin balance,
           surfaced across every tab so coins are always visible. Tapping the
-          balance jumps to the Locker (shop/season/wallet). The frame is the
-          VIEWER's own equipped frame. */}
+          balance jumps to the Clubhouse's Locker segment (cosmetics shop). The
+          frame is the VIEWER's own equipped frame. */}
       <div className="golf-idbar">
         <Avatar src={me?.avatarUrl} name={me?.displayName} size={34} frame={frame} />
         <div className="golf-idbar-name">
@@ -607,25 +623,26 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
         <button
           type="button"
           className="golf-idbar-coins"
-          onClick={() => setSubTab('locker')}
+          onClick={() => {
+            setSubTab('clubhouse');
+            setClubSeg('locker');
+          }}
           aria-label="Open locker"
         >
           <CoinBalance balance={balance} size="sm" />
         </button>
       </div>
 
-      {/* Sub-tab bar (Daily / Play / Profile / Ranks). The Daily tab carries a
-          small 🔥N chip when the player has a live streak, so a returning player
-          notices it without opening the tab. */}
+      {/* Top-tab bar (Play / Arena / Clubhouse). The Arena tab carries a small
+          🔥N streak chip and a 🏆 live-event chip — both timed/ranked cues now
+          live under Arena — so a returning player notices them without opening
+          the tab. */}
       <div className="golf-subtabs" role="tablist" aria-label="Golf">
         {(
           [
-            ['daily', 'Daily'],
-            ['tourneys', 'Events'],
             ['play', 'Play'],
-            ['locker', 'Locker'],
-            ['profile', 'Profile'],
-            ['ranks', 'Ranks'],
+            ['arena', 'Arena'],
+            ['clubhouse', 'Clubhouse'],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -633,10 +650,19 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
             type="button"
             role="tab"
             aria-selected={subTab === key}
-            onClick={() => setSubTab(key)}
+            onClick={() => {
+              // Entering Arena, steer to the segment matching the live cue: an
+              // open event → Events (so the 🏆 chip is meaningful), else Daily
+              // (the streak default). Only on ENTRY — once the player is on
+              // Arena, respect the segment they've chosen and don't override it.
+              if (key === 'arena' && subTab !== 'arena') {
+                setArenaSeg(tourneyOpen ? 'events' : 'daily');
+              }
+              setSubTab(key);
+            }}
           >
             {label}
-            {key === 'daily' && dailyStreak != null && dailyStreak > 0 ? (
+            {key === 'arena' && dailyStreak != null && dailyStreak > 0 ? (
               <span
                 className="ml-1 rounded-full px-1.5 text-[11px] font-bold tabular-nums"
                 style={{
@@ -649,7 +675,7 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
               </span>
             ) : null}
             {/* Subtle 🏆 chip when a live event awaits the player's entry. */}
-            {key === 'tourneys' && tourneyOpen ? (
+            {key === 'arena' && tourneyOpen ? (
               <span
                 className="ml-1 rounded-full px-1 text-[11px] font-bold"
                 style={{
@@ -665,49 +691,104 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
         ))}
       </div>
 
-      {subTab === 'daily' ? (
-        <GolfDaily
-          onPlay={startDaily}
-          pendingResult={dailyPendingResult}
-          onResultConsumed={consumeDailyResult}
-        />
-      ) : null}
-
-      {subTab === 'tourneys' ? (
-        <GolfTournaments
-          onPlay={startTournament}
-          pendingResult={tourneyPendingResult}
-          onResultConsumed={consumeTournamentResult}
-        />
-      ) : null}
-
       {subTab === 'play' ? <GolfMenu onStart={startGolf} refreshKey={lbKey} /> : null}
 
-      {subTab === 'locker' ? <GolfLocker /> : null}
-
-      {subTab === 'profile' ? <GolfProfile /> : null}
-
-      {subTab === 'ranks' ? (
+      {/* ARENA — everything timed/ranked, split by an inner segmented control
+          into Daily / Events / Ranks. */}
+      {subTab === 'arena' ? (
         <div className="flex flex-col gap-4">
-          <div className="golf-seg" role="group" aria-label="Board">
+          <div className="golf-seg" role="tablist" aria-label="Arena section">
             {(
               [
-                ['golf', 'Mini-Golf'],
-                ['golfcourse', 'Course'],
-                ['golfrange', 'Range'],
+                ['daily', 'Daily'],
+                ['events', 'Events'],
+                ['ranks', 'Ranks'],
               ] as const
             ).map(([key, label]) => (
               <button
                 key={key}
                 type="button"
-                aria-pressed={board === key}
-                onClick={() => setBoard(key)}
+                role="tab"
+                aria-selected={arenaSeg === key}
+                onClick={() => setArenaSeg(key)}
               >
                 {label}
               </button>
             ))}
           </div>
-          <GolfLeaderboard game={board} refreshKey={lbKey} />
+
+          {arenaSeg === 'daily' ? (
+            <GolfDaily
+              onPlay={startDaily}
+              pendingResult={dailyPendingResult}
+              onResultConsumed={consumeDailyResult}
+            />
+          ) : null}
+
+          {arenaSeg === 'events' ? (
+            <GolfTournaments
+              onPlay={startTournament}
+              pendingResult={tourneyPendingResult}
+              onResultConsumed={consumeTournamentResult}
+            />
+          ) : null}
+
+          {arenaSeg === 'ranks' ? (
+            <div className="flex flex-col gap-4">
+              <div className="golf-seg" role="group" aria-label="Board">
+                {(
+                  [
+                    ['golf', 'Mini-Golf'],
+                    ['golfcourse', 'Course'],
+                    ['golfrange', 'Range'],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    aria-pressed={board === key}
+                    onClick={() => setBoard(key)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <GolfLeaderboard game={board} refreshKey={lbKey} />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* CLUBHOUSE — the player's identity + economy, split by an inner
+          segmented control into Profile / Locker (cosmetics shop) / Season /
+          Wallet. This absorbs the old standalone Locker tab. */}
+      {subTab === 'clubhouse' ? (
+        <div className="flex flex-col gap-4">
+          <div className="golf-seg" role="tablist" aria-label="Clubhouse section">
+            {(
+              [
+                ['profile', 'Profile'],
+                ['locker', 'Locker'],
+                ['season', 'Season'],
+                ['wallet', 'Wallet'],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={clubSeg === key}
+                onClick={() => setClubSeg(key)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {clubSeg === 'profile' ? <GolfProfile /> : null}
+          {clubSeg === 'locker' ? <GolfShop /> : null}
+          {clubSeg === 'season' ? <GolfSeason /> : null}
+          {clubSeg === 'wallet' ? <GolfWallet /> : null}
         </div>
       ) : null}
     </div>
