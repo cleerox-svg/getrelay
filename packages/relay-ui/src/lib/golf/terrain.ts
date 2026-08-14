@@ -670,7 +670,7 @@ export const HOLE_1: CourseHole = {
   fairwayTaper: -3, // pinch to 13-yd half (26-yd fairway) at the green
   roughHalf: 40,
   green: { d: 512, x: 18, r: 15, raise: 3.2, tiltPct: 0.04, tiltDir: Math.PI, undulation: 0.08 },
-  fringeW: 2,
+  fringeW: 1,
   hazards: [
     { kind: 'bunker', d: 300, x: 20, r: 12, depth: -1.6 }, // fairway bunker, inside the dogleg
     // Greenside bunker front-right. Pushed out so its WOBBLED edge still clears

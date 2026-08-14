@@ -127,20 +127,117 @@ describe('puttSim — speed-dependent cup capture', () => {
     expect(r.sank).toBe(true);
   });
 
-  it('a too-fast putt does not drop (it skips the cup)', () => {
+  it('a too-fast putt does not drop — it caroms off the flagstick and stays out', () => {
+    // A dead-centre bullet putt is too fast to be captured, so it now STRIKES the
+    // pin (the pole at the cup centre) and bounces back rather than dropping. The
+    // pole kills its pace, so it comes to rest well OUT of the hole. (Off-centre a
+    // fast putt still skips the cup — that path is unchanged; this is the pin.)
+    const h = cupHole();
+    const sim = new PuttSim(h);
+    const b = sim.ball;
+    b.pos = { x: 50, y: 100 };
+    b.vel = { x: 0, y: -MAX_LAUNCH_SPEED };
+    b.resting = false;
+    let sank = false;
+    let steps = 0;
+    while (!b.resting && steps < 100000) {
+      sim.substep(H);
+      for (const ev of sim.drainEvents()) if (ev.type === 'sink') sank = true;
+      steps++;
+    }
+    expect(sank).toBe(false); // never dropped
+    expect(b.resting).toBe(true); // caromed off the pin and settled (no ping-pong)
+    // It finished clearly OUT of the cup (the flagstick turned it away).
+    expect(Math.hypot(b.pos.x - h.cup.c.x, b.pos.y - h.cup.c.y)).toBeGreaterThan(h.cup.r);
+  });
+});
+
+// --- Flagstick (pin) collision ------------------------------------------------
+// The pin is always in the hole. A ball reaching the pole (at the cup centre) is
+// captured if slow enough (drops) or caroms off if too fast (stays out); a ball
+// that never reaches the pole zone is untouched. These pin the three cases.
+describe('puttSim — flagstick (pin) collision', () => {
+  const cupHole = (): Hole => hole({ tee: { x: 50, y: 100 }, cup: { x: 50, y: 40 } });
+
+  it('a SLOW on-line putt is captured at the pin (drops)', () => {
+    // On-pace, dead weight arriving at the cup → holes (the pin sits at centre so
+    // the capture window is widest). Same behaviour as before the pin existed.
+    const r = roll(cupHole(), { x: 0, y: -156 });
+    expect(r.sank).toBe(true);
+  });
+
+  it('a FAST on-line putt deflects: it does not hole and its direction reverses', () => {
+    // Fire dead-centre at the pin far too fast: it strikes the pole, the normal
+    // velocity reverses (vy flips from downward to upward) at reduced pace, and it
+    // never drops.
     const sim = new PuttSim(cupHole());
     const b = sim.ball;
     b.pos = { x: 50, y: 100 };
     b.vel = { x: 0, y: -MAX_LAUNCH_SPEED };
     b.resting = false;
-    let sankBeforeCrossing = false;
-    // Run only until the ball has clearly passed the cup line (y well past 40).
-    while (!b.resting && b.pos.y > 30) {
+    let reversed = false;
+    let speedAfter = Infinity;
+    let sank = false;
+    let prevVy = b.vel.y;
+    let steps = 0;
+    while (!b.resting && steps < 100000) {
       sim.substep(H);
-      for (const ev of sim.drainEvents()) if (ev.type === 'sink') sankBeforeCrossing = true;
+      for (const ev of sim.drainEvents()) if (ev.type === 'sink') sank = true;
+      if (prevVy < 0 && b.vel.y > 0) {
+        reversed = true;
+        speedAfter = Math.hypot(b.vel.x, b.vel.y);
+      }
+      prevVy = b.vel.y;
+      steps++;
     }
-    expect(sankBeforeCrossing).toBe(false);
-    expect(b.pos.y).toBeLessThan(40); // it made it past the hole
+    expect(sank).toBe(false);
+    expect(reversed).toBe(true); // direction changed at the pole
+    expect(speedAfter).toBeLessThan(MAX_LAUNCH_SPEED); // pace killed by the carom
+  });
+
+  it('a putt that MISSES the pin rolls straight through, untouched', () => {
+    // Offset laterally past the cup by more than the pole zone AND the cup radius:
+    // the flagstick never acts and there is no lip tug, so it tracks dead straight
+    // (vx stays 0) and does not sink — a miss behaves exactly as before.
+    const sim = new PuttSim(cupHole());
+    const b = sim.ball;
+    b.pos = { x: 56, y: 100 }; // 6 units right of the cup line (> cup.r=2.8)
+    b.vel = { x: 0, y: -150 };
+    b.resting = false;
+    let maxVx = 0;
+    let sank = false;
+    let steps = 0;
+    while (!b.resting && steps < 100000) {
+      sim.substep(H);
+      for (const ev of sim.drainEvents()) if (ev.type === 'sink') sank = true;
+      maxVx = Math.max(maxVx, Math.abs(b.vel.x));
+      steps++;
+    }
+    expect(sank).toBe(false);
+    expect(maxVx).toBe(0); // never nudged sideways by pin or lip
+    expect(b.pos.x).toBeCloseTo(56, 6); // stayed on its line
+  });
+
+  it('the lip-out tug does not re-engage on an OUTWARD carom (inbound-only guard)', () => {
+    // Over the rim but OUTSIDE the pole zone, moving straight AWAY from the cup —
+    // the state just after a carom (nudged clear of the pole, still inside cup.r).
+    // The lip-out tug must NOT pull it back: it's inbound-only now. With the tug
+    // off only friction acts, which scales vx and vy EQUALLY, so the (radial +x,
+    // tangential +y) direction is preserved; an inward tug would shrink the radial
+    // +x faster than +y and bend it back toward the hole.
+    const h = cupHole();
+    const sim = new PuttSim(h);
+    const b = sim.ball;
+    const cup = h.cup.c;
+    // 2.4 units from centre: inside cup.r (2.8), outside the pole zone (~2.05), and
+    // fast enough NOT to be captured at that distance.
+    b.pos = { x: cup.x + 2.4, y: cup.y };
+    b.vel = { x: 40, y: 40 };
+    b.resting = false;
+    sim.substep(H);
+    expect(sim.ball.resting).toBe(false); // didn't get sucked in / captured
+    expect(b.vel.x).toBeGreaterThan(0); // still moving outward
+    expect(b.vel.x).toBeCloseTo(b.vel.y, 9); // direction preserved → no inward tug
   });
 });
 

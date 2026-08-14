@@ -38,7 +38,17 @@ import {
 } from './rangeSim';
 import { gradientAt, heightAt, slopeAccel, surfaceAt } from './terrain';
 import type { CourseHole, Surface } from './terrain';
-import { CUP_R, cupCaptured, greenRollDecel, launchSpeedForRoll } from './greenPhysics';
+import {
+  BALL_R,
+  CUP_R,
+  POLE_R,
+  POLE_RESTITUTION,
+  cupCaptured,
+  greenRollDecel,
+  launchSpeedForRoll,
+  poleDeflect,
+  poleSweep,
+} from './greenPhysics';
 
 // Below this ground speed a rolling ball on ~flat ground is snapped to rest. On
 // a slope the per-substep slopeAccel keeps feeding it, so it only rests where
@@ -48,6 +58,12 @@ const ROLL_REST = 2.0;
 // than a settling fairway shot (a coarse 2.0 threshold would strand a dying putt
 // a couple of yards short of the cup).
 const GREEN_REST = 0.3;
+// Height (yd, above the local ground) of the flagstick — how high a flighted
+// ball can still catch the pole. A real pin is ~2.1 m ≈ 2.3 yd. Only used to
+// gate the AIRBORNE pin strike so a shot flying well over the pin (an approach
+// at apex, a bomb crossing the green) can't carom off a pole it never reaches;
+// a grounded roll into the pin is always within this and needs no gate.
+const PIN_HEIGHT = 2.3;
 // Off-green grass friction (Coulomb, KINETIC) — the piece that slows a moving
 // ball. Below LOW_ROLL_SPEED a constant decel of frictionFor(lie) yd/s² opposes
 // motion, so a rolling ball bleeds to a stop at the KINETIC angle-of-repose
@@ -868,6 +884,12 @@ export class CourseSim {
       if (surf === 'ob') return this.stop('ob');
       const speed = Math.hypot(b.vd, b.vx);
       if (this.holedOut(speed)) return this.stop('holed');
+      // Flagstick strike on the ground roll (swept over this substep's motion so a
+      // fast skidder can't tunnel the pin): a slow catch drops (holed), a firm one
+      // caroms off the pole and stays out (velocity reflected + nudged clear).
+      // holedOut() already dropped the slow cup-captures above, so on the ground
+      // this almost always DEFLECTS a hot ball off the pin. prev = pre-move pos.
+      if (this.hitPin(b.d - b.vd * dt, b.x - b.vx * dt, speed)) return this.stop('holed');
       // ONE rest rule for EVERY grounded surface (green, fringe, fairway, rough,
       // bunker, tee, cartpath): the ball comes to rest when it is BOTH
       //   (a) slower than the surface's settle threshold, AND
@@ -903,6 +925,18 @@ export class CourseSim {
     this.pushTrail();
 
     const ground = this.ground(b.d, b.x);
+    // Flagstick strike IN FLIGHT: a descending shot that reaches the pin while
+    // below the flag top can hole (a soft dart that catches the pin) or carom off
+    // the pole. Gated on b.vh < 0 (descending) AND the ball being within the
+    // flag's height above ground, so a shot flying well over the pin never
+    // touches it. hitPin only reflects the HORIZONTAL velocity and nudges d/x —
+    // vh/h carry on through the airborne integrator unchanged.
+    if (b.vh < 0 && b.h - ground <= PIN_HEIGHT) {
+      const speed = Math.hypot(b.vd, b.vx);
+      // Swept over this substep's horizontal motion (prev = pre-integration pos)
+      // so a descending liner can't tunnel the pin at speed.
+      if (this.hitPin(b.d - b.vd * dt, b.x - b.vx * dt, speed)) return this.stop('holed');
+    }
     // Land on descent (h dropping to the surface), OR when a still-climbing liner
     // has clearly PENETRATED rising terrain — the latter catches a low shot that
     // would otherwise tunnel through an upslope. The penetration MARGIN keeps a
@@ -957,6 +991,46 @@ export class CourseSim {
     const b = this.ball;
     const p = this.hole.pin;
     return cupCaptured(Math.hypot(b.d - p.d, b.x - p.x), speed, CUP_R);
+  }
+
+  // Flagstick (pin) collision — SWEPT over the ball's motion this substep. The
+  // pin sits at the cup centre with a physical pole radius POLE_R; the ball's
+  // centre swept prev→cur has STRUCK the pole when the segment passes within
+  // POLE_R + BALL_R of the pin (poleSweep). Sweeping (not a single endpoint test)
+  // is what keeps the pin live for a FAST shot — a powered approach / liner that
+  // would step clean over the ~0.56-yd zone in one substep and tunnel through.
+  // `speed` is the horizontal ground speed; (prevD,prevX) the pre-integration
+  // position.
+  //   • A slow strike DROPS: the pin is right over the cup, so the shared
+  //     cupCaptured() rule (at the closest approach distance) holes it — returns
+  //     true so the caller stops the shot 'holed', exactly like the cup path.
+  //   • A faster strike DEFLECTS: reverse the inbound normal component of the
+  //     horizontal velocity with POLE_RESTITUTION (pace killed, tangential glide
+  //     kept) and nudge the ball just OUTSIDE the collision radius along the
+  //     contact normal so the next substep starts clear (no re-trigger). Only
+  //     caroms when the ball is moving TOWARD the pin (poleSweep.approaching), so
+  //     a ball sitting at / leaving the pin isn't shoved by a pole it's departing.
+  //     Vertical motion (vh) is left untouched — consistent with both the
+  //     grounded (vh already 0) and airborne integrators. Returns false.
+  // Stateless: reads only ball + hole.pin and mutates the ball's own fields, so
+  // no new CourseSim state is introduced (the snapshot round-trip guard is safe).
+  private hitPin(prevD: number, prevX: number, speed: number): boolean {
+    const b = this.ball;
+    const p = this.hole.pin;
+    const R = POLE_R + BALL_R;
+    const sw = poleSweep(prevD, prevX, b.d, b.x, p.d, p.x, R);
+    if (sw.minDist > R) return false; // the swept path never reached the pole
+    // Dead-centre slow strike → the pin funnels it into the cup.
+    if (cupCaptured(sw.minDist, speed, CUP_R)) return true;
+    // Otherwise carom off the pole — but only on an inbound strike.
+    if (!sw.approaching) return false;
+    const r = poleDeflect(b.vd, b.vx, sw.n1, sw.n2, POLE_RESTITUTION);
+    b.vd = r.v1;
+    b.vx = r.v2;
+    const clear = R + 1e-3;
+    b.d = p.d + sw.n1 * clear;
+    b.x = p.x + sw.n2 * clear;
+    return false;
   }
 
   // Capture / restore the FULL mutable simulation state in ONE place. predict()

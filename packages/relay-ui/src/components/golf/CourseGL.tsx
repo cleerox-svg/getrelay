@@ -13,8 +13,10 @@ import {
   heightAt,
   surfaceAt,
   greenPadRadius,
+  corridorHalfAt,
   corridorEdgeDist,
   centerlineArcYd,
+  edgeNoise,
   edgeRadius,
   featureSeed,
   type CourseHole,
@@ -68,6 +70,16 @@ interface Props {
 // makeSurfaceMap below consumes them. Fairway and rough stay far apart in
 // hue+value (rough darker, more olive) so the corridor edge reads as a hard
 // material change; green/fringe/tee/bunker/water are refined by overlay meshes.
+
+// Fairway "first cut" (step-cut) colour, LOCKED to the green fringe collar
+// (SURFACE_RGB.fringe / 0x3a6e30) so the fairway first cut and the greenside
+// collar read as the SAME mown step-cut. It is NO LONGER baked into the surface
+// map — it is drawn as a real geometry ribbon along the fairway corridor
+// (buildFirstCutBand), the same technique as the green's collar annulus, so its
+// edge stays vector-crisp/MSAA-smoothed at grazing angles instead of the
+// texel-quantized seam a baked texel band gave. Change it here and the two stay
+// in sync.
+const CUT: readonly [number, number, number] = SURFACE_RGB.fringe;
 
 // Smoothstep in [0,1] between edges e0..e1 — used to anti-alias JUST the 1-texel
 // seam at each crisp surface-map boundary (a clean line, not a wide gradient).
@@ -124,10 +136,11 @@ function mulberry32(seed: number): () => number {
 // texel resolution (far finer than the mesh vertices the old per-vertex colour
 // multiply was limited to). Fairway gets bold alternating MOW STRIPES down the
 // hole; rough gets darker, wispy LONG-GRASS streaks (coherent, elongated
-// downrange — not blocky patches); a smooth "first cut" blends the two across a
-// short band at the corridor edge; the rest carry their base tint (their overlay
-// meshes add the fine texture). Mapped planar over the mesh's (x,d) domain via
-// the mesh UVs, so it lines up with the physics exactly.
+// downrange — not blocky patches) meeting the fairway at a single crisp seam
+// (the "first cut" step-cut is drawn as a geometry ribbon on top, not baked
+// here); the rest carry their base tint (their overlay meshes add the fine
+// texture). Mapped planar over the mesh's (x,d) domain via the mesh UVs, so it
+// lines up with the physics exactly.
 function makeSurfaceMap(
   hole: CourseHole,
   xHalf: number,
@@ -146,26 +159,17 @@ function makeSurfaceMap(
   const g = c.getContext('2d')!;
   const img = g.createImageData(W, H);
   const data = img.data;
-  // STRIPE_YD (mow band period downrange) + FRINGE_BAND (width of the distinct
-  // intermediate cut) are shared from scenery.ts so both scenes cut the same
-  // stripes; the intermediate cut is a NARROW, CRISP band keyed off
-  // corridorEdgeDist — fairway | first cut | rough with clean lines, not a
-  // gradient (render-only; surfaceAt classification is unchanged), and it scales
-  // to any hole via corridorEdgeDist.
+  // STRIPE_YD (mow band period downrange) is shared from scenery.ts so both
+  // scenes cut the same stripes. The fairway|rough boundary is a SINGLE crisp
+  // seam here (keyed off corridorEdgeDist); the "first cut" step-cut that used to
+  // be baked as a texel band between them is now a real geometry ribbon
+  // (buildFirstCutBand) so its edge reads sharp at grazing angles — removing it
+  // here avoids a doubled/mismatched seam. Render-only; surfaceAt is unchanged.
   const FAIR = SURFACE_RGB.fairway;
   const ROUGH = SURFACE_RGB.rough;
-  // Intermediate-cut ("first cut" / step cut) albedo: an EXPLICIT, UNIFORM mid-
-  // emerald — NOT a fairway↔rough blend (that read invisible against the fairway's
-  // own dark mow stripe). It's a cleaner, bluer green than the yellow-green
-  // fairway and clearly lighter/greener than the dark-olive rough, so the eye
-  // separates the collar from BOTH neighbours; its dead-uniform tone (no stripes,
-  // no long-grass streak) reads as a tightly-mown step cut. Tuned against the
-  // course screenshots. NOTE: render-only — surfaceAt classification is unchanged.
-  const CUT: readonly [number, number, number] = [0.23, 0.51, 0.26];
-  // Anti-alias half-width (yd) applied ONLY at the two colour seams so the lines
-  // read clean, not jaggy — roughly one surface-map texel (the hole spans ~120 yd
-  // across 512 texels ≈ 0.24 yd/texel), far narrower than FRINGE_BAND so the band
-  // itself stays a hard-edged strip, never a wide gradient.
+  // Anti-alias half-width (yd) applied ONLY at the fairway|rough colour seam so
+  // the line reads clean, not jaggy — roughly one surface-map texel (the hole
+  // spans ~120 yd across 512 texels ≈ 0.24 yd/texel).
   const SEAM_AA = 0.18;
   const fair: [number, number, number] = [0, 0, 0];
   const rgh: [number, number, number] = [0, 0, 0];
@@ -210,38 +214,21 @@ function makeSurfaceMap(
       let gg: number;
       let b: number;
       if (surf === 'fairway' || surf === 'rough') {
-        // Three CRISP regions keyed off corridorEdgeDist (ed<0 inside the
-        // fairway, 0 on the mown edge, >0 in the rough):
-        //   ed < 0                    → fairway (mow stripes)
-        //   0 ≤ ed < FRINGE_BAND      → intermediate cut (uniform, no stripes)
-        //   ed ≥ FRINGE_BAND          → rough (long-grass streaks)
-        // Each boundary is a hard step anti-aliased across only ±SEAM_AA so the
-        // fairway|first-cut and first-cut|rough lines read clean, NOT a gradient.
+        // A SINGLE crisp seam at the corridor edge (ed=0) keyed off
+        // corridorEdgeDist: fairway (mow stripes) inside, rough (long-grass
+        // streaks) outside, anti-aliased across only ±SEAM_AA so the line reads
+        // clean, NOT a gradient. The "first cut" step-cut band that used to sit
+        // between them is now a geometry ribbon (buildFirstCutBand) drawn on top
+        // along the corridor — baking it here as well would double the seam.
         // Render-only — surfaceAt still classifies fairway/rough here, so the lie
-        // the ball plays across this band is unchanged.
+        // the ball plays is unchanged.
         const ed = corridorEdgeDist(hole, d, x);
         fairwayRGB(x, d, centerlineArcYd(hole, d, x), fair);
         roughRGB(x, d, ROUGH, rgh);
-        // Only a WHISPER of blade speckle — the cut must stay near dead-uniform so
-        // it reads as manicured (a strong speckle would blur into the neighbours).
-        const blade = 0.98 + hashNoise(x * 3.1, d * 3.1) * 0.04;
-        const cutR = CUT[0] * blade;
-        const cutG = CUT[1] * blade;
-        const cutB = CUT[2] * blade;
-        // wLo: 0 in fairway → 1 in the first cut (seam at ed=0).
-        // wHi: 0 in the first cut → 1 in the rough (seam at ed=FRINGE_BAND).
-        const wLo = smoothstep(-SEAM_AA, SEAM_AA, ed);
-        const wHi = smoothstep(FRINGE_BAND - SEAM_AA, FRINGE_BAND + SEAM_AA, ed);
-        // fairway → first cut → rough (the two seams never overlap: SEAM_AA ≪
-        // FRINGE_BAND), so each transition is a clean colour line. The three bands
-        // sit hard-lined beside each other — no darker "mow line" pinstripe frames
-        // the seams; the crisp colour step alone separates the surfaces.
-        const fcR = fair[0] + (cutR - fair[0]) * wLo;
-        const fcG = fair[1] + (cutG - fair[1]) * wLo;
-        const fcB = fair[2] + (cutB - fair[2]) * wLo;
-        r = fcR + (rgh[0] - fcR) * wHi;
-        gg = fcG + (rgh[1] - fcG) * wHi;
-        b = fcB + (rgh[2] - fcB) * wHi;
+        const w = smoothstep(-SEAM_AA, SEAM_AA, ed); // 0 fairway → 1 rough
+        r = fair[0] + (rgh[0] - fair[0]) * w;
+        gg = fair[1] + (rgh[1] - fair[1]) * w;
+        b = fair[2] + (rgh[2] - fair[2]) * w;
       } else if (surf === 'ob') {
         roughRGB(x, d, SURFACE_RGB.ob, rgh);
         r = rgh[0];
@@ -653,6 +640,131 @@ function buildCupCollar(
   return geo;
 }
 
+// --- Fairway "first cut" ribbon (see-what-you-play, geometry parity) --------
+// The fairway step-cut is drawn as a REAL geometry band hugging the fairway
+// corridor — the SAME technique as the green's collar annulus — instead of a
+// texel band baked into the surface map (which quantized + aliased at grazing
+// angles). Two triangle strips (left + right of the centerline) follow the spine
+// with an INNER edge locked to the corridor half-width (corridorHalfAt — the
+// exact line the baked fairway→rough seam and the ball's fairway lie use, so the
+// band abuts the fairway) and an OUTER edge firstCutW beyond it. The outer edge
+// carries a seeded ±wobble (edgeNoise, keyed by arc length) so it has the same
+// tasteful organic waver as the green collar, not a dead-straight line. It is
+// terrain-FOLLOWING (yAt = heightAt) so it hugs the ground; explicit up-normals +
+// a DoubleSide material keep it evenly lit regardless of winding. The band stops
+// short of the green pad so it never fights the fringe collar. Scales to any hole
+// (all geometry derives from the centerline + corridorHalfAt).
+function buildFirstCutBand(
+  hole: CourseHole,
+  firstCutW: number,
+  yAt: (d: number, x: number) => number,
+  lift: number,
+): THREE.BufferGeometry {
+  const pts = hole.centerline;
+  // Cumulative arc length so a sample's normalized position t drives corridorHalfAt.
+  const segLen: number[] = [];
+  let total = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const l = Math.hypot(pts[i + 1]!.d - pts[i]!.d, pts[i + 1]!.x - pts[i]!.x);
+    segLen.push(l);
+    total += l;
+  }
+  const pointAtArc = (arc: number): { d: number; x: number } => {
+    let acc = 0;
+    for (let i = 0; i < segLen.length; i++) {
+      const l = segLen[i]!;
+      if (arc <= acc + l || i === segLen.length - 1) {
+        const f = l > 0 ? Math.max(0, Math.min(1, (arc - acc) / l)) : 0;
+        const a = pts[i]!;
+        const b = pts[i + 1]!;
+        return { d: a.d + (b.d - a.d) * f, x: a.x + (b.x - a.x) * f };
+      }
+      acc += l;
+    }
+    return { d: pts[pts.length - 1]!.d, x: pts[pts.length - 1]!.x };
+  };
+
+  const STEP = 2; // ~2-yd arc spacing → a smooth ribbon through the doglegs
+  const nS = Math.max(2, Math.ceil(total / STEP));
+  const seed = featureSeed(hole.tee.d, hole.tee.x) ^ 0x1f3c;
+  const WOBBLE_AMP = 0.28; // ±28% of firstCutW on the OUTER edge (inner stays locked)
+  const PHASE_YD = 6; // arc→angle divisor: a gentle lobe every ~19 yd (edgeNoise freq 2)
+  const INNER_OVERLAP = 0.8; // pull the inner edge this far INTO the fairway so it
+  // always covers the baked fairway→rough seam (incl. the small dogleg bevel trim)
+  // Stop the band before the green pad so it never overlaps the fringe collar.
+  const g = hole.green;
+  const trimDist = greenPadRadius(hole) + firstCutW + 6;
+
+  // Per-sample world position + up-to-date corridor half-width; the tangent is a
+  // central difference of the sampled positions (rotates smoothly through bends).
+  const samp: { d: number; x: number; t: number; half: number; keep: boolean }[] = [];
+  for (let k = 0; k <= nS; k++) {
+    const arc = (k / nS) * total;
+    const p = pointAtArc(arc);
+    const t = total > 0 ? arc / total : 0;
+    samp.push({
+      d: p.d,
+      x: p.x,
+      t,
+      half: corridorHalfAt(hole, t),
+      keep: Math.hypot(p.d - g.d, p.x - g.x) >= trimDist,
+    });
+  }
+
+  const vcount = (nS + 1) * 4; // per sample: leftInner, leftOuter, rightInner, rightOuter
+  const pos = new Float32Array(vcount * 3);
+  const uvs = new Float32Array(vcount * 2);
+  const nrm = new Float32Array(vcount * 3);
+  const put = (vi: number, wx: number, wd: number) => {
+    pos[vi * 3] = wx;
+    pos[vi * 3 + 1] = yAt(wd, wx) + lift;
+    pos[vi * 3 + 2] = -wd;
+    uvs[vi * 2] = wx / 6;
+    uvs[vi * 2 + 1] = wd / 6;
+    nrm[vi * 3 + 1] = 1; // flat up-normal → even lighting (DoubleSide covers winding)
+  };
+  for (let k = 0; k <= nS; k++) {
+    const s = samp[k]!;
+    const prev = samp[Math.max(0, k - 1)]!;
+    const next = samp[Math.min(nS, k + 1)]!;
+    let td = next.d - prev.d;
+    let tx = next.x - prev.x;
+    const tl = Math.hypot(td, tx) || 1;
+    td /= tl;
+    tx /= tl;
+    // Unit normal (perpendicular to the tangent) in the (d,x) plane.
+    const nd = tx;
+    const nx = -td;
+    const arc = s.t * total;
+    const wobL = firstCutW * (1 + WOBBLE_AMP * edgeNoise(seed, arc / PHASE_YD));
+    const wobR = firstCutW * (1 + WOBBLE_AMP * edgeNoise(seed ^ 0x55, arc / PHASE_YD + 1.7));
+    const inOff = s.half - INNER_OVERLAP;
+    const base = k * 4;
+    // Left side (+normal): inner then outer.
+    put(base + 0, s.x + nx * inOff, s.d + nd * inOff);
+    put(base + 1, s.x + nx * (s.half + wobL), s.d + nd * (s.half + wobL));
+    // Right side (−normal): inner then outer.
+    put(base + 2, s.x - nx * inOff, s.d - nd * inOff);
+    put(base + 3, s.x - nx * (s.half + wobR), s.d - nd * (s.half + wobR));
+  }
+  const idx: number[] = [];
+  for (let k = 0; k < nS; k++) {
+    if (!(samp[k]!.keep && samp[k + 1]!.keep)) continue;
+    const a = k * 4;
+    const b = (k + 1) * 4;
+    // Left strip (inner=+0, outer=+1); right strip (inner=+2, outer=+3). Winding
+    // is irrelevant (DoubleSide + explicit up-normals), so a simple quad each.
+    idx.push(a + 0, a + 1, b + 0, b + 0, a + 1, b + 1);
+    idx.push(a + 2, a + 3, b + 2, b + 2, a + 3, b + 3);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  geo.setIndex(idx);
+  return geo;
+}
+
 export default function CourseGL({ sim, onArm, paused }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const onArmRef = useRef(onArm);
@@ -862,6 +974,37 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     fill.position.set(hole.pin.x, baseY, -hole.pin.d / 2);
     fill.receiveShadow = true;
     scene.add(fill);
+
+    // --- Fairway "first cut" band --------------------------------------
+    // A real GEOMETRY ribbon along both sides of the fairway corridor (inner edge
+    // on the corridor half-width, outer edge FRINGE_BAND beyond it with a seeded
+    // organic wobble), the SAME technique as the green's collar annulus. It's
+    // coloured with CUT (== SURFACE_RGB.fringe), so the fairway step-cut and the
+    // greenside collar read alike, and its crisp mesh edge stays sharp at grazing
+    // angles — the baked texel band was removed from makeSurfaceMap to avoid a
+    // doubled seam. Terrain-following (heightAt) + a small lift & polygon offset
+    // so it sits just above the ground without z-fighting the baked seam.
+    const cutColor = new THREE.Color().setRGB(CUT[0], CUT[1], CUT[2], THREE.SRGBColorSpace);
+    const bandNorm = track(makeTurfNormalMap());
+    const bandGeo = track(
+      buildFirstCutBand(hole, FRINGE_BAND, (d, x) => heightAt(hole, d, x), 0.02),
+    );
+    const bandMat = track(
+      new THREE.MeshStandardMaterial({
+        color: cutColor,
+        roughness: 0.8,
+        metalness: 0,
+        normalMap: bandNorm,
+        side: THREE.DoubleSide,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
+      }),
+    );
+    bandMat.normalScale.set(0.35, 0.35);
+    const firstCut = new THREE.Mesh(bandGeo, bandMat);
+    firstCut.receiveShadow = true;
+    scene.add(firstCut);
 
     // Water discs (shimmer via an animated ripple normal map) + sand bunkers.
     // Both follow the ORGANIC feature outline (edgeRadius + the feature's own
