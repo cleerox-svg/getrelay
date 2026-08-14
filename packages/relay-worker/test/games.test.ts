@@ -3,8 +3,34 @@
 // @cloudflare/vitest-pool-workers. Isolated storage means writes made
 // inside a test are rolled back afterwards, while the beforeAll seed
 // (tables + users + sessions + the A→B contact) persists for the file.
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { createExecutionContext, env, waitOnExecutionContext } from 'cloudflare:test';
+
+// Mock push so the challenge create/completion seams' notifications can be
+// spied on and forced to throw — proving a push failure never breaks the
+// create or the result submit — while keeping the real pushRoutes() intact.
+vi.mock('../src/push', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    // Default: a resolving spy (real push no-ops without VAPID anyway). Tests
+    // override per-call with mockImplementationOnce to fault-inject a throw.
+    pushToUser: vi.fn(async () => {}),
+  };
+});
+
+// Wrap the economy earn helpers in spies over their REAL implementations, so
+// awards still land in the DB but a single call can be forced to throw to prove
+// an economy failure never fails the result submit.
+vi.mock('../src/economy', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    awardCoins: vi.fn(actual.awardCoins as (...a: unknown[]) => unknown),
+    addXp: vi.fn(actual.addXp as (...a: unknown[]) => unknown),
+  };
+});
+
 import worker from '../src/index';
 import type { Env } from '../src/env';
 import { signJwt } from '../src/lib/jwt';
@@ -14,7 +40,18 @@ import {
   DAILY_ROTATION,
   dailyChallengeFor,
   dailySeed,
+  CHALLENGE_WIN_COINS,
+  CHALLENGE_WIN_XP,
+  CHALLENGE_TIE_COINS,
+  CHALLENGE_TIE_XP,
+  CHALLENGE_LOSS_XP,
+  MAX_CHALLENGE_WINS_PER_DAY,
 } from '../src/games';
+import { pushToUser } from '../src/push';
+import { awardCoins } from '../src/economy';
+
+const pushMock = pushToUser as unknown as ReturnType<typeof vi.fn>;
+const awardCoinsMock = awardCoins as unknown as ReturnType<typeof vi.fn>;
 import {
   TOURNEY_ROTATION,
   TOURNEY_PERIOD_MS,
@@ -176,6 +213,50 @@ const DDL = [
      UNIQUE(tournament_id, user_id)
    )`,
   `CREATE INDEX IF NOT EXISTS idx_tournament_placements_user ON tournament_placements(user_id, created_at DESC)`,
+  // ---- Golf economy (migration 0013) — the round/daily/tournament earn hooks
+  // in games.ts + tournaments.ts write to these, so the score/daily/settlement
+  // endpoints tested here need them present.
+  `CREATE TABLE IF NOT EXISTS user_wallet (
+     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+     balance INTEGER NOT NULL DEFAULT 0,
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL
+   )`,
+  `CREATE TABLE IF NOT EXISTS currency_ledger (
+     id TEXT PRIMARY KEY,
+     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     delta INTEGER NOT NULL,
+     reason TEXT NOT NULL,
+     ref TEXT,
+     balance_after INTEGER NOT NULL,
+     created_at INTEGER NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_currency_ledger_user_time ON currency_ledger(user_id, created_at DESC)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_currency_ledger_award
+     ON currency_ledger(user_id, reason, ref) WHERE ref IS NOT NULL`,
+  `CREATE TABLE IF NOT EXISTS user_cosmetics (
+     id TEXT PRIMARY KEY,
+     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     cosmetic_id TEXT NOT NULL,
+     acquired_at INTEGER NOT NULL,
+     UNIQUE(user_id, cosmetic_id)
+   )`,
+  `CREATE TABLE IF NOT EXISTS user_equipped (
+     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     slot TEXT NOT NULL,
+     cosmetic_id TEXT NOT NULL,
+     updated_at INTEGER NOT NULL,
+     PRIMARY KEY (user_id, slot)
+   )`,
+  `CREATE TABLE IF NOT EXISTS season_progress (
+     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     season_id INTEGER NOT NULL,
+     xp INTEGER NOT NULL DEFAULT 0,
+     claimed TEXT NOT NULL DEFAULT '[]',
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL,
+     PRIMARY KEY (user_id, season_id)
+   )`,
 ];
 
 const USERS = {
@@ -326,6 +407,73 @@ function getChallenge(cookie: string, id: string): Promise<Response> {
   return request(`/game/challenge/${id}`, { headers: { Cookie: cookie } });
 }
 
+// The caller's current wallet balance (0 when no row yet).
+async function walletBalance(userId: string): Promise<number> {
+  const row = await testEnv.DB.prepare(`SELECT balance FROM user_wallet WHERE user_id = ?`)
+    .bind(userId)
+    .first<{ balance: number }>();
+  return row?.balance ?? 0;
+}
+
+// Count ledger coin rows for a (user, reason, ref) — the idempotency key. Used
+// to prove a completion credits exactly once.
+async function ledgerCoinCount(userId: string, reason: string, ref: string): Promise<number> {
+  const row = await testEnv.DB.prepare(
+    `SELECT COUNT(*) AS n FROM currency_ledger
+      WHERE user_id = ? AND reason = ? AND ref = ? AND delta <> 0`,
+  )
+    .bind(userId, reason, ref)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+// The caller's season XP for the current season (summed across seasons is fine
+// for these single-season tests). Null-safe.
+async function seasonXp(userId: string): Promise<number> {
+  const row = await testEnv.DB.prepare(
+    `SELECT COALESCE(SUM(xp), 0) AS xp FROM season_progress WHERE user_id = ?`,
+  )
+    .bind(userId)
+    .first<{ xp: number }>();
+  return row?.xp ?? 0;
+}
+
+// Seed N credited challenge coin ledger rows for a user TODAY under a given
+// reason, so the per-day coin cap can be exercised without playing N challenges.
+async function seedChallengeCoins(userId: string, reason: string, n: number): Promise<void> {
+  const now = Date.now();
+  for (let i = 0; i < n; i++) {
+    await testEnv.DB.prepare(
+      `INSERT INTO currency_ledger (id, user_id, delta, reason, ref, balance_after, created_at)
+       VALUES (?, ?, ?, ?, ?, 0, ?)`,
+    )
+      .bind(crypto.randomUUID(), userId, CHALLENGE_WIN_COINS, reason, `seed-${reason}-${i}`, now)
+      .run();
+  }
+}
+
+async function seedChallengeWins(userId: string, n: number): Promise<void> {
+  await seedChallengeCoins(userId, 'challenge_win', n);
+}
+
+async function seedChallengeTies(userId: string, n: number): Promise<void> {
+  await seedChallengeCoins(userId, 'challenge_tie', n);
+}
+
+// Drive a challenge from creation to completion, returning its id. A submits
+// `aToPar`, B submits `bToPar`.
+async function playChallenge(aToPar: number, bToPar: number): Promise<string> {
+  const created = await createChallenge(cookies.A, {
+    opponentId: USERS.B.id,
+    game: 'golfcourse',
+    course: 'Augusta',
+  });
+  const { challenge } = (await created.json()) as ChallengeBody;
+  await submitChallengeResult(cookies.A, challenge.id, { toPar: aToPar });
+  await submitChallengeResult(cookies.B, challenge.id, { toPar: bToPar });
+  return challenge.id;
+}
+
 type ChallengeBody = {
   challenge: {
     id: string;
@@ -338,6 +486,8 @@ type ChallengeBody = {
     opponent: { userId: string; toPar: number | null };
     winnerId: string | null;
     mine: 'challenger' | 'opponent';
+    rewardCoins: number;
+    rewardCoinsAwarded: number;
   };
 };
 
@@ -1305,6 +1455,246 @@ describe('game challenges', () => {
 
     // A missing id is a 404 too.
     expect((await getChallenge(cookies.A, 'nope')).status).toBe(404);
+  });
+
+  it('exposes rewardCoins on the shaped challenge', async () => {
+    const created = await createChallenge(cookies.A, {
+      opponentId: USERS.B.id,
+      game: 'golfcourse',
+      course: 'Augusta',
+    });
+    const { challenge } = (await created.json()) as ChallengeBody;
+    expect(challenge.rewardCoins).toBe(CHALLENGE_WIN_COINS);
+
+    // Still present (and constant) once complete, so the UI can pair it with
+    // winnerId to show whether the viewer won and what they earned.
+    await submitChallengeResult(cookies.A, challenge.id, { toPar: -1 });
+    const done = await submitChallengeResult(cookies.B, challenge.id, { toPar: 3 });
+    const doneBody = (await done.json()) as ChallengeBody;
+    expect(doneBody.challenge.rewardCoins).toBe(CHALLENGE_WIN_COINS);
+  });
+});
+
+describe('challenge rewards + notifications', () => {
+  it('pushes the opponent on create (best-effort)', async () => {
+    pushMock.mockClear();
+    const created = await createChallenge(cookies.A, {
+      opponentId: USERS.B.id,
+      game: 'golfcourse',
+      course: 'Augusta',
+    });
+    expect(created.status).toBe(200);
+    const { challenge } = (await created.json()) as ChallengeBody;
+
+    expect(pushMock).toHaveBeenCalledTimes(1);
+    const [, userId, payload] = pushMock.mock.calls[0]!;
+    expect(userId).toBe(USERS.B.id);
+    expect(payload).toMatchObject({ tag: `chal-${challenge.id}`, url: '/games/golf' });
+    expect((payload as { body: string }).body).toContain(USERS.A.name);
+  });
+
+  it('a failing push on create does not fail the create', async () => {
+    pushMock.mockImplementationOnce(async () => {
+      throw new Error('push boom');
+    });
+    const created = await createChallenge(cookies.A, {
+      opponentId: USERS.B.id,
+      game: 'golfcourse',
+      course: 'Augusta',
+    });
+    expect(created.status).toBe(200);
+    const { challenge } = (await created.json()) as ChallengeBody;
+    expect(challenge.status).toBe('pending');
+  });
+
+  it('credits the winner coins + XP exactly once and gives the loser XP', async () => {
+    const id = await playChallenge(-5, 0); // A wins (lower to-par)
+
+    expect(await walletBalance(USERS.A.id)).toBe(CHALLENGE_WIN_COINS);
+    expect(await seasonXp(USERS.A.id)).toBe(CHALLENGE_WIN_XP);
+    expect(await ledgerCoinCount(USERS.A.id, 'challenge_win', id)).toBe(1);
+
+    // Loser: consolation XP, no coins.
+    expect(await walletBalance(USERS.B.id)).toBe(0);
+    expect(await seasonXp(USERS.B.id)).toBe(CHALLENGE_LOSS_XP);
+
+    // rewardCoinsAwarded reflects what each viewer actually got: 30 for the
+    // winner, 0 for the loser.
+    const aView = (await (await getChallenge(cookies.A, id)).json()) as ChallengeBody;
+    const bView = (await (await getChallenge(cookies.B, id)).json()) as ChallengeBody;
+    expect(aView.challenge.rewardCoinsAwarded).toBe(CHALLENGE_WIN_COINS);
+    expect(aView.challenge.rewardCoins).toBe(CHALLENGE_WIN_COINS); // nominal stake unchanged
+    expect(bView.challenge.rewardCoinsAwarded).toBe(0);
+
+    // A redundant re-submit after completion must not re-award (ref-guarded +
+    // the transition gate): balance and the single ledger row are unchanged.
+    const re = await submitChallengeResult(cookies.B, id, { toPar: 9 });
+    expect(re.status).toBe(200);
+    expect(await walletBalance(USERS.A.id)).toBe(CHALLENGE_WIN_COINS);
+    expect(await ledgerCoinCount(USERS.A.id, 'challenge_win', id)).toBe(1);
+  });
+
+  it('pushes both players on completion with the outcome', async () => {
+    const created = await createChallenge(cookies.A, {
+      opponentId: USERS.B.id,
+      game: 'golfcourse',
+      course: 'Augusta',
+    });
+    const { challenge } = (await created.json()) as ChallengeBody;
+    await submitChallengeResult(cookies.A, challenge.id, { toPar: -2 });
+
+    // Only the SECOND (completing) submit fans out the outcome pushes.
+    pushMock.mockClear();
+    await submitChallengeResult(cookies.B, challenge.id, { toPar: 4 });
+    expect(pushMock).toHaveBeenCalledTimes(2);
+
+    const byUser = new Map(
+      pushMock.mock.calls.map((call) => [call[1] as string, call[2] as { body: string }]),
+    );
+    expect(byUser.get(USERS.A.id)!.body).toContain(`+${CHALLENGE_WIN_COINS} coins`);
+    expect(byUser.get(USERS.B.id)!.body).toContain('lost');
+  });
+
+  it('stops minting win coins past the daily cap but still completes + credits XP', async () => {
+    await seedChallengeWins(USERS.A.id, MAX_CHALLENGE_WINS_PER_DAY);
+
+    const created = await createChallenge(cookies.A, {
+      opponentId: USERS.B.id,
+      game: 'golfcourse',
+      course: 'Augusta',
+    });
+    const { challenge } = (await created.json()) as ChallengeBody;
+    await submitChallengeResult(cookies.A, challenge.id, { toPar: -5 });
+    pushMock.mockClear();
+    const done = await submitChallengeResult(cookies.B, challenge.id, { toPar: 2 });
+    const doneBody = (await done.json()) as ChallengeBody;
+
+    // The result still settles.
+    expect(doneBody.challenge.status).toBe('complete');
+    expect(doneBody.challenge.winnerId).toBe(USERS.A.id);
+
+    // No coin row for THIS challenge (capped) but XP still credited.
+    expect(await ledgerCoinCount(USERS.A.id, 'challenge_win', challenge.id)).toBe(0);
+    expect(await seasonXp(USERS.A.id)).toBe(CHALLENGE_WIN_XP);
+
+    // The winner's push reflects the win WITHOUT the coins line.
+    const winnerPush = pushMock.mock.calls.find((call) => call[1] === USERS.A.id)!;
+    expect((winnerPush[2] as { body: string }).body).toContain('won');
+    expect((winnerPush[2] as { body: string }).body).not.toContain('coins');
+
+    // From the WINNER's view, rewardCoinsAwarded shows the TRUE credited amount
+    // (0, capped), even though the nominal stake (rewardCoins) still reads 30.
+    const aView = (await (await getChallenge(cookies.A, challenge.id)).json()) as ChallengeBody;
+    expect(aView.challenge.rewardCoinsAwarded).toBe(0);
+    expect(aView.challenge.rewardCoins).toBe(CHALLENGE_WIN_COINS);
+  });
+
+  it('a tie credits both players coins + XP', async () => {
+    const id = await playChallenge(2, 2); // equal -> tie
+
+    const done = await getChallenge(cookies.A, id);
+    const doneBody = (await done.json()) as ChallengeBody;
+    expect(doneBody.challenge.winnerId).toBeNull();
+    expect(doneBody.challenge.rewardCoinsAwarded).toBe(CHALLENGE_TIE_COINS);
+
+    expect(await walletBalance(USERS.A.id)).toBe(CHALLENGE_TIE_COINS);
+    expect(await walletBalance(USERS.B.id)).toBe(CHALLENGE_TIE_COINS);
+    expect(await seasonXp(USERS.A.id)).toBe(CHALLENGE_TIE_XP);
+    expect(await seasonXp(USERS.B.id)).toBe(CHALLENGE_TIE_XP);
+    expect(await ledgerCoinCount(USERS.A.id, 'challenge_tie', id)).toBe(1);
+    expect(await ledgerCoinCount(USERS.B.id, 'challenge_tie', id)).toBe(1);
+  });
+
+  it('caps tie coins by the same daily limit, still completing + crediting XP', async () => {
+    // Fill A's daily coin allowance with tie rows; a further tie must mint no
+    // coins for A while the result still settles and XP still credits. B (under
+    // the cap) still gets tie coins.
+    await seedChallengeTies(USERS.A.id, MAX_CHALLENGE_WINS_PER_DAY);
+
+    const id = await playChallenge(1, 1); // equal -> tie
+    const view = (await (await getChallenge(cookies.A, id)).json()) as ChallengeBody;
+
+    expect(view.challenge.status).toBe('complete');
+    expect(view.challenge.winnerId).toBeNull();
+
+    // A: no coin row for THIS challenge (capped), but XP credited.
+    expect(await ledgerCoinCount(USERS.A.id, 'challenge_tie', id)).toBe(0);
+    expect(await seasonXp(USERS.A.id)).toBe(CHALLENGE_TIE_XP);
+    expect(view.challenge.rewardCoinsAwarded).toBe(0);
+
+    // B: under the cap -> tie coins credited as normal.
+    expect(await ledgerCoinCount(USERS.B.id, 'challenge_tie', id)).toBe(1);
+    expect(await walletBalance(USERS.B.id)).toBe(CHALLENGE_TIE_COINS);
+  });
+
+  it('an award throw on completion still fires the outcome pushes', async () => {
+    // Award and push are isolated: a failing award must NOT suppress the
+    // win/loss notifications (which the completion gate would otherwise deny).
+    const created = await createChallenge(cookies.A, {
+      opponentId: USERS.B.id,
+      game: 'golfcourse',
+      course: 'Augusta',
+    });
+    const { challenge } = (await created.json()) as ChallengeBody;
+    await submitChallengeResult(cookies.A, challenge.id, { toPar: -2 });
+
+    pushMock.mockClear();
+    awardCoinsMock.mockImplementationOnce(async () => {
+      throw new Error('economy boom');
+    });
+    const done = await submitChallengeResult(cookies.B, challenge.id, { toPar: 4 });
+    expect(done.status).toBe(200);
+
+    // Both players are still notified despite the award fault.
+    expect(pushMock).toHaveBeenCalledTimes(2);
+    const notified = pushMock.mock.calls.map((call) => call[1] as string);
+    expect(notified).toContain(USERS.A.id);
+    expect(notified).toContain(USERS.B.id);
+
+    // The award failed, so no coins landed AND the winner's push does not claim
+    // a credit that never happened.
+    expect(await walletBalance(USERS.A.id)).toBe(0);
+    const winnerPush = pushMock.mock.calls.find((call) => call[1] === USERS.A.id)!;
+    expect((winnerPush[2] as { body: string }).body).not.toContain('coins');
+  });
+
+  it('an economy throw on completion does not fail the result submit', async () => {
+    awardCoinsMock.mockImplementationOnce(async () => {
+      throw new Error('economy boom');
+    });
+    const created = await createChallenge(cookies.A, {
+      opponentId: USERS.B.id,
+      game: 'golfcourse',
+      course: 'Augusta',
+    });
+    const { challenge } = (await created.json()) as ChallengeBody;
+    await submitChallengeResult(cookies.A, challenge.id, { toPar: -3 });
+    const done = await submitChallengeResult(cookies.B, challenge.id, { toPar: 1 });
+
+    // The result still persists as complete despite the economy fault.
+    expect(done.status).toBe(200);
+    const doneBody = (await done.json()) as ChallengeBody;
+    expect(doneBody.challenge.status).toBe('complete');
+    expect(doneBody.challenge.winnerId).toBe(USERS.A.id);
+  });
+
+  it('a push throw on completion does not fail the result submit', async () => {
+    const created = await createChallenge(cookies.A, {
+      opponentId: USERS.B.id,
+      game: 'golfcourse',
+      course: 'Augusta',
+    });
+    const { challenge } = (await created.json()) as ChallengeBody;
+    await submitChallengeResult(cookies.A, challenge.id, { toPar: -1 });
+    pushMock.mockImplementationOnce(async () => {
+      throw new Error('push boom');
+    });
+    const done = await submitChallengeResult(cookies.B, challenge.id, { toPar: 5 });
+    expect(done.status).toBe(200);
+    expect(((await done.json()) as ChallengeBody).challenge.status).toBe('complete');
+
+    // The award still landed even though a push threw.
+    expect(await walletBalance(USERS.A.id)).toBe(CHALLENGE_WIN_COINS);
   });
 });
 

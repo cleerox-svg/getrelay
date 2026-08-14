@@ -3,6 +3,12 @@ interface Props {
   name?: string | null;
   size?: number;
   online?: boolean;
+  // Optional cosmetic frame overlay (golf economy avatar frames). A 'ring'
+  // draws a coloured border just OUTSIDE the disc; a 'glow' draws a soft halo.
+  // Rendered absolutely on the wrapper so it never shifts layout; null / absent
+  // → nothing (the default frame_none). The shape is inlined (not imported from
+  // the golf lib) so Avatar stays domain-agnostic.
+  frame?: { color: string; style: 'ring' | 'glow' } | null;
 }
 
 const PALETTE = [
@@ -21,7 +27,7 @@ function initials(name: string): string {
   return first ? first.toUpperCase() : '?';
 }
 
-export function Avatar({ src, name, size = 40, online = false }: Props) {
+export function Avatar({ src, name, size = 40, online = false, frame = null }: Props) {
   const label = name?.trim() || 'Relay user';
   const bg = PALETTE[hashIndex(label, PALETTE.length)] ?? '#8E8E93';
   const dotSize = Math.max(10, Math.floor(size * 0.28));
@@ -83,6 +89,32 @@ export function Avatar({ src, name, size = 40, online = false }: Props) {
           {initials(label)}
         </span>
       )}
+      {frame ? (
+        <span
+          aria-hidden="true"
+          style={
+            frame.style === 'glow'
+              ? {
+                  position: 'absolute',
+                  inset: 0,
+                  borderRadius: 999,
+                  // Soft coloured halo hugging the disc, plus a thin solid
+                  // seat so the frame reads even on a busy avatar.
+                  boxShadow: `0 0 0 2px ${frame.color}, 0 0 ${Math.max(6, Math.round(size * 0.22))}px 1px ${frame.color}`,
+                  pointerEvents: 'none',
+                }
+              : {
+                  position: 'absolute',
+                  // Ring sits just OUTSIDE the disc (negative inset) so it never
+                  // clips the avatar art; absolute → no layout shift.
+                  inset: -Math.max(2, Math.round(size * 0.06)),
+                  borderRadius: 999,
+                  border: `${Math.max(2, Math.round(size * 0.05))}px solid ${frame.color}`,
+                  pointerEvents: 'none',
+                }
+          }
+        />
+      ) : null}
       {online ? (
         <span
           aria-label="online"

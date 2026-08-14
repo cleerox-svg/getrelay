@@ -4,6 +4,8 @@ import { api } from '../../lib/api';
 import type { GolfRecords } from '../../lib/api';
 import { getCourse } from '../../lib/golf/courses';
 import { useStore } from '../../lib/store';
+import { useEconomy, useEquippedFrame } from '../../lib/golf/economy';
+import { CoinBalance } from './CoinBalance';
 import type { GolfStats, TournamentMe } from '../../lib/types';
 
 // ± to-par label. Negative (under par) is good and gets the accent colour.
@@ -66,6 +68,17 @@ function relTime(ms: number): string {
 // the empty state). Identity (avatar / name / PIN) comes from the store.
 export function GolfProfile() {
   const me = useStore((s) => s.me);
+  // The viewer's own equipped frame + coin balance for the card header. The hub
+  // already loads the economy on mount; ensure here too so the Profile tab is
+  // self-sufficient if reached first.
+  const frame = useEquippedFrame();
+  const balance = useEconomy((s) => s.balance);
+  const ensureCosmetics = useEconomy((s) => s.ensureCosmetics);
+  const ensureWallet = useEconomy((s) => s.ensureWallet);
+  useEffect(() => {
+    void ensureCosmetics();
+    void ensureWallet();
+  }, [ensureCosmetics, ensureWallet]);
 
   const [courseStats, setCourseStats] = useState<GolfStats | null>(null);
   const [puttStats, setPuttStats] = useState<GolfStats | null>(null);
@@ -174,10 +187,13 @@ export function GolfProfile() {
     <div className="flex flex-col gap-4">
       {/* ---- Header: identity + handicap ---- */}
       <div className="golf-phead">
-        <Avatar src={me?.avatarUrl} name={me?.displayName} size={60} />
+        <Avatar src={me?.avatarUrl} name={me?.displayName} size={60} frame={frame} />
         <div className="g-who">
           <b>{me?.displayName ?? 'Relay golfer'}</b>
           {me?.pin ? <div className="g-pin">PIN · {me.pin}</div> : null}
+          <div className="g-coins">
+            <CoinBalance balance={balance} size="sm" />
+          </div>
         </div>
         <div className="g-hcap">
           <span>Handicap</span>

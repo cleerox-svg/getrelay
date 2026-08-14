@@ -2,6 +2,8 @@ import { Hono } from 'hono';
 import type { Env } from './env';
 import { readAuthedUser } from './auth';
 import { avatarUrlFor } from './me';
+import { addXp, awardCoins } from './economy';
+import { pushToUser } from './push';
 import {
   currentPeriodIndex,
   periodWindow,
@@ -15,6 +17,11 @@ import {
 // MAX_POINTS_PER_ROUND per round over at most MAX_ROUNDS rounds).
 export const MAX_ROUNDS = 8;
 export const MAX_POINTS_PER_ROUND = 2000;
+
+// Economy anti-farm: a client can submit arbitrarily many arcade rounds, so the
+// per-round coin/XP reward is capped to this many credited rounds per UTC day.
+// Rounds past the cap still record their score — they just stop minting coins.
+export const MAX_ROUND_REWARDS_PER_DAY = 20;
 
 // Games that share the game_scores table (and its leaderboard). The
 // column defaults to 'fog', so an omitted/unknown value maps back to fog
@@ -131,6 +138,23 @@ const CHALLENGE_GAME_IDS = ['golf', 'golfrange', 'golfcourse'] as const;
 // A challenge score (to-par) is clamped to this magnitude both ways.
 const MAX_CHALLENGE_TO_PAR = 200;
 
+// ---- Challenge economy ----------------------------------------------------
+//
+// Completing a head-to-head challenge pays out once, at the moment BOTH sides
+// are in and the winner/tie is settled. Amounts are code-defined (like the
+// round/daily/tournament earns) and every credit is ref-guarded by the
+// challenge id, so the completion seam is idempotent even if re-entered.
+export const CHALLENGE_WIN_COINS = 30;
+export const CHALLENGE_WIN_XP = 20;
+export const CHALLENGE_TIE_COINS = 10;
+// A small consolation + tie XP so both players make season progress.
+export const CHALLENGE_TIE_XP = 5;
+export const CHALLENGE_LOSS_XP = 5;
+// Anti-collusion: cap how many challenge WINS credit coins to one user per UTC
+// day. Wins past the cap still settle the result and record the tally — they
+// just stop minting coins (mirrors MAX_ROUND_REWARDS_PER_DAY).
+export const MAX_CHALLENGE_WINS_PER_DAY = 10;
+
 interface ChallengeRow {
   id: string;
   game: string;
@@ -189,6 +213,23 @@ async function readChallengeShaped(
         ? 'opponent'
         : null;
 
+  // The coins the VIEWER actually received for this challenge (0 if they lost,
+  // tied-but-capped, or won-but-capped). Only meaningful once complete, so we
+  // skip the ledger lookup while pending. Lets the card show the TRUE amount
+  // even when a win was capped to 0 — `rewardCoins` (nominal stake) can't.
+  let rewardCoinsAwarded = 0;
+  if (r.status === 'complete') {
+    const led = await db
+      .prepare(
+        `SELECT COALESCE(SUM(delta), 0) AS coins FROM currency_ledger
+          WHERE user_id = ? AND ref = ?
+            AND reason IN ('challenge_win', 'challenge_tie')`,
+      )
+      .bind(meId, id)
+      .first<{ coins: number }>();
+    rewardCoinsAwarded = led?.coins ?? 0;
+  }
+
   return {
     id: r.id,
     game: r.game,
@@ -216,6 +257,13 @@ async function readChallengeShaped(
     },
     winnerId: r.winner_id ?? null,
     mine,
+    // The nominal winner STAKE — surfaced so the UI can show "winner earns 30
+    // coins" on the pending stake line. Additive/backward-tolerant field.
+    rewardCoins: CHALLENGE_WIN_COINS,
+    // The coins the viewer (mine) ACTUALLY received for this challenge (0 unless
+    // they won/tied AND were under the daily coin cap). 0 while pending. Lets the
+    // card show the true amount when a win is capped to 0.
+    rewardCoinsAwarded,
     createdAt: r.created_at,
   };
 }
@@ -440,12 +488,13 @@ export function gamesRoutes() {
       if (trimmed.length > 0 && trimmed.length <= MAX_COURSE_LEN) course = trimmed;
     }
 
+    const gameScoreId = crypto.randomUUID();
     await c.env.DB.prepare(
       `INSERT INTO game_scores (id, user_id, game, score, rounds, best_streak, course, to_par, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
       .bind(
-        crypto.randomUUID(),
+        gameScoreId,
         me.id,
         game,
         score,
@@ -456,6 +505,27 @@ export function gamesRoutes() {
         Date.now(),
       )
       .run();
+
+    // Economy earn: a completed round credits a small flat coin + XP reward.
+    // ref = the game_scores row id, so each distinct round credits exactly once
+    // (a replay of the SAME row is a no-op). Capped per UTC day to stop a client
+    // farming coins by spamming rounds. The whole block is best-effort: an
+    // economy failure must never fail the already-persisted score submission.
+    try {
+      const startOfDay = Date.parse(`${utcDate(Date.now())}T00:00:00Z`);
+      const credited = await c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM currency_ledger
+          WHERE user_id = ? AND reason = 'round_reward' AND created_at >= ?`,
+      )
+        .bind(me.id, startOfDay)
+        .first<{ n: number }>();
+      if ((credited?.n ?? 0) < MAX_ROUND_REWARDS_PER_DAY) {
+        await awardCoins(c.env, me.id, 10, 'round_reward', gameScoreId);
+        await addXp(c.env, me.id, 10, 'round_reward', gameScoreId);
+      }
+    } catch (err) {
+      console.error('round_reward economy hook failed:', err);
+    }
 
     const row = await c.env.DB.prepare(
       `SELECT MAX(score) AS best FROM game_scores WHERE user_id = ? AND game = ?`,
@@ -842,6 +912,26 @@ export function gamesRoutes() {
       .bind(id, game, course, hole, seed, me.id, opponentId, now, now)
       .run();
 
+    // Notify the opponent that they've been challenged. Best-effort: a push
+    // failure must never fail the already-persisted challenge. The authed user
+    // carries only an id, so fetch their display name for the notification.
+    try {
+      const challenger = await c.env.DB.prepare(
+        `SELECT display_name FROM users WHERE id = ?`,
+      )
+        .bind(me.id)
+        .first<{ display_name: string }>();
+      const challengerName = challenger?.display_name ?? 'Someone';
+      await pushToUser(c.env, opponentId, {
+        title: 'Golf challenge',
+        body: `${challengerName} challenged you to golf`,
+        tag: `chal-${id}`,
+        url: '/games/golf',
+      });
+    } catch (err) {
+      console.error('challenge create push failed:', err);
+    }
+
     const origin = new URL(c.req.url).origin;
     const challenge = await readChallengeShaped(c.env.DB, origin, id, me.id);
     return c.json({ challenge });
@@ -891,6 +981,13 @@ export function gamesRoutes() {
       ? row.opponent_score ?? toPar
       : row.opponent_score;
 
+    // Was the challenge ALREADY complete before this submission? If both sides
+    // were in already, this is a re-submit of an already-settled challenge, so
+    // the completion seam (reward + notify) must NOT re-run — the transition to
+    // complete happens exactly once.
+    const wasCompleteBefore =
+      row.challenger_score !== null && row.opponent_score !== null;
+
     const bothIn = challengerScore !== null && opponentScore !== null;
     let winnerId: string | null = null;
     if (bothIn) {
@@ -907,6 +1004,119 @@ export function gamesRoutes() {
     )
       .bind(challengerScore, opponentScore, winnerId, status, Date.now(), id)
       .run();
+
+    // Completion seam: this submission just brought the SECOND score in, so the
+    // challenge transitioned pending -> complete exactly here. Reward the
+    // outcome and notify BOTH players. All economy/push work is best-effort —
+    // the result is already persisted above, so a throw here can NEVER fail the
+    // submit. Every coin/XP credit is ref-guarded by the challenge id, so even a
+    // re-entry can't double-award; the wasCompleteBefore gate additionally keeps
+    // the push (which is not ref-guarded) from re-firing on a re-submit.
+    if (bothIn && !wasCompleteBefore) {
+      const challengerId = row.challenger_id;
+      const opponentId = row.opponent_id;
+
+      // Per-user daily coin cap covering BOTH the win AND tie payouts, so the
+      // TOTAL challenge coins one user can mint per UTC day is bounded no matter
+      // the outcome. Capping only decisive wins would leave a collusion hole:
+      // two accounts could repeatedly TIE and each collect tie coins forever.
+      // Past the cap the result still settles + XP still credits — only coins
+      // stop minting (mirrors MAX_ROUND_REWARDS_PER_DAY).
+      const startOfDay = Date.parse(`${utcDate(Date.now())}T00:00:00Z`);
+      const underDailyCoinCap = async (userId: string): Promise<boolean> => {
+        const capRow = await c.env.DB.prepare(
+          `SELECT COUNT(*) AS n FROM currency_ledger
+            WHERE user_id = ?
+              AND reason IN ('challenge_win', 'challenge_tie')
+              AND created_at >= ?`,
+        )
+          .bind(userId, startOfDay)
+          .first<{ n: number }>();
+        return (capRow?.n ?? 0) < MAX_CHALLENGE_WINS_PER_DAY;
+      };
+
+      if (winnerId) {
+        // Decisive result: winner + loser.
+        const loserId = winnerId === challengerId ? opponentId : challengerId;
+
+        // Awards — best-effort and ISOLATED from the notifications below, so a
+        // transient award failure can never suppress the outcome pushes (which
+        // the wasCompleteBefore gate would otherwise deny forever). coinsCredited
+        // flips true only once the coins ACTUALLY land, so the push never claims
+        // a credit that didn't happen.
+        let coinsCredited = false;
+        try {
+          if (await underDailyCoinCap(winnerId)) {
+            await awardCoins(c.env, winnerId, CHALLENGE_WIN_COINS, 'challenge_win', id);
+            coinsCredited = true;
+          }
+          await addXp(c.env, winnerId, CHALLENGE_WIN_XP, 'challenge_win', id);
+          // Consolation XP for the loser (no coins).
+          await addXp(c.env, loserId, CHALLENGE_LOSS_XP, 'challenge_played', id);
+        } catch (err) {
+          console.error('challenge win award failed:', err);
+        }
+
+        // Notifications — independent of the award outcome; each caught alone.
+        try {
+          await pushToUser(c.env, winnerId, {
+            title: 'Golf challenge',
+            body: coinsCredited
+              ? `You won your golf challenge — +${CHALLENGE_WIN_COINS} coins`
+              : 'You won your golf challenge',
+            tag: `chal-${id}`,
+            url: '/games/golf',
+          });
+        } catch (err) {
+          console.error('challenge win push failed:', err);
+        }
+        try {
+          await pushToUser(c.env, loserId, {
+            title: 'Golf challenge',
+            body: 'You lost your golf challenge',
+            tag: `chal-${id}`,
+            url: '/games/golf',
+          });
+        } catch (err) {
+          console.error('challenge loss push failed:', err);
+        }
+      } else {
+        // Tie: both players earn the tie payout, each subject to the SAME daily
+        // coin cap (checked per user). Distinct users share the (reason, ref),
+        // so the (user, reason, ref) guard keeps each idempotent. Track which
+        // users actually got coins so their push tells the truth.
+        const tieCoinsFor: Record<string, number> = {};
+        try {
+          for (const uid of [challengerId, opponentId]) {
+            if (await underDailyCoinCap(uid)) {
+              await awardCoins(c.env, uid, CHALLENGE_TIE_COINS, 'challenge_tie', id);
+              tieCoinsFor[uid] = CHALLENGE_TIE_COINS;
+            } else {
+              tieCoinsFor[uid] = 0;
+            }
+            await addXp(c.env, uid, CHALLENGE_TIE_XP, 'challenge_tie', id);
+          }
+        } catch (err) {
+          console.error('challenge tie award failed:', err);
+        }
+
+        for (const uid of [challengerId, opponentId]) {
+          try {
+            await pushToUser(c.env, uid, {
+              title: 'Golf challenge',
+              body:
+                (tieCoinsFor[uid] ?? 0) > 0
+                  ? `Your golf challenge tied — +${CHALLENGE_TIE_COINS} coins`
+                  : 'Your golf challenge tied',
+              tag: `chal-${id}`,
+              url: '/games/golf',
+            });
+          } catch (err) {
+            console.error('challenge tie push failed:', err);
+          }
+        }
+      }
+    }
 
     const origin = new URL(c.req.url).origin;
     const challenge = await readChallengeShaped(c.env.DB, origin, id, me.id);
@@ -1076,6 +1286,17 @@ export function gamesRoutes() {
     )
       .bind(me.id, current, best, today, now, now)
       .run();
+
+    // Economy earn: completing the day's challenge credits coins + XP once per
+    // UTC day. ref = today's date, so a same-day retry is a no-op (ledger
+    // idempotency guard). Placed AFTER the streak recompute and wrapped so an
+    // economy failure can neither skip the streak nor fail the primary submit.
+    try {
+      await awardCoins(c.env, me.id, 50, 'daily_reward', today);
+      await addXp(c.env, me.id, 50, 'daily_reward', today);
+    } catch (err) {
+      console.error('daily_reward economy hook failed:', err);
+    }
 
     // Read-after-write so `today` reflects the persisted best (not necessarily
     // this attempt, when a prior one was better). A row is guaranteed here: we

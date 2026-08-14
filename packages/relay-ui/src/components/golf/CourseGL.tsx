@@ -48,6 +48,7 @@ import {
   TURF_ROUGHNESS,
 } from '../../lib/golf/scenery';
 import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
+import type { GolfCosmetics } from '../../lib/golf/cosmetics';
 import { BALL_R, CUP_R } from '../../lib/golf/greenPhysics';
 import type { CourseSim, CoursePrediction, CourseTrailPt } from '../../lib/golf/courseSim';
 
@@ -64,6 +65,11 @@ interface Props {
   // the accuracy bar and calls sim.fireArmed().
   onArm?: () => void;
   paused?: boolean;
+  // Equipped ball skin + trail colour (from the golf economy). Read ONCE at
+  // scene build (the ball material + tracer colour are baked in the mount
+  // effect); the default equip leaves both undefined → stock white ball + white
+  // tracer, so the pre-economy render is unchanged.
+  cosmetics?: GolfCosmetics;
 }
 
 // Per-lie base albedo, the intermediate-cut band width and the bold mow-stripe
@@ -824,7 +830,12 @@ function buildFirstCutBand(
   return geo;
 }
 
-export default function CourseGL({ sim, onArm, paused }: Props) {
+export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
+  // Snapshot the equipped skin so the mount effect (which reads it to build the
+  // ball material + tracer colour) doesn't re-run when the parent passes a new
+  // object identity mid-round.
+  const cosmeticsRef = useRef(cosmetics);
+  cosmeticsRef.current = cosmetics;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const onArmRef = useRef(onArm);
   onArmRef.current = onArm;
@@ -1638,7 +1649,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     const ballGeo = track(new THREE.SphereGeometry(BALL_R, 32, 24));
     // Dimpled ball material shared with the range (ballTexture.ts) — a dimple
     // normal map so the sun catches the surface, instead of a plain smooth sphere.
-    const ballMat = track(makeBallMaterial(track(makeDimpleNormalMap())));
+    const ballMat = track(makeBallMaterial(track(makeDimpleNormalMap()), cosmeticsRef.current?.ball));
     const ball = new THREE.Mesh(ballGeo, ballMat);
     ball.castShadow = true;
     scene.add(ball);
@@ -1667,7 +1678,7 @@ export default function CourseGL({ sim, onArm, paused }: Props) {
     scene.add(ballShadow);
 
     // Tracer (ball flight/roll trail).
-    const tracerMat = track(new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 }));
+    const tracerMat = track(new THREE.LineBasicMaterial({ color: cosmeticsRef.current?.trail?.color ?? 0xffffff, transparent: true, opacity: 0.6 }));
     const tracerGeo = track(new THREE.BufferGeometry());
     const tracerBuf = new Float32Array(70 * 3);
     tracerGeo.setAttribute('position', new THREE.BufferAttribute(tracerBuf, 3));

@@ -449,3 +449,116 @@ CREATE TABLE IF NOT EXISTS tournament_placements (
   UNIQUE(tournament_id, user_id)     -- one placement per user per event
 );
 CREATE INDEX IF NOT EXISTS idx_tournament_placements_user ON tournament_placements(user_id, created_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- Golf economy + progression: soft currency ("coins"), cosmetics, season track.
+--
+-- Design mirrors the tournament/daily precedents: definitions that CAN be
+-- derived deterministically in code live in code, not the DB. The cosmetic
+-- CATALOG (ball skins, trails, avatar frames, nameplates) is code-defined —
+-- like the tournament rotation — so there is NO catalog table; the DB only
+-- records what each user OWNS and has EQUIPPED. Likewise SEASON/TIER
+-- definitions (which tier costs what XP, what each tier grants) are derived
+-- deterministically from a period index in code; the DB stores only per-user
+-- XP and which tiers were claimed.
+--
+-- Idempotency contract (shared with messaging-core):
+--   * Every idempotent balance change writes exactly one currency_ledger row
+--     keyed by (user_id, reason, ref). The partial UNIQUE index below makes a
+--     replayed award a no-op, so a given earn source (tournament placement,
+--     daily reward, season tier, etc.) can never be credited twice.
+--   * user_wallet.balance is the running total; balance_after on the newest
+--     ledger row must equal it. balance is never allowed to go negative
+--     (enforced by the worker, which reads-checks-writes on spend).
+-- ---------------------------------------------------------------------------
+
+-- One row per user: their coin balance (soft currency). Created lazily on the
+-- first credit/debit; kept as a running total so reads don't sum the ledger.
+-- Keyed on user_id like golf_records / daily_streaks / tournament_trophies so
+-- award-time is a single INSERT ... ON CONFLICT(user_id) DO UPDATE. `balance`
+-- is coins and must never go negative (the worker guards spends). Cascades so a
+-- deleted account drops its wallet.
+CREATE TABLE IF NOT EXISTS user_wallet (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  balance INTEGER NOT NULL DEFAULT 0,   -- coins; never negative
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+-- Append-only audit trail for every balance change AND the idempotency guard
+-- for awards. One row per change: `delta` is signed (+earn / -spend), `reason`
+-- classifies the source ('tournament_placement', 'daily_reward', 'round_reward',
+-- 'season_tier', 'purchase', ...), `ref` is the source id that makes the award
+-- unique (tournament id / tier number / cosmetic id; NULL only for changes that
+-- carry no natural idempotency key). `balance_after` snapshots user_wallet.balance
+-- as of this row. Cascades on account delete.
+--
+-- The partial UNIQUE index below (on rows WHERE ref IS NOT NULL) is what makes
+-- idempotent earns safe: a retry of the same (user_id, reason, ref) hits the
+-- constraint and is a no-op, so the wallet is credited exactly once. Callers of
+-- idempotent earns MUST pass a ref; ref may be NULL only for one-off manual /
+-- non-repeatable changes that intentionally opt out of the guard.
+CREATE TABLE IF NOT EXISTS currency_ledger (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  delta INTEGER NOT NULL,               -- signed: +earn / -spend
+  reason TEXT NOT NULL,                 -- e.g. tournament_placement, daily_reward, season_tier, purchase
+  ref TEXT,                             -- source id (tournament id / cosmetic id / tier no); NULL opts out of the guard
+  balance_after INTEGER NOT NULL,       -- user_wallet.balance snapshot after this change
+  created_at INTEGER NOT NULL
+);
+-- Per-user history reads, newest first.
+CREATE INDEX IF NOT EXISTS idx_currency_ledger_user_time ON currency_ledger(user_id, created_at DESC);
+-- Idempotency guard for awards: at most one credit per (user_id, reason, ref).
+-- Partial (WHERE ref IS NOT NULL) so ledger rows with a NULL ref — deliberate
+-- opt-outs — aren't collapsed together. SQLite/D1 supports partial UNIQUE
+-- indexes (see idx_receipts_undelivered above).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_currency_ledger_award
+  ON currency_ledger(user_id, reason, ref) WHERE ref IS NOT NULL;
+
+-- Owned cosmetic inventory: one row per (user, cosmetic) the user has acquired.
+-- cosmetic_id references the CODE catalog (no catalog table by design), so it's
+-- a free TEXT id validated in code. UNIQUE(user_id, cosmetic_id) makes a grant
+-- idempotent (buy/award twice = one row). Cascades on account delete.
+CREATE TABLE IF NOT EXISTS user_cosmetics (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  cosmetic_id TEXT NOT NULL,            -- references the code-defined catalog
+  acquired_at INTEGER NOT NULL,
+  UNIQUE(user_id, cosmetic_id)          -- own each cosmetic at most once
+);
+CREATE INDEX IF NOT EXISTS idx_user_cosmetics_user ON user_cosmetics(user_id);
+
+-- Currently-equipped cosmetic per slot: one row per (user, slot). `slot` is a
+-- code-defined slot id ('ball', 'trail', 'frame', 'nameplate', ...) and PK
+-- (user_id, slot) enforces one equipped item per slot; equipping upserts on the
+-- PK. cosmetic_id should reference something the user owns in user_cosmetics
+-- (enforced in code, not by FK, since the catalog is code-defined). Cascades on
+-- account delete.
+CREATE TABLE IF NOT EXISTS user_equipped (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  slot TEXT NOT NULL,                   -- e.g. ball, trail, frame, nameplate
+  cosmetic_id TEXT NOT NULL,            -- the equipped cosmetic (owned in user_cosmetics)
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, slot)           -- one equipped cosmetic per slot
+);
+
+-- Per-user per-season progression for the battle-pass-style season track.
+-- season_id is the DERIVED period index (like the tournament id / daily date):
+-- the tier layout and rewards for a season are computed deterministically in
+-- code, so the DB stores only `xp` (accumulated from play this season) and
+-- `claimed`, a JSON array of tier numbers the user has already claimed. PK
+-- (user_id, season_id) so each season's progress is one upsertable row; a tier
+-- claim appends its number to `claimed` (guarded in code so a tier claims once)
+-- and separately writes the tier's coin reward as a currency_ledger row
+-- (reason='season_tier', ref=<tier no>) and/or a user_cosmetics grant.
+-- Cascades on account delete.
+CREATE TABLE IF NOT EXISTS season_progress (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  season_id INTEGER NOT NULL,           -- derived period index for the season
+  xp INTEGER NOT NULL DEFAULT 0,        -- XP accumulated this season
+  claimed TEXT NOT NULL DEFAULT '[]',   -- JSON array of claimed tier numbers
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, season_id)      -- one progress row per user per season
+);

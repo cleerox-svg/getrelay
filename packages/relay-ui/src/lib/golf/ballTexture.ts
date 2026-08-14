@@ -90,11 +90,19 @@ export function makeDimpleNormalMap(size = 256): THREE.CanvasTexture {
 // White ball material with a slight sheen (low roughness) and the dimple normal
 // map applied at a modest scale. Caller owns disposal of BOTH the returned
 // material and the passed-in normal map.
-export function makeBallMaterial(normalMap: THREE.Texture): THREE.MeshStandardMaterial {
+//
+// `ball` is the equipped ball cosmetic (GolfCosmetics.ball) — a plain
+// {color,metalness,roughness}. When omitted (default ball_classic) the stock
+// white/low-metal look is unchanged; any provided field overrides it. `color`
+// is a CSS hex string, which THREE.Color accepts directly.
+export function makeBallMaterial(
+  normalMap: THREE.Texture,
+  ball?: { color?: string; metalness?: number; roughness?: number },
+): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: 0.3,
-    metalness: 0.02,
+    color: ball?.color ?? 0xffffff,
+    roughness: ball?.roughness ?? 0.3,
+    metalness: ball?.metalness ?? 0.02,
     normalMap,
     normalScale: new THREE.Vector2(0.55, 0.55),
   });

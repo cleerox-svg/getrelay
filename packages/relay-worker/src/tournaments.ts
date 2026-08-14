@@ -1,4 +1,6 @@
 import type { Env } from './env';
+import { addXp, awardCoins } from './economy';
+import { pushToUser } from './push';
 
 // ---- Rapid Tournaments -----------------------------------------------------
 //
@@ -96,6 +98,34 @@ export function trophyAward(rank: number, _fieldSize: number): number {
   return 5;
 }
 
+// Coins awarded for a finishing rank, mirroring trophyAward's tiers but scaled
+// for the economy: 1st = 500, 2-3 = 300, 4-10 = 150, 11-50 = 50, else = 20.
+// `fieldSize` is accepted for future field-relative tuning (rank-absolute now).
+export function coinAward(rank: number, _fieldSize: number): number {
+  if (rank <= 1) return 500;
+  if (rank <= 3) return 300;
+  if (rank <= 10) return 150;
+  if (rank <= 50) return 50;
+  return 20;
+}
+
+// English ordinal for a rank ("1st", "2nd", "3rd", "11th", ...). Used in the
+// placement push copy.
+export function ordinal(n: number): string {
+  const rem100 = n % 100;
+  if (rem100 >= 11 && rem100 <= 13) return `${n}th`;
+  switch (n % 10) {
+    case 1:
+      return `${n}st`;
+    case 2:
+      return `${n}nd`;
+    case 3:
+      return `${n}rd`;
+    default:
+      return `${n}th`;
+  }
+}
+
 interface EntryRow {
   user_id: string;
   score: number;
@@ -164,6 +194,29 @@ async function settleTournament(env: Env, tournamentId: number, now: number): Pr
     // Only bump the cumulative tally when THIS pass actually created the
     // placement — otherwise a retry would double-count trophies.
     if ((placed.meta?.changes ?? 0) < 1) continue;
+
+    // Economy earn + placement push. This seam runs EXACTLY once per finisher
+    // (guarded by the placement INSERT above), and the awards are additionally
+    // ref-guarded by (user, reason, tournamentId) — double safety. The WHOLE
+    // block is wrapped: an award or push failure must NOT abort settlement,
+    // otherwise `settled` never flips and the retry's INSERT OR IGNORE skips
+    // this finisher forever — losing BOTH their coins and their trophy tally.
+    // So the trophy insert + settled=1 below always complete; a failed award is
+    // ref-guarded and will re-credit on a later manual replay if needed.
+    const coins = coinAward(rank, fieldSize);
+    try {
+      await awardCoins(env, e.user_id, coins, 'tournament_placement', String(tournamentId));
+      await addXp(env, e.user_id, coins, 'tournament_placement', String(tournamentId));
+      // Fans out to Web Push + FCM (no-ops if unconfigured).
+      await pushToUser(env, e.user_id, {
+        title: 'Rapid Tournament',
+        body: `You placed ${ordinal(rank)} — +${coins} coins`,
+        tag: `tourney-${tournamentId}`,
+        url: '/games/golf/tournaments',
+      });
+    } catch (err) {
+      console.error(`tournament ${tournamentId} placement award/push failed for ${e.user_id}:`, err);
+    }
 
     await env.DB.prepare(
       `INSERT INTO tournament_trophies

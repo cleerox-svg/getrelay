@@ -1837,6 +1837,23 @@ html.beta .composer-capsule {
   font-size: 12.5px;
   color: rgba(255, 255, 255, 0.55);
 }
+/* Stake line — coins on the line while the match is live (pending / in-progress
+   / waiting). Sits on the dark broadcast surface, so it's a warm gold accent. */
+.challenge-stake {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  padding: 8px 11px;
+  border-radius: 11px;
+  color: #ffe08a;
+  background: rgba(255, 202, 74, 0.12);
+  border: 1px solid rgba(255, 202, 74, 0.22);
+}
 .challenge-outcome {
   margin-top: 13px;
   text-align: center;
@@ -2508,4 +2525,421 @@ html.beta .composer-capsule {
 .feed-chip.is-tie {
   background: color-mix(in srgb, var(--text-dim) 16%, transparent);
   color: var(--text-dim);
+}
+
+/* ============================================================
+   Golf economy — coin wallet, cosmetics shop, season track.
+   Scoped under .golf-hub so it inherits the games-only tokens
+   (--golf-accent / --golf-gold) and never touches messenger UI.
+   The immersive 3D game screens don't use any of these classes.
+   ============================================================ */
+
+/* ---- coin balance pill ---- */
+.golf-hub .golf-coins {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 800;
+  color: var(--text);
+  white-space: nowrap;
+}
+.golf-hub .golf-coins-sm {
+  font-size: 13px;
+}
+.golf-hub .golf-coins-md {
+  font-size: 16px;
+}
+.golf-hub .golf-coin {
+  color: var(--golf-gold);
+  font-size: 1.05em;
+  line-height: 1;
+}
+
+/* ---- hub header identity chip ---- */
+.golf-idbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  border: 1px solid var(--golf-line);
+  background: var(--golf-surface);
+}
+.golf-idbar-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.golf-idbar-name b {
+  display: block;
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.golf-idbar-coins {
+  border: 1px solid var(--golf-line);
+  background: color-mix(in srgb, var(--golf-gold) 10%, var(--card-bg));
+  border-radius: 999px;
+  padding: 5px 11px;
+  cursor: pointer;
+}
+.golf-idbar-coins:focus-visible {
+  outline: 2px solid var(--golf-accent-2);
+  outline-offset: 2px;
+}
+
+/* profile coin line */
+.golf-phead .g-who .g-coins {
+  margin-top: 3px;
+}
+
+/* ---- shop ---- */
+.golf-shop,
+.golf-season,
+.golf-wallet {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.golf-shop-bar,
+.golf-season-head,
+.golf-wallet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--golf-line);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--golf-accent) 8%, var(--card-bg)),
+    var(--card-bg)
+  );
+}
+.golf-shop-bar b,
+.golf-season-head b {
+  font-size: 15px;
+}
+.golf-shop-sub,
+.golf-season-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+.golf-wallet-head > span:first-child {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+.golf-shop-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.golf-shop-grouph {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.golf-shop-grouph b {
+  font-size: 14px;
+}
+.golf-shop-grouph span {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.golf-cos-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+@media (max-width: 380px) {
+  .golf-cos-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.golf-cos-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 10px 8px;
+  border-radius: 12px;
+  border: 1px solid var(--separator);
+  background: var(--card-bg);
+  text-align: center;
+}
+.golf-cos-card.rar-rare {
+  border-color: color-mix(in srgb, #3b82f6 55%, var(--separator));
+}
+.golf-cos-card.rar-epic {
+  border-color: color-mix(in srgb, #a855f7 60%, var(--separator));
+}
+.golf-cos-card.is-equipped {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--golf-accent) 70%, transparent);
+}
+
+.golf-cos-swatch {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  border-radius: 999px;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.golf-cos-none {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  background: var(--bubble-them);
+  border: 1px dashed var(--separator);
+}
+
+.golf-cos-name {
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+.golf-cos-rar {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+.golf-cos-card.rar-rare .golf-cos-rar {
+  color: #3b82f6;
+}
+.golf-cos-card.rar-epic .golf-cos-rar {
+  color: #a855f7;
+}
+
+.golf-cos-buy,
+.golf-cos-equip {
+  margin-top: 2px;
+  width: 100%;
+  border: 0;
+  border-radius: 9px;
+  padding: 7px 8px;
+  font-size: 12.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.golf-cos-buy {
+  background: linear-gradient(180deg, var(--golf-accent-2), var(--golf-accent));
+  color: #fff;
+}
+.golf-cos-buy:disabled {
+  background: var(--bubble-them);
+  color: var(--text-dim);
+  cursor: default;
+}
+.golf-cos-equip {
+  background: color-mix(in srgb, var(--golf-accent) 12%, var(--card-bg));
+  border: 1px solid color-mix(in srgb, var(--golf-accent) 45%, transparent);
+  color: var(--golf-accent-2);
+}
+.golf-cos-equip:disabled {
+  background: color-mix(in srgb, var(--golf-accent) 20%, var(--card-bg));
+  color: var(--golf-accent);
+  cursor: default;
+}
+.golf-cos-buy:focus-visible,
+.golf-cos-equip:focus-visible,
+.golf-tier-claim:focus-visible {
+  outline: 2px solid var(--golf-accent-2);
+  outline-offset: 2px;
+}
+
+.golf-cos-msg {
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.golf-cos-msg.ok {
+  color: var(--golf-accent-2);
+}
+.golf-cos-msg.err {
+  color: var(--golf-flag);
+}
+.golf-cos-msg.dim {
+  color: var(--text-dim);
+}
+
+/* ---- season ---- */
+.golf-xp {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.golf-xp-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.golf-xpbar {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--bubble-them);
+  overflow: hidden;
+}
+.golf-xpbar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--golf-accent), var(--golf-accent-2));
+  transition: width 0.3s ease;
+}
+.golf-season-msg {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--golf-accent-2);
+  text-align: center;
+}
+
+.golf-tiers {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.golf-tier {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--separator);
+  background: var(--card-bg);
+}
+.golf-tier.is-claimable {
+  border-color: color-mix(in srgb, var(--golf-accent) 55%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--golf-accent) 10%, var(--card-bg)),
+    var(--card-bg)
+  );
+}
+.golf-tier.is-locked {
+  opacity: 0.72;
+}
+.golf-tier-badge {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 13px;
+  background: var(--bubble-them);
+  color: var(--text);
+}
+.golf-tier.is-claimed .golf-tier-badge {
+  background: var(--golf-accent);
+  color: #fff;
+}
+.golf-tier-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.golf-tier-body b {
+  font-size: 13.5px;
+}
+.golf-tier-body span {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.golf-reward {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 700;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--golf-gold) 12%, var(--card-bg));
+  color: var(--text);
+  white-space: nowrap;
+}
+.golf-tier-claim {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 9px;
+  padding: 7px 14px;
+  font-size: 12.5px;
+  font-weight: 800;
+  color: #fff;
+  background: linear-gradient(180deg, var(--golf-accent-2), var(--golf-accent));
+  cursor: pointer;
+}
+.golf-tier-state {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.golf-tier-state.claimed {
+  color: var(--golf-accent-2);
+}
+
+/* ---- wallet ledger ---- */
+.golf-ledger {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--separator);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--card-bg);
+}
+.golf-ledger-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--separator);
+}
+.golf-ledger-row:last-child {
+  border-bottom: 0;
+}
+.golf-ledger-what {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.golf-ledger-what b {
+  font-size: 13px;
+}
+.golf-ledger-what span {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.golf-ledger-delta {
+  font-weight: 800;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.golf-ledger-delta.credit {
+  color: var(--golf-accent-2);
+}
+.golf-ledger-delta.debit {
+  color: var(--golf-flag);
 }
