@@ -85,6 +85,10 @@ Golf works but sprawled (`CourseGL.tsx` is 2630 lines). Baseball does not repeat
 1. **File-size caps, asserted by `budget.test.ts`**: 500 lines for any `lib/baseball`
    module, 700 for any component, 900 for `StadiumGL.tsx`. At the cap the fix is
    **extraction, not a raised cap**; raising one needs a comment saying why.
+   When this is extracted into the shared `makeBudgetSuite` helper it must take
+   **per-directory caps, not one global number** — golf's files are 1,000–2,600
+   lines today and will ratchet down over time, so a single shared cap would
+   either be useless to baseball or unmeetable for golf.
 2. **`StadiumGL.tsx` is a composer, not a monolith** — it owns the renderer, camera
    modes and the loop, nothing else. The scene is built by small single-purpose
    `stadium/{bowl,turf,dirt,roof,crowd,lights,skyline}.ts` modules, each a pure
@@ -128,6 +132,27 @@ second scene is a permanent parity tax.
 > 45 holes actually ship) and is being rewritten, so every line number in it will
 > shift. Golf is also mid-audit, so its source line numbers are moving too.
 
+## Renderer patterns NOT to inherit
+Measured in the golf audit (Aug 2026). All three are cheap to get right at
+scene-build time and expensive to retrofit, so get them right the first time.
+
+1. **Build each procedural texture ONCE and `.clone()` per repeat.** `CourseGL`
+   generates six byte-identical turf normal maps — ~31.7 ms and 256 KB each,
+   ~190 ms and 1.5 MB wasted per mount — because they differ only in `.repeat`,
+   which is per-texture while `clone()` shares the source image. And it remounts
+   every hole. **`PuttGL` does this correctly: copy `PuttGL`, not `CourseGL`.**
+   The stadium has more repeated surfaces than a golf hole (turf, dirt, warning
+   track, seating decks, concourse), so this compounds harder here.
+2. **`shadow.autoUpdate = false` for the static scene.** The bowl, stands, roof
+   and crowd never move. Re-rendering their shadow map every frame is pure waste.
+   Flip it back on only if something in the shadow set actually animates.
+3. **Gate any per-`pointermove` prediction behind a quantised input signature.**
+   `CourseGL` runs four full shot sims on every `pointermove` — ~2 ms desktop but
+   **8–16 ms on a mid-range phone**, i.e. a dropped frame per move event.
+   `RangeGL`'s identical feature costs 0.55 ms because it only recomputes when a
+   quantised bucket changes. **Take `RangeGL`'s pattern.** This applies directly
+   to the pitch-aiming trajectory preview and to the batting reticle.
+
 ## GPU budget
 Shadow maps start at **1024²** and are never raised without an on-device Android test.
 GOLF.md records a 2048² map crashing the WebView GPU process on real hardware (black
@@ -160,6 +185,15 @@ different legal posture entirely. `ip.test.ts` is the mechanical guard.
 The duel is **3 innings, 3 outs**: no stolen bases, no errors, no substitutions, no
 pitching changes, no defensive shifts. Fielding is a landing-point + hang-time lookup
 modulated by one defender rating. If it wants to grow, that is a later milestone.
+
+## Owed to the golf session when `DerbyGame` exists
+The screenshot harness is being unified (one driver, per-game scene registries)
+and golf is shaping the **fixture seam** — the thing that stands a HUD up without
+the app shell. It will take both games' shapes rather than golf's-plus-an-adapter,
+but only if it knows ours. So when `DerbyGame.tsx` first exists, **report its
+external dependency list** — `api`, audio, the store, and anything else it
+reaches for — before the harness seam is finalised. A HUD that can only mount
+inside the real app is a HUD the visual gate cannot photograph.
 
 ## Gate visual changes
 After any change to the scene, its materials, lighting or geometry: run the
