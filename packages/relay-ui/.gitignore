@@ -10,3 +10,15 @@ assets
 
 # Golf visual-QA screenshot output (headless harness)
 .golf-shots/
+
+# Baseball visual-QA screenshot output (headless harness). Not yet generated —
+# added ahead of the harness so the first run cannot accidentally commit PNGs.
+.baseball-shots/
+
+# Agent scratch benches. Physics work needs throwaway harnesses (coefficient
+# sweeps, mutation drivers, parameterised integrator clones) and they must live
+# OUTSIDE src/: a review once left one under src/lib/baseball/ that broke
+# `pnpm build` with a type error, while `pnpm typecheck` reported clean because
+# turbo served a cache hit. Ignored here so a forgotten bench is noise rather
+# than a commit — but delete them anyway when the work is done.
+scratch/
