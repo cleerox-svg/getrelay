@@ -33,6 +33,7 @@ import {
   disableNativePush,
   enableNativePush,
   isNativePush,
+  sendNativeTestPush,
   type NativePushState,
 } from '../lib/native-push';
 import { useStore } from '../lib/store';
@@ -100,10 +101,15 @@ export function Profile() {
     setTestResults(null);
     setPushError(null);
     try {
-      const results = await sendTestPush();
+      // Native installs have no Web Push subscription at all, so the web test
+      // would only ever answer `no_subscriptions`. Test the path this device
+      // actually uses.
+      const results = native ? await sendNativeTestPush() : await sendTestPush();
       setTestResults(results);
     } catch (err) {
-      setPushError(err instanceof Error ? err.message : 'failed');
+      const msg = err instanceof Error ? err.message : 'failed';
+      if (native) setNativeError(msg);
+      else setPushError(msg);
     } finally {
       setTesting(false);
     }
@@ -364,6 +370,46 @@ export function Profile() {
                 {nativeError ? (
                   <div className="text-xs mt-2" style={{ color: 'var(--ping)' }}>
                     {nativeError}
+                  </div>
+                ) : null}
+                {nativePush === 'subscribed' ? (
+                  <div className="mt-3">
+                    <button
+                      onClick={runPushTest}
+                      disabled={testing}
+                      className="text-sm font-medium disabled:opacity-50"
+                      style={{ color: 'var(--accent)' }}
+                    >
+                      {testing ? 'Sending…' : 'Send test notification'}
+                    </button>
+                    {testResults ? (
+                      <div className="mt-2 text-[12px]" style={{ color: 'var(--text-dim)' }}>
+                        {testResults.length === 0 ? (
+                          <div>No devices registered for this account.</div>
+                        ) : (
+                          testResults.map((r, i) => (
+                            <div key={i} style={{ marginTop: 4 }}>
+                              <span style={{ color: r.ok ? 'var(--online)' : 'var(--ping)' }}>
+                                {r.ok ? '✓' : '✗'}
+                              </span>{' '}
+                              <code>{r.endpointHost}</code> · HTTP {r.status}
+                              {r.body ? (
+                                <div
+                                  style={{
+                                    marginLeft: 16,
+                                    marginTop: 2,
+                                    whiteSpace: 'pre-wrap',
+                                    wordBreak: 'break-word',
+                                  }}
+                                >
+                                  {r.body}
+                                </div>
+                              ) : null}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </>

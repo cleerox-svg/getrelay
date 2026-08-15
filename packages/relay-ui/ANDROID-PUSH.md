@@ -1,5 +1,10 @@
 # Native Android push (Firebase Cloud Messaging)
 
+> iOS uses the **same** FCM sender, credential and `native_push_tokens` table —
+> Firebase relays to APNs. Its extra setup (APNs auth key, the patched
+> AppDelegate that turns the APNs token into an FCM one) is in
+> [IOS-PUSH.md](./IOS-PUSH.md).
+
 The Android app is a Capacitor WebView, which doesn't support **Web Push**
 (no `PushManager`). So on the native build, notifications go through
 **Firebase Cloud Messaging (FCM)** instead:

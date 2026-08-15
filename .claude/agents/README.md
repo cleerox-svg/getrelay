@@ -19,6 +19,7 @@ small.
 | `frontend-pwa` | React PWA: routes, components, store, api client, theming, service worker |
 | `golf` | In-app golf game: `lib/golf/*` sim/data + `components/golf/*` scenes/HUD + GOLF.md |
 | `android` | Capacitor native shell, FCM wiring, Gradle signing, Android CI |
+| `ios` | Capacitor iOS shell, FCM-via-APNs wiring, ASC cloud signing, iOS CI |
 | `data-migrations` | D1 `schema.sql` + numbered migrations + lint/test tooling |
 
 ## Cross-cutting agents (invoked around feature work)
@@ -41,8 +42,10 @@ small.
   its `*Routes()` sub-app (never bloat `index.ts`).
 - Sports or push notification payloads → **sports** and **push** coordinate on
   one shared payload shape.
-- Native (Capacitor/FCM) behavior → **android**; the web UI it wraps →
-  **frontend-pwa** (branch on `lib/platform.ts`).
+- Native (Capacitor/FCM) behavior → **android** or **ios** by shell; the web UI
+  they both wrap → **frontend-pwa** (branch on `lib/platform.ts`). A change to
+  the shared `capacitor.config.ts` or to `lib/native-push.ts` affects BOTH
+  shells — route it to one and have the other review, don't split it.
 - Golf game (`src/**/golf/**`, GOLF.md) → **golf**, not frontend-pwa. Any change
   to a golf 3D scene, its materials, lighting or geometry → **golf** implements,
   then **golf-visual-qa** gates the RENDER (before/after screenshots) before the

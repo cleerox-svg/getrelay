@@ -1,5 +1,9 @@
 # Android build & release
 
+> The iOS counterpart is [IOS.md](./IOS.md). Both shells wrap the same PWA and
+> follow the same rule: cut a native build only when something ships *inside*
+> the app.
+
 This is the user-facing checklist for shipping Relay to Google Play. All
 build steps run in GitHub Actions — no local Android Studio or Mac
 required.
