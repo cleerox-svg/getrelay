@@ -64,6 +64,19 @@ export interface AirConditions {
   rh: number;
 }
 
+/**
+ * ⚠ AIR IS A PARAMETER OF THE CALL, NOT A FIELD OF THE THROW — and deliberately
+ * so. `simulatePitch` plays in GAME_AIR; `measureBreak` measures in
+ * BREAK_REF_AIR, because a league-wide published break table cannot be quoted in
+ * one park's weather. Those two defaults are DIFFERENT and both are correct.
+ *
+ * An earlier cut carried the air on `PitchThrow` as an optional field, so the
+ * same object handed to the two functions silently meant two different things —
+ * one interface, two defaults, and a 0.6 in discrepancy on a four-seamer with
+ * nothing on screen to say why. Making it an argument puts the two defaults side
+ * by side in the two signatures where a reader will actually compare them.
+ */
+
 /** The neutral game-day air (tuning.ts). Parks override it in stage 3. */
 export const GAME_AIR: AirConditions = { elevFt: GAME_ELEV_FT, tempF: GAME_TEMP_F, rh: GAME_RH };
 
@@ -83,7 +96,11 @@ export const BREAK_REF_AIR: AirConditions = {
 export const aeroScaleFor = (air: AirConditions): number =>
   aeroScale(airDensity(air.elevFt, air.tempF, air.rh));
 
-/** What a pitcher throws. Everything optional has a published default. */
+/**
+ * What a pitcher throws. Everything optional has a published default.
+ *
+ * It does NOT carry the air — see the note above `GAME_AIR`.
+ */
 export interface PitchThrow {
   pitch: Pitch;
   hand: Handedness;
@@ -93,8 +110,6 @@ export interface PitchThrow {
   veloMph?: number;
   /** Spin-rate override, rpm — likewise. Break scales with it, as it should. */
   spinRpm?: number;
-  /** Air. Defaults to GAME_AIR. */
-  air?: AirConditions;
 }
 
 /**
@@ -236,7 +251,6 @@ function solveRelease(
     if (!hit) break;
     const eh = hit.state.p.z - target.h;
     const ex = hit.state.p.y - target.x;
-    residual = Math.hypot(eh, ex);
     elev -= eh / flightX;
     azim -= ex / flightX;
   }
@@ -246,6 +260,18 @@ function solveRelease(
   // angles would be a quiet inconsistency of exactly the size of the residual.
   const v0 = velocityFrom(speedFps, elev, azim);
   omega = spinVector(pitch, th.hand, vScale(v0, 1 / speedFps));
+
+  // ⚠ AND MEASURE THE RESIDUAL OF *THAT* PITCH, with one extra flight, rather
+  // than reusing the last iterate's error. The loop's error is computed BEFORE
+  // its own angle update, so reporting it would describe the previous iterate —
+  // a number that is conservative (it is larger) but is not about the trajectory
+  // this function returns, which is exactly the sort of half-truth a residual
+  // exists to rule out. One more ~50-step integration out of nine, once per
+  // pitch, buys a number that means what it says.
+  const check = flyToX({ p: p0, v: v0 }, omega, K, worldXAt(0));
+  if (check) {
+    residual = Math.hypot(check.state.p.z - target.h, check.state.p.y - target.x);
+  }
   return { release: { p: p0, v: v0 }, omega, residual };
 }
 
@@ -254,11 +280,15 @@ function solveRelease(
 // ---------------------------------------------------------------------------
 
 /**
- * Simulate one pitch to the plate. Pure: same arguments in, byte-identical
- * numbers out, whatever the frame rate, the tempo or the machine.
+ * Simulate one pitch to the plate, in the air the GAME is played in. Pure: same
+ * arguments in, byte-identical numbers out, whatever the frame rate, the tempo
+ * or the machine.
+ *
+ * `air` defaults to GAME_AIR — the neutral park. `measureBreak` below defaults
+ * to BREAK_REF_AIR instead, and that difference is deliberate: see the note
+ * above `GAME_AIR`.
  */
-export function simulatePitch(th: PitchThrow): PitchResult {
-  const air = th.air ?? GAME_AIR;
+export function simulatePitch(th: PitchThrow, air: AirConditions = GAME_AIR): PitchResult {
   const K = aeroScaleFor(air);
   const { release, omega, residual } = solveRelease(th, K);
 
@@ -360,14 +390,20 @@ export function sampleTrack(track: PitchTrack, t: number): { d: number; x: numbe
  * ⚠ `segmentFt` is the game's single fitted number. It is fitted ONCE, globally,
  * against all sixteen published targets at once (see pitchSim.test.ts's sweep).
  * A per-pitch segment would be a per-pitch fudge factor.
+ *
+ * ⚠ `air` defaults to BREAK_REF_AIR — ISA sea level — and NOT to the game-day
+ * air `simulatePitch` uses. Published break tables are league-wide averages, so
+ * quoting one in a particular park's weather is a category error worth 0.6 in on
+ * a four-seamer. Passing a park's air here is legitimate (the altitude test
+ * does), but it is then a measurement of that park, not of the published table.
  */
 export function measureBreak(
   th: PitchThrow,
   segmentFt: number = BREAK_SEGMENT_FT,
+  air: AirConditions = BREAK_REF_AIR,
 ): { ivbIn: number; hbIn: number; hbArmSideIn: number } {
-  const air = th.air ?? BREAK_REF_AIR;
   const K = aeroScaleFor(air);
-  const { release, omega } = solveRelease({ ...th, air }, K);
+  const { release, omega } = solveRelease(th, K);
 
   // A segment at or beyond the release distance starts AT the release point —
   // `crossingFraction` is half-open at 0 and would never report a crossing on

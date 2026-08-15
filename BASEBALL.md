@@ -176,31 +176,85 @@ The result:
   test, not argued in prose. Over a common segment
   `Δ ≈ ½·a·t² = ½·(K·C_L·|v|²)·(L/|v|)² = ½·K·C_L·L²`, so `|v|` cancels: the
   **ratio** of any two pitches' break is just the ratio of their `C_L`, at every
-  L. Measured true to 3 %, and identically at L = 40 and L = 50. The segment
+  L. (With exponential drag the cancellation is *exact*, not leading-order —
+  `Δ = K·C_L·[(e^{kL} − 1)/k² − L/k]`, in which `v₀` does not appear at all,
+  because `|v|` enters once through `a_M ∝ |v|²` and twice through `dt = dx/|v|`.)
+  The model tracks the law to **4.3 % at L = 40 and 2.9 % at L = 50**, and that
+  residual is *not* independent of L: it falls monotonically from 7.1 % at
+  L = 20 to 2.4 % at L = 54, because the prediction evaluates `C_L` at the
+  *release* spin parameter while the real `S` climbs as `|v|` decays — so a short
+  segment measures only the last and slowest feet, where the true `C_L` has
+  drifted furthest from the release value. What *is*
+  independent of L is the thing the argument needs: no pitch's break **ratio**
+  moves by more than **0.011** between a 40 ft and a 50 ft segment. The segment
   sets the *scale* of all eight together and can never change their relative
-  pattern.
+  pattern. Both figures are asserted; an earlier draft claimed "~2 %, and
+  identically at 40 and 50 ft" on the strength of a loop that only ran those two
+  lengths, and adding L = 30 would have failed its own bound.
+- **Nor can the *shape* of `C_L` rescue it** — which has to be argued, not
+  asserted, precisely because the identity above says break ratios *are* `C_L`
+  ratios, and `C_L`'s citation is flagged unverified. (A merely proportional
+  `C_L ∝ S` would move the slider's published ÷ C_L from 0.61 to 0.81 and the
+  splitter's from 0.74 to 1.05, so the loophole is real.) What closes it uses no
+  `C_L` at all, only that `C_L` is **monotone** in `S` — asserted over 501
+  samples in `airPhysics.test.ts`, and a physical requirement rather than a
+  fitting choice. The published table contains a **spin/break inversion**: the
+  cutter has the *higher* spin parameter (S = 0.175 against the changeup's 0.152)
+  and **half** the published break ratio (0.444 against 0.899). Over a common
+  segment `Δ ∝ C_L`, so a monotone `C_L` makes that pair impossible for *any*
+  fit. The curveball against the four-seamer is a second, milder instance
+  (S 0.251 vs 0.197, break 0.768 vs 1.000). `pitchSim.test.ts` asserts both.
 - **So the residual is in the arsenal's spin data or in unmodelled physics.**
   Published break ÷ C_L, normalised to the four-seamer: ff 1.00, si 1.04,
   ch 1.03 — then st 0.84, fs 0.74, cu 0.67, sl 0.61, **fc 0.47**. A cutter at
-  2400 rpm / 75 % efficiency carries *more* effective spin than a four-seamer at
-  2300 / 93 %, at a lower speed and so a longer flight, yet its published break
-  is 44 % of the four-seamer's. No `C_L`, no segment and no air can produce
-  that. Either its spin efficiency is really ~0.24, or seam-shifted wake — which
-  this spin-only model does not have — is cancelling much of its Magnus break.
-  The residual signs match the documented SSW directions: the sinker and changeup
-  run *more* arm-side than their axis predicts, the cutter breaks *less*.
-- Adopted 50 ft, not the RMS-optimal 44 ft, because 50 is nominated from
-  **outside** this data (the tracking system fits every pitch's trajectory
-  parameters at a plane 50 ft from the plate — that the public movement columns
-  use that segment is an inference we have **not** verified) and confirmed from
-  inside it: the three rows whose own tilt and break columns agree with each
-  other independently require 49.8 / 51.1 / 50.8 ft. 44 ft is fitted to rows
-  shown to be self-contradictory and makes the best-measured pitch in baseball
-  worse (four-seam IVB residual +0.3 in at 50 ft, −3.3 in at 44 ft).
+  2400 rpm / 75 % efficiency carries *comparable* effective spin to a four-seamer
+  at 2300 / 93 % — 1800 rpm against 2139, so slightly **less**, which its spin
+  parameter (0.175 vs 0.197) and its `C_L` (0.94× the four-seamer's) both agree
+  with — at a lower speed and so a longer flight, yet its published break is 44 %
+  of the four-seamer's. A 0.94× coefficient cannot make a 0.44× break: no `C_L`,
+  no segment and no air can produce that. Either its spin efficiency is really
+  ~0.24 (bisecting the model to its own published magnitude gives 0.2418), or
+  seam-shifted wake — which this spin-only model does not have — is cancelling
+  much of its Magnus break.
+- **A separate, systematic finding worth more than the SSW story it replaced.**
+  *All eight* arm-side horizontal residuals are negative: ff −0.37, si −1.94,
+  fc −4.52, sl −5.17, st −3.77, cu −0.09, ch −3.91, fs −1.68 in, mean **−2.7 in**.
+  A uniform sign across the whole arsenal cannot be evidence about *which*
+  pitches seam-shifted wake should affect — the slider, sweeper and splitter
+  share it with no SSW story to tell. It points instead at a model-wide or
+  tilt-column bias, is unexplained, and is printed under the dynamics table so it
+  stays visible. An earlier draft cited these signs as SSW corroboration; that
+  claim was non-diagnostic and is withdrawn.
+- Adopted 50 ft, not the RMS-optimal 44 ft, for exactly two reasons. **(1)** It is
+  nominated from **outside** this data: the tracking system fits every pitch's
+  trajectory parameters at a plane 50 ft from the plate — that the public
+  movement columns use that segment is an inference we have **not** verified.
+  **(2)** The single best-measured row independently requires it: the four-seamer,
+  the only row whose tilt and break columns agree to better than 5° (1.1°), needs
+  **49.8 ft** on its own. The sinker (51.1) and changeup (50.8) land there too,
+  but they are **not** independent confirmations and were previously miscounted
+  as such: the bisection matches break *magnitude* only, so "requires ~50 ft" and
+  "published ÷ C_L ≈ 1" are the same statement, and that ratio is defined
+  relative to the four-seamer. One constraint plus two consistency checks. (The
+  changeup is in any case the second-*worst* row in the table by tilt/break
+  agreement, 22.5° out, which is what `pitches.test.ts` says about it.) 44 ft is
+  then rejected on its own terms: it is fitted to rows the inversion above proves
+  mutually inconsistent, and it makes the best-measured pitch in baseball worse
+  (four-seam IVB residual +0.3 in at 50 ft, −3.3 in at 44 ft).
+- **Open question, held to the same standard as the length: where the segment
+  *ends*.** It ends at `d = 0`, the plate's rear point, because that is the
+  physics frame's origin — but the front edge is 1.42 ft nearer, and `C_D`'s
+  calibration note already flags the identical ambiguity as one of its two
+  biases. A segment running from the same 50 ft plane to the *front* edge measures
+  15.39 in on the reference four-seamer against 16.31 in: **5.6 % / 0.92 in less**.
+  (Sliding a whole 50 ft segment earlier so that it *ends* at the front edge costs
+  only 0.13 %, so this is a question about the segment's length, not its
+  placement.) Unverifiable from here, so it is flagged, not split.
 
 `C_D` and `C_L` were **not** touched, and no per-pitch correction was added. The
-five resisting rows are pinned to the **model's own** numbers as golden values,
-with their published values and residuals recorded beside them.
+**seven** resisting rows are pinned to the **model's own** numbers as golden
+values, with their published values and residuals recorded beside them; the
+four-seamer is the one row asserted against published numbers anywhere.
 
 **The one derived aero scale.** Both aero forces have the form
 `F = ½ρ·C·A·|v|·v`. Dividing by `m` puts the same group in front of both:
@@ -269,6 +323,7 @@ the render layer; contact resolves at the true physical state.
 | `packages/relay-ui/src/lib/baseball/pitchSim.ts` | Release-aim solve, the flight on stage 1's RK4, the sampled `PitchTrack` at TRUE physical time, the analytic plate crossing, and `measureBreak` on the pinned convention. Does not import `PITCH_TEMPO`, and a test reads the file to keep it that way |
 | `packages/relay-ui/src/lib/baseball/pitchSim.test.ts` | The pitching bench: prints the segment sweep, the ratio-structure table, the per-pitch dynamics table, the pure-gyro and track tables; asserts the plate-speed loss, the aim solve, the ordering, determinism and the golden break values |
 | `packages/relay-ui/src/lib/baseball/determinism.test.ts` | Source-reading guard: no `Math.random`, `Date.now`, `performance.` or `new Date` in any baseball source |
+| `packages/relay-ui/src/lib/baseball/budget.test.ts` | Anti-bloat guard: 500-line cap per shipping `lib/baseball` module (tests exempt), 700 per component, 900 for `StadiumGL.tsx`; no `three` in the sim; no barrel `index.ts` |
 | `packages/relay-ui/src/lib/baseball/ip.test.ts` | Source-reading guard: no club nickname, real park name or `mlbstatic` host in the shipped game |
 
 ## Roadmap
@@ -296,8 +351,9 @@ the render layer; contact resolves at the true physical state.
   `pitches.ts` (the eight-row arsenal, the tilt clock → spin axis with the gyro
   fraction carried, `validatePitches`), `pitchSim.ts` (aim solve to < 1e-6 ft,
   the `PitchTrack` at true physical time, the analytic plate crossing,
-  `measureBreak`). 24 new tests over three files; `FIXED_MS`/`FIXED_DT` moved to
-  `tuning.ts` and re-exported by `airPhysics.ts`.
+  `measureBreak`). 26 new tests over four files; `FIXED_MS`/`FIXED_DT` moved to
+  `tuning.ts` and re-exported by `airPhysics.ts`; `budget.test.ts` added with the
+  anti-bloat caps, four modules in rather than two thousand lines late.
   **`C_L` was NOT recalibrated** — see the segment sweep above. The one fitted
   number is `BREAK_SEGMENT_FT`, and the honest result is that no segment
   reconciles the eight; the finding is reported rather than absorbed into a
@@ -306,10 +362,22 @@ the render layer; contact resolves at the true physical state.
   against published with nothing tuned to it.
   **Seven mutations were watched to fail** and reverted: mirrored tilt clock (5
   tests), dropped `activeSpin` factor (5), slider tilt shifted to a sweeper's
-  (1 — only the golden pin catches it, which is what golden pins are for),
-  dropped gyro component (3), plate crossing snapped to a substep instead of
-  interpolated (4), stage 1's gyro projection defeated (7, two of them stage 1's
-  own), and `BREAK_SEGMENT_FT` moved to the RMS optimum (4).
+  (1 — only the golden pin caught it, which is what golden pins are for; a
+  break-*direction* test now catches it on merit, 14.8° apart collapsing to
+  0.9°), dropped gyro component (3), plate crossing snapped to a substep instead
+  of interpolated (4), stage 1's gyro projection defeated (7, two of them stage
+  1's own), and `BREAK_SEGMENT_FT` moved to the RMS optimum (4).
+  **An adversarial review then re-derived the physics independently and found
+  the conclusions sound but several claims overstated.** Corrected in place, all
+  with numbers: the cutter carries *comparable and slightly lower* effective spin
+  than a four-seamer (1800 vs 2139 rpm), not more; the ratio law holds to 4.3 %
+  at L = 40 rather than 2 %, and is L-*dependent*; 50 ft rests on one external
+  nomination plus one row, not "three independent constraints"; the uniform
+  arm-side residual is a systematic deficit, not seam-shifted-wake evidence; the
+  changeup and sinker are now golden-pinned (seven rows, not five); and `C_L`'s
+  shape is ruled out by a monotonicity inversion in the published table rather
+  than by assertion. Three more mutations were watched to fail — see
+  `pitchSim.test.ts`'s log.
 - **Stage 3 — hitting.** `batSim.ts` (bat inertia, COR, derived `M_eff`/`q`/`eA`,
   calibrated `e_T`), `battedBallSim.ts` on the *same* `airPhysics` integrator,
   `parks.ts` (fence data read by physics *and* geometry, so the fence you see is
@@ -359,10 +427,18 @@ the render layer; contact resolves at the true physical state.
   targets into our convention; never move a coefficient to close the gap.
 - **The measured segment sets SCALE, never SHAPE.** `|v|` cancels out of
   `Δ ≈ ½·K·C_L·L²`, so every pitch's break moves together when `L` moves and the
-  ratios between pitches do not move at all. If one pitch is out relative to the
-  others, `BREAK_SEGMENT_FT` is not the lever — its spin/efficiency data is, or
-  the missing physics is. `pitchSim.test.ts` asserts the ratio law so that a
-  per-pitch fudge factor is a test failure.
+  ratios between pitches do not move at all (measured: ≤ 0.011 between L = 40 and
+  L = 50). If one pitch is out relative to the others, `BREAK_SEGMENT_FT` is not
+  the lever — its spin/efficiency data is, or the missing physics is.
+  `pitchSim.test.ts` asserts the ratio law so that a per-pitch fudge factor is a
+  test failure.
+- **`C_L`'s SHAPE is not the lever either, and the reason needs no `C_L`.** The
+  ratio law makes `C_L(S)`'s functional form the one thing that *could* change
+  the relative pattern, so "the error is not in a coefficient" cannot be asserted
+  by fiat. It is closed by monotonicity alone: the cutter out-spins the changeup
+  (S 0.175 vs 0.152) and breaks **half** as much in the published columns, which
+  a monotone `C_L` forbids at any segment. Refitting `C_L` cannot reach the
+  table, so nobody needs to try.
 - **The tilt clock is FIXED IN SPACE and points the way the ball BREAKS.** 12:00
   is straight up, 3:00 is the third-base side (a RHP's arm side, a LHP's glove
   side) — which is why a RHP's fastball is quoted near 1:00 and a LHP's near
@@ -376,7 +452,9 @@ the render layer; contact resolves at the true physical state.
   gyro sign is invisible in the break (it is projected out) and wrong the moment
   a spin axis is drawn or a bat imparts torque.
 - **A pure gyro pitch breaks 1.4 in, not 0.** The axis is fixed in space while
-  gravity rotates the velocity ~6° through the flight, so an axis parallel at
+  gravity rotates the velocity 7.1° through the flight (measured, on that row —
+  the arsenal spans 2.8° for the four-seamer to 12.0° for the curveball), so an
+  axis parallel at
   release is not parallel at the plate and a real sliver of transverse spin
   appears — 0.14 in over the last 10 ft, 1.44 in over 50 ft. That is physics, not
   a leak in the projection; the leak would show up in the 10 ft figure and in

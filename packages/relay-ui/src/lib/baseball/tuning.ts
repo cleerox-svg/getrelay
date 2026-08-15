@@ -133,24 +133,66 @@ export const BREAK_REF_ELEV_FT = 0;
  *
  * WHY THE SEGMENT CANNOT BE THE ANSWER, in one line: over a common segment,
  * deflection ≈ ½·K·C_L·|v|²·(L/|v|)² = ½·K·C_L·L², so |v| cancels and the RATIO
- * of any two pitches' break is just the ratio of their C_L — measured true to
- * within 2 % in the test. The segment sets the SCALE of all eight together and
- * nothing else. The published table's break ratios disagree with the C_L ratios
- * implied by its own spin/efficiency columns by up to 2.1× (the cutter), so no
- * choice of scale can fit them. The error is in the arsenal's spin data or in
- * unmodelled physics (seam-shifted wake), NOT in a coefficient and NOT here.
+ * of any two pitches' break is just the ratio of their C_L. Keeping the drag
+ * makes that cancellation EXACT rather than leading-order: with |v| = v₀·e^(−k·x)
+ * and k = K·C_D, integrating a_M = K·C_L·|v|² twice in time (dt = dx/|v|) gives
+ *     Δ = K·C_L·[ (e^(k·L) − 1)/k² − L/k ]     → ½·K·C_L·L² as k → 0,
+ * in which v₀ does not appear AT ALL — because |v| enters once through a_M ∝ |v|²
+ * and twice through dt. The model obeys it to 4.3 % at L = 40 and 2.9 % at
+ * L = 50 — and that residual is L-DEPENDENT (7.1 % at L = 20, 2.4 % at L = 54),
+ * because the prediction evaluates C_L at the release spin parameter while the
+ * real S climbs as |v| decays, so a short segment measures only the last and
+ * slowest feet, where the true C_L has drifted furthest. What does NOT move with
+ * L is the ratio itself (≤ 0.011 between L = 40 and L = 50). The
+ * segment sets the SCALE of all eight together and nothing else. The published
+ * table's break ratios disagree with the C_L ratios implied by its own
+ * spin/efficiency columns by up to 2.1× (the cutter), so no choice of scale can
+ * fit them.
  *
- * WHY 50 AND NOT THE RMS-OPTIMAL 44. 50 ft is chosen from OUTSIDE this data:
- * the tracking system fits every pitch's trajectory parameters at a reference
- * plane 50 ft from the plate, so a movement figure derived from that fit is
- * naturally a 50 ft figure. (That the public movement columns use it is an
- * inference we have NOT verified — flagged, not asserted.) It is then confirmed
- * from inside: the three rows whose own tilt and break columns agree with each
- * other — four-seamer, sinker, changeup — independently require 49.8, 51.1 and
- * 50.8 ft. Three independent constraints landing within 1.3 ft of a plane
- * nominated in advance is evidence; 44 ft is a compromise fitted to rows shown
- * to be self-contradictory, and it makes the best-measured pitch in baseball
- * WORSE (four-seam IVB residual +0.3 in at 50 ft, −3.3 in at 44 ft).
+ * AND THE ERROR IS NOT IN C_L'S SHAPE EITHER — which matters, because the
+ * identity above says break ratios ARE C_L ratios, so C_L(S)'s functional form
+ * is precisely the lever that could change the pattern, and its citation is
+ * flagged unverified. The argument that closes it needs no C_L at all, only
+ * that C_L is monotone in S (asserted in airPhysics.test.ts): the published
+ * table contains a spin/break INVERSION. The cutter has the higher spin
+ * parameter (S = 0.175 vs the changeup's 0.152) and HALF the published break
+ * ratio (0.444 vs 0.899). Under any monotone C_L a higher S must break at least
+ * as much over a common segment, so no fit — published, refitted or invented —
+ * reproduces that pair. (The curveball vs the four-seamer is a second, milder
+ * instance: S 0.251 vs 0.197, break 0.768 vs 1.000.) The error is in the
+ * arsenal's spin data or in unmodelled physics (seam-shifted wake), NOT in a
+ * coefficient and NOT here. `pitchSim.test.ts` asserts the inversion.
+ *
+ * WHY 50 AND NOT THE RMS-OPTIMAL 44 — two reasons, and only two.
+ *   1. It is nominated from OUTSIDE this data: the tracking system fits every
+ *      pitch's trajectory parameters at a reference plane 50 ft from the plate,
+ *      so a movement figure derived from that fit is naturally a 50 ft figure.
+ *      ⚠ UNVERIFIED — that the public movement columns use that segment is an
+ *      inference, flagged, not asserted.
+ *   2. The single best-measured row in baseball independently requires it: the
+ *      four-seamer, whose tilt and break columns agree to 1.1°, needs 49.8 ft on
+ *      its own.
+ * The sinker (51.1 ft) and changeup (50.8 ft) land there too, but they are NOT a
+ * third and fourth independent confirmation and must not be sold as one: the
+ * bisection matches break MAGNITUDE, so "requires ~50 ft" and "published ÷ C_L
+ * ≈ 1" are the same statement, and the latter is defined relative to the
+ * four-seamer. One constraint plus two consistency checks. (The changeup in
+ * particular is the second-WORST row in the table by tilt/break agreement, 22.5°
+ * out, so it is not evidence of anything except its own magnitude.)
+ * 44 ft is then rejected on its own terms: it is a least-squares compromise
+ * fitted to rows the inversion above proves mutually inconsistent, and it makes
+ * the best-measured pitch in baseball WORSE (four-seam IVB residual +0.3 in at
+ * 50 ft, −3.3 in at 44 ft).
+ *
+ * ⚠ OPEN QUESTION, HELD TO THE SAME STANDARD AS THE LENGTH: WHERE THE SEGMENT
+ * ENDS. It ends at d = 0, the plate's REAR point, because that is the physics
+ * frame's origin — but the front edge is 1.42 ft nearer, and C_D's calibration
+ * note already flags the identical ambiguity as one of its two biases. A segment
+ * running from the same 50 ft plane to the FRONT edge measures 15.39 in on the
+ * reference four-seamer against 16.31 in, i.e. 5.6 % / 0.92 in less. (Sliding a
+ * full 50 ft segment earlier so it ENDS at the front edge costs only 0.13 %, so
+ * this is a question about the segment's LENGTH, not its placement.) Unresolved
+ * and unverifiable from here, so it is flagged rather than split the difference.
  *
  * ⚠ THIS IS THE ONLY NUMBER STAGE 2 FITTED, AND IT IS GLOBAL. C_D and C_L did
  * not move; they are published/calibrated and locked by stage 1's

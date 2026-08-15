@@ -12,9 +12,15 @@
 // C_L. The segment sets the scale of all eight together and cannot change their
 // relative pattern at all. The published table's break ratios disagree with the
 // C_L ratios implied by the same table's spin/efficiency columns by up to 2.1×.
-// So: C_D and C_L were NOT touched, no per-pitch correction was added, and the
-// five resisting rows are pinned to the MODEL's own numbers with their
-// published values recorded beside them as residuals.
+//
+// AND THE SHAPE OF C_L CANNOT RESCUE IT EITHER — the argument that closes that
+// loophole is asserted too, and it needs no C_L: the published table contains a
+// spin/break INVERSION (the cutter has a higher spin parameter than the changeup
+// and half its published break), which no monotone C_L can produce. So: C_D and
+// C_L were NOT touched, no per-pitch correction was added, and the SEVEN rows
+// that resist are pinned to the MODEL's own numbers with their published values
+// recorded beside them as residuals. Exactly one row — the four-seamer — lands
+// on its published pair, and only that row is asserted against published.
 //
 // ⚠ MUTATIONS WATCHED TO FAIL. Each was applied to the shipping source, the
 // whole baseball suite was run, and the source was reverted. A test nobody has
@@ -38,6 +44,31 @@
 //   7. BREAK_SEGMENT_FT moved 50 → 44, the RMS optimum — 4 tests. The adopted
 //      convention is pinned; it cannot drift without someone re-reading this
 //      file's tables.
+// Added after the stage-2 adversarial review, same discipline (applied to the
+// shipping source, whole suite run, reverted):
+//   8. the cutter's activeSpin "repaired" 0.75 → 0.2418 — the efficiency its own
+//      published break implies — 3 tests: the C_L-free inversion, the ratio
+//      structure and the goldens. That the inversion test dies here is the
+//      point: it asserts a property of the DATA and must stop passing the moment
+//      the data stops having it.
+//   9. the slider's tilt 9:30 → 9:00 again, now 2 tests rather than 1 — the
+//      goldens AND the break-direction test, which catches it on merit (14.81°
+//      of separation collapsing to 0.94°). Note a tiltVsPublishedDeg bound would
+//      NOT: the mutation IMPROVES the slider's agreement, −11.4° → +3.6°.
+//  10. the changeup's tilt 1:30 → 1:00 — 1 test, its new golden pin. Run again
+//      with that one golden row commented out: 49 passed, 0 failed. An unpinned
+//      row is an unguarded row, which is exactly why ch is now pinned.
+//  11. a per-pitch, per-SEGMENT fudge inside measureBreak (the slider only,
+//      0.4 %/ft) — 1 test, and specifically the |ratio(40 ft) − ratio(50 ft)|
+//      line, at 0.0213 against a bound of 0.02. The ratio-law residual bound did
+//      NOT catch it. That is why both assertions exist and why the second one is
+//      the one the "scale, never shape" argument actually rests on.
+//  12. PITCH_TEMPO imported by airPhysics.ts — 1 test, the widened tempo guard.
+//      The old version of that guard read pitchSim.ts alone and passed this.
+//  13. `import { Vector3 } from 'three'` added to zone.ts — 1 test (budget), the
+//      leak that would silently pull the renderer into the main entry chunk.
+//  14. budget.test.ts's own LIB_CAP dropped 500 → 400 — 1 test, proving the cap
+//      is measured against real files rather than a list nobody updates.
 
 import { describe, expect, it } from 'vitest';
 import { BALL_RADIUS_FT, liftCoef, vLen } from './airPhysics';
@@ -53,11 +84,19 @@ const f = (n: number, w: number, p = 2) => pad(n.toFixed(p), w);
 
 /** Break of a pitch on the pinned convention, RHP, ISA air, default aim. */
 const breakOf = (p: Pitch, segmentFt: number = BREAK_SEGMENT_FT) =>
-  measureBreak({ pitch: p, hand: 'R', air: BREAK_REF_AIR }, segmentFt);
+  measureBreak({ pitch: p, hand: 'R' }, segmentFt, BREAK_REF_AIR);
 
 /** Spin parameter S of a row, from its own published columns. */
 const spinParamOf = (p: Pitch) =>
   (BALL_RADIUS_FT * p.spinRpm * p.activeSpin * RPM_TO_RADS) / (p.veloMph * MPH_TO_FPS);
+
+// The four-seamer is the normaliser for every ratio below: it is the row the
+// segment was fitted against and the only one that lands on its published pair.
+const FF = pitchById('ff');
+/** C_L implied by a row's own spin columns, relative to the four-seamer's. */
+const clRatioOf = (p: Pitch) => liftCoef(spinParamOf(p)) / liftCoef(spinParamOf(FF));
+/** PUBLISHED break magnitude of a row, relative to the four-seamer's. */
+const pubRatioOf = (p: Pitch) => Math.hypot(p.ivbIn, p.hbIn) / Math.hypot(FF.ivbIn, FF.hbIn);
 
 // ---------------------------------------------------------------------------
 // THE SEGMENT SWEEP — the headline experiment
@@ -119,12 +158,28 @@ describe('the measurement-segment experiment', () => {
     // The finding itself, asserted so it cannot rot into a silent assumption.
     const spread = Math.max(...required.map((r) => r.L)) - Math.min(...required.map((r) => r.L));
     expect(spread).toBeGreaterThan(10);
-    // The three rows whose own tilt and break columns agree with each other
-    // (ff, si, ch — see pitches.test.ts's tilt−pub column) independently land on
-    // the adopted segment. That agreement is the evidence for 50 ft, and it is
-    // the thing that would break first if the aero core drifted.
-    const near50 = required.filter((r) => ['ff', 'si', 'ch'].includes(r.id));
-    for (const r of near50) expect(Math.abs(r.L - BREAK_SEGMENT_FT)).toBeLessThan(1.5);
+
+    // ⚠ THE EVIDENCE FOR 50 ft IS ONE ROW, NOT THREE. The four-seamer — the
+    // best-measured pitch in baseball, and the only row whose tilt and break
+    // columns agree to better than 5° (1.1°) — independently requires 49.8 ft,
+    // against a plane nominated from outside this data set. That, plus the
+    // external nomination, is the whole case.
+    const ffRequired = required.find((r) => r.id === 'ff');
+    expect(Math.abs((ffRequired?.L ?? 0) - BREAK_SEGMENT_FT)).toBeLessThan(1.5);
+
+    // The sinker (51.1) and changeup (50.8) land there too, and that is worth
+    // asserting as a CONSISTENCY check — but it is NOT further evidence, and an
+    // earlier draft of this file claimed it was. Two reasons it is not:
+    //   • The bisection above matches break MAGNITUDE only; it never looks at
+    //     direction. So "requires ~50 ft" and "published ÷ C_L ≈ 1" are the same
+    //     statement, and that ratio is defined RELATIVE TO the four-seamer. They
+    //     restate the ff constraint rather than adding to it.
+    //   • The changeup is not a self-consistent row at all: 22.5° between its
+    //     tilt and its published break, the second worst in the table after the
+    //     splitter's 40°. pitches.test.ts names it as such, and this file used to
+    //     name it as an example of the opposite.
+    const consistentWithFF = required.filter((r) => ['si', 'ch'].includes(r.id));
+    for (const r of consistentWithFF) expect(Math.abs(r.L - BREAK_SEGMENT_FT)).toBeLessThan(1.5);
   });
 
   it('⚠ STRUCTURE: the segment sets the SCALE only — break ratios are C_L ratios', () => {
@@ -133,56 +188,151 @@ describe('the measurement-segment experiment', () => {
     //   Δ ≈ ½·a·t² = ½·(K·C_L·|v|²)·(L/|v|)² = ½·K·C_L·L²
     // so |v| cancels and Δ_i/Δ_j = C_L(S_i)/C_L(S_j) for ANY L. Add a per-pitch
     // multiplier anywhere and this comparison breaks by exactly that multiplier.
-    const ff = pitchById('ff');
-    const clFF = liftCoef(spinParamOf(ff));
+    const ff = FF;
+    const mag = (b: { ivbIn: number; hbIn: number }) => Math.hypot(b.ivbIn, b.hbIn);
+    /** Model break magnitude relative to the four-seamer's, at segment L. */
+    const modelRatioAt = (p: Pitch, L: number) => mag(breakOf(p, L)) / mag(breakOf(ff, L));
+
     const rows: string[] = [];
     for (const L of [40, 50]) {
-      const mFF = Math.hypot(...(Object.values(breakOf(ff, L)).slice(0, 2) as [number, number]));
       for (const p of PITCHES) {
-        const m = breakOf(p, L);
-        const modelRatio = Math.hypot(m.ivbIn, m.hbIn) / mFF;
-        const clRatio = liftCoef(spinParamOf(p)) / clFF;
-        const pubRatio = Math.hypot(p.ivbIn, p.hbIn) / Math.hypot(ff.ivbIn, ff.hbIn);
         rows.push(
           `  L=${L}  ${pad(p.id, 3)}  S=${f(spinParamOf(p), 6, 3)}  C_L=${f(
             liftCoef(spinParamOf(p)),
             6,
             3,
-          )}  model/ff=${f(modelRatio, 6, 3)}  C_L/C_L(ff)=${f(clRatio, 6, 3)}  published/ff=${f(
-            pubRatio,
+          )}  model/ff=${f(modelRatioAt(p, L), 6, 3)}  C_L/C_L(ff)=${f(
+            clRatioOf(p),
             6,
             3,
-          )}  published÷C_L=${f(pubRatio / clRatio, 6, 2)}`,
+          )}  published/ff=${f(pubRatioOf(p), 6, 3)}  published÷C_L=${f(
+            pubRatioOf(p) / clRatioOf(p),
+            6,
+            2,
+          )}`,
         );
-        if (p.id !== 'ff') {
-          // The model obeys the ½·K·C_L·L² law to ~2 % at both lengths, and the
-          // agreement is INDEPENDENT of L — that independence is the proof that
-          // the segment cannot change the relative pattern.
-          expect(Math.abs(modelRatio / clRatio - 1)).toBeLessThan(0.05);
-        }
       }
       rows.push('');
     }
+
+    // ⚠ HOW WELL THE MODEL OBEYS THE LAW, AND HOW THAT VARIES WITH L. An earlier
+    // draft claimed "~2 %, and INDEPENDENT of L" on the strength of a loop that
+    // only ever ran L ∈ {40, 50}. Both halves were wrong. Measured worst-case
+    // |model/ff ÷ C_L/C_L(ff) − 1| (always the slider, the most gyro-heavy row):
+    //   L=20 → 7.1 %,  L=30 → 5.7 %,  L=40 → 4.3 %,  L=50 → 2.9 %,  L=54 → 2.4 %.
+    // It is monotone in L, and for a reason: the prediction evaluates C_L at the
+    // RELEASE spin parameter, while the real S climbs through the flight as |v|
+    // decays. A SHORT segment measures only the last, slowest feet — where the
+    // true C_L has drifted furthest from the release value — so the shorter the
+    // segment the worse the agreement, and the effect is largest on the pitch
+    // whose C_L is furthest down the fit (the slider). 8 % bounds the sweep with
+    // room; it is a statement about the approximation, not a tolerance on the
+    // physics, which is why the assertion that follows is the load-bearing one.
+    const lawRows: string[] = [];
+    for (const L of [20, 30, 40, 50, 54]) {
+      let worst = { id: '', dev: 0 };
+      for (const p of PITCHES) {
+        if (p.id === 'ff') continue;
+        const dev = Math.abs(modelRatioAt(p, L) / clRatioOf(p) - 1);
+        if (dev > worst.dev) worst = { id: p.id, dev };
+        expect(dev, `ratio law broke at L=${L} on ${p.id}`).toBeLessThan(0.08);
+      }
+      lawRows.push(`  L=${pad(L, 2)}  worst |model/C_L − 1| = ${f(worst.dev * 100, 5, 2)} %  (${worst.id})`);
+    }
+
+    // And the claim the ARGUMENT actually needs is not the size of that residual
+    // but the L-independence of the RATIO itself — that is what makes "the
+    // segment sets scale, never shape" true. Assert it directly rather than
+    // inferring it from two similar residuals: no pitch's break ratio moves by
+    // more than 0.011 between a 40 ft and a 50 ft segment (worst: the sweeper).
+    const drift: string[] = [];
+    for (const p of PITCHES) {
+      if (p.id === 'ff') continue;
+      const d = Math.abs(modelRatioAt(p, 40) - modelRatioAt(p, 50));
+      drift.push(`${p.id} ${d.toFixed(4)}`);
+      expect(d, `${p.id}'s break ratio moved with the segment`).toBeLessThan(0.02);
+    }
+
     // eslint-disable-next-line no-console
     console.log(
       '\n[RATIO STRUCTURE — break ratios vs C_L ratios, normalised to the four-seamer]\n' +
         rows.join('\n') +
         '  published÷C_L is the residual the segment CANNOT touch: 1.00 means the row\n' +
         '  is consistent with the rest of the table, 0.47 (cutter) means its published\n' +
-        '  break is less than half what its own spin columns demand.\n',
+        '  break is less than half what its own spin columns demand.\n\n' +
+        '  How closely the model tracks ½·K·C_L·L², swept — NOT independent of L:\n' +
+        lawRows.join('\n') +
+        '\n  |ratio(40 ft) − ratio(50 ft)| per pitch — THIS is what "scale, not shape" means:\n    ' +
+        drift.join('   ') +
+        '\n',
     );
 
-    // The cutter is the extreme case and it is a DATA problem, not a physics
-    // one: 2400 rpm at 75 % efficiency is MORE effective spin than the
-    // four-seamer's 2300 at 93 %, at a lower speed (so more flight time), yet
-    // its published break is 44 % of the four-seamer's. No C_L, no segment and
-    // no air can produce that; only a lower spin efficiency (~0.24) or
-    // unmodelled seam-shifted wake can.
+    // The cutter is the extreme case, and it is a DATA problem rather than a
+    // physics one. Note what is and is NOT true of it: at 2400 rpm × 75 %
+    // efficiency it carries 1800 rpm of effective spin against the four-seamer's
+    // 2300 × 93 % = 2139 — COMPARABLE, and slightly LOWER, which is also what its
+    // spin parameter (0.175 vs 0.197) and its C_L (0.94× the ff's) say. It is
+    // thrown slower, so it flies longer. And its published break is 44 % of the
+    // four-seamer's. A 0.94× coefficient cannot produce a 0.44× break: that is
+    // 2.1× out, and no C_L, no segment and no air closes it. Either its real
+    // efficiency is ~0.24 (bisecting the model to its own published magnitude
+    // gives 0.2418) or seam-shifted wake — absent from any spin-only model — is
+    // cancelling most of its Magnus break.
     const fc = pitchById('fc');
-    const clRatioFC = liftCoef(spinParamOf(fc)) / clFF;
-    const pubRatioFC = Math.hypot(fc.ivbIn, fc.hbIn) / Math.hypot(ff.ivbIn, ff.hbIn);
-    expect(clRatioFC).toBeGreaterThan(0.9);
-    expect(pubRatioFC).toBeLessThan(0.5);
+    expect(fc.spinRpm * fc.activeSpin).toBeLessThan(ff.spinRpm * ff.activeSpin);
+    expect(clRatioOf(fc)).toBeGreaterThan(0.9);
+    expect(clRatioOf(fc)).toBeLessThan(1.0);
+    expect(pubRatioOf(fc)).toBeLessThan(0.5);
+  });
+
+  it('⚠ C_L-FREE: the published table contains a spin/break INVERSION', () => {
+    // The test that closes the loophole the ratio law above leaves open. Break
+    // ratios ARE C_L ratios, so C_L(S)'s functional FORM is exactly the lever
+    // that could change the pattern — and C_L's citation is flagged unverified,
+    // so "the error is not in a coefficient" cannot be asserted by fiat. A merely
+    // proportional C_L ∝ S, for instance, would move the slider's published÷C_L
+    // from 0.61 to 0.81 and the splitter's from 0.74 to 1.05. The loophole is
+    // real.
+    //
+    // What closes it uses no C_L at all — only that C_L is MONOTONE in S, which
+    // airPhysics.test.ts asserts over 501 samples, and which is a physical
+    // requirement rather than a fitting choice (a non-monotone C_L makes a
+    // higher-spin pitch break less). Over a common segment Δ ∝ C_L, so monotone
+    // C_L ⇒ a row with the higher S must break AT LEAST AS MUCH as one with a
+    // lower S. The published table says otherwise, twice.
+    const rows: string[] = [];
+    const cmp = (hi: string, lo: string) => {
+      const a = pitchById(hi as Pitch['id']);
+      const b = pitchById(lo as Pitch['id']);
+      rows.push(
+        `  ${pad(a.id, 3)} S=${f(spinParamOf(a), 6, 4)} pub/ff=${f(pubRatioOf(a), 6, 3)}   vs   ` +
+          `${pad(b.id, 3)} S=${f(spinParamOf(b), 6, 4)} pub/ff=${f(pubRatioOf(b), 6, 3)}   ` +
+          `→ higher S, ${f((pubRatioOf(a) / pubRatioOf(b)) * 100, 5, 1)} % of the break`,
+      );
+      // Higher spin parameter…
+      expect(spinParamOf(a), `${hi} should out-spin ${lo}`).toBeGreaterThan(spinParamOf(b));
+      // …and yet LESS published break. Monotone C_L forbids the pair outright,
+      // whatever the segment and whatever the fit.
+      expect(pubRatioOf(a), `${hi} vs ${lo}: the inversion is gone`).toBeLessThan(pubRatioOf(b));
+    };
+    // The strong instance: the cutter out-spins the changeup and breaks half as
+    // much. Factor 2.0 — an order of magnitude past the ratio law's own 2.9 %
+    // residual at the adopted segment, so it cannot be a modelling artefact.
+    cmp('fc', 'ch');
+    // The milder second instance, on rows that share neither speed nor shape.
+    cmp('cu', 'ff');
+    // eslint-disable-next-line no-console
+    console.log(
+      '\n[SPIN/BREAK INVERSION — the C_L-free argument]\n' +
+        rows.join('\n') +
+        '\n  A monotone C_L(S) — asserted in airPhysics.test.ts — cannot give a HIGHER-S\n' +
+        '  pitch LESS break over a common segment. So the residual is not in C_L’s shape,\n' +
+        '  not in the segment, and not in the air: it is in the table’s own spin columns\n' +
+        '  or in physics this model does not have.\n',
+    );
+    // The cutter's factor is the load-bearing one; state the size, not just the
+    // sign, so "repairing" the data by halving the gap still fails here.
+    expect(pubRatioOf(pitchById('fc')) / pubRatioOf(pitchById('ch'))).toBeLessThan(0.6);
   });
 });
 
@@ -193,10 +343,12 @@ describe('the measurement-segment experiment', () => {
 describe('the arsenal in flight', () => {
   it('prints the dynamics table and holds the published plate-speed loss', () => {
     const rows: string[] = [];
+    const hbResiduals: number[] = [];
     for (const p of PITCHES) {
       const r = simulatePitch({ pitch: p, hand: 'R' });
       const b = breakOf(p);
       const pub = publishedBreak(p, 'R');
+      hbResiduals.push(b.hbArmSideIn - p.hbIn);
       rows.push(
         [
           pad(p.id, 4),
@@ -238,43 +390,96 @@ describe('the arsenal in flight', () => {
       ).toFixed(0)} % RH; break measured in ISA air over ${BREAK_SEGMENT_FT} ft]\n` +
         '  id  release   plate   ratio  flight   plate_x plate_h      IVB   pub      Δ       HB   pub      Δ\n' +
         rows.join('\n') +
-        '\n  HB is on the PUBLISHED convention (+ = arm side). Δ = model − published.\n',
+        '\n  HB is on the PUBLISHED convention (+ = arm side). Δ = model − published.\n' +
+        // ⚠ READ THIS LINE, it is the point of printing the table. Every one of
+        // the eight ΔHB residuals is NEGATIVE — a systematic arm-side deficit
+        // across the whole arsenal, mean −2.7 in, not a per-pitch story. An
+        // earlier draft cited these signs as corroboration of seam-shifted wake;
+        // they are not, because sl/st/fs share the sign with no SSW story to
+        // tell. A uniform sign points at a MODEL or tilt-column bias, and that
+        // is a more interesting open question than the one it replaced.
+        `  ⚠ ALL EIGHT ΔHB are arm-side NEGATIVE (mean ${(
+          hbResiduals.reduce((a, b) => a + b, 0) / hbResiduals.length
+        ).toFixed(2)} in, range ${Math.min(...hbResiduals).toFixed(2)} … ${Math.max(
+          ...hbResiduals,
+        ).toFixed(2)}): a systematic deficit,\n  not a per-pitch one — unexplained, and NOT evidence about any single pitch.\n`,
     );
   });
 
-  it('the four-seamer reaches its published break with nothing fitted to it', () => {
+  it('the four-seamer — the ONE row — reaches its published break with nothing fitted to it', () => {
     // The most-measured pitch in baseball, and the one with the least
     // seam-shifted wake, on a segment nominated from outside this data set.
-    // Nothing in the model was tuned to this row.
-    const b = breakOf(pitchById('ff'));
+    // Nothing in the model was tuned to this row. It is also the ONLY row
+    // asserted against published values anywhere in this file; every other row
+    // is golden-pinned below, with its published pair recorded as a residual.
+    const b = breakOf(FF);
     expect(b.ivbIn).toBeCloseTo(16.0, 0); // published 16.0
-    expect(Math.abs(b.ivbIn - 16.0)).toBeLessThan(1.0);
-    expect(Math.abs(b.hbArmSideIn - 7.0)).toBeLessThan(1.0);
-    // The sinker, the other row whose columns are self-consistent, inside 2 in.
-    const si = breakOf(pitchById('si'));
-    expect(Math.abs(si.ivbIn - 8.5)).toBeLessThan(2.0);
-    expect(Math.abs(si.hbArmSideIn - 15.0)).toBeLessThan(2.0);
+    expect(Math.abs(b.ivbIn - 16.0)).toBeLessThan(1.0); // measured +0.31
+    expect(Math.abs(b.hbArmSideIn - 7.0)).toBeLessThan(1.0); // measured −0.37
   });
 
-  it('⚠ GOLDEN: the five resisting rows are pinned to the MODEL, not to the table', () => {
-    // These are NOT published values. They are what this physics produces, to
-    // 0.1 in, so that any future drift fails loudly — while the published
-    // number and the residual sit right beside them as a standing reminder of
-    // what is not yet explained. Closing these gaps means better spin/efficiency
-    // DATA or a seam-shifted-wake model, never a coefficient nudge.
+  it('⚠ GOLDEN: the seven resisting rows are pinned to the MODEL, not to the table', () => {
+    // These are NOT published values. They are what this physics produces —
+    // pinned with toBeCloseTo(_, 2), i.e. to ±0.005 in, which is far tighter than
+    // the "0.1 in" an earlier comment here advertised. The strict bound is
+    // deliberate and stays: a golden pin's whole job is to fail on drift nobody
+    // meant, and there is no measurement noise in a deterministic integrator to
+    // leave room for. The published number and the residual sit right beside
+    // each value as a standing reminder of what is not yet explained. Closing
+    // these gaps means better spin/efficiency DATA or a seam-shifted-wake model,
+    // never a coefficient nudge.
+    //
+    // ⚠ WHY THE SINKER IS HERE AND NOT IN THE PUBLISHED TEST ABOVE. It used to be
+    // asserted against published at ±2.0 in with residuals of 1.64 and 1.94 —
+    // a fifth of an inch of margin, which would read as a physics regression the
+    // first time anything moved, when what it really encodes is "close-ish". The
+    // sinker is a resisting row: 19 % out on IVB and 13 % on HB. Pinning it to
+    // the model says that honestly AND catches more drift than a 3 % margin did.
+    //
+    // ⚠ AND WHY THE CHANGEUP IS HERE. It was in neither list — constrained only
+    // by the sweep's |L − 50| < 1.5 magnitude line, despite a +4.87 in IVB
+    // residual and the second-worst tilt/break disagreement in the table (22.5°).
+    // An unpinned row is an unguarded row: moving its tilt 1:30 → 1:00 failed
+    // nothing at all before this line existed.
     //              model IVB  model HB(arm)   published (IVB, HB)   why it resists
     const golden: Array<[string, number, number, string]> = [
+      ['si', 10.143, 13.056, 'pub (8.5, 15.0): Δ +1.64 / −1.94; magnitude needs 51.1 ft'],
       ['fc', 15.249, -6.523, 'pub (7.5, −2.0): break 0.44× the ff, its own C_L 0.94× — 2.1× out'],
       ['sl', 3.675, -13.168, 'pub (0.5, −8.0): gyro-heavy, 0.46× vs C_L 0.76× — 1.6× out'],
-      ['st', 0.284, -20.767, 'pub (−1.5, −17.0): the closest of the five, 0.98× vs C_L 1.16×'],
+      ['st', 0.284, -20.767, 'pub (−1.5, −17.0): the closest of the seven, 0.98× vs C_L 1.16×'],
       ['cu', -19.584, -6.094, 'pub (−12.0, −6.0): 0.77× vs C_L 1.16× — 1.5× out, direction right'],
+      ['ch', 10.867, 10.594, 'pub (6.0, 14.5): Δ +4.87 / −3.91; tilt vs break 22.5° apart'],
       ['fs', 10.034, 7.325, 'pub (2.0, 9.0): its tilt and break columns disagree by 40° — SSW'],
     ];
+    expect(golden).toHaveLength(PITCHES.length - 1); // every row but the ff
     for (const [id, ivb, hb] of golden) {
       const b = breakOf(pitchById(id as Pitch['id']));
-      expect(b.ivbIn).toBeCloseTo(ivb, 2);
-      expect(b.hbArmSideIn).toBeCloseTo(hb, 2);
+      expect(b.ivbIn, `${id} IVB`).toBeCloseTo(ivb, 2);
+      expect(b.hbArmSideIn, `${id} HB`).toBeCloseTo(hb, 2);
     }
+  });
+
+  it('⚠ the slider and the sweeper are different pitches, by break DIRECTION', () => {
+    // A merit-based catch for the mutation that previously only the golden pins
+    // saw: the slider's tilt shifted 9:30 → 9:00, i.e. made into a sweeper. The
+    // ordering test misses it (a 9:00 slider still breaks glove-side, still less
+    // than the sweeper), and — importantly — a bound on tiltVsPublishedDeg would
+    // MISS it too, because the mutation IMPROVES the slider's agreement with its
+    // own published columns (−11.4° → +3.6°). What separates them is the ANGLE of
+    // the break vector, which is what the tilt clock actually sets: measured
+    // sl −74.4°, st −89.2°, 14.8° apart. Under the mutation both land at −89°
+    // and the separation collapses to 0.9°.
+    const angleOf = (id: string) => {
+      const b = breakOf(pitchById(id as Pitch['id']));
+      return (Math.atan2(b.hbArmSideIn, b.ivbIn) * 180) / Math.PI;
+    };
+    const sep = Math.abs(angleOf('sl') - angleOf('st'));
+    // eslint-disable-next-line no-console
+    console.log(
+      `\n[BREAK DIRECTION] sl ${angleOf('sl').toFixed(2)}°, st ${angleOf('st').toFixed(2)}° ` +
+        `— ${sep.toFixed(2)}° apart (0° = straight up, −90° = pure glove side).\n`,
+    );
+    expect(sep).toBeGreaterThan(8);
   });
 
   it('ordering: the fastball rises, the curve sinks, the sweeper out-sweeps the slider', () => {
@@ -337,7 +542,11 @@ describe('the arsenal in flight', () => {
     expect(half.ivbIn / full.ivbIn).toBeLessThan(0.75);
     // A mile of altitude thins the air by ~17.5 % and takes the break with it —
     // the ONLY channel is K, so this is also a guard on nobody hand-setting K.
-    const denver = measureBreak({ pitch: ff, hand: 'R', air: { elevFt: 5280, tempF: 59, rh: 0 } });
+    const denver = measureBreak({ pitch: ff, hand: 'R' }, BREAK_SEGMENT_FT, {
+      elevFt: 5280,
+      tempF: 59,
+      rh: 0,
+    });
     expect(denver.ivbIn).toBeLessThan(full.ivbIn * 0.87);
     expect(denver.ivbIn).toBeGreaterThan(full.ivbIn * 0.78);
   });
@@ -429,30 +638,50 @@ describe('the track', () => {
     // The break mirrors with it: same IVB, opposite HB in the world frame, and
     // IDENTICAL on the published arm-side convention, which is what that
     // convention exists for.
-    const bR = measureBreak({ pitch: pitchById('sl'), hand: 'R', air: BREAK_REF_AIR });
-    const bL = measureBreak({ pitch: pitchById('sl'), hand: 'L', air: BREAK_REF_AIR });
+    const bR = measureBreak({ pitch: pitchById('sl'), hand: 'R' }, BREAK_SEGMENT_FT, BREAK_REF_AIR);
+    const bL = measureBreak({ pitch: pitchById('sl'), hand: 'L' }, BREAK_SEGMENT_FT, BREAK_REF_AIR);
     expect(bL.ivbIn).toBeCloseTo(bR.ivbIn, 6);
     expect(bL.hbIn).toBeCloseTo(-bR.hbIn, 6);
     expect(bL.hbArmSideIn).toBeCloseTo(bR.hbArmSideIn, 6);
   });
 
-  it('⚠ PITCH_TEMPO cannot reach the physics — the source may not mention it', async () => {
+  it('⚠ PITCH_TEMPO cannot reach the physics — no sim source may mention it', async () => {
     // The architectural guard, enforced the only way that survives a refactor:
-    // by reading the file. Slow motion belongs to the render layer; if it ever
+    // by reading the sources. Slow motion belongs to the render layer; if it ever
     // reaches dt, gravity (linear in dt) and the aero terms (quadratic in |v|)
     // are re-weighted against each other and every break number above drifts
     // silently. A HUD that wants slow motion scales the CLOCK it feeds
     // sampleTrack, which is why sampleTrack takes a time and not a frame index.
-    const { readFileSync } = await import('node:fs');
-    const src = readFileSync(new URL('./pitchSim.ts', import.meta.url), 'utf8');
-    // Comments are allowed to NAME it — that is how the rule stays visible. Code
-    // is not, so strip comment lines and block-comment bodies before looking.
-    const code = src
-      .split('\n')
-      .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
-      .join('\n');
-    expect(code).not.toMatch(/PITCH_TEMPO/);
-    expect(code).not.toMatch(/Math\.random|Date\.now|performance\./);
+    //
+    // ⚠ IT GLOBS THE DIRECTORY, and it did not always. Reading pitchSim.ts alone
+    // was right when pitchSim.ts was the only file that integrated anything —
+    // but airPhysics.ts now imports tuning.ts for the substep, so THE integrator
+    // itself was outside the guard. determinism.test.ts globs for exactly this
+    // reason; this one matches it rather than inventing a second scope.
+    // (Math.random / Date.now / performance are NOT re-checked here —
+    // determinism.test.ts owns that ban over the same directory AND the tests,
+    // and "one implementation per concept" applies to guards too.)
+    const { readdirSync, readFileSync } = await import('node:fs');
+    const { dirname, join } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dir = dirname(fileURLToPath(import.meta.url));
+    const names = readdirSync(dir).filter(
+      // tuning.ts DECLARES the knob, so it is the one exemption; tests may name
+      // it in prose, and are covered by their own eyes rather than by this.
+      (n) => n.endsWith('.ts') && !n.endsWith('.test.ts') && n !== 'tuning.ts',
+    );
+    // Guard the guard: a glob that stops matching must not pass over zero files.
+    expect(names).toContain('pitchSim.ts');
+    expect(names).toContain('airPhysics.ts');
+    for (const name of names) {
+      // Comments are allowed to NAME it — that is how the rule stays visible.
+      // Code is not, so strip comment lines and block-comment bodies first.
+      const code = readFileSync(join(dir, name), 'utf8')
+        .split('\n')
+        .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+        .join('\n');
+      expect(code, `${name} reads PITCH_TEMPO`).not.toMatch(/PITCH_TEMPO/);
+    }
   });
 
   it('a pitch aimed at a corner is a strike; a pitch off the plate is not', () => {
