@@ -15,6 +15,14 @@
 // The frame is declared here and nothing may redefine it; `zone.ts` and the GL
 // scene consume this same convention.
 //
+// The frame is LOAD-BEARING for the Magnus SIGN, so pin it with the two cases
+// the whole pitching game rests on (both asserted in airPhysics.test.ts):
+//   • backspin — ω along −y on a ball travelling +x ⇒ ω̂ × v = (−ŷ) × x̂ = +ẑ,
+//     i.e. UPWARD lift. A four-seamer resists gravity; it does not sink.
+//   • sidespin — ω along +z ⇒ ẑ × x̂ = +ŷ, a push toward third base.
+// Swapping the cross-product operands inverts both and turns every fastball
+// into a sinker, which is why the sign is asserted and not merely commented.
+//
 // Units: ft, s, slug (see units.ts). g is REAL — 32.174 ft/s².
 
 import { G_FPS2, IN_TO_FT, lbfToSlug, OZ_TO_LBF } from './units';
@@ -37,10 +45,6 @@ export const vDot = (a: Vec3, b: Vec3): number => a.x * b.x + a.y * b.y + a.z * 
 export const vLen = (a: Vec3): number => Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
 export const vCross = (a: Vec3, b: Vec3): Vec3 =>
   vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
-export function vNormalize(a: Vec3): Vec3 {
-  const l = vLen(a);
-  return l > 1e-12 ? vScale(a, 1 / l) : vec3(0, 0, 0);
-}
 
 // ---------------------------------------------------------------------------
 // The ball — FIXED, published MLB specification (Rule 3.01)
@@ -182,19 +186,39 @@ export function spinParameter(speedFps: number, spinRadS: number): number {
 }
 
 /**
- * Lift (Magnus) coefficient C_L(S). CALIBRATED — a piecewise fit, steeper in
- * the low-S region and flattening as the boundary layer saturates:
- *   S ≤ 0.1 : C_L = 1.5·S          (through the origin: no spin, no Magnus)
- *   S > 0.1 : C_L = 0.09 + 0.6·S   (continuous at S = 0.1, both give 0.15)
- *   capped at C_L_MAX = 0.35       (real balls stop gaining lift past S ≈ 0.45)
- * Monotonically non-decreasing by construction, which the test asserts — a
- * non-monotone C_L would make a HIGHER-spin pitch break LESS and is always a
- * calibration bug.
- *
- * ⚠ Stage 2 recalibrates this against ALL EIGHT rows of the pitch table at
- * once. Never nudge it to fix one pitch.
+ * Ceiling on C_L. FEEL KNOB (a safety clamp), explicitly NOT part of the
+ * published fit below — the fit is linear and unbounded, real balls are not.
+ * It bites at S = (0.35 − 0.09)/0.6 = 0.4333, roughly double the S of a
+ * fully-efficient four-seamer (0.221 at 2400 rpm / 94 mph), so it never binds
+ * anywhere in the pitch table and exists only so that absurd inputs — a bat
+ * clipping the ball into 6000 rpm — cannot produce an absurd force.
  */
 export const C_L_MAX = 0.35;
+
+/**
+ * Lift (Magnus) coefficient C_L(S).
+ *
+ * ⚠ PUBLISHED DATA — NOT calibrated, and nothing in this repo calibrates it.
+ *   S ≤ 0.1 : C_L = 1.5·S          (through the origin: no spin, no Magnus)
+ *   S > 0.1 : C_L = 0.09 + 0.6·S   (continuous at S = 0.1, both give 0.15)
+ * This is Alan Nathan's published baseball-aerodynamics lift fit — the standard
+ * piecewise form used throughout the baseball trajectory literature, steeper
+ * through the low-S region and flattening as the boundary layer saturates.
+ * (Exact reference unverified — confirm the journal/volume/page before
+ * publication. A general attribution is honest; an invented citation is not.)
+ *
+ * Because it is published, the honest way to change it is to find a BETTER
+ * published fit — not to nudge the slope until one pitch looks right. Stage 2
+ * checks all eight pitch-table rows against THIS fit; if the table cannot be
+ * reached, the error is in the table's spin/tilt data, in the break-reporting
+ * convention (see BASEBALL.md § induced break), or in C_D — never here.
+ * `airPhysics.test.ts` anchors the fit at fixed S values so any edit to either
+ * branch fails immediately.
+ *
+ * Monotonically non-decreasing by construction, which the test asserts — a
+ * non-monotone C_L would make a HIGHER-spin pitch break LESS and is always a
+ * bug.
+ */
 export function liftCoef(S: number): number {
   const s = Math.max(0, S);
   const cl = s <= 0.1 ? 1.5 * s : 0.09 + 0.6 * s;
@@ -202,16 +226,44 @@ export function liftCoef(S: number): number {
 }
 
 /**
- * Drag coefficient C_D. CALIBRATED, currently a constant.
+ * Drag coefficient C_D. CALIBRATED by a failing test, currently a constant.
  *
- * Value: 0.300. Calibrated against the published Statcast speed loss — a
- * four-seamer released at 94.0 mph crosses the plate at ~86.3 mph after ~55 ft
- * of flight, an 8.2 % loss. Closed form for the horizontal decay is
- * v(x) = v0·exp(−K·C_D·x), so C_D = ln(94/86.3)/(K·55) = 0.298 at sea level;
- * the full 3-D integration (gravity adds a downward component that raises |v|
- * slightly) lands 0.300 at 86.3 mph, dead on the published number. The starting
- * guess of 0.35 gave 84.6 mph — clearly outside the band — so it was moved.
- * `airPhysics.test.ts` re-measures this every run.
+ * Value 0.300, and the calibration is only meaningful if the conditions are
+ * stated, so they are stated:
+ *
+ *   TARGET     a four-seamer released at 94.0 mph crosses the plate at
+ *              ~86.3 mph (published Statcast averages, an ~8.2 % loss).
+ *   SPEED      86.3 is the VECTOR MAGNITUDE |v|, not the horizontal component.
+ *              This is the whole reason the number is 0.300 and not 0.283.
+ *   AIR        ISA sea level — 59 °F, DRY, ρ = 0.0023770, K = 0.00549317 ft⁻¹.
+ *   FLIGHT     55 ft, from release to the plate: 60.5 ft mound-to-plate less
+ *              ~5.5 ft of release extension.
+ *   SPIN       none. Drag is calibrated on a spinless ball so C_L cannot
+ *              absorb any part of it.
+ *
+ * WHY 0.300 AND NOT THE CLOSED FORM. Gravity-free horizontal decay is exactly
+ * v_x(x) = v0·exp(−K·C_D·x), which inverts to C_D = ln(94/86.3)/(K·55) =
+ * 0.2829 (0.2902 in game-day 70 °F/50 % RH air). That closed form is a
+ * statement about v_x, and it is accurate: integrating the real 3-D flight at
+ * C_D = 0.300 gives v_x decaying with an effective exponent of 0.3005, i.e. the
+ * closed form predicts v_x to 0.2 %. So C_D = 0.2829 would land v_x = 86.3 —
+ * but a radar plate speed is |v|, and gravity has by then added ~13 ft/s of
+ * downward velocity that v_x does not see. At C_D = 0.300 the model lands
+ * |v| = 86.29 mph (v_x = 85.84). We match the published quantity, so 0.300 is
+ * the right choice and 0.2829 answers a different question.
+ *
+ * The first guess of 0.35 gave |v| = 84.6 mph — far outside the band — so it
+ * was moved. `airPhysics.test.ts` re-measures this every run against 86.3 ±0.4,
+ * which pins C_D to about ±0.016.
+ *
+ * HONEST RESIDUAL SLOP (~±0.2 mph, ~±2 % of C_D each, and they partly cancel):
+ *   • the game plays at 70 °F/50 % RH, thinner than the ISA air this is
+ *     calibrated in; the same C_D there gives 86.49 mph, biasing us HIGH;
+ *   • 55 ft measures to the plate's rear point, while a published plate speed
+ *     is read ~1.4 ft nearer the front — so our flight is slightly long,
+ *     biasing us LOW.
+ * "Dead on the published number" would over-claim; "inside the convention slop
+ * of the published number" is what this is.
  *
  * The `speedFps`/`S` parameters are deliberately in the signature though the
  * body ignores them: a real baseball has a mild drag crisis (C_D falls with
@@ -276,7 +328,7 @@ export function aeroAccel(v: Vec3, omega: Vec3, K: number): Vec3 {
   // magnitude is K·C_L·|v|² — same v² law as drag, different direction.
   if (omegaEffMag > 1e-9) {
     const axis = vScale(omegaEff, 1 / omegaEffMag);
-    const m = vCross(axis, v);
+    const m = vCross(v, axis);
     const kl = K * liftCoef(S) * speed;
     a.x += kl * m.x;
     a.y += kl * m.y;
@@ -352,13 +404,23 @@ export function lerpBallState(a: BallState, b: BallState, t: number): BallState 
 }
 
 /**
- * Fraction t ∈ [0,1] at which a scalar crosses `target` between `from` and
- * `to`. Returns null if the pair does not straddle the target. Pair with
- * `lerpBallState` for analytic event resolution.
+ * Fraction at which a scalar crosses `target` between `from` and `to`, or null
+ * if this step does not cross it. Pair with `lerpBallState` for analytic event
+ * resolution.
+ *
+ * ⚠ HALF-OPEN, t ∈ (0, 1]. The start of the step is EXCLUDED and the end is
+ * INCLUDED, for two reasons that both matter once `battedBallSim` uses this for
+ * ground contact:
+ *   • no spurious contact — a ball launched from exactly z = 0 would otherwise
+ *     report a crossing on its first substep and be "caught" at the tee;
+ *   • no double count and no miss — a crossing landing exactly on a substep
+ *     boundary is reported once, by the step that ENDS there (t = 1), never
+ *     again by the step that begins there.
+ * Consumers therefore scan steps in order and take the first non-null t.
  */
 export function crossingFraction(from: number, to: number, target: number): number | null {
   const d = to - from;
   if (Math.abs(d) < 1e-12) return null;
   const t = (target - from) / d;
-  return t >= 0 && t <= 1 ? t : null;
+  return t > 0 && t <= 1 ? t : null;
 }

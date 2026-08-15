@@ -59,8 +59,9 @@ test**, or an **explicitly-labelled feel knob**. There is no fifth category.
 | `R_vapor` | 2759.8 | **derived** | `R_dry / 0.62197` (molar-mass ratio) |
 | `ρ` | 0.0023770 @ ISA SL | **derived** | barometric + ideal gas + humidity split |
 | `K = ρA/2m` | 0.0054932 ft⁻¹ @ ISA SL | **derived** | see below — never hand-set |
-| `C_D` | 0.300 | **calibrated** | 94.0 mph release → 86.3 at the plate |
-| `C_L(S)` | piecewise, cap 0.35 | **calibrated** | stage 2: all 8 pitch-table rows at once |
+| `C_D` | 0.300 | **calibrated** | 94.0 mph release → 86.3 mph \|v\| at the plate, spinless, 55 ft, **ISA air** — see below |
+| `C_L(S)` | `1.5S` (S≤0.1), `0.09+0.6S` | **published data** | Alan Nathan's published baseball-aerodynamics lift fit (exact reference unverified — confirm before publication) |
+| `C_L_MAX` | 0.35 | **feel knob** | safety clamp, NOT part of the fit; bites at S = 0.4333, never in the pitch table |
 | `FIXED_MS` | 1000/120 | fixed | the one substep, shared by every consumer |
 
 **Air density.** `airDensity(elevFt, tempF, rh)` = standard-atmosphere
@@ -70,10 +71,63 @@ at the *local* temperature with a partial-pressure split for vapour:
 humid air is thinner and the ball carries.
 
 Note the textbook figure **0.002378 slug/ft³ is quoted at ISA sea level: 59 °F,
-dry.** A game-day 70 °F / 50 % RH sea level is **0.0023169** — 2.5 % thinner,
+dry.** A game-day 70 °F / 50 % RH sea level is **0.0023168** — 2.6 % thinner,
 because it is 11 °F warmer *and* carries vapour. The tests assert the physics,
 not the round number. A mile-high park is 17.5 % thinner still, which is the
 largest single park effect in the sport.
+
+**`C_L` is published, not calibrated.** The piecewise form `C_L = 1.5·S` for
+`S ≤ 0.1` and `C_L = 0.09 + 0.6·S` above it is the standard lift fit from the
+baseball aerodynamics literature — Alan Nathan's published fit. *(Exact
+journal/volume/page unverified; confirm before publication. A general
+attribution is honest, an invented citation is not.)* It was previously labelled
+"calibrated", which was wrong twice over: nothing in this repo calibrates it, and
+the label invites stage 2 to nudge the slope until one pitch looks right. The
+honest way to change it is a better *published* fit.
+`airPhysics.test.ts` anchors both branches at fixed `S`, so an edit to either
+slope fails immediately — changing 0.6 → 0.9 previously passed the whole suite.
+
+**`C_D` = 0.300, and the conditions are part of the number.** ISA air (59 °F,
+dry, `K = 0.00549317 ft⁻¹`), 55 ft of flight, spinless, and the 86.3 mph target
+is the **vector magnitude** `|v|` — which is what a radar plate speed reports.
+The gravity-free closed form `v_x = v₀·exp(−K·C_D·x)` inverts to `C_D = 0.2829`
+(0.2902 in game-day air) — accurate, but a statement about `v_x`, not `|v|`.
+The model lands `|v| = 86.29`, `v_x = 85.84`. Two documented biases of ~±0.2 mph
+each remain and partly cancel: the game plays in thinner 70 °F/50 % RH air
+(86.49 mph with the same `C_D`), and 55 ft measures to the plate's rear point
+while plate speed is read ~1.4 ft nearer the front. "Inside the convention slop
+of the published number" is the honest claim; "dead on it" is not.
+
+### Induced break — the reporting convention
+
+> ⚠ **Pinned here so stage 2 cannot recalibrate a published coefficient to fix a
+> reporting mismatch.** This is a *convention*, not a physical result.
+
+| | |
+| --- | --- |
+| reference trajectory | same release state, **same drag**, spin set to **zero** |
+| start point | the release point |
+| end point | the plate crossing |
+| flight length | **55 ft** (60.5 mound-to-plate less ~5.5 ft extension) |
+| reported quantity | `Δz = z_spun − z_spinless` at the end point, in inches |
+
+Keeping drag in the reference is what makes the number *the Magnus term alone*:
+drag and gravity are identical between the two trajectories, so the difference
+is exactly the lift force's contribution. The alternative — a vacuum
+gravity-only reference — folds in drag's vertical component and reads ~4 % higher
+(23.56 in vs 22.59 in for the reference four-seamer). Both columns are printed by
+`airPhysics.test.ts`; the **spinless-with-drag** column is the convention.
+
+**Expected relationship to quoted Statcast IVB.** A fully-efficient 2400 rpm /
+94 mph four-seamer measures **22.59 in** on this convention, against the ~15–18 in
+usually quoted as IVB. That gap is the *measured segment*, not the physics: the
+Magnus acceleration is 0.72 g, inside the published 0.5–0.9 g range, and
+deflection grows as the square of the measured length. Measured over the last
+45 ft the same pitch gives 15.23 in, over the last 40 ft 12.07 in — the printed
+table walks it. So a pitch-table break target published on someone else's
+convention must be **converted** before it is asserted against; `C_L` does not
+move to close a convention gap. (Which segment the public figures use is a
+reporting detail we have not verified — flagged, not guessed.)
 
 **The one derived aero scale.** Both aero forces have the form
 `F = ½ρ·C·A·|v|·v`. Dividing by `m` puts the same group in front of both:
@@ -115,8 +169,14 @@ the vitest harness and the screenshot driver — that identity is what makes an
 on-screen trajectory trustworthy evidence about the physics. Events (plate
 crossing, fence plane, ground) resolve **analytically** via
 `crossingFraction` + `lerpBallState`, never by snapping to a substep boundary: a
-95 mph pitch covers 1.16 ft per substep against a 1.9 ft strike zone. No
-`Math.random`, no wall clock in any sim file — seeded `mulberry32` only.
+95 mph pitch covers 1.16 ft per substep against a 1.9 ft strike zone (measured:
+the interpolated crossing state matches a 512× finer integration to 1.2e-3 in).
+`crossingFraction` is **half-open, `t ∈ (0, 1]`** — the start of a substep is
+excluded so a ball launched from exactly `z = 0` does not register ground contact
+on its first step, and the end is included so a crossing landing on a substep
+boundary is reported exactly once. No `Math.random`, no wall clock in any sim
+file — seeded `mulberry32` only, and `determinism.test.ts` reads the sources and
+fails on `Math.random`, `Date.now`, `performance.` or `new Date`.
 
 `PITCH_TEMPO` (slow motion) **must never scale `dt`**. Gravity is linear in `dt`
 while the aero terms go as `v²`, so a time-scaled `dt` re-weights them against
@@ -129,7 +189,9 @@ the render layer; contact resolves at the true physical state.
 | --- | --- |
 | `packages/relay-ui/src/lib/baseball/units.ts` | ft/s/slug conversions, real `g`, the units rationale |
 | `packages/relay-ui/src/lib/baseball/airPhysics.ts` | **THE** aero core: ball spec, `airDensity`, `aeroScale` (K), `C_D`/`C_L`, `aeroAccel`, RK4 `stepBall`, analytic event interpolation. Called by both the pitch and the batted ball — never copied |
-| `packages/relay-ui/src/lib/baseball/airPhysics.test.ts` | The dynamics bench: prints ρ→K and S→C_L tables, asserts the derivations, the gyro projection and the drag calibration |
+| `packages/relay-ui/src/lib/baseball/airPhysics.test.ts` | The dynamics bench: prints the ρ→K, C_L(S), gyro-superposition, Magnus-sign, drag, break-convention, RK4-convergence and plate-crossing tables; asserts the derivations, the gyro projection, the Magnus sign and magnitude, and the drag calibration |
+| `packages/relay-ui/src/lib/baseball/determinism.test.ts` | Source-reading guard: no `Math.random`, `Date.now`, `performance.` or `new Date` in any baseball source |
+| `packages/relay-ui/src/lib/baseball/ip.test.ts` | Source-reading guard: no club nickname, real park name or `mlbstatic` host in the shipped game |
 
 ## Roadmap
 
@@ -138,9 +200,18 @@ the render layer; contact resolves at the true physical state.
   derived to mass/radius/area, `airDensity` with barometric + humidity, the
   derived `K = ρA/2m`, `liftCoef`/`dragCoef`, `aeroAccel` with per-call gyro
   projection, RK4 `stepBall` at `FIXED_MS = 1000/120`, `crossingFraction` /
-  `lerpBallState` for exact event resolution); `airPhysics.test.ts` — 10 tests,
+  `lerpBallState` for exact event resolution); `airPhysics.test.ts` — 15 tests,
   printed tables, `C_D` calibrated to **0.300** giving 94.0 mph → **86.29 mph**
-  at 55 ft against the published 86.3.
+  at 55 ft against the published 86.3. Plus `determinism.test.ts` and
+  `ip.test.ts`, the two source-reading guards.
+  **Every assertion in stage 1 has been watched fail.** The original gyro test
+  fed ω exactly parallel to `v`, where `ω̂ × v` vanishes with or without the
+  projection — deleting the projection outright kept all ten tests green. Four
+  more mutations passed too: flipping the Magnus cross product (a four-seamer
+  *sinks* 22.8 in), changing the `C_L` slope 0.6 → 0.9 (a 30 % break error),
+  computing `S` from the unprojected `|ω|` (2.15× the break on a gyro slider),
+  and `C_D = 0.25` (87.59 mph, inside the old 86–88 band). All five are now
+  killed, verified by re-running each mutation.
 - **Stage 2 — pitching.** `tuning.ts` (every constant labelled fixed / derived /
   calibrated / feel knob), `pitches.ts` (the eight-row published pitch table:
   velo, spin, tilt, and the induced-break targets), `zone.ts`, `pitchSim.ts`
@@ -159,9 +230,24 @@ the render layer; contact resolves at the true physical state.
 
 - **Project the gyro spin out every substep.** `ω_eff = ω − (ω·v̂)v̂`. Doing it
   once at release is wrong — `v` rotates through the flight. Doing it not at all
-  makes every pitch the same pitch. `airPhysics.test.ts` asserts a pure-gyro ball
-  feels a Magnus force below `1e-9` ft/s² (it measures exactly 0), and that the
-  same spin turned perpendicular exceeds half a g.
+  makes every pitch the same pitch.
+- **⚠ Test the projection by SUPERPOSITION, never by a parallel spin.** `ω̂ × v`
+  vanishes for parallel vectors *whether or not the projection exists*, so a
+  "pure gyro spin is inert" test passes an implementation with the projection
+  deleted — which is exactly what stage 1 shipped at first, and why "exactly
+  0.00e+0 across 9 cases" was an artifact of degenerate inputs rather than
+  evidence. The test with teeth is `aeroAccel(v, ω) === aeroAccel(v, ω + c·v̂)`
+  for an **oblique** `ω` and several `c`: adding pure gyro spin to an existing
+  oblique spin must move the acceleration by nothing (measured ≤ 5e-15 ft/s²;
+  the unprojected implementation moves it by up to 16 ft/s²). The general rule:
+  **an invariant test must use inputs where a wrong implementation gives a
+  different answer**, and you must watch it fail before you trust it.
+- **The frame is load-bearing for the Magnus SIGN.** Backspin about `−y` on a
+  `+x` ball gives `(−ŷ) × x̂ = +ẑ` — UP. Swapping the cross-product operands
+  makes every fastball sink and passes any suite that only checks magnitudes, so
+  the sign is asserted directly: `a.z = −8.956` against gravity-alone `−32.174`,
+  i.e. 23.22 ft/s² of lift, with topspin the exact mirror and `+z` sidespin
+  pushing toward third base.
 - **Gravity is real: 32.174 ft/s².** Golf's `GRAVITY = 16` is a yard-space arcade
   fudge and is not transferable. Break is *defined* against a gravity-only
   trajectory, so g is load-bearing for the definition itself, not just the drop.
@@ -169,7 +255,12 @@ the render layer; contact resolves at the true physical state.
   are `C_D` / `C_L` (calibrated against published data) or a labelled feel knob.
   Editing `K` disconnects altitude and weather from the ball.
 - **0.002378 is the *59 °F dry* density.** Do not assert it for 70 °F/50 % RH;
-  the right answer there is 0.0023169, and the 2.5 % gap is real carry.
-- **Never tune one pitch by nudging `C_L` in isolation** — recalibrate against
-  all eight rows of the pitch table at once. A change that fixes the curveball
-  and breaks the sweeper is the failure mode that rule exists to prevent.
+  the right answer there is 0.0023168, and the 2.6 % gap is real carry.
+- **`C_L` is published data — it is not a dial.** Never tune one pitch by nudging
+  it. If the eight-row pitch table cannot be reached, the error is in the table's
+  spin/tilt data, in the break-reporting convention above, or in `C_D` — a change
+  that fixes the curveball and breaks the sweeper is the failure mode that rule
+  exists to prevent.
+- **Break numbers only mean something with a convention attached.** 22.59 in and
+  15.23 in are the *same pitch* measured over 55 ft and 45 ft. Convert published
+  targets into our convention; never move a coefficient to close the gap.
