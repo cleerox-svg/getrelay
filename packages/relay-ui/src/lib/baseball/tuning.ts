@@ -1,0 +1,188 @@
+// Every tunable number in the baseball game, in one place, with its CATEGORY
+// stated. Pure data: no imports, no three, no Math.random, no clock — so this
+// file can be read by the sim, the HUD and the GL scene without dragging
+// anything behind it, and so `airPhysics.ts` can import the substep from here
+// without a cycle.
+//
+// ⚠ THE PHYSICS RULE. A number in this game is exactly one of:
+//
+//   • PUBLISHED DATA — a rule-book or measured figure from outside this repo
+//     (60.5 ft, 5.125 oz, 93.9 mph). Changing it means the source changed.
+//   • DERIVED — computed from other numbers (ρ, K = ρA/2m, the ball's mass).
+//     NEVER hand-set: a hand-set derived value silently disconnects its inputs.
+//   • CALIBRATED — chosen so a FAILING TEST passes against published data
+//     (C_D, and the break measurement segment below). The test is the
+//     definition; the constant is the answer.
+//   • FEEL KNOB — has no physical referent at all and is labelled as such
+//     (PITCH_TEMPO). A feel knob may be turned freely; nothing else may.
+//
+// There is no fifth category. In particular there is no "fudge factor", no
+// "per-pitch correction" and no "close enough multiplier". If the eight-row
+// pitch table cannot be reached, the finding gets reported, not absorbed into a
+// new constant.
+
+// ---------------------------------------------------------------------------
+// The substep — FIXED
+// ---------------------------------------------------------------------------
+//
+// ⚠ FIXED_MS is THE shared substep of the whole game: the live rAF loop, the
+// headless predict() used by the AI, the vitest harness and the screenshot
+// driver all advance by exactly this. That identity is what makes an on-screen
+// trajectory trustworthy evidence about the physics — the pitch you watch is
+// the pitch the test measured, step for step.
+//
+// It lives HERE rather than in airPhysics.ts (where stage 1 left it) so that
+// the render layer can import the substep without importing the integrator.
+// airPhysics.ts re-exports it, so every stage-1 consumer is unaffected.
+
+/** The one substep, in milliseconds. 120 Hz. FIXED. */
+export const FIXED_MS = 1000 / 120;
+
+/** The one substep, in seconds. DERIVED from FIXED_MS. */
+export const FIXED_DT = FIXED_MS / 1000;
+
+// ---------------------------------------------------------------------------
+// Playback — FEEL KNOB, and quarantined from the physics
+// ---------------------------------------------------------------------------
+
+/**
+ * Slow-motion playback rate for a pitch, ∈ (0, 1]. FEEL KNOB — pure
+ * presentation, no physical referent whatsoever. 0.55 means a pitch that really
+ * takes 0.40 s takes 0.73 s of wall time on screen, which is what makes a
+ * one-tap timing game playable at all.
+ *
+ * ⚠ IT MUST NEVER TOUCH dt, AND NOTHING IN THE SIM MAY READ IT. Gravity is
+ * linear in dt while both aero terms go as v², so scaling dt re-weights them
+ * against each other and silently rewrites every break number in the table —
+ * a bug that would look like "the curveball feels a bit flat" and never like a
+ * broken integrator.
+ *
+ * The architecture that enforces this: `pitchSim` precomputes the ENTIRE
+ * trajectory at true physical time into a sampled PitchTrack, and the render
+ * layer plays that array back at PITCH_TEMPO. Contact resolves against the true
+ * physical state, at true physical time, at any tempo. `pitchSim.ts` does not
+ * import this constant, and its test asserts the trajectory is identical
+ * whatever the tempo is set to, because the tempo cannot reach it.
+ */
+export const PITCH_TEMPO = 0.55;
+
+// ---------------------------------------------------------------------------
+// Air the game is played in — PUBLISHED DATA (a default; parks override)
+// ---------------------------------------------------------------------------
+//
+// Air reaches the ball through exactly one channel, K = ρA/2m (airPhysics.ts),
+// so these three numbers ARE the park effect. Stage 3's parks.ts supplies its
+// own elevation per park; these are the neutral defaults used by the pitch sim
+// and by anything that has not been told where it is.
+
+/** Default park elevation, ft. PUBLISHED DATA (sea level). */
+export const GAME_ELEV_FT = 0;
+
+/** Default game-time temperature, °F. PUBLISHED DATA (a mild evening). */
+export const GAME_TEMP_F = 70;
+
+/** Default relative humidity, 0..1. PUBLISHED DATA (a mild evening). */
+export const GAME_RH = 0.5;
+
+// ---------------------------------------------------------------------------
+// The induced-break reporting convention
+// ---------------------------------------------------------------------------
+//
+// See BASEBALL.md § "Induced break — the reporting convention". Break is
+// DEFINED as the displacement between the real trajectory and a reference
+// trajectory that shares its position, velocity, drag and gravity but has ZERO
+// spin. Because drag and gravity are identical between the two, the difference
+// is exactly the Magnus term's contribution — nothing else.
+//
+// Two things about that definition are conventions rather than physics, and
+// both change the answer by a lot, so both are pinned here:
+//
+//   1. THE AIR. The same four-seamer measures 22.59 in in ISA air, 22.01 in at
+//      70 °F/50 % RH and 18.11 in a mile up. Quote the air or the number is
+//      meaningless. Published break tables are league-wide, so the reference
+//      air is ISA sea level — NOT the game-day air above.
+//   2. THE SEGMENT. Deflection grows as the square of the measured length, so
+//      "how much did it break" has no answer until you say "over what". This is
+//      the one free parameter stage 2 had, and it was fitted — see below.
+
+/** Break-reference temperature, °F. PUBLISHED DATA (ISA sea level). */
+export const BREAK_REF_TEMP_F = 59;
+
+/** Break-reference humidity, 0..1. PUBLISHED DATA (ISA is dry). */
+export const BREAK_REF_RH = 0;
+
+/** Break-reference elevation, ft. PUBLISHED DATA (ISA sea level). */
+export const BREAK_REF_ELEV_FT = 0;
+
+/**
+ * Length of the segment, in feet BEFORE the plate, over which induced break is
+ * measured. CALIBRATED — but read the whole note, because the honest answer is
+ * more interesting than the number.
+ *
+ * WHAT STAGE 2 SET OUT TO TEST. Stage 1 measured its fully-efficient reference
+ * four-seamer at 22.59 in over the whole flight against a published ~16 in, and
+ * concluded the gap was a measured-segment convention rather than a coefficient
+ * error. Stage 2 tested that: one free parameter (this one) against sixteen
+ * published constraints (eight pitches × IVB and HB), swept 30→54 ft, residual
+ * table printed by `pitchSim.test.ts`.
+ *
+ * ⚠ IT FAILED, AND THAT IS THE FINDING. No single segment reconciles all eight.
+ * The length each pitch needs to hit its own published break spans 34.0 ft
+ * (cutter) to 51.1 ft (sinker). The RMS optimum over all sixteen is 44 ft, at
+ * an RMS residual of 3.40 in, which fits nothing well.
+ *
+ * WHY THE SEGMENT CANNOT BE THE ANSWER, in one line: over a common segment,
+ * deflection ≈ ½·K·C_L·|v|²·(L/|v|)² = ½·K·C_L·L², so |v| cancels and the RATIO
+ * of any two pitches' break is just the ratio of their C_L — measured true to
+ * within 2 % in the test. The segment sets the SCALE of all eight together and
+ * nothing else. The published table's break ratios disagree with the C_L ratios
+ * implied by its own spin/efficiency columns by up to 2.1× (the cutter), so no
+ * choice of scale can fit them. The error is in the arsenal's spin data or in
+ * unmodelled physics (seam-shifted wake), NOT in a coefficient and NOT here.
+ *
+ * WHY 50 AND NOT THE RMS-OPTIMAL 44. 50 ft is chosen from OUTSIDE this data:
+ * the tracking system fits every pitch's trajectory parameters at a reference
+ * plane 50 ft from the plate, so a movement figure derived from that fit is
+ * naturally a 50 ft figure. (That the public movement columns use it is an
+ * inference we have NOT verified — flagged, not asserted.) It is then confirmed
+ * from inside: the three rows whose own tilt and break columns agree with each
+ * other — four-seamer, sinker, changeup — independently require 49.8, 51.1 and
+ * 50.8 ft. Three independent constraints landing within 1.3 ft of a plane
+ * nominated in advance is evidence; 44 ft is a compromise fitted to rows shown
+ * to be self-contradictory, and it makes the best-measured pitch in baseball
+ * WORSE (four-seam IVB residual +0.3 in at 50 ft, −3.3 in at 44 ft).
+ *
+ * ⚠ THIS IS THE ONLY NUMBER STAGE 2 FITTED, AND IT IS GLOBAL. C_D and C_L did
+ * not move; they are published/calibrated and locked by stage 1's
+ * mutation-verified tests. A pitch that misses does NOT get its own segment
+ * length — a per-pitch measurement convention is a fudge factor wearing a lab
+ * coat, and `pitchSim.test.ts` asserts the ratio structure above specifically so
+ * that adding one is a test failure.
+ */
+export const BREAK_SEGMENT_FT = 50;
+
+// ---------------------------------------------------------------------------
+// Score clamps — MIRRORED FROM THE WORKER. Do not diverge.
+// ---------------------------------------------------------------------------
+//
+// ⚠ THE SERVER IS THE AUTHORITY AND IT WILL REJECT, NOT CLAMP. These two
+// numbers are copies of MAX_ROUNDS / MAX_POINTS_PER_ROUND in
+// `packages/relay-worker/src/games.ts`, where a submitted score above
+// MAX_ROUNDS × MAX_POINTS_PER_ROUND is a 400, not a truncation. They are
+// duplicated here (rather than imported) because the worker and the UI deploy
+// INDEPENDENTLY and cannot share a module — which is exactly why a divergence
+// is dangerous: a scoring change that lets a good derby round pay 2500 points
+// ships fine, plays fine, and then silently fails to submit for every player
+// who has a great game.
+//
+// If you change a payout, check the product against these first, and change
+// the worker in the same PR.
+
+/** Max rounds the worker will accept in one submitted game. MIRRORED. */
+export const MAX_ROUNDS = 8;
+
+/** Max points per round the worker will accept. MIRRORED. */
+export const MAX_POINTS_PER_ROUND = 2000;
+
+/** The worker's hard score ceiling. DERIVED from the two mirrors above. */
+export const MAX_SUBMITTABLE_SCORE = MAX_ROUNDS * MAX_POINTS_PER_ROUND;

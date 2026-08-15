@@ -10,21 +10,36 @@
 //
 // Coordinate frame (feet, right-handed, Z UP):
 //   +x — from the mound toward home plate (the pitch's travel direction)
-//   +y — toward third base / the catcher's left (a RHP's arm side is −y)
+//   +y — toward FIRST base / the catcher's right (a RHP's arm side is −y)
 //   +z — up. Gravity is (0, 0, −g).
 // The frame is declared here and nothing may redefine it; `zone.ts` and the GL
 // scene consume this same convention.
+//
+// ⚠ STAGE-2 CORRECTION, comment only — no code, no constant and no test result
+// moved. Stage 1 labelled +y "toward third base / the catcher's left", which
+// cannot be true of a right-handed frame with +x mound→plate and +z up:
+// ŷ = ẑ × x̂, and with home at the bottom of a bird's-eye diagram (first base
+// right, centre field up, ẑ out of the page) that is the FIRST-base side. The
+// stage-1 line was also self-contradictory, since it then said "a RHP's arm
+// side is −y" — and a RHP's arm side IS the third-base side, so the
+// parenthetical was right and the label was wrong. Corrected in that direction:
+// the gameplay-load-bearing claim (arm side = −y) stands, unchanged. This
+// matters to stage 2 because zone.ts maps y onto the Statcast lateral axis
+// (+ = catcher's right), and an inverted label would mirror every pitch's
+// horizontal break against its published sign.
 //
 // The frame is LOAD-BEARING for the Magnus SIGN, so pin it with the two cases
 // the whole pitching game rests on (both asserted in airPhysics.test.ts):
 //   • backspin — ω along −y on a ball travelling +x ⇒ ω̂ × v = (−ŷ) × x̂ = +ẑ,
 //     i.e. UPWARD lift. A four-seamer resists gravity; it does not sink.
-//   • sidespin — ω along +z ⇒ ẑ × x̂ = +ŷ, a push toward third base.
+//   • sidespin — ω along +z ⇒ ẑ × x̂ = +ŷ, a push toward FIRST base (see the
+//     stage-2 correction below).
 // Swapping the cross-product operands inverts both and turns every fastball
 // into a sinker, which is why the sign is asserted and not merely commented.
 //
 // Units: ft, s, slug (see units.ts). g is REAL — 32.174 ft/s².
 
+import { FIXED_DT, FIXED_MS } from './tuning';
 import { G_FPS2, IN_TO_FT, lbfToSlug, OZ_TO_LBF } from './units';
 
 // ---------------------------------------------------------------------------
@@ -344,19 +359,18 @@ export function aeroAccel(v: Vec3, omega: Vec3, K: number): Vec3 {
 // ⚠ FIXED_MS is THE shared substep of the whole game: the live rAF loop, the
 // headless `predict()` used by the AI, the vitest harness and the screenshot
 // driver all advance by exactly this. That identity is what makes an on-screen
-// trajectory trustworthy evidence about the physics. Stage 2 moves the constant
-// to tuning.ts and re-exports; nothing else about it changes.
+// trajectory trustworthy evidence about the physics.
 //
 // It is also why PITCH_TEMPO (the slow-motion feel knob) must NEVER scale dt:
 // gravity is linear in dt while the aero terms go as v², so a time-scaled dt
 // re-weights them against each other and silently rewrites every break number.
 // Playback speed belongs to the render layer, never to the integrator.
+//
+// The constant itself now lives in tuning.ts (stage 2), alongside every other
+// labelled number, so the render layer can import the substep without importing
+// this integrator. It is re-exported here so stage-1 consumers are unchanged.
 
-/** The one substep, in milliseconds. 120 Hz. */
-export const FIXED_MS = 1000 / 120;
-
-/** The one substep, in seconds. DERIVED from FIXED_MS. */
-export const FIXED_DT = FIXED_MS / 1000;
+export { FIXED_MS, FIXED_DT };
 
 /** Position + velocity. The complete state of a ball in flight. */
 export interface BallState {
