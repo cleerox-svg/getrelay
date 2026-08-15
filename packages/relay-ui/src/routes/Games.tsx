@@ -11,7 +11,7 @@ import { getFogStats } from '../lib/fog/stats';
 import { getTuneStats } from '../lib/tune/stats';
 import { getGolfStats } from '../lib/golf/stats';
 
-// /discover is the Games tab: a grid of game chiclets (the "hub").
+// /games is the Games tab: a grid of game chiclets (the "hub").
 // Picking one routes into that game's standalone screen (menu → guess →
 // results), which is pure component state — the tab bar's active check is
 // an exact pathname match, so game switching never touches the URL path.
@@ -48,7 +48,7 @@ const GAMES: { id: 'fog' | 'tune' | 'golf'; title: string; subtitle: string; ico
 const iconOf = (id: 'fog' | 'tune' | 'golf'): string =>
   GAMES.find((g) => g.id === id)?.icon ?? '';
 
-export function Fog() {
+export function Games() {
   const me = useStore((s) => s.me);
   // Personal bests for the hub cards. Read from localStorage (offline-safe)
   // once per landing mount; omit the "Best" line until a game's been played.

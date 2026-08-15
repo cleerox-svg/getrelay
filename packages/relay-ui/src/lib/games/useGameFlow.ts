@@ -17,7 +17,10 @@ import { useLocation, useNavigate } from 'react-router-dom';
 // by the route.
 export type GameScreen = 'menu' | 'guess' | 'free' | 'results';
 
-type FogHistoryState = { fog?: 'guess' | 'free' } | null;
+// The same-path history marker written when entering guess/free. `fog` is
+// the legacy key from when the hub was Fog-anchored; it is read but never
+// written — see the compatibility shim below.
+type GameHistoryState = { game?: 'guess' | 'free'; fog?: 'guess' | 'free' } | null;
 
 export function useGameFlow() {
   const [screen, setScreen] = useState<GameScreen>('menu');
@@ -35,9 +38,17 @@ export function useGameFlow() {
 
   const location = useLocation();
   const nav = useNavigate();
-  const histFog = (location.state as FogHistoryState)?.fog;
-  const histFogRef = useRef(histFog);
-  histFogRef.current = histFog;
+  // COMPAT (one release): accept the old `fog` key as well as the new
+  // `game` one. The UI deploys independently, so a user mid-session can
+  // have a history entry pushed by the previous build still on their
+  // stack — reading only `game` would treat it as "no marker" and make
+  // back skip the pause step. Writes below use `game` only, so once every
+  // client has reloaded onto this build the `?? state?.fog` fallback (and
+  // the `fog` field on GameHistoryState) can be dropped.
+  const state = location.state as GameHistoryState;
+  const histGame = state?.game ?? state?.fog;
+  const histGameRef = useRef(histGame);
+  histGameRef.current = histGame;
 
   // The one case a menu stats useMemo can't see: backing out of a
   // running game renders the menu BEFORE GuessGame's unmount safety net
@@ -63,7 +74,7 @@ export function useGameFlow() {
   // - back while PAUSED → do NOT re-arm. The pop stands, so we drop
   //   out of the game to the menu; GuessGame unmounts and its
   //   safety net records + submits the partial run (>=1 completed
-  //   round). History is back at the plain /discover entry, so the
+  //   round). History is back at the plain /games entry, so the
   //   NEXT back leaves the tab like on any other screen — a running
   //   game can never trap the user in the tab or block app exit.
   // - back in free play → menu (unchanged).
@@ -74,22 +85,22 @@ export function useGameFlow() {
   // screen has already moved on, so every branch below is a no-op.
   //
   // History depth across play → back → resume → back → back, starting
-  // from the plain /discover entry [A]:
+  // from the plain /games entry [A]:
   //   startGame pushes the guard     [A, G]  playing
   //   back (playing) → pop + re-push [A, G]  paused, sheet up
   //   Resume (touches no history)    [A, G]  playing, guard still armed
   //   back (playing) → pop + re-push [A, G]  paused again
   //   back (paused)  → pop, no push  [A]     menu, partial run recorded
-  //   back                           [...]   leaves /discover
+  //   back                           [...]   leaves /games
   // Nothing grows the stack, and every press does something visible.
   //
-  // Why the re-push can't loop: back pops the marker (histFog
+  // Why the re-push can't loop: back pops the marker (histGame
   // 'guess' → undefined) which runs this effect; the push flips it
   // back ('guess') which runs it exactly once more, and that run hits
   // NO branch — screen 'guess' WITH the 'guess' marker is the steady
   // state.
   useEffect(() => {
-    if (screen === 'guess' && histFog !== 'guess') {
+    if (screen === 'guess' && histGame !== 'guess') {
       // pausedRef, not `paused`: this effect must not re-run on a
       // pause toggle, so it reads the live value instead of closing
       // over it.
@@ -99,20 +110,20 @@ export function useGameFlow() {
         setScreen('menu');
       } else {
         setPaused(true);
-        nav(location.pathname, { state: { fog: 'guess' } });
+        nav(location.pathname, { state: { game: 'guess' } });
       }
-    } else if (screen === 'free' && histFog !== 'free') {
+    } else if (screen === 'free' && histGame !== 'free') {
       setScreen('menu');
-    } else if (histFog && (screen === 'menu' || screen === 'results')) {
+    } else if (histGame && (screen === 'menu' || screen === 'results')) {
       nav(location.pathname, { replace: true, state: null });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [histFog]);
+  }, [histGame]);
 
   // Consume the history entry pushed when entering guess/free — unless
-  // a back gesture already popped it (then histFog is already gone).
+  // a back gesture already popped it (then histGame is already gone).
   function consumeHistoryEntry(marker: 'guess' | 'free') {
-    if (histFogRef.current === marker) nav(-1);
+    if (histGameRef.current === marker) nav(-1);
   }
 
   function startGame() {
@@ -122,13 +133,13 @@ export function useGameFlow() {
     // marker is game-agnostic — the guess screen renders GuessGame,
     // TuneGame, GolfGame or the range's RangeGame from the owning
     // screen, and the pause/back choreography is identical.
-    nav(location.pathname, { state: { fog: 'guess' } });
+    nav(location.pathname, { state: { game: 'guess' } });
   }
 
   function startFree() {
     setScreen('free');
     // Same back-gesture guard entry as the guess game.
-    nav(location.pathname, { state: { fog: 'free' } });
+    nav(location.pathname, { state: { game: 'free' } });
   }
 
   function markAbandoned() {

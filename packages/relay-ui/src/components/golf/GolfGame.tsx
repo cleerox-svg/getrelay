@@ -26,7 +26,7 @@ interface Props {
   onFinish: (result: GolfGameResult) => void;
   // Freeze the round and show the pause sheet. Same contract as
   // GuessGame: the back gesture that raises it is a history event owned
-  // by the parent (routes/Fog.tsx); Resume calls onResume, "End game"
+  // by the parent (routes/Games.tsx); Resume calls onResume, "End game"
   // funnels through the same finishNow as the header End pill.
   paused: boolean;
   onResume: () => void;

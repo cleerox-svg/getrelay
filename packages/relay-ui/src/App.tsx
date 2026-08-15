@@ -21,7 +21,7 @@ import { ContactProfile } from './routes/ContactProfile';
 import { Contacts } from './routes/Contacts';
 import { EditGroup } from './routes/EditGroup';
 import { Feeds } from './routes/Feeds';
-import { Fog } from './routes/Fog';
+import { Games } from './routes/Games';
 import { GroupInfo } from './routes/GroupInfo';
 import { LegacyChat } from './routes/LegacyChat';
 import { LegacyChats } from './routes/LegacyChats';
@@ -202,14 +202,20 @@ export function App() {
             <Route path="/sports/:league/:id" element={<SportsDetail />} />
             <Route path="/settings/sports" element={<SportsSettings />} />
 
+            {/* Games used to live at /discover (the old Discover placeholder).
+                Kept as a redirect so installed PWAs, pinned shortcuts and any
+                stale link still resolve. It sits OUTSIDE the MainLayout group
+                on purpose: the tab bar's active check is an exact pathname
+                match, so redirecting before MainLayout renders means the tab
+                highlights on /games instead of flashing with nothing active. */}
+            <Route path="/discover" element={<Navigate to="/games" replace />} />
+
             <Route element={<MainLayout />}>
               <Route path="/chats" element={legacy ? <LegacyChats /> : <Chats />} />
               <Route path="/contacts" element={<Contacts />} />
               <Route path="/sports" element={<Sports />} />
               <Route path="/feeds" element={<Feeds />} />
-              {/* The old Discover placeholder is now the Fog mini game.
-                  Same path so pinned shortcuts / muscle memory survive. */}
-              <Route path="/discover" element={<Fog />} />
+              <Route path="/games" element={<Games />} />
             </Route>
           </Route>
           <Route path="/" element={<Navigate to="/chats" replace />} />

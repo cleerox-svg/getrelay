@@ -31,7 +31,7 @@ interface Props {
   onFinish: (result: GameResult) => void;
   // Freeze the run and show the pause sheet. Owned by the parent
   // because the back gesture that raises it is a history event (see
-  // routes/Fog.tsx); the sheet's Resume button calls onResume, its
+  // routes/Games.tsx); the sheet's Resume button calls onResume, its
   // "End game" button goes through the same finishNow funnel as the
   // header End pill.
   // Both are required and travel together on purpose: a `paused` with
