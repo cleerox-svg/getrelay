@@ -43,6 +43,9 @@ const SCENES = {
   played: { query: 'scene=course&at=played', label: 'course-played-aim', drag: true },
   celebrate: { query: 'scene=course&at=holed', label: 'course-celebrate' },
   range: { query: 'scene=range&layout=fairway', label: 'range-fairway' },
+  // The island/lane layout floods the range with water, so it is the view that
+  // actually shows the shared water surface on the Range.
+  'range-water': { query: 'scene=range&layout=lane', label: 'range-water-lane' },
   // Mini-golf (PuttGL). Holes are 0-based into the default GARDEN course; each
   // shows a signature feature so golf-visual-qa can read the displaced slope,
   // the ramp and a banked rail. `putt-drag` pulls back from the ball to capture
@@ -51,6 +54,12 @@ const SCENES = {
   'putt-slope': { query: 'scene=putt&hole=6', label: 'putt-sidehill' },
   'putt-ramp': { query: 'scene=putt&hole=3', label: 'putt-ramp' },
   'putt-bank': { query: 'scene=putt&hole=1', label: 'putt-bank-rail' },
+  // Pirate Cove hole 2 (0-based idx 1) carries a water hazard — the only putt
+  // view that exercises the shared water surface.
+  'putt-water': {
+    query: 'scene=putt&course=pirate-cove&hole=1',
+    label: 'putt-water-cove',
+  },
   // The mini-golf ball sits higher on screen than the course tee, so start the
   // pull ON the ball (dragFrom, viewport fractions) — the grab test needs the
   // pointer-down within the ball's grab radius.
@@ -88,6 +97,14 @@ const SCENES = {
   augusta12: { query: 'scene=course&course=augusta&hole=11', label: 'augusta-12-golden-bell' },
   augusta13: { query: 'scene=course&course=augusta&hole=12', label: 'augusta-13-azalea' },
   augusta2: { query: 'scene=course&course=augusta&hole=1', label: 'augusta-2-pink-dogwood' },
+  // Hole 16 (Redbud) — a par 3 played straight over the pond, so the water fills
+  // the frame. This is the reference view the water work was judged against.
+  augusta16: { query: 'scene=course&course=augusta&hole=15', label: 'augusta-16-redbud' },
+  // The wedge-in view across the pond — the frame the water work is judged from.
+  augusta16pond: {
+    query: 'scene=course&course=augusta&hole=15&at=pond',
+    label: 'augusta-16-pond',
+  },
   listowelHeritage3: {
     query: 'scene=course&course=listowel-heritage&hole=2',
     label: 'listowel-heritage-3',
@@ -226,6 +243,13 @@ async function main() {
       const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1 });
       const errors = [];
       page.on('pageerror', (e) => errors.push(String(e)));
+      // Shader compile/link failures surface as console.error, NOT pageerror —
+      // three logs them and skips the object, so the scene renders MINUS that
+      // mesh and the shot looks plausibly fine. Capture them or a broken
+      // material is invisible to visual QA.
+      page.on('console', (m) => {
+        if (m.type() === 'error') errors.push(m.text().slice(0, 400));
+      });
       const url = `${base}/golfpreview.html?${query}`;
       try {
         await page.goto(url, { waitUntil: 'load', timeout: 20000 });

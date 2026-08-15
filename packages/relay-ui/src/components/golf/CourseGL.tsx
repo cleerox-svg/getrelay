@@ -21,6 +21,7 @@ import {
   courseTrees,
   edgeRadius,
   featureSeed,
+  waterLevelAt,
   type CourseHole,
 } from '../../lib/golf/terrain';
 import {
@@ -38,7 +39,6 @@ import {
   makeFog,
   makeTurfColor,
   makeTurfNormalMap,
-  makeWater,
   FRINGE_BAND,
   GREEN_COLOR,
   STRIPE_HI,
@@ -48,10 +48,18 @@ import {
   TURF_NORMAL_SCALE,
   TURF_ROUGHNESS,
 } from '../../lib/golf/scenery';
+import {
+  attachWaterDepth,
+  makeWater,
+  makeWaterFX,
+  pickWaterQuality,
+  readWaterQualityOverride,
+} from '../../lib/golf/water';
 import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
 import type { GolfCosmetics } from '../../lib/golf/cosmetics';
 import { BALL_R, CUP_R } from '../../lib/golf/greenPhysics';
 import type { CourseSim, CoursePrediction, CourseTrailPt } from '../../lib/golf/courseSim';
+import { windBearing, windMph } from '../../lib/golf/wind';
 
 // Regulation liner (sunken cup) geometry. CUP_DEPTH ≈ 3.5×BALL_R so the ball
 // sits clearly below the rim; the aperture punched in the green (grid + cap) is a
@@ -889,6 +897,16 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
     // BALL material's envMap ONLY (below) — NOT scene.environment — so turf/trees/
     // water pay no per-frame env cost. Background/sky visuals unchanged.
     const ballEnvMap = makeSkyEnvMap(renderer, track);
+    // Water quality tier. Auto-detected from GPU/CPU headroom, overridable with
+    // ?water=high|medium|low so the extra planar-reflection pass can be checked
+    // on a real low-end handset (GOLF.md's open on-device GPU action) without a
+    // rebuild. 'high' adds a second scene render per frame; everything below it
+    // costs no more than an ordinary material.
+    const waterQuality = readWaterQualityOverride() ?? pickWaterQuality(renderer);
+    // Shared splash: droplet crown + expanding ripple rings. The Course used to
+    // play a splash SOUND and draw nothing at all; this is the Range's visual,
+    // lifted into the kit so a ball finding water looks the same everywhere.
+    const waterFX = makeWaterFX(scene, track);
 
     const hemi = new THREE.HemisphereLight(0xcdeaff, 0x4f7d3f, 1.05);
     scene.add(hemi);
@@ -1095,14 +1113,33 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
     // water edge is exactly the wavy shape the ball plays and the baked map
     // classifies — no more circle-vs-organic mismatch. Radial UV for the disc
     // textures. Ground-height (heightAt) sampled per vertex so a bunker cap sits
-    // ON the basin bowl; water is a flat surface at its rim height.
-    // Shared animated water material (scenery.makeWater) — the SAME multi-wave
-    // scrolling normal + sun glint the Range uses, replacing the old static teal
-    // disc. Created lazily on the first water hazard and shared across all of a
-    // hole's water meshes (one material, one per-frame update). The geometry
-    // stays terrain-following + organic (buildOrganicDisc), so only the material
-    // is single-sourced.
+    // ON the basin bowl; water is LEVEL at its own waterline (see below).
+    //
+    // Water is the shared kit (lib/golf/water.ts) — the SAME level geometry,
+    // Gerstner waves, Fresnel/sky/planar reflection, foam and splash the Range
+    // and Putt use, so the three scenes cannot drift on what water is. Created
+    // lazily on the first water hazard and shared across all of a hole's water
+    // meshes (one material, one per-frame update, one reflection pass).
     let waterKit: ReturnType<typeof makeWater> | null = null;
+    // Every pond's level, so a splash lands ON the surface it went into (a hole
+    // may carry more than one, at different elevations).
+    const waterPools: { d: number; x: number; r: number; y: number }[] = [];
+    /** The water level under a world point — the containing pond, else the nearest. */
+    const waterSurfaceY = (x: number, d: number): number => {
+      let best = waterPools[0];
+      let bestDist = Infinity;
+      for (const p of waterPools) {
+        const dist = Math.hypot(p.x - x, p.d - d);
+        if (dist <= p.r) return p.y;
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = p;
+        }
+      }
+      return best?.y ?? heightAt(hole, d, x);
+    };
+    /** Splash size from the vertical speed the ball arrived with. */
+    const splashStrength = (vh: number) => Math.min(1.5, 0.55 + Math.abs(vh) / 28);
     const sandTex = track(makeSand());
     sandTex.repeat.set(3, 3);
     // A defined bunker LIP: a thin, darker "shaded sand wall" ring drawn right at
@@ -1119,43 +1156,55 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
     for (const hz of hole.hazards) {
       const hzSeed = featureSeed(hz.d, hz.x);
       if (hz.kind === 'water') {
-        // The water surface must COVER the ENTIRE baked-water footprint (which
-        // surfaceAt classifies out to edgeRadius(hzSeed, angle, hz.r)) with no
-        // exposed baked crescent. A single flat plane at one rim height failed:
-        // the rolling hills are NOT erased under a hazard, so the basin rim rides
-        // several yards higher on the far side than a lone rimY sample — the baked
-        // water there poked ABOVE the flat plane, leaving the dark crescent under
-        // a hard seam. Fix: sample heightAt PER VERTEX (like the sand cap) so the
-        // water skin sits a hair proud of the ground at every point it covers, and
-        // OVERFILL the wobbled radius slightly (WATER_OVER) so the sub-segment
-        // chord + the wave both fully reach the classified edge on ALL sides. 72
-        // segments kill the faceting. The shoreline then just laps the edge.
-        const groundY = (d: number, x: number) => heightAt(hole, d, x);
-        const WATER_OVER = 1.03;
+        // LEVEL water (Tier 0). The old skin sampled heightAt PER VERTEX so it
+        // followed the dished basin — a bowl of blue, which is precisely why the
+        // hazard read as tinted ground: water is the one surface in the world
+        // that is exactly level. The original flat-plane attempt was reverted
+        // because the rolling hills left the rim several yards higher on one
+        // side, so a single plane exposed a baked crescent. That is now fixed at
+        // the SOURCE instead of in the renderer — heightAt grades the hills level
+        // around a water hazard (the water pad, terrain.ts), so one waterLevelAt
+        // sample seats the whole pond.
+        //
+        // The disc still OVERFILLS the classified outline so it always reaches
+        // the played edge; the shader discards every vertex whose water depth is
+        // ≤ 0, so the visible waterline is where the level surface meets the
+        // rising bank — a terrain-derived shoreline that cannot disagree with the
+        // outline surfaceAt classifies. That also retires the pale annulus decal
+        // (the hard white outline in the reference screenshots): the shore is now
+        // a depth-faded, wave-driven foam band inside the shader.
+        //
+        // Rings 8 → 22 because the Gerstner crests are real geometry now and
+        // need vertices to resolve; the triangle count is still trivial.
+        const waterY = waterLevelAt(hole, hz);
+        const WATER_OVER = 1.06;
         const wGeo = track(
-          buildOrganicDisc(hzSeed, hz.d, hz.x, hz.r * WATER_OVER, groundY, 0.12, radialUV, 8, 72),
+          buildOrganicDisc(
+            hzSeed,
+            hz.d,
+            hz.x,
+            hz.r * WATER_OVER,
+            () => waterY,
+            0,
+            radialUV,
+            22,
+            96,
+          ),
         );
-        waterKit ??= makeWater(track);
+        // Per-vertex water depth (yd of water above the bed) — the shader's
+        // single input for the shallow→deep colour ramp, the shoreline alpha
+        // fade, the foam band and the wave taper.
+        attachWaterDepth(wGeo, (wx, wz) => waterY - heightAt(hole, -wz, wx));
+        waterKit ??= makeWater(track, {
+          renderer,
+          waterY,
+          sunDir: sun.position.clone(),
+          quality: waterQuality,
+        });
         const water = new THREE.Mesh(wGeo, waterKit.material);
         scene.add(water);
-        // A thin pale shoreline (organic annulus, SAME seed → hugs the water's
-        // wave) that laps JUST outside the water edge. Its inner base sits under
-        // the water overfill (so no gap) and it lifts a hair LESS than the water,
-        // so the water wins the overlap; the narrow 0.98→1.06·r band keeps it from
-        // spilling deep into the fringe/rough (old 1.08 base bulged to ~1.24·r).
-        const shoreGeo = track(
-          buildOrganicAnnulus(hzSeed, hz.d, hz.x, hz.r * 0.98, hz.r * 1.06, groundY, 0.07, radialUV, 2, 72),
-        );
-        const shoreMat = track(
-          new THREE.MeshBasicMaterial({
-            color: 0xdaf0f2,
-            transparent: true,
-            opacity: 0.55,
-            side: THREE.DoubleSide,
-          }),
-        );
-        const shore = new THREE.Mesh(shoreGeo, shoreMat);
-        scene.add(shore);
+        waterKit.addSurface(water);
+        waterPools.push({ d: hz.d, x: hz.x, r: hz.r * WATER_OVER, y: waterY });
       } else if (hz.kind === 'bunker') {
         // A DISHED sand cap that samples the heightfield (the basin bowl) along
         // the ORGANIC outline, so a ball — which rests on the terrain height —
@@ -2159,6 +2208,7 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
       renderer.setSize(w, h, false);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
+      waterKit?.setSize(w, h);
       applyPull();
     };
     window.addEventListener('resize', onResize);
@@ -2179,6 +2229,9 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
     let sfxLastVh = 0;
     let sfxBounces = 0; // bounces since launch (first is louder than the rest)
     let sfxLastRollAt = 0;
+    // Last wind applied to the water, so setWind only runs when it changes.
+    let lastWindAlong = Number.NaN;
+    let lastWindCross = Number.NaN;
 
     const frame = (now: number) => {
       raf = requestAnimationFrame(frame);
@@ -2208,12 +2261,27 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
       ballShadow.scale.set(shScale, shScale, shScale);
       ballShadowMat.opacity = 0.9 * Math.max(0.12, 1 - alt / 8);
 
-      // Water shimmer: shared per-frame hook scrolls the colour + ripple normal
-      // maps (multi-wave + sun glint), matching the range.
+      // Water: advance the wave clock (Gerstner crests travel, detail normals
+      // cross-scroll, the sun glint rides the crests) and integrate any live
+      // splash. Identical hooks in the Range and Putt.
       if (waterKit) waterKit.update(now / 1000);
+      waterFX.update(now, dt);
 
       // Sim state (used for the tracer gate below and the aim-hide logic).
       const st = sim.getState();
+
+      // Wind → waves. The HUD prints a wind speed and bearing; the pond now
+      // answers it (crest direction, amplitude, chop), from the SAME numbers the
+      // WindChip reads, so the readout and the water can't disagree. Re-applied
+      // only when the round wind actually changes.
+      if (waterKit && (st.windAlong !== lastWindAlong || st.windCross !== lastWindCross)) {
+        lastWindAlong = st.windAlong;
+        lastWindCross = st.windCross;
+        waterKit.setWind(
+          windBearing(st.windAlong, st.windCross),
+          windMph(st.windAlong, st.windCross),
+        );
+      }
 
       // --- SFX (render-side only; the sim is never touched) ----------------
       // Shot fire: inFlight rises false→true. This covers BOTH a lofted swing and
@@ -2258,7 +2326,13 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
       // OB buzzes a penalty, a normal lie gives a soft rest. Hole-out is handled
       // by the sink latch below (so it never doubles as a 'rest').
       if (st.resting && !sfxWasResting) {
-        if (st.lastResult === 'water') play('splash');
+        if (st.lastResult === 'water') {
+          play('splash');
+          // …and the VISUAL, which the Course never had. The sim stops the ball
+          // at the point of entry on a water result, so the resting position is
+          // where it went in. Strength scales with how hard it arrived.
+          waterFX.splash(b.x, waterSurfaceY(b.x, b.d), -b.d, splashStrength(sfxLastVh));
+        }
         else if (st.lastResult === 'ob') play('penalty');
         else if (st.lastResult !== 'holed') play('rest');
       }
@@ -2431,6 +2505,11 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
       camLook.lerp(desiredLook, k);
       camera.position.copy(camPos);
       camera.lookAt(camLook);
+
+      // Tier 3: mirror the scene into the reflection target BEFORE the main
+      // render, and only once the camera is final for this frame — the mirror
+      // camera is derived from it. No-op on any tier below 'high'.
+      waterKit?.renderReflection(renderer, scene, camera);
 
       renderer.render(scene, camera);
     };

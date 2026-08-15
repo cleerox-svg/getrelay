@@ -6,9 +6,10 @@
 // tokens, an explicit dark-translucent surface — never the light theme vars.
 
 import { frostedSurface, FROST_RADIUS_CHIP, FROST_TEXT, FROST_DIM, FROST_MINT, MONO_NUM } from './frosted';
+import { windMph } from '../../../lib/golf/wind';
 
 export function WindChip({ along, cross }: { along: number; cross: number }) {
-  const mph = Math.round(Math.hypot(along, cross) * 2.5);
+  const mph = Math.round(windMph(along, cross));
   const deg = (Math.atan2(cross, Math.max(0.0001, along)) * 180) / Math.PI;
   // Any meaningful breeze tints the arrow mint so it pops off the frosted glass;
   // dead calm keeps it plain white.

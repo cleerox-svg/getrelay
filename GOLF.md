@@ -119,6 +119,7 @@ A data-driven **Range layout** picker (persisted, default `fairway`):
 | Area | Path |
 |---|---|
 | Shared scene kit (turf/sky/trees/fog) | `packages/relay-ui/src/lib/golf/scenery.ts` |
+| Shared WATER (level geometry, Gerstner waves, Fresnel + sky/planar reflection, foam, splash, quality tiers) | `packages/relay-ui/src/lib/golf/water.ts` |
 | Headless screenshot harness | `packages/relay-ui/scripts/shoot-golf.mjs` + `golfpreview.html` + `src/golfpreview.tsx` |
 | Range physics/sim (headless) | `packages/relay-ui/src/lib/golf/rangeSim.ts` |
 | Sim tests / harness | `packages/relay-ui/src/lib/golf/rangeSim.test.ts` |
@@ -417,6 +418,77 @@ detail that MULTIPLIES the vertex colour (keeping each lie's hue while adding
 mown texture); the Range bakes `'green'`. `three` stays lazy: `scenery.ts` is
 only imported by the already `lazy()`-loaded `*GL.tsx`.
 
+**Shared water (`lib/golf/water.ts`).** Water is single-sourced across all
+three scenes — Course, Range and Putt attach ONE material to their own geometry
+and never make look/behaviour decisions of their own. It replaced a
+`MeshStandardMaterial` with a mottled colour map that read as "a blue lid",
+for four compounding reasons worth remembering:
+
+1. **The Course surface followed the dished terrain**, so it was a *bowl*.
+   Water is the one surface in the world that is exactly level, and a curved one
+   reads as tinted ground instantly.
+2. **Nothing reflected.** No env map, and `scene.environment` is deliberately
+   unset — yet at golf camera angles real water is mostly mirror.
+3. **One opacity and one colour edge to edge** — no Fresnel, no depth.
+4. **The ripple repeats were baked into the shared texture**, so the Range's
+   150 yd plane and the Course's ~26 yd pond got the same anisotropic tile,
+   which combed the wave trains into horizontal stripes.
+
+What it does now:
+
+- **Level surfaces with per-vertex depth.** Geometry carries an `aDepth`
+  attribute (yards of water above the bed); the shader discards where it is ≤ 0,
+  so the visible waterline is where the level plane meets the rising bank — a
+  terrain-derived shoreline that cannot disagree with the outline `surfaceAt`
+  classifies. The old painted shoreline annulus is gone.
+- **`heightAt` grades a WATER PAD** (`terrain.ts`) exactly like the green pad:
+  hills AND the tee→green grade are erased inside a water hazard's outline and
+  ramped back over a skirt, so the basin rim is one height all the way round.
+  Without it a level plane is impossible — measured rim spread on this course's
+  ponds was 1.3–2.7 yd against a 2.2 yd basin. `waterLevelAt(hole, hz)` is the
+  single source for the waterline. **Bunkers are excluded** — sand genuinely
+  follows the ground it sits in.
+- **Gerstner waves** in the vertex shader with analytic normals, so crests
+  actually travel. Steepness is DERIVED from amplitude (`k·a`) — passing both
+  separately once left the surface geometrically calm but *shaded* as heavy
+  chop, which mottled the pond like static.
+- **Fresnel + reflection**: the sky gradient always (the same
+  `makeSkyGradientTexture` that feeds the ball's PMREM, so the pond and the sky
+  dome can't drift), and on the `high` tier a true planar reflection.
+- **Wind-driven**: wave direction, amplitude, wavelength and whitecaps come from
+  the hole wind, via the same `windMph`/`windBearing` the HUD's WindChip reads.
+- **`makeWaterFX`**: the droplet crown + expanding ripple rings, seeded so
+  screenshots are stable. This existed only in the Range; the Course played a
+  splash SOUND and drew nothing, and Putt had neither.
+
+**Quality tiers.** `pickWaterQuality(renderer)` returns `high | medium | low`,
+overridable with **`?water=high|medium|low`** on the preview page so the extra
+pass can be checked on a real handset without a rebuild. Only `high` adds the
+Tier 3 planar reflection — a SECOND full scene render per frame — so it is
+gated behind GPU/CPU headroom. Everything below it costs no more than an
+ordinary material and still gets level water, Fresnel, moving crests and foam.
+
+**Gotchas that cost real time here:**
+- Clipping the reflection at the waterline via `renderer.clippingPlanes` flips
+  the renderer's plane COUNT every frame, and three rebuilds *every* material's
+  program when that count changes — a full shader recompile per frame. Use an
+  **oblique near plane** on the reflection camera instead (it is inside the
+  projection matrix, and free).
+- Render the reflection pass with **tone mapping OFF into a LINEAR target**, or
+  it is tone-mapped once into the target and again by the water shader and comes
+  out visibly grey.
+- A **flat-bedded** pond (the Range lake, a Putt board) floats inches above its
+  bed, so an unclamped wave trough drops *through* it and the ground punches up
+  in a marbled pattern. Pass `clearance` — the shader clamps the trough.
+- A hazard basin is a **raised cosine**, so its shoulders are nearly flat at the
+  rim: dropping the waterline even a quarter-yard pulls the shore a long way
+  inward and leaves a crater. `WATER_LIP` is 0.05 for a reason.
+- Three's `<fog_vertex>` chunk reads a varying named **`mvPosition`** — name the
+  view-space position that or the shader silently fails to compile, three logs to
+  `console.error` (NOT `pageerror`) and skips the mesh, so the scene renders
+  minus the water and looks plausibly fine. `shoot-golf.mjs` now captures
+  console errors for exactly this reason.
+
 **Shared putting physics.** `lib/golf/greenPhysics.ts` is the pure-math
 counterpart for greens (Stimp → μ, roll-out, cup capture; no `three`, no sim
 state), used by `courseSim`'s green/fringe roll. **Consolidation status:**
@@ -470,9 +542,13 @@ the roadmap markers above. Next up:
 2. **Consolidate Mini-Golf onto a real heightfield** so `puttSim`/`PuttGL` can
    share `greenPhysics` instead of its own flat engine.
 3. **On-device GPU check** (swiftshader/headless won't catch it): the 2048²
-   shadow map — plus the added terrain-following water/shoreline geometry — needs
-   verifying on a low-end Android device before the release AAB ships; 1536² is the
-   first dial to turn down. (The transparent slope-read overlay that was an earlier
+   shadow map — plus the shared water surface — needs verifying on a low-end
+   Android device before the release AAB ships; 1536² is the first dial to turn
+   down. Water now has its own dial: load the preview with **`?water=medium`**
+   (drops the Tier 3 planar reflection pass, keeping everything else) or
+   **`?water=low`** (also drops the detail normals). `pickWaterQuality` only
+   offers `high` where the GPU reports headroom, but that heuristic is exactly
+   what wants confirming on a real handset. (The transparent slope-read overlay that was an earlier
    GPU concern is gone — the green is clean now.)
 
 **Regressions:** if you ever touch `CourseSim` state, remember any new mutable
