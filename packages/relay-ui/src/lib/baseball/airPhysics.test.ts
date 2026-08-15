@@ -307,7 +307,7 @@ describe('aeroAccel', () => {
     }
   });
 
-  it('⚠ SIGN: backspin LIFTS, topspin sinks, +z spin runs toward third base', () => {
+  it('⚠ SIGN: backspin LIFTS, topspin sinks, +z spin runs toward first base', () => {
     // The declared frame (airPhysics.ts header) is load-bearing: swapping the
     // cross-product operands to vCross(v, axis) makes a four-seamer SINK 22.8 in
     // instead of rising 22.6 in, and passes a suite that only checks magnitudes.
@@ -327,7 +327,7 @@ describe('aeroAccel', () => {
       )})  ⇒ lift ${(top.z + G_FPS2).toFixed(3)} ft/s²`,
       `  spin axis +z (sidespin) : a = (${side.x.toFixed(3)}, ${side.y.toFixed(
         3,
-      )}, ${side.z.toFixed(3)})  ⇒ side ${side.y.toFixed(3)} ft/s² to +y (3B)`,
+      )}, ${side.z.toFixed(3)})  ⇒ side ${side.y.toFixed(3)} ft/s² to +y (1B)`,
       `  gravity alone would be z = ${(-G_FPS2).toFixed(3)}`,
     ];
     // eslint-disable-next-line no-console
@@ -340,7 +340,8 @@ describe('aeroAccel', () => {
     // Topspin is the exact mirror: it must SINK, by the same amount.
     expect(top.z).toBeLessThan(-G_FPS2);
     expect(back.z + top.z).toBeCloseTo(-2 * G_FPS2, 9);
-    // Sidespin about +z: ẑ × x̂ = +ŷ, toward third base, with no vertical part.
+    // Sidespin about +z: ẑ × x̂ = +ŷ, toward FIRST base (see the frame
+    // correction in airPhysics.ts's header), with no vertical part.
     expect(side.y).toBeGreaterThan(1);
     expect(side.z).toBeCloseTo(-G_FPS2, 9);
     expect(side.y).toBeCloseTo(back.z + G_FPS2, 9); // same magnitude, rotated 90°
@@ -417,7 +418,7 @@ describe('drag calibration — the published 94 mph release', () => {
     //
     // ⚠ CONDITIONS, because a calibration without them is a coincidence:
     // ISA air (59 °F, DRY — not the 70 °F/50 % game-day air, which is thinner
-    // and gives 86.49 mph with the SAME C_D), 55 ft of flight, spinless, and
+    // and gives 86.48 mph with the SAME C_D), 55 ft of flight, spinless, and
     // 86.3 is the VECTOR MAGNITUDE |v|, which is what a radar plate speed is.
     // The gravity-free closed form v_x = v0·exp(−K·C_D·x) inverts to 0.2829 —
     // but that answers a question about v_x, not |v|.

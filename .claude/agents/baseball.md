@@ -85,6 +85,10 @@ Golf works but sprawled (`CourseGL.tsx` is 2630 lines). Baseball does not repeat
 1. **File-size caps, asserted by `budget.test.ts`**: 500 lines for any `lib/baseball`
    module, 700 for any component, 900 for `StadiumGL.tsx`. At the cap the fix is
    **extraction, not a raised cap**; raising one needs a comment saying why.
+   When this is extracted into the shared `makeBudgetSuite` helper it must take
+   **per-directory caps, not one global number** — golf's files are 1,000–2,600
+   lines today and will ratchet down over time, so a single shared cap would
+   either be useless to baseball or unmeetable for golf.
 2. **`StadiumGL.tsx` is a composer, not a monolith** — it owns the renderer, camera
    modes and the loop, nothing else. The scene is built by small single-purpose
    `stadium/{bowl,turf,dirt,roof,crowd,lights,skyline}.ts` modules, each a pure
@@ -118,9 +122,36 @@ chunk byte size is unchanged**.
 
 ## One scene, camera modes
 `StadiumGL` has camera *modes* (`batter` / `pitcher` / `flight` / `wide`), **not** a
-second GL file. `GOLF.md:409` records what happened when Course and Range were
-separate scenes: they drifted, and a shared kit had to be retrofitted. A second scene
-is a permanent parity tax.
+second GL file. GOLF.md's rendering chapter records what happened when Course and
+Range were separate scenes: they drifted, and a shared kit had to be retrofitted. A
+second scene is a permanent parity tax.
+
+> ⚠ **Cite GOLF.md by SECTION, never by line number**, and the same for any
+> `lib/golf/*` reference. GOLF.md is two milestones stale (it still describes
+> "Course · Hole 1 (beta)" and holes 2–9 as future work, while four courses and
+> 45 holes actually ship) and is being rewritten, so every line number in it will
+> shift. Golf is also mid-audit, so its source line numbers are moving too.
+
+## Renderer patterns NOT to inherit
+Measured in the golf audit (Aug 2026). All three are cheap to get right at
+scene-build time and expensive to retrofit, so get them right the first time.
+
+1. **Build each procedural texture ONCE and `.clone()` per repeat.** `CourseGL`
+   generates six byte-identical turf normal maps — ~31.7 ms and 256 KB each,
+   ~190 ms and 1.5 MB wasted per mount — because they differ only in `.repeat`,
+   which is per-texture while `clone()` shares the source image. And it remounts
+   every hole. **`PuttGL` does this correctly: copy `PuttGL`, not `CourseGL`.**
+   The stadium has more repeated surfaces than a golf hole (turf, dirt, warning
+   track, seating decks, concourse), so this compounds harder here.
+2. **`shadow.autoUpdate = false` for the static scene.** The bowl, stands, roof
+   and crowd never move. Re-rendering their shadow map every frame is pure waste.
+   Flip it back on only if something in the shadow set actually animates.
+3. **Gate any per-`pointermove` prediction behind a quantised input signature.**
+   `CourseGL` runs four full shot sims on every `pointermove` — ~2 ms desktop but
+   **8–16 ms on a mid-range phone**, i.e. a dropped frame per move event.
+   `RangeGL`'s identical feature costs 0.55 ms because it only recomputes when a
+   quantised bucket changes. **Take `RangeGL`'s pattern.** This applies directly
+   to the pitch-aiming trajectory preview and to the batting reticle.
 
 ## GPU budget
 Shadow maps start at **1024²** and are never raised without an on-device Android test.
@@ -130,7 +161,17 @@ since been re-enabled to 2048² *by request* and still carries that as an open d
 risk. Baseball does not inherit that bet — a stadium is a worse case than a golf hole
 (crowd, roof, towers, a much larger shadow volume). Budget: 1 shadow-casting sun + 1 hemisphere fill +
 baked emissives. Gate the crowd instance count behind a `pickStadiumQuality(renderer)`
-tier (copy the renderer-probing idiom from `pickWaterQuality`, `lib/golf/water.ts:105`).
+tier.
+
+> ⚠ **Do NOT copy golf's `pickWaterQuality` — it is known broken.** A golf audit
+> (Aug 2026) found it promotes to the most expensive tier on
+> `cores > 4 && maxTextureSize >= 8192`, which a typical mid-range Android
+> satisfies — so the tier that is supposed to be gated behind GPU headroom is
+> what most phones actually get. Golf is fixing it. Take the fixed version, or
+> write a conservative probe of your own: **default DOWN, promote only on
+> measured evidence** (a real frame-time sample beats a capability sniff), and
+> expose a `?quality=` URL override so a tier can be forced on a real handset
+> without a rebuild.
 "Renders fine in SwiftShader" is **not** evidence of on-device safety.
 
 ## IP
@@ -144,6 +185,15 @@ different legal posture entirely. `ip.test.ts` is the mechanical guard.
 The duel is **3 innings, 3 outs**: no stolen bases, no errors, no substitutions, no
 pitching changes, no defensive shifts. Fielding is a landing-point + hang-time lookup
 modulated by one defender rating. If it wants to grow, that is a later milestone.
+
+## Owed to the golf session when `DerbyGame` exists
+The screenshot harness is being unified (one driver, per-game scene registries)
+and golf is shaping the **fixture seam** — the thing that stands a HUD up without
+the app shell. It will take both games' shapes rather than golf's-plus-an-adapter,
+but only if it knows ours. So when `DerbyGame.tsx` first exists, **report its
+external dependency list** — `api`, audio, the store, and anything else it
+reaches for — before the harness seam is finalised. A HUD that can only mount
+inside the real app is a HUD the visual gate cannot photograph.
 
 ## Gate visual changes
 After any change to the scene, its materials, lighting or geometry: run the
