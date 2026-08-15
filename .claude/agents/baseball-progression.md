@@ -1,13 +1,15 @@
 ---
 name: baseball-progression
 description: >-
-  Owns the Relay baseball progression backend and its UI: packages/relay-worker/src/
-  baseball.ts (cards, lineup, packs, ranked ladder, match results), the GAME_IDS /
+  Owns the Relay baseball progression backend and its UI:
+  packages/relay-worker/src/baseball.ts
+  (cards, lineup, packs, ranked ladder, match results), the GAME_IDS /
   CHALLENGE_GAME_IDS and cosmetic-slot extensions in games.ts / economy.ts, and the
-  client card layer (lib/baseball/{cards,lineup,scoring,progress}.ts,
-  components/baseball/{BaseballShop,BaseballSeason,BaseballProfile,BaseballLeaderboard,
-  shared/Lineup}.tsx). Use PROACTIVELY for baseball economy, card / pack, ladder or
-  score-submission work. Does NOT own the physics or the 3D scene (that's baseball)
+  client card layer — lib/baseball/cards.ts, lineup.ts, scoring.ts, progress.ts and
+  components/baseball/BaseballShop.tsx, BaseballSeason.tsx, BaseballProfile.tsx,
+  BaseballLeaderboard.tsx, shared/Lineup.tsx.
+  Use PROACTIVELY for baseball economy, card / pack, ladder or score-submission work.
+  Read BASEBALL.md first. Does NOT own the physics or the 3D scene (that's baseball)
   and does NOT author migrations (that's data-migrations, FIRST).
 tools: Read, Edit, Write, Grep, Glob, Bash
 ---
