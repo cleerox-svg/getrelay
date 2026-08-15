@@ -38,7 +38,7 @@ interface Props {
   mode: TuneMode;
   // Freeze the run and show the pause sheet. Owned by the parent because
   // the back gesture that raises it is a history event (see routes/
-  // Fog.tsx); identical contract to GuessGame.
+  // Games.tsx); identical contract to GuessGame.
   paused: boolean;
   onResume: () => void;
   // Active player skin (design tokens). The chrome, readout, transport

@@ -18,7 +18,9 @@ Quick routing: worker API (auth/chats/messages/contacts/blocks) →
 `messaging-core`; Durable Objects + WebSocket → `realtime`; push (Web Push +
 FCM) → `push`; R2/avatars/GIFs/stickers → `media`; Sports tab → `sports`;
 React UI/PWA → `frontend-pwa`; in-app golf game (`src/**/golf/**`, GOLF.md) →
-`golf` then `golf-visual-qa` screenshots the render; Capacitor Android →
+`golf` then `golf-visual-qa` screenshots the render; in-app baseball game
+(`src/**/baseball/**`, BASEBALL.md) → `baseball` then `baseball-visual-qa`, with
+cards/ladder/economy → `baseball-progression`; Capacitor Android →
 `android`; Capacitor iOS → `ios`; D1 schema + migrations → `data-migrations`
 (**first**, before feature code); `wrangler.toml` + deploy/CI →
 `devops-release`.

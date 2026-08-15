@@ -9,7 +9,7 @@ const TABS = [
   { to: '/chats',    label: 'Chats',    icon: ChatsIcon },
   { to: '/sports',   label: 'Sports',   icon: SportsIcon },
   { to: '/feeds',    label: 'Feeds',    icon: FeedsIcon },
-  { to: '/discover', label: 'Games',    icon: FogIcon },
+  { to: '/games',    label: 'Games',    icon: GamesIcon },
   { to: '/contacts', label: 'Contacts', icon: ContactsIcon },
 ];
 
@@ -20,7 +20,7 @@ export function MainLayout() {
   const unread = useStore((s) => s.chats.reduce((n, c) => n + (c.unreadCount ?? 0), 0));
   // Immersive screens (e.g. the full-bleed 3D golf games) hide the bottom
   // nav so they own the whole viewport. The flag is set/cleared by the
-  // screen itself (see Fog.tsx) and reliably reset on exit/unmount.
+  // screen itself (see Games.tsx) and reliably reset on exit/unmount.
   const immersive = useStore((s) => s.immersive);
   // True when any followed team has a live game right now. Drives a
   // small red dot on the Sports tab so the user notices without
@@ -185,9 +185,9 @@ function FeedsIcon({ active }: { active: boolean }) {
     </svg>
   );
 }
-function FogIcon({ active }: { active: boolean }) {
+function GamesIcon({ active }: { active: boolean }) {
   // Frosted window: rounded pane with a finger-wipe swoosh and a
-  // condensation drip below it — the Fog mini game's glyph.
+  // condensation drip below it — the Games tab's glyph.
   return (
     <svg viewBox="0 0 28 28" width="28" height="28">
       <g

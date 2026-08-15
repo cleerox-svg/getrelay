@@ -72,7 +72,7 @@ export function Feeds() {
           <div className="text-base mb-2">Nothing here yet</div>
           <div className="text-sm">
             Set a status in Profile, play a game in{' '}
-            <Link to="/discover" style={{ color: 'var(--accent)' }}>
+            <Link to="/games" style={{ color: 'var(--accent)' }}>
               Games
             </Link>
             , or add contacts to see theirs here.
@@ -166,19 +166,19 @@ function statusesToEvents(statuses: ContactStatus[]): FeedEvent[] {
 // Routing by kind. A status opens the contact who set it (or Profile for your
 // own — the only place to change it). Every game/challenge/record event opens
 // the Games hub: there's no deep-link into a specific game screen (each game is
-// selected by state inside /discover), so linking the hub beats guessing the
+// selected by state inside /games), so linking the hub beats guessing the
 // wrong game.
 function eventHref(e: FeedEvent): string {
   if (e.kind === 'status') {
     return e.mine ? '/profile' : `/contacts/${encodeURIComponent(e.userId)}`;
   }
-  return '/discover';
+  return '/games';
 }
 
 // ---- Copy helpers ----
 
 // Display name for every game id. No existing map covers all five (the Games
-// hub in Fog.tsx only lists fog/tune/golf), so this is the single source here.
+// hub in Games.tsx only lists fog/tune/golf), so this is the single source here.
 const GAME_NAMES: Record<GameId, string> = {
   fog: 'Fog',
   tune: 'Tune',
