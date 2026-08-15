@@ -118,9 +118,15 @@ chunk byte size is unchanged**.
 
 ## One scene, camera modes
 `StadiumGL` has camera *modes* (`batter` / `pitcher` / `flight` / `wide`), **not** a
-second GL file. `GOLF.md:409` records what happened when Course and Range were
-separate scenes: they drifted, and a shared kit had to be retrofitted. A second scene
-is a permanent parity tax.
+second GL file. GOLF.md's rendering chapter records what happened when Course and
+Range were separate scenes: they drifted, and a shared kit had to be retrofitted. A
+second scene is a permanent parity tax.
+
+> ⚠ **Cite GOLF.md by SECTION, never by line number**, and the same for any
+> `lib/golf/*` reference. GOLF.md is two milestones stale (it still describes
+> "Course · Hole 1 (beta)" and holes 2–9 as future work, while four courses and
+> 45 holes actually ship) and is being rewritten, so every line number in it will
+> shift. Golf is also mid-audit, so its source line numbers are moving too.
 
 ## GPU budget
 Shadow maps start at **1024²** and are never raised without an on-device Android test.
@@ -130,7 +136,17 @@ since been re-enabled to 2048² *by request* and still carries that as an open d
 risk. Baseball does not inherit that bet — a stadium is a worse case than a golf hole
 (crowd, roof, towers, a much larger shadow volume). Budget: 1 shadow-casting sun + 1 hemisphere fill +
 baked emissives. Gate the crowd instance count behind a `pickStadiumQuality(renderer)`
-tier (copy the renderer-probing idiom from `pickWaterQuality`, `lib/golf/water.ts:105`).
+tier.
+
+> ⚠ **Do NOT copy golf's `pickWaterQuality` — it is known broken.** A golf audit
+> (Aug 2026) found it promotes to the most expensive tier on
+> `cores > 4 && maxTextureSize >= 8192`, which a typical mid-range Android
+> satisfies — so the tier that is supposed to be gated behind GPU headroom is
+> what most phones actually get. Golf is fixing it. Take the fixed version, or
+> write a conservative probe of your own: **default DOWN, promote only on
+> measured evidence** (a real frame-time sample beats a capability sniff), and
+> expose a `?quality=` URL override so a tier can be forced on a real handset
+> without a rebuild.
 "Renders fine in SwiftShader" is **not** evidence of on-device safety.
 
 ## IP

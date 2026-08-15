@@ -94,9 +94,16 @@ the fix.
 ## Caveats
 - SwiftShader is **software** GL: it validates composition, materials, geometry, scale
   and parity, but NOT real-GPU behaviour. A 2048² shadow map has crashed the WebView
-  GPU process on low-end Android (`GOLF.md:218`) — that is an on-device check you
+  GPU process on low-end Android (see GOLF.md's roadmap — cite it by section, not
+  line: the file is being rewritten) — that is an on-device check you
   cannot cover. **Flag every GPU-cost change (shadow map size, crowd instance count,
   light count, added render pass) for device testing.**
-- Seeded placement (crowd, clouds) is deterministic, but procedural texture grain may
-  use per-run randomness. Judge structurally, not by pixel diff.
+- **Every baseball scene texture and placement MUST be seeded (`mulberry32`), so a
+  pixel diff between two runs of the same scene is meaningful.** Do not inherit
+  golf's "judge structurally, never pixel-diff" caveat: that caveat exists because
+  GOLF.md *claims* its textures are seeded and they are not — an audit found
+  `paintTurfDetail` and the mini-golf rough/sand builders calling `Math.random()`
+  ~9,500 times per build, which makes golf's screenshot diffs noisy by
+  construction. If a baseball scene renders differently across two identical runs,
+  that is a **FAIL**, not a caveat — report it and name `baseball` as the owner.
 - A "visual" change that produces **no visible delta** is itself a finding — say so.
