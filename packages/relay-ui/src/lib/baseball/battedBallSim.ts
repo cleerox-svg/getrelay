@@ -33,8 +33,10 @@ import {
   crossingFraction,
   lerpBallState,
   stepBall,
+  vAdd,
   vLen,
   vScale,
+  vSub,
   vec3,
 } from './airPhysics';
 import type { BallState, Vec3 } from './airPhysics';
@@ -140,6 +142,9 @@ export function launchFromAngles(
   };
 }
 
+/** No wind. The default, and the exact object the zero-wind fast path tests. */
+export const NO_WIND: Vec3 = vec3(0, 0, 0);
+
 /**
  * Fly a batted ball from contact to the ground.
  *
@@ -152,21 +157,45 @@ export function launchFromAngles(
  * `lerpBallState`), never snapped to a substep: a ball descending at 60 mph
  * covers 0.73 ft per substep, which is a foot of carry and a full inch of
  * landing-point error for the fielding lookup.
+ *
+ * ⚠ WIND IS A GALILEAN BOOST, NOT A SECOND INTEGRATOR — and that is a derivation,
+ * not a shortcut. Both aero forces depend on the AIR-RELATIVE velocity and
+ * gravity is invariant under a uniform translation, so in a frame moving with a
+ * uniform wind `w` the equations of motion are EXACTLY the ones `stepBall`
+ * already solves. Integrate from `v − w`, then add `w·t` back to every sampled
+ * position. Stage 1's integrator, stage 1's coefficients, no copy, no new
+ * approximation — and the equivalence is an identity a test can assert to the
+ * last bit, which "add a wind acceleration term" would not be.
+ *
+ * Two conditions come with it and both are enforced or stated:
+ *   • `w` must be HORIZONTAL. The ground crossing is solved on z, and z is
+ *     frame-invariant only while `w.z = 0`. `w.z` is ignored, not silently
+ *     integrated; `parks.parkConditions` never produces one.
+ *   • `w` must be UNIFORM and CONSTANT. A gust that varies over the flight is a
+ *     different problem and is not modelled.
+ * With `w = (0,0,0)` the boost is skipped entirely, so every stage 1–3 golden is
+ * byte-identical rather than merely equal to within a rounding of zero.
  */
 export function simulateBattedBall(
   launch: BattedLaunch,
   air: AirConditions = GAME_AIR,
+  wind: Vec3 = NO_WIND,
 ): BattedFlight {
   const K = aeroScaleFor(air);
+  const w = vec3(wind.x, wind.y, 0);
+  const windy = w.x !== 0 || w.y !== 0;
   const track: BattedTrack = { t: [], x: [], y: [], z: [] };
+  // Air frame → ground frame: p_ground = p_air + w·t. Applied on the way into
+  // the track so every consumer (the fence walk, the fielding lookup, the
+  // renderer) reads ground-frame feet and never has to know the boost happened.
   const push = (s: BallState, t: number) => {
     track.t.push(t);
-    track.x.push(s.p.x);
-    track.y.push(s.p.y);
+    track.x.push(s.p.x + w.x * t);
+    track.y.push(s.p.y + w.y * t);
     track.z.push(s.p.z);
   };
 
-  let s: BallState = { p: launch.p, v: launch.v };
+  let s: BallState = { p: launch.p, v: windy ? vSub(launch.v, w) : launch.v };
   let t = 0;
   let apex = s.p.z;
   push(s, t);
@@ -190,12 +219,14 @@ export function simulateBattedBall(
   }
 
   const speed = vLen(launch.v);
+  const endP = windy ? vAdd(end.p, vScale(w, t)) : end.p;
+  const endV = windy ? vAdd(end.v, w) : end.v;
   return {
-    carryFt: Math.hypot(end.p.x - launch.p.x, end.p.y - launch.p.y),
+    carryFt: Math.hypot(endP.x - launch.p.x, endP.y - launch.p.y),
     hangS: t,
     apexFt: apex,
-    landing: end.p,
-    landingSpeedMph: vLen(end.v) * FPS_TO_MPH,
+    landing: endP,
+    landingSpeedMph: vLen(endV) * FPS_TO_MPH,
     evMph: speed * FPS_TO_MPH,
     laDeg: (Math.atan2(launch.v.z, Math.hypot(launch.v.x, launch.v.y)) * 180) / Math.PI,
     sprayDeg: (sprayAngle(launch.v) * 180) / Math.PI,

@@ -127,6 +127,17 @@ export const GAME_RH = 0.5;
  * derivation, and the honest reading is that it bounds how much the crisis
  * PLACEMENT matters at altitude. Fixing it properly means giving `dragCoef` the
  * park's ρ, which changes its signature and every caller; flagged, not fudged.
+ *
+ * ⚠ STAGE 4 MEASURED THE LIKE-FOR-LIKE COMPARISON AND IT IS BETTER THAN THIS
+ * NOTE SAID. The +34.7 ft above is the 105 mph MAX-CARRY rung, which is a 432 ft
+ * fly at sea level — but the published ~25–30 ft is quoted ON A 400 FT FLY, and
+ * the altitude gain is superlinear in flight length (8.03 % of a 432 ft fly,
+ * 7.61 % of a 400 ft one). Hold the swing fixed at a 400 ft sea-level carry and
+ * change only the air: the model gives **+29.1 ft** at 5200 ft and +29.5 at
+ * 5280, or +30.0 / +30.4 with each air at its own optimum launch angle. That is
+ * INSIDE the published band, at its top edge — not outside it. `parks.test.ts`
+ * prints the ladder and asserts the band. The value of ν did NOT move; only the
+ * yardstick was corrected.
  */
 export const AIR_KINEMATIC_VISC_FT2_S = 1.57e-4;
 

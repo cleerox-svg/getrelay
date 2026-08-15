@@ -102,6 +102,14 @@ test**, or an **explicitly-labelled feel knob**. There is no fifth category.
 | `e_T` | **0** | **derived** | the Coulomb STICK condition: reaching rolling costs `J_t/J_n = 0.084` against μ ≈ 0.4–0.6, so the grip fraction is forced to 1.0 — see below |
 | reference undercut | 0.56 in | **calibrated** | the swing parameter that meets BOTH published bands at `e_T = 0` (window 0.552–0.582 in) |
 | barrel | 98 mph, 26–30°, ±1°/mph | **published data** | Statcast classification, `tuning.isBarrel` |
+| foul lines | ±45° | fixed | rule book (the lines are 90° apart) |
+| park fence / roof / elevation | see `parks.ts` | fixed | **design data** for ORIGINAL parks — inputs to the physics exactly as the ball's mass is, and nothing is ever fitted to them |
+| closed-roof air | 72 °F, 40 % RH | fixed | climate control — the number that makes a domed park deterministic |
+| fielder sprint speed | 27 ft/s | **published data** | league-average sprint speed |
+| fielder reaction | 0.5 s | **published data** | the reaction leg of published route work (reference unverified) |
+| time to sprint speed | 1.8 s | **published data** | ⇒ `a = v/t = 15 ft/s²`, **derived**. Worth 24.3 ft of reach |
+| infield dirt radius | 155.5 ft | **derived** | `RUBBER_D_FT + 95` (the published 95 ft infield arc) |
+| `GROUND_INTERCEPT_FT`, `XB_*`, `DEFENSE_SPAN` | 26 ft, 68/130 ft, ±15 % | **feel knobs** | the fielding lookup's bands — see the fielding section |
 
 **Air density.** `airDensity(elevFt, tempF, rh)` = standard-atmosphere
 barometric pressure `p(h) = p₀(1 − 6.87535e-6·h)^5.2559`, then the ideal gas law
@@ -543,6 +551,137 @@ by `Δt`, `θ_c = −ω·Δt·v_p/(ωd + v_p)` and `R_c = d/cos θ_c`.
   and this is a second consequence of the missing `e(z)`, not a resolution. The
   symmetry is still asserted so nobody closes it with an asymmetric fudge.
 
+### The park — data, and three mechanics that come out of it
+
+A park is a **data entry and zero code**: `parks.ts` holds the `Park` shape, the
+generic fence/roof/air machinery, and a `validatePark()` that
+`parks.test.ts` runs against a deliberately-broken park (14 distinct complaints,
+asserted individually). Adding a venue is a row in `PARKS`.
+
+**M1's home park is `Harbourfront Dome`** — original name, Toronto homage:
+−45° 328 ft, −22° 375, 0° 400, +22° 375, +45° 328, a uniform 10 ft wall,
+250 ft of elevation, a retractable roof 282 ft up, 28 ft of foul ground. A second
+park, `Alpine Heights` at 5200 ft, exists so that **altitude can be measured**
+rather than asserted — it is deeper, asymmetric, and carries a 16 ft wall in
+left-centre so the height column is exercised by something.
+
+**The fence between samples is a monotone cubic Hermite** (Fritsch–Carlson /
+pchip, in `pchip.ts` with the full argument). A wall is piecewise *smooth*, not
+polygonal, and the interpolant answers to the physics and the renderer at once.
+Linear in polar is C⁰ — measured, the one-sided slopes at the −22° knot differ by
+**0.66 ft/deg**, which is five samples becoming five visible creases; pchip's
+differ by **< 0.01**. A natural cubic is C² but global and it *rings*, bulging
+past the sampled 400 ft at dead centre — inventing a distance the data does not
+contain at the one bearing the park is defined by, and perturbing the whole curve
+when a sample is added. Fritsch–Carlson is C¹, **local** and **overshoot-free**,
+and sets the slope to 0 at a local extremum, so centre field is the true maximum
+of a symmetric park. C¹ over C² is deliberate: no-overshoot is a *correctness*
+property of a gameplay boundary; curvature smoothness is cosmetic. Outside
+±45° the curve is **clamped, not extrapolated**.
+
+**The roof is a real mechanic.** Closed ⇒ wind is **exactly** `vec3(0,0,0)` (the
+test asserts `=== 0`, not a tolerance), the temperature is pinned to 72 °F and the
+humidity to 40 %, so ρ and therefore `K` are constants and **the park is
+deterministic**: two unrelated seeds give byte-identical `track` arrays and an
+identical `carryFt` to the last bit. That is what ranked play will default to.
+Open ⇒ a seeded draw of temperature, humidity and wind — measured, 429–439 ft on
+the same 103 mph swing against 422.6 ft with the roof shut.
+
+⚠ **The 282 ft ceiling is enforced but essentially never bites**, and that is a
+finding, not a bug. A ball reaches it only above **~120.2 mph** exit velocity hit
+near-vertically (115 mph apexes 262.9 ft); a 125 mph ball at a *home-run* launch
+angle apexes 200.3 ft, so **the roof never converts a home run**. What it does
+convert is the hardest pop-up in the sport, which is roughly what a real dome roof
+does. There is **no deflection model** — the dimension is enforced by ruling such
+a ball `'roof'` (never a home run, played live where it lands); a restitution and
+a panel normal are data we do not have.
+
+**Wind is a Galilean boost, not a second integrator.** Both aero forces depend on
+the *air-relative* velocity and gravity is invariant under a uniform translation,
+so in a frame moving with a uniform wind `w` the equations of motion are exactly
+the ones `stepBall` already solves: integrate from `v − w`, then add `w·t` back to
+every sampled position. Stage 1's integrator, stage 1's coefficients, no copy —
+and the equivalence is an **identity a test asserts to the last bit** (measured
+disagreement 0.00e+0 ft over 652 substeps), which "add a wind acceleration term"
+could not be. Two conditions come with it and both are enforced: `w` must be
+**horizontal** (the ground crossing is solved on `z`, which is frame-invariant
+only while `w.z = 0`; `w.z` is ignored, not silently integrated) and **uniform and
+constant**. With `w = 0` the boost is skipped outright, so every stage 1–3 golden
+is byte-identical. Independent check nobody fitted: a 10 mph wind straight out is
+worth **+24.2 ft** on a 400 ft fly against a commonly published 20–25 ft, and a
+10 mph headwind costs **33.4 ft** — more than the tailwind gains, which is the
+right asymmetry for a `v²` drag law.
+
+**Home-run resolution** walks the flight against `r − fence(bearing)` and resolves
+the crossing **analytically** with the same `crossingFraction` every other event
+uses; snapping to a substep moves a home-run call by most of a foot of wall
+(mutation-verified). Above the wall ⇒ home run, below ⇒ off the wall, `|spray| >
+45°` ⇒ foul with the pole itself **fair** (asserted two-sided and mirrored).
+
+⚠ **A 400 ft *carry* is not a 400 ft home run**, and the tests say which 400 they
+mean. A ball whose carry is exactly 400 ft lands at the base of a 400 ft wall and
+is **in play**; clearing a 10 ft wall there takes ~409 ft of carry. The asserted
+boundary is on the *distance at wall height* — `distanceAtHeight(flight, 10)` —
+which is the quantity the resolver actually compares: 400 ft clears (10.000 ft at
+the fence), 395 ft does not (4.560 ft at the fence, off the wall).
+
+### Altitude is derived — and the like-for-like number is inside the band
+
+There is **no park factor** and there must never be one. Elevation reaches the
+ball through `ρ → K` and nothing else; `parks.test.ts` holds a swing fixed, changes
+only the air, and reads the gain.
+
+| elevation | carry @ 27° | Δ | carry @ LA_opt | Δ |
+| --- | --- | --- | --- | --- |
+| 0 | 400.0 | — | 400.0 | — |
+| 2500 | 414.3 | +14.3 | 414.5 | +14.5 |
+| **5200** | **429.1** | **+29.1** | **430.0** | **+30.0** |
+| 5280 | 429.5 | +29.5 | 430.5 | +30.4 |
+
+Published altitude effect on a 400 ft fly: **~25–30 ft**. The model is **inside
+the band**, at its top edge.
+
+⚠ **This corrects stage 3b's "slightly high" reading, without moving a constant.**
+That note compared **+34.7 ft** against the same 25–30 band — but +34.7 is the
+105 mph *max-carry* rung, a **432 ft** fly, and the altitude gain is superlinear
+in flight length (8.03 % of a 432 ft fly against 7.61 % of a 400 ft one).
+Measured the way the published figure is *stated*, the model gives +29.1. Both
+numbers are reproduced and asserted in the same test, so the reconciliation is
+arithmetic rather than a story. `ν` did **not** move; only the yardstick was
+corrected, and the fixed-ν choice is better supported than before.
+
+### Fielding — the smallest model in the game
+
+Landing point + hang time + **one** defender rating → out / 1B / 2B / 3B / HR.
+No stolen bases, errors, substitutions, shifts, positioning, throws, cutoffs or
+baserunner state. `fielding.ts` is 204 lines and the charter's cap is the design.
+
+- **The alignment is a constant** — seven standing positions, polar from the
+  plate. That constant *is* the "no shifts" rule expressed as data.
+- **Reach ramps.** `react (0.5 s) → accelerate (1.8 s to 27 ft/s) → sprint`. The
+  ramp is not cosmetic: an instantly-sprinting fielder is over-credited
+  `v·t/2 = 24.3 ft` on every play, and the published catch envelope (~100 ft on a
+  4 s hang is a five-star play) is only reachable with it — 70.2 ft against the
+  naive 94.5.
+- **The rating reaches exactly one quantity**, `reachFt`, over ±15 %. Measured, it
+  flips a real play: a 310 ft ball with a 4.0 s hang 76.3 ft from the LF is a
+  single at 0.0 and an out at 1.0.
+- Off the wall is **never** an out; a corner (|bearing| ≥ 30°) is a triple.
+- A foul pop is caught only inside the park's own `foulTerritoryFt`, so that
+  field is live data rather than decoration.
+
+⚠ **The stated limitation, pinned by a test.** The model reads the ball's
+*landing point*, and a ground ball does not stop where it lands — it rolls to the
+fielder, who throws. A routine grounder to short lands 25.1 ft from him with
+0.55 s of usable time, in which he covers **2.3 ft**; `GROUND_INTERCEPT_FT = 26`
+is a labelled feel knob standing in for the roll and the throw, and setting it to
+0 makes every routine ground ball a base hit (mutation-verified, 2 tests). A
+second clause caps any unfielded ball landing on the dirt at a **single** — load
+bearing, not tidy: a chopper landing 7 ft in front of the plate is 100 ft from
+the nearest fielder's *standing spot*, and without it the miss arithmetic scores
+it a double. When the duel wants real infield play the fix is a rolling phase,
+and both are deleted rather than tuned.
+
 ### Determinism
 
 `FIXED_MS = 1000/120` is shared by the live rAF loop, the headless `predict()`,
@@ -581,6 +720,11 @@ the render layer; contact resolves at the true physical state.
 | `packages/relay-ui/src/lib/baseball/batSim.test.ts` | The collision bench: prints the contact-point ladder, the collision grid and the timing table; asserts the derivations, the `(1+e)/(1+q) ≡ 1+eA` identity, the zero-obliquity closed form, the backspin band, the hook/slice signs and the handedness mirror |
 | `packages/relay-ui/src/lib/baseball/battedBallSim.ts` | The flight, on stage 1's `stepBall` — never a second integrator. `launchFromAngles` (published EV/LA/spray/spin → a launch state), `simulateBattedBall` with the analytic ground crossing, `maxCarry` (argmax over LA), `distanceAtHeight` for the fence |
 | `packages/relay-ui/src/lib/baseball/battedBallSim.test.ts` | The carry bench and stage 3's central experiment: prints the carry-ladder residual table in both airs, the spin sensitivity, the altitude ladder and the end-to-end undercut sweep; asserts the model's goldens, the +58 ft residual as a finding, and the lift structure |
+| `packages/relay-ui/src/lib/baseball/pchip.ts` | Monotone cubic Hermite (Fritsch–Carlson) + the argument for it against linear and against a natural cubic. Extracted from `parks.ts` at the 500-line cap — extraction, not a raised cap |
+| `packages/relay-ui/src/lib/baseball/parks.ts` | The park as DATA + `fenceAt` (pchip through the sampled wall), the roof mechanic (`roofClosed`, `parkConditions` — exactly-zero wind and pinned air when shut), `resolveFence` (analytic fence crossing → homeRun/offWall/foul/roof/inPlay) and `validatePark()`. Read by the physics AND by stage 4's geometry |
+| `packages/relay-ui/src/lib/baseball/parks.test.ts` | The park bench: prints the fence tables (pchip vs linear, with the knot-slope jump), the roof-open weather draw, the roof ceiling ladder, the wind boost identity and the altitude ladder; asserts the 400/395 wall boundary, the foul pole, `wind === 0` under a shut roof, byte-identical trajectories across seeds, and the altitude result against the published 25–30 ft band |
+| `packages/relay-ui/src/lib/baseball/fielding.ts` | The deliberately tiny defence: fixed alignment, a ramped reach, one defender rating, → out / 1B / 2B / 3B / HR. 200 lines, and the cap is the design |
+| `packages/relay-ui/src/lib/baseball/fielding.test.ts` | The fielding bench: prints the reach ladder and a named batted-ball ladder; asserts the catch boundary exactly on the reach, the single/double index boundary, the foul-territory boundary, the rating's ±15 % span, and the landing-point limitation |
 | `packages/relay-ui/src/lib/baseball/determinism.test.ts` | Source-reading guard: no `Math.random`, `Date.now`, `performance.` or `new Date` in any baseball source |
 | `packages/relay-ui/src/lib/baseball/budget.test.ts` | Anti-bloat guard: 500-line cap per shipping `lib/baseball` module (tests exempt), 700 per component, 900 for `StadiumGL.tsx`; no `three` in the sim; no barrel `index.ts` |
 | `packages/relay-ui/src/lib/baseball/ip.test.ts` | Source-reading guard: no club nickname, real park name or `mlbstatic` host in the shipped game |
@@ -711,7 +855,44 @@ the render layer; contact resolves at the true physical state.
   cubic smoothstep (caught by the RK4 convergence bench, which is what chose the
   quintic) and the fixed kinematic viscosity (15 tests, including stage 1's own
   plate-speed calibration).
-- **Stage 4 — game & scene.** `derbySim.ts`, `duelSim.ts` (3 innings, 3 outs, no
+- **Stage 4 — parks, fences, roof, fielding.** → **Done.** `parks.ts` (the `Park`
+  shape, `Harbourfront Dome` and `Alpine Heights` as data, `fenceAt`, the roof
+  mechanic, `resolveFence`, `validatePark`), `pchip.ts` (extracted at the cap),
+  `fielding.ts` (204 lines), and a wind term in `battedBallSim` implemented as an
+  **exact Galilean boost** so there is still exactly one integrator. 28 new tests
+  over two files, **124 in the baseball suite**. `C_D`, `C_L`, `e_T`, the Reynolds
+  band and `ν` were **not** touched.
+  **The findings, reported rather than absorbed.** (1) The altitude effect is
+  **+29.1 ft on a 400 ft fly at 5200 ft**, inside the published 25–30 band —
+  stage 3b's "+34.7 ft, slightly high" compared a 432 ft fly against a figure
+  quoted on a 400 ft one, and the reconciliation is asserted arithmetic. (2) The
+  282 ft roof is enforced but needs **~120.2 mph** hit near-vertically to bite,
+  and **never** converts a home run (a 125 mph home run apexes 200.3 ft) — the
+  dimension exists and is asserted; there is no deflection model. (3) A 400 ft
+  *carry* to a 400 ft fence is **not** a home run; the asserted boundary is on the
+  distance at wall height, and the ~9 ft difference is printed. (4) Fielding reads
+  the landing point, so the roll and the throw are missing and two labelled knobs
+  stand in for them.
+  **Twenty-three mutations were watched to fail** and reverted, each against the
+  whole 124-test suite: the fence made linear (1), its monotonicity limiter
+  removed (1), the fence extrapolated past the foul lines (2), a "tiny" wind under
+  a shut roof (1), the closed-roof temperature unpinned (1), the park's elevation
+  cut out of its air (1), the wind boost sign flipped (2), the un-boost using `dt`
+  instead of `t` (1), the fence crossing snapped to a substep (1), the foul pole
+  made foul (1), the roof ceiling deleted (1) and applied with the roof open (1),
+  `validatePark`'s roofless-ceiling clause dropped (1), the fence height ignored
+  (3) and not interpolated (2), the crossing bearing read from the wrong point
+  (5), the fielder's acceleration ramp deleted (4), the infield-hit cap removed
+  (1), `GROUND_INTERCEPT_FT` zeroed (2), the defender rating neutered (1),
+  off-the-wall made catchable (2), the catch boundary loosened by a foot (2) and
+  foul territory ignored (2).
+  ⚠ **Two of those survived the first pass and both were real gaps**, not test
+  noise: removing the infield-hit cap changed nothing because an unclamped depth
+  term was silently doing the same job (two mechanisms covering one case, so
+  neither was tested — the clamp was restored and the cap is now load-bearing),
+  and pinning the fence *height* to its first sample changed nothing because M1's
+  wall is a uniform 10 ft. Both are now asserted.
+- **Stage 5 — game & scene.** `derbySim.ts`, `duelSim.ts` (3 innings, 3 outs, no
   steals/errors/subs/shifts), `ai.ts`, `StadiumGL.tsx` as a *composer* over
   `stadium/{bowl,turf,dirt,roof,crowd,lights,skyline}.ts`, HUDs, and the budget /
   determinism / IP guard tests.
@@ -820,6 +1001,26 @@ the render layer; contact resolves at the true physical state.
   2.71 mph (incorrect), and an *inside pitch* — a smaller aim radius — is rewarded
   out to ~6 in, so there is **no jamming in this model at all**. All three are
   golden-pinned. The fix is a measured `e(z)`, not a nudge.
+- **A 400 ft CARRY is not a 400 ft home run.** A ball carrying exactly 400 ft
+  lands at the base of a 400 ft wall. Clearing a 10 ft wall there needs ~409 ft.
+  Every fence assertion says which quantity it means — `distanceAtHeight(flight,
+  wallHeight)` is the one the resolver compares — because "a 400 foot homer" has
+  no answer until you fix which 400.
+- **Wind is a Galilean boost and it MUST stay horizontal.** `simulateBattedBall`
+  integrates from `v − w` and adds `w·t` back, which is *exact* for a uniform
+  wind and needs no change to `aeroAccel` — but the ground crossing is solved on
+  `z`, and `z` is frame-invariant only while `w.z = 0`. `w.z` is ignored on
+  purpose. An updraft needs the crossing solved in the boosted frame, and that is
+  a different piece of work.
+- **A park factor is the fifth category.** Altitude reaches the ball through
+  `ρ → K` and nothing else, and the like-for-like measurement (+29.1 ft on a
+  400 ft fly at 5200 ft) is inside the published band without one. If a park ever
+  "plays big", the honest dials are its fence data and its air — never a
+  multiplier on carry.
+- **Fielding reads the LANDING POINT, so there is no roll and no throw.** Two
+  labelled knobs stand in for them (`GROUND_INTERCEPT_FT`, and the cap that makes
+  any unfielded ball on the dirt a single). Do not tune them to fix an infield
+  outcome; the fix is a rolling phase, and then both are deleted.
 - **The called zone is the rule zone plus one ball RADIUS a side (19.90 in),
   not a diameter (22.81 in).** A strike is any part of the ball over any part of
   the plate and we integrate the ball's *centre*, so the centre may sit one
