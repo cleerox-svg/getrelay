@@ -165,6 +165,21 @@ function CoursePreview({ at }: { at: string | null }) {
       b.inFlight = b.grounded = false;
       b.resting = true;
       sim.selectClub('5iron');
+    } else if (at === 'pond') {
+      // Pin-relative (so it works on ANY hole): ~62 yd short of the flag on the
+      // line to it — the wedge-in view the water work is judged from, matching
+      // the reference screenshots. On a hole with a greenside pond this frames
+      // the water across the whole lower half of the screen.
+      const back = 62;
+      const dx = HOLE.pin.x - HOLE.tee.x;
+      const dd = HOLE.pin.d - HOLE.tee.d;
+      const len = Math.max(1, Math.hypot(dx, dd));
+      b.d = HOLE.pin.d - (dd / len) * back;
+      b.x = HOLE.pin.x - (dx / len) * back;
+      b.h = heightAt(HOLE, b.d, b.x);
+      b.inFlight = b.grounded = false;
+      b.resting = true;
+      sim.selectClub('sw');
     } else if (at === 'approach') {
       // ~45 yd short of the green, so the whole green reads at approach distance.
       b.d = 468;

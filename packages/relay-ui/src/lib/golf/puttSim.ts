@@ -156,6 +156,12 @@ export interface Ball {
 export type PuttEventType = 'stroke' | 'sink' | 'rest' | 'penalty';
 export interface PuttEvent {
   type: PuttEventType;
+  // Where the ball ENTERED the water, in virtual ground space. Present on
+  // 'penalty' only. The ball is reset to the shot start by the time the event is
+  // drained, so the renderer would otherwise have no way to place the splash.
+  // Read-only extra data — the sim's behaviour and determinism are unchanged.
+  x?: number;
+  y?: number;
 }
 
 // Aim/state snapshot for the renderer's in-scene aim line + power meter.
@@ -384,10 +390,12 @@ export class PuttSim {
     // and emits a 'penalty' (a later HUD adds +1 stroke). The ball comes to rest
     // at the reset point. Deterministic (region test + captured shot start).
     if (len(ball.vel) > 1e-6 && this.hazardKindAt(ball.pos.x, ball.pos.y) === 'water') {
+      const entryX = ball.pos.x;
+      const entryY = ball.pos.y;
       ball.pos = { x: this._shotStart.x, y: this._shotStart.y };
       ball.vel = { x: 0, y: 0 };
       ball.resting = true;
-      this.events.push({ type: 'penalty' });
+      this.events.push({ type: 'penalty', x: entryX, y: entryY });
       return;
     }
 

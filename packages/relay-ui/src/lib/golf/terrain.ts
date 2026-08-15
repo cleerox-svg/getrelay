@@ -532,13 +532,58 @@ export function heightAt(hole: CourseHole, d: number, x: number): number {
         ? 0.5 + 0.5 * Math.cos(((dg - padOuter) / skirt) * Math.PI)
         : 0;
 
+  // WATER PAD — the same construction logic as the green pad, for the same
+  // reason. A pond's surface is LEVEL, so its rim must be too: with the rolling
+  // hills left running through a hazard the basin rim rode 1.3–2.7 yd higher on
+  // one side than the other (measured across the course's ponds) while the dish
+  // itself is only ~2.2 yd deep, so any level water plane either floated over
+  // the low bank or left the high bank towering — the pond read as a crater, and
+  // the renderer's old workaround (bending the water skin to follow the terrain)
+  // is exactly why it looked like tinted ground rather than water.
+  //
+  // So a real course grades a pond's surround level, and so do we: erase the
+  // hills inside the hazard outline, ramping back to grade over a skirt derived
+  // from the basin depth (same raised-cosine profile the green skirt uses, so
+  // the bank shoulder stays a natural grade). The tee→green grade is NOT erased,
+  // so a pond still sits at the right elevation on the hole.
+  //
+  // BUNKERS are deliberately excluded: sand genuinely follows the ground it sits
+  // in, and the sand cap is drawn on the dished bowl. Only water needs a level lip.
+  let waterPad = 0;
+  let waterPlateau = 0;
+  for (const hz of hole.hazards) {
+    if (hz.kind !== 'water') continue;
+    const dh = dist(d, x, hz);
+    const hzR = edgeRadius(featureSeed(hz.d, hz.x), featureAngle(hz.d, hz.x, d, x), hz.r);
+    const skirt = Math.min(22, Math.max(10, Math.abs(hz.depth) * 6));
+    const b =
+      dh <= hzR
+        ? 1
+        : dh < hzR + skirt
+          ? 0.5 + 0.5 * Math.cos(((dh - hzR) / skirt) * Math.PI)
+          : 0;
+    if (b > waterPad) {
+      waterPad = b;
+      // The level the surround grades to: the hole's BASE elevation at the
+      // pond's centre. Both the hills AND the tee→green grade are erased inside
+      // the pad — on a short hole the grade alone tilts a 26 yd pond by over a
+      // yard, which is as bad for a level waterline as the hills were.
+      const alongHz = Math.max(0, Math.min(1, (hz.d - hole.tee.d) / span));
+      waterPlateau = t.teeElev + (t.greenElev - t.teeElev) * alongHz;
+    }
+  }
+
   // Rolling hills, almost entirely erased under the green pad: a real green is
   // graded far smoother than the fairway mounds, so its own planar tilt (not the
   // surrounding noise) is the slope a putt breaks on. Leaving even 10% of the
   // hills here gave the putting surface a ~0.5yd-per-6yd lateral wander that made
   // reading a break impossible; 3% keeps a whisper of movement without polluting
   // the designed tilt.
-  h += t.hilliness * valueNoise(d / t.hillScale, x / t.hillScale, t.seed) * (1 - 0.97 * gBlend);
+  h +=
+    t.hilliness *
+    valueNoise(d / t.hillScale, x / t.hillScale, t.seed) *
+    (1 - 0.97 * gBlend) *
+    (1 - waterPad);
 
   if (gBlend > 0) {
     // Flat-topped raise + planar tilt (fall toward tiltDir) + gentle interior
@@ -550,6 +595,13 @@ export function heightAt(hole: CourseHole, d: number, x: number): number {
     const undul = g.undulation * valueNoise(d / 12 + 50, x / 12 + 50, t.seed + 7);
     h += g.raise * gBlend + (tilt + undul) * gBlend;
   }
+
+  // Grade the water surround to its level plateau. Applied AFTER the green pad
+  // (so a greenside pond blends smoothly off the pad's skirt) and BEFORE the
+  // basin dish, so the dish is excavated out of level ground and the rim is one
+  // height all the way round — which is what lets the surface be a single level
+  // plane with a shoreline only a few inches of bank wide.
+  if (waterPad > 0) h += (waterPlateau - h) * waterPad;
 
   // Hazard basins (bunker / pond): dish the ground down inside the ORGANIC
   // outline — the basin edge follows the same seeded radius surfaceAt() uses to
@@ -567,6 +619,46 @@ export function heightAt(hole: CourseHole, d: number, x: number): number {
     }
   }
   return h;
+}
+
+// How far (yd) a pond's waterline sits below the LOWEST point of its rim, so a
+// little damp bank always shows and the level surface can never spill over the
+// low side of the basin.
+//
+// Deliberately TINY. The basin is a raised cosine, so its shoulders are nearly
+// flat at the rim: dropping the water even a quarter-yard pulls the shoreline a
+// long way inward and leaves a wide ring of exposed bed (which is exactly what a
+// first attempt at this looked like — a crater with a puddle in it). At 0.05 the
+// waterline lands at ~94% of the basin radius, i.e. a shoreline a few inches of
+// bank wide, which is what a pond edge actually looks like.
+export const WATER_LIP = 0.02;
+
+/**
+ * The world y of a water hazard's LEVEL surface.
+ *
+ * Water is level, so the renderer needs ONE height for the whole pond, and it
+ * must be low enough to sit inside the basin at every angle. Sampling the
+ * minimum rim height around the hazard's organic outline guarantees that — and
+ * because heightAt now grades the hills level around a water hazard (the water
+ * pad above), the rim barely varies, so the exposed bank is a shoreline rather
+ * than a crater wall.
+ *
+ * Lives here, next to heightAt, so the surface the ball is classified against
+ * and the surface that gets drawn are derived from the same source. The renderer
+ * subtracts this from heightAt per vertex to get water DEPTH, which is what
+ * shades the shallows and fades the shoreline.
+ */
+export function waterLevelAt(hole: CourseHole, hz: CircleFeature): number {
+  const seed = featureSeed(hz.d, hz.x);
+  let lo = Infinity;
+  const N = 72;
+  for (let i = 0; i < N; i++) {
+    const a = (i / N) * Math.PI * 2;
+    const r = edgeRadius(seed, a, hz.r);
+    const y = heightAt(hole, hz.d + Math.sin(a) * r, hz.x + Math.cos(a) * r);
+    if (y < lo) lo = y;
+  }
+  return lo - WATER_LIP;
 }
 
 // Slope at a world point as ∂h/∂d, ∂h/∂x (dimensionless rise/run) via a central

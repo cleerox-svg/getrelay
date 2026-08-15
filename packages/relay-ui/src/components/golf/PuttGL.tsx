@@ -16,12 +16,18 @@ import {
   makeSkyEnvMap,
   makeTurfColor,
   makeTurfNormalMap,
-  makeWater,
   SURFACE_RGB,
   TURF_NORMAL_SCALE,
   TURF_ROUGHNESS,
-  type WaterKit,
 } from '../../lib/golf/scenery';
+import {
+  makeWater,
+  makeWaterFX,
+  makeWaterPlane,
+  pickWaterQuality,
+  readWaterQualityOverride,
+  type WaterKit,
+} from '../../lib/golf/water';
 import { FIXED_MS, MAX_LAUNCH_SPEED } from '../../lib/golf/tuning';
 import { play, unlockAudio } from '../../lib/audio';
 
@@ -461,7 +467,19 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
     }
 
     // --- Hazards (water/sand) — data-only in Phase 1 but drawn for parity ----
+    // Water uses the shared kit (lib/golf/water.ts) — the SAME level surface,
+    // Gerstner waves, Fresnel + sky/planar reflection, foam and splash as the
+    // Course and Range, so mini-golf water can't drift from the rest of the game.
+    // Board scale is much smaller than a course, so the ripple tile and pond
+    // depth are scaled down to suit; everything else is the shared behaviour.
     let waterKit: WaterKit | null = null;
+    // Shared splash FX, so a putt into the drink looks like a course shot does.
+    const waterFX = makeWaterFX(scene, track);
+    // Lifted clear of the board so a wave trough can't clip through it, and
+    // given a deep nominal depth so the pond reads as water rather than as an
+    // all-foam puddle (the board is flat — there is no modeled basin).
+    const PUTT_WATER_LIFT = 0.2;
+    const PUTT_WATER_DEPTH = 1.6;
     for (const hz of hole.hazards ?? []) {
       const r = hz.region;
       const rw = r.x1 - r.x0;
@@ -469,20 +487,43 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
       const cx = (r.x0 + r.x1) / 2;
       const cy = (r.y0 + r.y1) / 2;
       const y = heightAtV(cx, cy);
-      const geo = track(new THREE.PlaneGeometry(rw, rh));
-      let mat: THREE.Material;
       if (hz.kind === 'water') {
-        if (!waterKit) waterKit = makeWater(track);
-        mat = waterKit.material;
+        const waterY = y + PUTT_WATER_LIFT;
+        if (!waterKit) {
+          waterKit = makeWater(track, {
+            renderer,
+            waterY,
+            sunDir: sun.position.clone(),
+            quality: readWaterQualityOverride() ?? pickWaterQuality(renderer),
+            // A mini-golf board reads as MINIATURE, so the ripples, wavelength
+            // and amplitude scale down even though the board's world units are
+            // course-sized. Same shader, same behaviour — just scaled.
+            tileYd: 1.6,
+            waveLen: 3.2,
+            waveAmp: 0.09,
+            shoreDepth: 0.5,
+            foamDepth: 0.09,
+            clearance: PUTT_WATER_LIFT - 0.05,
+          });
+        }
+        // Segment ~every 0.12 board units so the crests resolve on a small pond.
+        // 1.4-unit shoreline fade, so the pond laps its edge instead of ending
+        // on a hard rectangle (the board has no modeled bank to meet).
+        const geo = track(makeWaterPlane(rw, rh, PUTT_WATER_DEPTH, 0.12, 1.4));
+        const mesh = new THREE.Mesh(geo, waterKit.material);
+        mesh.position.set(wx(cx), waterY, wz(cy));
+        scene.add(mesh);
+        waterKit.addSurface(mesh);
       } else {
         const sandTex = track(makeSandTexture());
-        mat = track(new THREE.MeshStandardMaterial({ map: sandTex, roughness: 1 }));
+        const mat = track(new THREE.MeshStandardMaterial({ map: sandTex, roughness: 1 }));
+        const geo = track(new THREE.PlaneGeometry(rw, rh));
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.rotation.x = -Math.PI / 2;
+        mesh.position.set(wx(cx), y + 0.06, wz(cy));
+        mesh.receiveShadow = true;
+        scene.add(mesh);
       }
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.rotation.x = -Math.PI / 2;
-      mesh.position.set(wx(cx), y + 0.06, wz(cy));
-      mesh.receiveShadow = hz.kind === 'sand';
-      scene.add(mesh);
     }
 
     // --- Walls / obstacles (extruded barriers; banked rails distinct) --------
@@ -931,6 +972,11 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
           play('putt', { rate: 0.95 + 0.1 * p01, gain: 0.4 + 0.2 * p01 });
         } else if (ev.type === 'penalty') {
           play('penalty');
+          // …and the shared splash, at the point of entry (the sim reports it on
+          // the event because the ball is already reset by the time we see it).
+          if (ev.x != null && ev.y != null) {
+            waterFX.splash(wx(ev.x), heightAtV(ev.x, ev.y) + PUTT_WATER_LIFT, wz(ev.y), 0.7);
+          }
         } else if (ev.type === 'rest') {
           play('rest');
         }
@@ -990,11 +1036,12 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
       // one the physics collided against this substep.
       for (let i = 0; i < spinUpdaters.length; i++) spinUpdaters[i]!(sim.simTime);
 
-      // Flag sway + water shimmer.
+      // Flag sway + water (wave clock + any live splash).
       const t = now / 1000;
       flag.rotation.z = Math.sin(t * 2) * 0.12;
       flag.position.x = flagBaseX + Math.sin(t * 3) * 0.2;
       if (waterKit) waterKit.update(t);
+      waterFX.update(now, dt);
 
       // Sink burst integration.
       if (particles.visible) {
@@ -1014,6 +1061,10 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
           partAttr.needsUpdate = true;
         }
       }
+
+      // Tier 3: mirror the scene into the reflection target BEFORE the main
+      // render, once the camera is final for this frame. No-op below 'high'.
+      waterKit?.renderReflection(renderer, scene, camera);
 
       renderer.render(scene, camera);
       raf = requestAnimationFrame(frame);
@@ -1048,6 +1099,7 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
       renderer.setSize(w, h, false);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
+      waterKit?.setSize(w, h);
     });
     ro.observe(host);
 

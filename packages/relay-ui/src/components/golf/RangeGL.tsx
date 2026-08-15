@@ -13,11 +13,18 @@ import {
   makeFairwayTurf,
   makeFog,
   makeTurfNormalMap,
-  makeWater,
   GREEN_COLOR,
   TURF_NORMAL_SCALE,
   TURF_ROUGHNESS,
 } from '../../lib/golf/scenery';
+import {
+  makeWater,
+  makeWaterFX,
+  makeWaterPlane,
+  pickWaterQuality,
+  readWaterQualityOverride,
+} from '../../lib/golf/water';
+import { windBearing, windMph } from '../../lib/golf/wind';
 import {
   FAIRWAY_HALF_W,
   FAIRWAY_WATER_END,
@@ -297,14 +304,35 @@ export default function RangeGL({
     const waterNear = isFairway ? FAIRWAY_WATER_START : GRASS_END;
     const waterFar = isFairway ? FAIRWAY_WATER_END : WATER_END;
     const WATER_Y = 0.06;
-    // Shared animated water (scenery.makeWater): multi-wave scrolling normal + sun
-    // glint. The Course uses the SAME material on its organic water disc.
-    const waterKit = makeWater(track);
-    const waterGeo = track(new THREE.PlaneGeometry(150, waterFar - waterNear));
+    // Shared water (lib/golf/water.ts) — the SAME level surface, Gerstner waves,
+    // Fresnel + sky/planar reflection, foam and splash the Course and Putt use.
+    // The Range only supplies geometry and a nominal depth; every look/behaviour
+    // decision lives in the kit, so the three scenes cannot drift again.
+    //
+    // makeWaterPlane tessellates from the plane's SIZE (the old geometry was a
+    // single quad, with no vertices for wave crests to live on) and the ripple
+    // scale is applied in the shader from world XZ — so this 150 yd lake and the
+    // Course's ~26 yd pond get identically-sized wavelets instead of the
+    // stretched, combed tile the one baked repeat used to give them both.
+    const RANGE_WATER_DEPTH = 2.6; // open lake: no modeled bed, so a deep constant
+    const waterKit = makeWater(track, {
+      renderer,
+      waterY: WATER_Y,
+      sunDir: sun.position.clone(),
+      quality: readWaterQualityOverride() ?? pickWaterQuality(renderer),
+      // The lake is a plane floating just above the flat ground plane (which
+      // sits at -0.05), so a wave trough has ~0.11 yd before it would clip
+      // through. Clamp a hair inside that.
+      clearance: 0.09,
+    });
+    const waterGeo = track(makeWaterPlane(150, waterFar - waterNear, RANGE_WATER_DEPTH));
     const water = new THREE.Mesh(waterGeo, waterKit.material);
-    water.rotation.x = -Math.PI / 2;
     water.position.set(0, WATER_Y, -(waterNear + waterFar) / 2);
     scene.add(water);
+    waterKit.addSurface(water);
+    // Shared splash FX (droplet crown + ripple rings). This behaviour ORIGINATED
+    // here; it now lives in the kit so the Course and Putt get it too.
+    const waterFX = makeWaterFX(scene, track);
 
     // --- Grass fairway causeway (lane / practiceLane only) -------------
     // A turf lane laid over the water straight down the middle so an online
@@ -812,30 +840,9 @@ export default function RangeGL({
     scene.add(divotDecal);
     let divotStart = -1;
 
-    // Expanding concentric ripple rings on the water surface for a splash.
-    const RIPPLES = 2;
-    const rippleGeo = track(new THREE.RingGeometry(0.7, 1.0, 32));
-    const rippleMeshes: THREE.Mesh[] = [];
-    const rippleMats: THREE.MeshBasicMaterial[] = [];
-    for (let i = 0; i < RIPPLES; i++) {
-      const m = track(
-        new THREE.MeshBasicMaterial({
-          color: 0xeaf7ff,
-          transparent: true,
-          opacity: 0,
-          side: THREE.DoubleSide,
-          depthWrite: false,
-        }),
-      );
-      const mesh = new THREE.Mesh(rippleGeo, m);
-      mesh.rotation.x = -Math.PI / 2;
-      mesh.visible = false;
-      scene.add(mesh);
-      rippleMeshes.push(mesh);
-      rippleMats.push(m);
-    }
-    let splashStart = -1;
-
+    // The splash rig (droplet crown + ripple rings) moved to the shared water
+    // kit — see waterFX above. The turf-divot particles below stay local: they
+    // are a GRASS effect, not a water one.
     // Kick a low turf divot: a few short green/brown flecks + a fading mark.
     const spawnDivot = (x: number, z: number, island: boolean) => {
       const y = island ? ISLAND_TOP + 0.05 : 0.05;
@@ -876,37 +883,10 @@ export default function RangeGL({
       divotStart = performance.now();
     };
 
-    // Kick a water splash: a white crown of droplets + expanding ripple rings.
-    const spawnSplash = (x: number, z: number) => {
-      pActive = 22;
-      pGround = WATER_Y;
-      pLifeMax = 0.7;
-      partMat.size = 2.3;
-      for (let i = 0; i < pActive; i++) {
-        const j = i * 3;
-        partPos[j] = x;
-        partPos[j + 1] = WATER_Y + 0.2;
-        partPos[j + 2] = z;
-        const ang = Math.random() * Math.PI * 2;
-        const sp = 2 + Math.random() * 5;
-        pVel[j] = Math.cos(ang) * sp;
-        pVel[j + 1] = 9 + Math.random() * 11;
-        pVel[j + 2] = Math.sin(ang) * sp;
-        const w = 0.85 + Math.random() * 0.15;
-        partCol[j] = w;
-        partCol[j + 1] = w;
-        partCol[j + 2] = 1;
-      }
-      pLife = pLifeMax;
-      particles.visible = true;
-      partAttr.needsUpdate = true;
-      partColAttr.needsUpdate = true;
-      // Ripple rings.
-      splashStart = performance.now();
-      for (const m of rippleMeshes) {
-        m.position.set(x, WATER_Y + 0.03, z);
-        m.visible = true;
-      }
+    // Water splash now comes from the shared kit (identical crown + rings in the
+    // Course and Putt). Strength scales with the ball's descent speed.
+    const spawnSplash = (x: number, z: number, strength = 1) => {
+      waterFX.splash(x, WATER_Y, z, strength);
     };
 
     // --- Pointer input (drag back to swing) ----------------------------
@@ -1009,6 +989,9 @@ export default function RangeGL({
     // --- Camera follow state -------------------------------------------
     let following = false;
     let revertAt = 0;
+    // Last wind applied to the water, so setWind only runs when it changes.
+    let lastWindAlong = Number.NaN;
+    let lastWindCross = Number.NaN;
     const followTarget = new THREE.Vector3();
     const lookTarget = new THREE.Vector3();
     // Up axis for yawing the tee view about the tee (origin) by the aim steer.
@@ -1088,7 +1071,8 @@ export default function RangeGL({
           suppressBounceSfx = true;
         } else if (ev.type === 'splash') {
           if (ev.d != null && ev.x != null) {
-            spawnSplash(ev.x, -ev.d);
+            // Strength from the descent speed, matching the Course.
+            spawnSplash(ev.x, -ev.d, Math.min(1.5, 0.55 + Math.abs(lastVh) / 28));
             sinking = true;
             sinkStart = now;
           }
@@ -1290,25 +1274,8 @@ export default function RangeGL({
         }
       }
 
-      // Splash ripple rings: staggered expand + fade on the water surface.
-      if (splashStart >= 0) {
-        const elapsed = (now - splashStart) / 1000;
-        let anyLive = false;
-        for (let i = 0; i < rippleMeshes.length; i++) {
-          const p = (elapsed - i * 0.22) / 1.0;
-          const m = rippleMeshes[i]!;
-          if (p < 0 || p >= 1) {
-            m.visible = false;
-            if (p < 1) anyLive = true;
-            continue;
-          }
-          anyLive = true;
-          m.visible = true;
-          m.scale.setScalar(1 + p * 7);
-          rippleMats[i]!.opacity = (1 - p) * 0.6;
-        }
-        if (!anyLive) splashStart = -1;
-      }
+      // Splash droplets + ripple rings: integrated by the shared water kit.
+      waterFX.update(now, dt);
 
       // Gentle flag sway.
       const t = now / 1000;
@@ -1317,9 +1284,20 @@ export default function RangeGL({
         f.mesh.rotation.z = Math.sin(t * 2 + i) * 0.12;
         f.mesh.position.x = f.base + Math.sin(t * 3 + i) * 0.12;
       }
-      // Water: shared per-frame hook scrolls the colour + ripple normal maps so
-      // the surface visibly moves and the sun glint shimmers.
+      // Water: advance the wave clock (Gerstner crests travel, detail normals
+      // cross-scroll, the sun glint rides the crests). Same hook as the Course.
       waterKit.update(t);
+      // Wind → waves, from the SAME numbers the HUD's WindChip reads, so the
+      // readout and the lake agree. Re-applied only when the round wind changes.
+      const wSt = sim.getState();
+      if (wSt.windAlong !== lastWindAlong || wSt.windCross !== lastWindCross) {
+        lastWindAlong = wSt.windAlong;
+        lastWindCross = wSt.windCross;
+        waterKit.setWind(
+          windBearing(wSt.windAlong, wSt.windCross),
+          windMph(wSt.windAlong, wSt.windCross),
+        );
+      }
 
       // Camera: chase the ball down-range in flight, then ease back to the tee.
       if (following && revertAt !== 0 && now >= revertAt) following = false;
@@ -1346,6 +1324,10 @@ export default function RangeGL({
       camera.position.lerp(followTarget, k);
       lookAt.lerp(lookTarget, k);
       camera.lookAt(lookAt);
+
+      // Tier 3: mirror the scene into the reflection target BEFORE the main
+      // render, once the camera is final for this frame. No-op below 'high'.
+      waterKit.renderReflection(renderer, scene, camera);
 
       renderer.render(scene, camera);
       raf = requestAnimationFrame(frame);
@@ -1382,6 +1364,7 @@ export default function RangeGL({
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       applyPull();
+      waterKit.setSize(w, h);
     });
     ro.observe(host);
 

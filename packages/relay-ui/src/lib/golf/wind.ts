@@ -26,6 +26,26 @@ export function makeWind(rng: () => number = Math.random): Wind {
 }
 
 /**
+ * The wind speed in mph, as shown on the HUD's WindChip.
+ *
+ * Single-sourced because the WATER now answers the wind too: wave direction and
+ * amplitude are driven from the same numbers the chip prints, so the readout and
+ * the pond agree instead of the HUD claiming a breeze over a dead-flat surface.
+ */
+export function windMph(along: number, cross: number): number {
+  return Math.hypot(along, cross) * 2.5;
+}
+
+/**
+ * The wind's bearing in radians for the 3D scenes: 0 = straight downrange (+d),
+ * +π/2 = to the right (+x). Scenes convert to an XZ direction as
+ * (sin, −cos) — the convention water.ts's setWind expects.
+ */
+export function windBearing(along: number, cross: number): number {
+  return Math.atan2(cross, along);
+}
+
+/**
  * Turn a numeric seed into a deterministic RNG (`() => number` in [0,1)).
  * A tiny mulberry32 — three-free / sim-free, so this file stays importable by
  * the non-lazy HUD wrappers without pulling `three` into the main bundle.
