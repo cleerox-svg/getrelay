@@ -2,39 +2,62 @@
 // sit inside every tolerance while walking the whole grid one way, and the grid
 // is the point.
 //
-// ⚠ WHAT THIS FILE FOUND, up front, because it is the most important thing the
-// collision produced: the two published targets for a reference swing cannot
-// both be met, and no value of `e_T` reconciles them. Launch angle and backspin
-// move in OPPOSITE directions with `e_T`, measured on the reference swing
-// (0.75 in undercut, +10° attack, 90 mph pitch descending 8° with 2200 rpm,
-// 71.5 mph bat speed):
+// ⚠ WHAT THIS FILE USED TO CLAIM, AND WHY IT WAS WRONG. Stage 3 reported that
+// "the two published targets cannot both be met, and no value of e_T reconciles
+// them". That finding is RETRACTED. It came from a one-dimensional sweep: e_T
+// varied at a FIXED 0.75 in undercut, on which launch angle and backspin do move
+// in opposite directions —
 //
 //     e_T      LA        backspin
-//   +0.46    26.1°      5900 rpm     the LA that "LA = θ_LOC + α" predicts
+//   +0.46    26.2°      5866 rpm     the LA that "LA = θ_LOC + α" predicts
 //   +0.20    29.0°      4430 rpm     the textbook rigid-surface e_T
 //    0.00    31.2°      3325 rpm     exact rolling (the patch stops sliding)
-//   −0.20    33.4°      2220 rpm     ADOPTED — the published backspin band
+//   −0.20    33.4°      2220 rpm     what stage 3 shipped
 //
-// "LA 25–29°" needs e_T ≥ +0.2; "backspin 1900–2500 rpm" needs e_T ≤ −0.14.
-// Disjoint, by a factor of ~2.7 in tangential impulse. Neither Coulomb friction
-// (the adopted solve needs only J_t/J_n = 0.12 against μ ≈ 0.5) nor the bat's
-// own tangential recoil (worth 6.6 %) closes it. `e_T` is calibrated against
-// BACKSPIN because that is the tangential observable it controls and because
-// backspin is what feeds carry; the consequence is that the `LA ≈ θ_LOC + α`
-// rule of thumb under-predicts this model's launch angle by ~7°, which is
-// reported rather than absorbed into a launch-angle correction.
+// — but THE UNDERCUT IS NOT PUBLISHED DATA. It is a free swing parameter, so
+// pinning it asks whether one arbitrary swing can hit both targets, not whether
+// the MODEL can. Over the 2-D (e_T, undercut) region, printed below, the bands
+// overlap for e_T ∈ [−0.16, +0.02].
+//
+// ⚠ AND e_T IS NOT A CALIBRATED DIAL AT ALL — it is DERIVED. The solve needs only
+// J_t/J_n = 0.084 to bring the contact patch to rolling, against μ ≈ 0.4–0.6 for
+// leather on wood: the contact sits ~5–7× inside the STICK regime, so the patch
+// MUST reach rolling and the grip fraction (1 + e_T) is forced to exactly 1.0.
+// Nothing in a rigid-body impulse solve removes tangential impulse while
+// friction is in surplus, so stage 3's negative e_T had no mechanism behind it.
+// The admissible range is [0, +0.2] — 0 is stick, positive is tangential
+// compliance — and admissible ∩ feasible = [0, +0.02]. SHIPPED: e_T = 0.
+//
+// ⚠ AND THE "~2.7×" WAS A MISLABEL. 2.643 is the BACKSPIN ratio between e_T =
+// +0.46 and −0.20, not an impulse ratio. The tangential-impulse gap is the ratio
+// of grip fractions, and at the fixed 0.75 in undercut the two bands' nearest
+// edges are e_T = +0.2024 (LA 29.0°) and e_T = −0.1493 (2500 rpm): 1.413×. Both
+// numbers are asserted below so neither can drift back.
+//
+// What survives, stated precisely: AT ANY FIXED UNDERCUT the two bands are
+// disjoint by 1.413× in tangential impulse, and `LA ≈ θ_LOC + α` still
+// under-predicts this model's launch angle — by 3.3° at the reference swing,
+// because the rule assumes the tangential velocity is entirely scrubbed off and
+// even at 100 % grip it is not.
 //
 // ⚠ SECOND FINDING, printed as its own table: the rigid-body model has no bat
 // VIBRATION, so `eA` keeps rising toward the balance point and the model's exit
 // -velocity optimum sits ~3 in toward the HANDLE of the real sweet spot. Toward
-// the tip it is right for the right reason (M_eff collapses, 4 in costs 11.25
-// mph); toward the handle it GAINS 2.6 mph where a real bat loses. Both are
+// the tip it is right for the right reason (M_eff collapses, 4 in costs 11.53
+// mph); toward the handle it GAINS 2.71 mph where a real bat loses. Both are
 // pinned below so the gap cannot quietly close or quietly widen.
+//
+// ⚠ AND IT HAS A SECOND CONSEQUENCE, ALSO A RETRACTION. Stage 3 explained away
+// the timing model's symmetry by saying jamming "is a property of an INSIDE
+// pitch, which is `aimZM`'s job". It is not: the same missing `e(z)` means an
+// inside pitch makes this batter STRONGER for six inches (peak EV 3 in inside
+// the sweet spot, +3.0 mph). The model has no jamming mechanism anywhere. Its
+// own table is printed below and the numbers are asserted.
 //
 // ⚠ MUTATIONS WATCHED TO FAIL — see the log at the bottom of this file.
 
 import { describe, expect, it } from 'vitest';
-import { vLen, vec3 } from './airPhysics';
+import { BALL_MASS_SLUG, BALL_RADIUS_FT, vLen, vec3 } from './airPhysics';
 import type { Vec3 } from './airPhysics';
 import {
   BALL_MASS_KG,
@@ -70,11 +93,23 @@ const refPitch = (spinRpm = 2200, descDeg = -8, mph = 90) => {
   };
 };
 
-/** The reference swing: sweet spot, on time, 0.75 in undercut, +10° attack. */
+/**
+ * The reference swing: sweet spot, on time, `REF_UNDERCUT_IN`, +10° attack.
+ *
+ * ⚠ THE UNDERCUT IS 0.56 in, NOT STAGE 3's 0.75, AND THAT IS THE WHOLE POINT OF
+ * THE RETRACTION ABOVE. It is a SWING parameter — a choice about how this
+ * reference batter swings — so it is free to be chosen, and the honest thing to
+ * choose it against is the pair of published targets. With `e_T` at its derived
+ * Coulomb value of 0, the joint-feasible window is 0.552–0.582 in (LA 25.0–25.9°,
+ * backspin 2350–2500 rpm) and 0.56 sits inside it: LA 25.26°, backspin 2391 rpm,
+ * EV 101.60 mph. That window is NARROW — it is the corner where the two bands
+ * just overlap — which is itself the finding, and the 2-D table below shows why.
+ */
+const REF_UNDERCUT_IN = 0.56;
 const swing = (o: Partial<Swing> = {}): Swing => ({
   hand: 'R',
   timingErrorS: 0,
-  undercutIn: 0.75,
+  undercutIn: REF_UNDERCUT_IN,
   ...o,
 });
 
@@ -162,7 +197,7 @@ describe('launch angle is geometry', () => {
 // ---------------------------------------------------------------------------
 
 const GRID: [string, Swing][] = [
-  ['sweet spot, 0.75 in under', swing()],
+  ['sweet spot, 0.56 in under', swing()],
   ['sweet spot, 0.00 in under', swing({ undercutIn: 0 })],
   ['over the top, −0.5 in', swing({ undercutIn: -0.5 })],
   ['4 in toward the TIP', swing({ aimZM: SWEET_SPOT_M + 4 * IN_TO_M })],
@@ -202,36 +237,122 @@ describe('the collision grid', () => {
     expect(c.totalSpinRpm).toBeCloseTo(0, 9);
   });
 
-  it('0.75 in undercut: backspin lands in the published 1900–2500 rpm band', () => {
+  it('⚠ 2-D: the reference swing meets BOTH published bands at once', () => {
+    // ⚠ THE DIMENSION STAGE 3 NEVER SWEPT. Its finding held the undercut at
+    // 0.75 in and varied only e_T; this walks the undercut at the shipped e_T
+    // and marks the window where BOTH published bands are satisfied. That window
+    // is non-empty, which is the whole retraction in one assertion.
+    console.log(`\nUNDERCUT SWEEP at the derived e_T = ${E_T} (Coulomb rolling)`);
+    console.log('  under(in)     LA   backspin      EV   in LA band   in spin band');
+    for (let u = 0.3; u <= 0.9001; u += 0.05) {
+      const c = swingContact(REF, swing({ undercutIn: u }));
+      const inLa = c.laDeg >= 25 && c.laDeg <= 29;
+      const inSpin = c.backspinRpm >= 1900 && c.backspinRpm <= 2500;
+      console.log(
+        `${f(u, 10, 3)} ${f(c.laDeg, 6, 2)} ${f(c.backspinRpm, 10, 0)} ${f(c.evMph, 7, 2)} ${(inLa ? '       yes' : '        no')} ${(inSpin ? '           yes' : '            no')}${inLa && inSpin ? '   ← BOTH' : ''}`,
+      );
+    }
+    // The joint window's edges, by bisection on the shipped solve.
+    const solveU = (want: (c: ReturnType<typeof swingContact>) => boolean) => {
+      let lo = 0;
+      let hi = 1.5;
+      for (let i = 0; i < 60; i++) {
+        const mid = (lo + hi) / 2;
+        if (want(swingContact(REF, swing({ undercutIn: mid })))) hi = mid;
+        else lo = mid;
+      }
+      return (lo + hi) / 2;
+    };
+    const uLo = solveU((c) => c.laDeg >= 25); // LA band opens
+    const uHi = solveU((c) => c.backspinRpm >= 2500); // spin band closes
+    console.log(`  joint-feasible undercut window: ${uLo.toFixed(4)} … ${uHi.toFixed(4)} in`);
+    expect(uHi).toBeGreaterThan(uLo); // ⚠ NON-EMPTY — the retraction, asserted
+    expect(uLo).toBeCloseTo(0.5517, 3);
+    expect(uHi).toBeCloseTo(0.5822, 3);
+    expect(REF_UNDERCUT_IN).toBeGreaterThan(uLo);
+    expect(REF_UNDERCUT_IN).toBeLessThan(uHi);
+
     const c = swingContact(REF, swing());
+    // BOTH published bands, on one swing, with nothing tuned to either.
     expect(c.backspinRpm).toBeGreaterThan(1900);
     expect(c.backspinRpm).toBeLessThan(2500);
+    expect(c.laDeg).toBeGreaterThan(25);
+    expect(c.laDeg).toBeLessThan(29);
     // GOLDEN — the model's own numbers, with the published rule of thumb beside
-    // them. LA = θ_LOC + α_attack predicts 26.11°; this model gives 33.4°,
-    // because at 80 % grip the ball keeps ~7° worth of tangential velocity.
-    // See this file's header: no e_T satisfies both bands.
-    expect(c.backspinRpm).toBeCloseTo(2220, 0);
-    expect(c.laDeg).toBeCloseTo(33.4, 1);
-    expect(c.evMph).toBeCloseTo(100.4, 1);
-    const ruleOfThumb = ((locAngleRad(0.75) + Math.PI / 18) * 180) / Math.PI;
-    expect(ruleOfThumb).toBeCloseTo(26.114, 3);
-    expect(c.laDeg - ruleOfThumb).toBeGreaterThan(6); // the gap, pinned
+    // them. LA = θ_LOC + α_attack predicts 21.96°; this model gives 25.26°,
+    // because even at exact rolling the ball keeps ~3.3° worth of tangential
+    // velocity. Stage 3 measured that gap at ~7° at 80 % grip; it shrinks with
+    // the grip fraction but does not vanish, which is the honest version.
+    expect(c.backspinRpm).toBeCloseTo(2391, 0);
+    expect(c.laDeg).toBeCloseTo(25.26, 1);
+    expect(c.evMph).toBeCloseTo(101.6, 1);
+    const ruleOfThumb = ((locAngleRad(REF_UNDERCUT_IN) + Math.PI / 18) * 180) / Math.PI;
+    expect(ruleOfThumb).toBeCloseTo(21.960, 3);
+    expect(c.laDeg - ruleOfThumb).toBeCloseTo(3.30, 1); // the gap, pinned
+  });
+
+  it('⚠ e_T = 0 IS the rolling condition, and Coulomb friction FORCES it', () => {
+    // ⚠ THE ASSERTION THAT MAKES e_T DERIVED RATHER THAN CALIBRATED, and the one
+    // that kills the mutation e_T → anything. Two independent statements:
+    //
+    //   1. ROLLING. With (1 + e_T) = 1 the tangential impulse is exactly the one
+    //      that zeroes the contact patch's tangential velocity relative to the
+    //      bat: s' = s − (1 + e_T)·s = −e_T·s = 0. Measured on the outgoing
+    //      state, so any other e_T leaves a residual proportional to it.
+    //   2. STICK. Reaching rolling costs J_t/J_n = 0.084 on the reference swing
+    //      (0.103 at the 0.75 in undercut stage 3 used), against μ ≈ 0.4–0.6
+    //      for leather on wood — the contact is ~5–7× inside the stick regime,
+    //      so friction is in surplus and rolling is not optional. Nothing in a
+    //      rigid-body solve can leave the patch sliding while that is true,
+    //      which is why the shipped −0.20 had no mechanism.
+    const c = swingContact(REF, swing());
+    const g = contactGeometry(vLen(REF.v), swing());
+    const attack = (10 * Math.PI) / 180;
+    const elev = attack + locAngleRad(REF_UNDERCUT_IN);
+    const n = vec3(-Math.cos(elev), 0, Math.sin(elev)); // spray-free reference
+    const vBat = vec3(-Math.cos(attack) * g.batSpeedFps, 0, Math.sin(attack) * g.batSpeedFps);
+
+    const rVec = vec3(-n.x * BALL_RADIUS_FT, -n.y * BALL_RADIUS_FT, -n.z * BALL_RADIUS_FT);
+    const cross = (a: Vec3, b: Vec3): Vec3 =>
+      vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
+    const dot = (a: Vec3, b: Vec3) => a.x * b.x + a.y * b.y + a.z * b.z;
+    const patchOut = (() => {
+      const w = cross(c.omega, rVec);
+      const rel = vec3(c.v.x + w.x - vBat.x, c.v.y + w.y - vBat.y, c.v.z + w.z - vBat.z);
+      const nn = dot(rel, n);
+      return vLen(vec3(rel.x - nn * n.x, rel.y - nn * n.y, rel.z - nn * n.z));
+    })();
+    // 1. The patch is ROLLING on the way out: < 0.01 ft/s out of an incoming
+    //    tangential relative speed of order 100 ft/s.
+    console.log(`\n  outgoing contact-patch tangential speed: ${patchOut.toExponential(2)} ft/s`);
+    expect(patchOut).toBeLessThan(0.01);
+
+    // 2. The Coulomb number, from the shipped outputs alone.
+    //    J_t from the angular impulse: |Δω| = r·J_t/I, I = (2/5)m r².
+    //    J_n from the normal velocity change.
+    const inertia = (2 / 5) * BALL_MASS_SLUG * BALL_RADIUS_FT * BALL_RADIUS_FT;
+    const dOmega = vLen(vec3(c.omega.x - REF.omega.x, c.omega.y - REF.omega.y, c.omega.z - REF.omega.z));
+    const jt = (inertia * dOmega) / BALL_RADIUS_FT;
+    const jn = BALL_MASS_SLUG * Math.abs(dot(c.v, n) - dot(REF.v, n));
+    console.log(`  J_t/J_n = ${(jt / jn).toFixed(4)} against μ ≈ 0.4–0.6 for leather on wood`);
+    expect(jt / jn).toBeCloseTo(0.084, 3);
+    expect(jt / jn).toBeLessThan(0.4 / 4); // ≥4× inside the softest published μ
   });
 
   it('zero undercut on a level-ish swing launches at ~the attack angle, barely spinning', () => {
     const c = swingContact(REF, swing({ undercutIn: 0 }));
     expect(Math.abs(c.laDeg - 10)).toBeLessThan(3);
     expect(Math.abs(c.backspinRpm)).toBeLessThan(1200);
-    expect(c.laDeg).toBeCloseTo(8.9, 1);
-    expect(c.backspinRpm).toBeCloseTo(-735, 0);
+    expect(c.laDeg).toBeCloseTo(8.24, 1);
+    expect(c.backspinRpm).toBeCloseTo(-369, 0);
   });
 
   it('over the top ⇒ negative launch angle AND topspin, from the same solve', () => {
     const c = swingContact(REF, swing({ undercutIn: -0.5 }));
     expect(c.laDeg).toBeLessThan(0);
     expect(c.backspinRpm).toBeLessThan(0); // negative backspin IS topspin
-    expect(c.laDeg).toBeCloseTo(-7.2, 1);
-    expect(c.backspinRpm).toBeCloseTo(-2714, 0);
+    expect(c.laDeg).toBeCloseTo(-7.0, 1);
+    expect(c.backspinRpm).toBeCloseTo(-2843, 0);
   });
 
   it('⚠ INVARIANT: undercut drives LA and backspin together, monotonically', () => {
@@ -256,12 +377,48 @@ describe('the collision grid', () => {
     const tipLoss = on.evMph - tip.evMph;
     expect(tipLoss).toBeGreaterThan(8);
     expect(tipLoss).toBeLessThan(12);
-    expect(tipLoss).toBeCloseTo(11.25, 2);
+    expect(tipLoss).toBeCloseTo(11.53, 2);
     // ⚠ The rigid-body model has no vibrational loss, so the handle side GAINS.
     // Pinned as a golden so the gap is visible and cannot silently move; closing
     // it needs a measured e(z) profile this stage has no data for.
-    expect(handle.evMph - on.evMph).toBeCloseTo(2.66, 2);
+    expect(handle.evMph - on.evMph).toBeCloseTo(2.71, 2);
     expect(handle.evMph).toBeGreaterThan(on.evMph);
+  });
+
+  it('⚠ FINDING: an INSIDE pitch makes this batter stronger for six inches', () => {
+    // ⚠ THE SECOND CONSEQUENCE OF THE MISSING e(z), and a RETRACTION. Stage 3
+    // resolved the timing model's symmetry by saying that getting jammed "is a
+    // property of an INSIDE pitch (a smaller aim radius), which is `aimZM`'s
+    // job". Measured, that is false: the model has NO jamming mechanism at all.
+    // Moving contact toward the hands raises `eA` (constant `e`, rising `M_eff`
+    // toward the balance point) faster than it costs bat speed, so an inside
+    // pitch is REWARDED until roughly 6 in inside, where the two finally
+    // balance. Printed and asserted so the retraction cannot quietly lapse.
+    console.log('\nAIM RADIUS — "inside pitch" is a SMALLER aim radius (RHB, on time)');
+    console.log('  offset(in)   aimZM(m)      EV      LA   back(rpm)');
+    let peak = { off: 0, ev: -1 };
+    for (const off of [2, 0, -1, -2, -3, -4, -5, -6, -7, -8]) {
+      const c = swingContact(REF, swing({ aimZM: SWEET_SPOT_M + off * IN_TO_M }));
+      if (c.evMph > peak.ev) peak = { off, ev: c.evMph };
+      console.log(
+        `${f(off, 12, 1)} ${f(SWEET_SPOT_M + off * IN_TO_M, 10, 4)} ${f(c.evMph, 8, 2)} ${f(c.laDeg, 7, 2)} ${f(c.backspinRpm, 11, 0)}`,
+      );
+    }
+    const on = swingContact(REF, swing()).evMph;
+    const at3 = swingContact(REF, swing({ aimZM: SWEET_SPOT_M - 3 * IN_TO_M })).evMph;
+    console.log(`  peak EV at ${peak.off} in inside; sweet spot ${on.toFixed(2)}, 3 in inside ${at3.toFixed(2)} mph`);
+    expect(peak.off).toBe(-3);
+    expect(at3).toBeGreaterThan(on + 2.5); // jamming is worth +3.0 mph here
+    // Where it finally crosses back below the sweet-spot value.
+    let cross = 0;
+    for (let off = -3; off > -12; off -= 0.05) {
+      if (swingContact(REF, swing({ aimZM: SWEET_SPOT_M + off * IN_TO_M })).evMph < on) {
+        cross = off;
+        break;
+      }
+    }
+    console.log(`  falls back below the sweet-spot EV only at ${cross.toFixed(2)} in inside`);
+    expect(cross).toBeLessThan(-5.5);
   });
 });
 
@@ -281,16 +438,30 @@ describe('timing produces spray AND contact quality from one model', () => {
     }
   });
 
-  it('25 ms early pulls, 25 ms late goes oppo, and BOTH are weaker', () => {
+  it('25 ms early pulls to the edge of the foul line, 25 ms late goes oppo, BOTH weaker', () => {
+    // ⚠ TWO-SIDED, and it was not before. `early.sprayDeg ≤ −35` passes at
+    // −46.9° and would equally pass at −80°, so as a reproduction of a published
+    // ±35° figure it asserted almost nothing. The model is exactly symmetric
+    // (asserted separately below to 9 dp), so the honest form is a BAND on each
+    // side, mirrored.
+    //
+    // ⚠ AND THE GAMEPLAY FACT IS WORTH ASSERTING SEPARATELY: 25 ms early puts
+    // the ball 43.8° toward the line, i.e. barely FAIR — a foot more error and
+    // it is a foul ball, not a pulled home run. (Under stage 3's e_T = −0.20 and
+    // 0.75 in undercut it was 46.9°, past the line; the shipped rolling
+    // collision keeps slightly less tangential velocity, so it stays in play.)
     const on = swingContact(REF, swing());
     const early = swingContact(REF, swing({ timingErrorS: -0.025 }));
     const late = swingContact(REF, swing({ timingErrorS: 0.025 }));
-    expect(early.sprayDeg).toBeLessThanOrEqual(-35);
-    expect(late.sprayDeg).toBeGreaterThanOrEqual(20);
+    expect(early.sprayDeg).toBeLessThan(-35);
+    expect(early.sprayDeg).toBeGreaterThan(-50);
+    expect(late.sprayDeg).toBeGreaterThan(35);
+    expect(late.sprayDeg).toBeLessThan(50);
+    expect(Math.abs(early.sprayDeg)).toBeLessThan(45); // still fair, by 1.2°
     expect(late.evMph).toBeLessThan(on.evMph);
     expect(on.evMph - late.evMph).toBeGreaterThan(5);
-    expect(early.evMph).toBeCloseTo(92.0, 1);
-    expect(early.sprayDeg).toBeCloseTo(-46.9, 1);
+    expect(early.evMph).toBeCloseTo(92.4, 1);
+    expect(early.sprayDeg).toBeCloseTo(-43.8, 1);
   });
 
   it('⚠ FINDING: the EV penalty is SYMMETRIC in |Δt|, and contact moves to the TIP', () => {
@@ -309,14 +480,24 @@ describe('timing produces spray AND contact quality from one model', () => {
   });
 
   it('⚠ the ball keeps moving: the spray shift is NOT ω_bat·Δt', () => {
-    // The naive rule gives ω·Δt = 45.8° of BAT rotation at 25 ms. Because the
-    // ball travels 3.3 ft deeper while the bat catches up, the bat is only 25.5°
-    // from square. A model that skipped the ball's motion would report 45.8 here.
+    // The naive rule gives ω·Δt = 45.8° of BAT rotation at 25 ms. Contact
+    // actually happens 1.46 ft deeper — v_p · contactDelayS — and the bat is only
+    // 25.5° from square when it gets there. A model that skipped the ball's
+    // motion would report 45.8 here.
+    //
+    // ⚠ 1.46 ft, NOT the 3.3 ft an earlier draft of this comment (and of
+    // batSim.ts's) quoted. 3.3 ft is v_p·Δt — the ball's travel over the WHOLE
+    // timing error, which is precisely the naive quantity this test exists to
+    // refute. Asserted below so the two cannot be confused again.
     const c = swingContact(REF, swing({ timingErrorS: -0.025 }));
+    const g = contactGeometry(vLen(REF.v), swing({ timingErrorS: -0.025 }));
     const naiveDeg = ((32 * 0.025) * 180) / Math.PI;
     expect(naiveDeg).toBeCloseTo(45.84, 2);
     expect(c.batAngleDeg).toBeCloseTo(25.5, 1);
     expect(c.batAngleDeg).toBeLessThan(naiveDeg * 0.7);
+    // The depth of the contact point, and the naive figure it is not.
+    expect(Math.abs(vLen(REF.v) * g.contactDelayS)).toBeCloseTo(1.46, 2);
+    expect(Math.abs(vLen(REF.v) * 0.025)).toBeCloseTo(3.3, 1);
     // …and yet the BALL is deflected further than the bat angle, because the
     // retained tangential velocity carries it past the line of centres.
     expect(Math.abs(c.sprayDeg)).toBeGreaterThan(c.batAngleDeg);
@@ -482,4 +663,24 @@ describe('isBarrel', () => {
 //  10. the swing axis hand-set to 3.0 ft instead of derived from the published
 //      bat speed — 8 tests. A derived constant that nothing checks is a literal.
 //  11. the barrel window widened 1 → 3 °/mph — 1 test, the widening assertion.
+//
+// ⚠ STAGE 3b, against the 96-test suite. Every assertion this stage added or
+// changed has now been watched to fail:
+//  12. e_T 0 → stage 3's −0.20 — 6 tests, and e_T → the textbook +0.20 — the same
+//      6. The rolling/Coulomb test dies on BOTH, which is what makes e_T derived
+//      rather than a dial: it is not a band, it is a single admissible value.
+//  13. the reference undercut moved back to 0.75 in — 4 tests, including the 2-D
+//      window. A reference swing outside the joint-feasible window is now a test
+//      failure, which is exactly the mistake stage 3 shipped.
+//  14. a JAMMING FUDGE — exit velocity scaled down for contact inside the sweet
+//      spot, i.e. the asymmetric patch the retracted claim invites — 2 tests,
+//      including the new aim-radius finding. The retraction is guarded.
+//  15. the naive bat angle (−ω·Δt) — now 2 tests INCLUDING the spray-magnitude
+//      one. ⚠ That is the improvement: with the old ONE-SIDED `spray ≤ −35`
+//      bound this mutation slipped past the spray test entirely (45.8° clears
+//      −35° comfortably) and only the bat-angle test caught it. The two-sided
+//      band catches it on merit.
+//  16. contactDelayS replaced by the raw timing error — 1 test, the new 1.46 ft
+//      assertion, which exists precisely because the comment used to quote the
+//      3.3 ft this mutation produces.
 // ---------------------------------------------------------------------------

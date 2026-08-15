@@ -104,12 +104,16 @@ export interface ContactGeometry {
  *     θ_c = ω(t − Δt) = −ω·Δt·v_p/(ωd + v_p)          R_c = d / cos θ_c
  *
  * ⚠ THE BALL KEEPS MOVING, and that is the whole content of the second factor.
- * The naive "spray shift = ω·Δt" would give 45.8° at Δt = 25 ms; because the
- * ball travels 3.3 ft deeper while the bat catches up, the bat is only 25.5° from
- * square at contact. The outgoing ball is nevertheless deflected further than the
- * bat angle (−42.9° measured) because the retained tangential velocity carries
- * it past the line of centres — so the published ±35° figure is reproduced, but
- * by a different mechanism than the rule of thumb it comes from.
+ * The naive "spray shift = ω·Δt" would give 45.8° of BAT rotation at Δt = 25 ms;
+ * contact actually happens 1.46 ft deeper (v_p · contactDelayS, NOT v_p · Δt,
+ * which is the 3.3 ft an earlier draft of this comment quoted — precisely the
+ * naive quantity this sentence exists to refute), and the bat is only 25.5° from
+ * square when it gets there. The outgoing ball is nevertheless deflected further
+ * than the bat angle (−43.8° measured on the reference swing) because the
+ * retained tangential velocity carries it past the line of centres — so a
+ * ±35°-scale spray falls out, but by a different mechanism than the rule of
+ * thumb it comes from. −43.8° is also 1.2° INSIDE the foul line, which is a
+ * gameplay fact and is asserted as one.
  *
  * And R_c = d/cos θ_c > d for a miss in EITHER direction: any mistiming, early
  * or late, drives contact OUT toward the barrel tip, where `M_eff` collapses.
@@ -117,10 +121,20 @@ export interface ContactGeometry {
  *
  * ⚠ It also means the model is SYMMETRIC in |Δt| for exit velocity: it does not
  * reproduce "late = jammed at the handle". In this geometry a late swing meets
- * the ball DEEPER and further out the barrel, not nearer the hands; getting
- * jammed is a property of an INSIDE pitch (a smaller aim radius `d`), which is
- * `aimZM`'s job, not the timing model's. Reported rather than papered over with
- * an asymmetric fudge.
+ * the ball DEEPER and further out the barrel, not nearer the hands.
+ *
+ * ⚠ RETRACTED, STAGE 3b: an earlier version of this note resolved that by saying
+ * getting jammed "is a property of an INSIDE pitch (a smaller aim radius `d`),
+ * which is `aimZM`'s job". THAT IS FALSE IN THIS MODEL, and it was measured to
+ * be false. Exit velocity against aim radius, on time, reference swing: sweet
+ * spot 101.6 mph, 2 in inside 104.3, 3 in inside 104.6 (the peak), 4 in inside
+ * 104.3, and it does not fall back below the sweet-spot value until ~6.2 in
+ * inside. An inside pitch makes this batter STRONGER for six inches. The cause
+ * is the same missing physics as the handle-side finding in `bat.ts`: with a
+ * constant `e`, `eA` keeps rising toward the balance point, so moving contact
+ * toward the hands is rewarded. The model has NO jamming mechanism at all — not
+ * in the timing geometry and not in the aim radius. It is a second consequence
+ * of the missing measured `e(z)` profile, and it is reported as one.
  */
 export function contactGeometry(pitchSpeedFps: number, swing: Swing): ContactGeometry {
   const omega = swing.batSpeedMph === undefined
@@ -208,25 +222,37 @@ const mirrorAxialY = (w: Vec3): Vec3 => vec3(-w.x, w.y, -w.z);
  * every one of those reverses, which is why `undercutIn < 0` produces topspin
  * with no extra code.
  *
- * ⚠ THE FINDING. The two published targets for this collision cannot both be
- * met, and no value of e_T reconciles them. On the reference swing (0.75 in
- * undercut, +10° attack, 90 mph pitch descending 8° with 2200 rpm of backspin,
- * 71.5 mph bat):
+ * ⚠ RETRACTED, STAGE 3b: "the two published targets cannot both be met". They
+ * can, and the finding that said otherwise was an artifact of a one-dimensional
+ * sweep. Stage 3 varied e_T at a FIXED 0.75 in undercut and found that launch
+ * angle and backspin move in opposite directions with e_T:
  *
  *     e_T    LA      backspin
- *   +0.46   26.1°     5900 rpm    ← the LA the "LA = θ_LOC + α" rule predicts
+ *   +0.46   26.2°     5866 rpm    ← the LA the "LA = θ_LOC + α" rule predicts
  *   +0.20   29.0°     4430 rpm    ← the textbook rigid-surface e_T
- *    0.00   31.2°     3325 rpm    ← exact rolling
- *   −0.20   33.4°     2220 rpm    ← ADOPTED: the published backspin band
+ *    0.00   31.2°     3325 rpm    ← exact rolling (the patch stops sliding)
+ *   −0.20   33.4°     2220 rpm    ← what stage 3 shipped
  *
- * LA and backspin move in OPPOSITE directions with e_T, so "LA 25–29°" needs
- * e_T ≥ +0.2 and "backspin 1900–2500 rpm" needs e_T ≤ −0.14: the two bands are
- * disjoint, by a factor of ~2.7 in tangential impulse. e_T is calibrated against
- * BACKSPIN because backspin is the tangential observable e_T actually controls,
- * and because backspin is what feeds carry. The consequence is that
- * `LA ≈ θ_LOC + α_attack` UNDER-predicts this model's launch angle by ~7° — that
- * rule of thumb assumes the tangential velocity is almost entirely scrubbed off,
- * and at 80 % grip it is not. `batSim.test.ts` prints the whole ladder above.
+ * …and concluded the bands were disjoint. But THE UNDERCUT IS NOT PUBLISHED
+ * DATA — it is a free swing parameter, so holding it fixed asks the wrong
+ * question. The 2-D (e_T, undercut) region says the bands overlap for
+ * e_T ∈ [−0.16, +0.02]; `bat.ts`'s Coulomb argument says only e_T ∈ [0, +0.2] is
+ * physically admissible; the intersection is [0, +0.02] and e_T = 0 sits in it.
+ * At 0.56 in of undercut that gives LA 25.3°, backspin 2391 rpm, EV 101.6 mph —
+ * both published bands at once. `batSim.test.ts` prints the whole region.
+ *
+ * ⚠ AND THE "~2.7×" WAS A MISLABEL. 2.643 is the BACKSPIN ratio between
+ * e_T = +0.46 and −0.20 — a different quantity. The tangential-impulse gap is
+ * (1 + e_T)'s ratio, and at the fixed 0.75 in undercut the two bands' nearest
+ * edges are e_T = +0.2024 (LA 29.0°) and e_T = −0.1493 (2500 rpm), i.e.
+ * 1.202/0.851 = **1.413×**. Corrected here, in BASEBALL.md and in the tests.
+ *
+ * WHAT SURVIVES, restated precisely: at any FIXED undercut the two bands are
+ * disjoint, by 1.413× in tangential impulse — the model cannot reach both with
+ * one swing shape it was not allowed to choose. And `LA ≈ θ_LOC + α_attack`
+ * still under-predicts: at exact rolling the reference swing launches 25.3°
+ * against the rule's 22.0°, a 3.3° gap, because the rule assumes the tangential
+ * velocity is entirely scrubbed off and even at 100 % grip it is not.
  */
 export function swingContact(pitch: ContactPitch, swing: Swing): Contact {
   // Solve for a right-handed batter, then mirror. The pitch is mirrored INTO

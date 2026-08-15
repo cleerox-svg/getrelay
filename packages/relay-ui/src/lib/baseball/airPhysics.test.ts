@@ -418,7 +418,7 @@ describe('drag calibration — the published 94 mph release', () => {
     //
     // ⚠ CONDITIONS, because a calibration without them is a coincidence:
     // ISA air (59 °F, DRY — not the 70 °F/50 % game-day air, which is thinner
-    // and gives 86.49 mph with the SAME C_D), 55 ft of flight, spinless, and
+    // and gives 86.48 mph with the SAME C_D), 55 ft of flight, spinless, and
     // 86.3 is the VECTOR MAGNITUDE |v|, which is what a radar plate speed is.
     // The gravity-free closed form v_x = v0·exp(−K·C_D·x) inverts to 0.2829 —
     // but that answers a question about v_x, not |v|.

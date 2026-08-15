@@ -96,7 +96,13 @@ export const LOC_DISTANCE_IN = BALL_RADIUS_FT * FT_TO_IN + BAT_RADIUS_IN;
  *     1/M_eff(z) = 1/M + (z − z_cm)² / I_cm
  *
  * At the sweet spot: 1/0.879 + 0.16²/0.044 = 1.1377 + 0.5818 = 1.7195, so
- * M_eff = 0.5816 kg — the published figure, reproduced rather than asserted.
+ * M_eff = 0.5816 kg, matching the figure the bat-collision literature quotes for
+ * this spec. ⚠ That is ARITHMETIC ON FOUR FIXED INPUTS, not corroboration:
+ * M_eff, q and eA are one formula applied to the published mass, balance point,
+ * inertia and COR, so reproducing them checks the transcription, not the model.
+ * The only genuinely external content in the chain is `|eA − 0.20| < 0.01`,
+ * which compares the RESULT against a separately-published performance factor.
+ * `batSim.test.ts` asserts all four, but only the last one can surprise us.
  *
  * ⚠ It is MAXIMAL at z = z_cm (0.56 m) and falls off both ways, which is the
  * source of one of this file's two honest findings — see `collisionEfficiency`.
@@ -129,10 +135,17 @@ export function massRatio(zM: number): number {
  * rising toward the balance point, and the model's exit-velocity optimum lands
  * ~3 in toward the HANDLE of the real sweet spot (106.95 mph against 103.83 for
  * a 90 mph pitch). Toward the barrel tip the model is right for the right
- * reason — `M_eff` collapses — and 4 in out costs 11.25 mph. Toward the handle
- * it is wrong, and gains 2.6 mph where a real bat would lose. `batSim.test.ts`
+ * reason — `M_eff` collapses — and 4 in out costs 11.53 mph. Toward the handle
+ * it is wrong, and gains 2.71 mph where a real bat would lose. `batSim.test.ts`
  * pins BOTH numbers so the gap stays visible; closing it needs a measured
  * e(z) profile, which is a calibration this stage does not have data for.
+ *
+ * ⚠ AND IT HAS A SECOND, LARGER CONSEQUENCE, added in stage 3b: the model has no
+ * JAMMING. An inside pitch is a smaller aim radius, i.e. contact nearer the
+ * hands, so the same rising `eA` REWARDS it — exit velocity peaks 3 in inside
+ * the sweet spot (+3.0 mph) and does not fall back below the sweet-spot value
+ * until ~6 in inside. Stage 3 cited the aim radius as the place jamming lives;
+ * it is not, and `batSim.ts`'s `contactGeometry` note carries the retraction.
  */
 export function collisionEfficiency(zM: number): number {
   const q = massRatio(zM);
@@ -177,22 +190,36 @@ export const ATTACK_ANGLE_DEG = 10;
  * Tangential coefficient of restitution: the contact patch's tangential
  * relative velocity leaves as `−e_T ×` its incoming value.
  *
- * ⚠ CALIBRATED, AND THE VALUE IS NEGATIVE. −0.20 is calibrated against the one
- * published tangential observable — batted-ball backspin, 1900–2500 rpm on a
- * reference 0.75 in undercut. A negative e_T is not a sign error and not a
- * fudge: it says the contact point never reverses at all, and is still sliding
- * FORWARD at 20 % of its initial rate when the ball leaves. Writing the impulse
- * as J_t = −(1 + e_T)·(2m/7)·s makes the reading plain — (1 + e_T) = 0.80 is a
- * GRIP FRACTION, where 1.0 is exactly the rolling condition (the patch stops
- * sliding) and >1 is tangential rebound. The collision reaches 80 % of rolling.
+ * ⚠ DERIVED — from the Coulomb stick condition, NOT calibrated. This is a
+ * category change, and stage 3b made it after retracting a finding; the whole
+ * story is in `batSim.swingContact`'s ⚠ note and in BASEBALL.md § "The
+ * collision". In short:
  *
- * The textbook rigid-surface value e_T = +0.20 gives **4430 rpm** on that same
- * swing — 1.8× the published band — and neither Coulomb friction (the solve
- * needs only J_t/J_n = 0.12, far inside μ ≈ 0.5) nor the bat's own tangential
- * recoil (worth 6.6 %) closes the gap. See the ⚠ note on `swingContact` for the
- * consequence, which is a genuine finding and not a tuning problem.
+ *   The solve needs a tangential impulse of only J_t/J_n = 0.084 to bring the
+ *   contact patch to ROLLING (0.103 at the 0.75 in undercut stage 3 swept at).
+ *   Leather on wood is μ ≈ 0.4–0.6, so the friction
+ *   available is ~5–7× what is required: the contact is deep inside the STICK
+ *   regime, the patch must reach rolling, and the grip fraction (1 + e_T) is
+ *   forced to exactly 1.0. That is e_T = 0. Nothing in a rigid-body impulse
+ *   solve can remove tangential impulse while friction is in surplus, so a
+ *   NEGATIVE e_T — the −0.20 stage 3 shipped, which claimed the patch was
+ *   "still sliding forward at 20 %" — has no mechanism behind it. The admissible
+ *   range is e_T ∈ [0, +0.2]: 0 is Coulomb stick, positive values are tangential
+ *   COMPLIANCE (the bat's surface and the ball's cover storing and returning
+ *   tangential strain), which is what the textbook bat-ball e_T ≈ +0.2 measures.
+ *
+ * ⚠ AND IT MEETS BOTH PUBLISHED TARGETS, which stage 3 wrongly reported as
+ * impossible. Stage 3 varied e_T at a FIXED 0.75 in undercut — but the undercut
+ * is a free SWING parameter, not published data, so that sweep answered the
+ * wrong question. Over the 2-D (e_T, undercut) region the bands are NOT
+ * disjoint: e_T ∈ [−0.16, +0.02] can hit "LA 25–29°" and "backspin
+ * 1900–2500 rpm" simultaneously, and intersecting that with the admissible
+ * [0, +0.2] leaves [0, +0.02]. e_T = 0 is in it, and it is the physically
+ * principled end. At 0.56 in of undercut the reference swing gives LA 25.3°,
+ * backspin 2391 rpm, EV 101.6 mph — both bands, at once, with no dial turned.
+ * `batSim.test.ts` prints the whole 2-D region.
  */
-export const E_T = -0.2;
+export const E_T = 0;
 /**
  * Exit velocity from the published closed form, for the head-on case only:
  *

@@ -370,6 +370,12 @@ describe('the arsenal in flight', () => {
       // Published: a pitch arrives at 91–93 % of its release speed. This is the
       // drag calibration re-measured through the whole pitch pipeline rather
       // than on stage 1's bare bench — if C_D or K ever drifts, it lands here.
+      // ⚠ Stage 3b's Reynolds-dependent C_D moved this band from 92.2–92.5 % to
+      // 91.5–92.3 %: the four-seamer, sinker and cutter are unchanged to 0.1 mph
+      // because they never leave the supercritical branch, while the curveball —
+      // the slowest row, and the only one that gets well into the crisis band —
+      // arrives at 72.7 mph instead of 73.5. Still inside the published band,
+      // and now spread across it rather than bunched at the top.
       const ratio = r.plate.speedMph / r.releaseSpeedMph;
       expect(ratio).toBeGreaterThan(0.91);
       expect(ratio).toBeLessThan(0.93);
@@ -441,15 +447,24 @@ describe('the arsenal in flight', () => {
     // residual and the second-worst tilt/break disagreement in the table (22.5°).
     // An unpinned row is an unguarded row: moving its tilt 1:30 → 1:00 failed
     // nothing at all before this line existed.
+    // ⚠ RE-PINNED IN STAGE 3b, when `dragCoef` became Reynolds-dependent (the
+    // drag crisis — see tuning.ts). Every row moved, and the sizes are the
+    // point: si/fc 0.000 in, ch/fs 0.003, sl 0.004, st 0.025, cu 0.036 — the
+    // largest on the SLOWEST pitch, which is the only one that samples much of
+    // the crisis band. Break is a DIFFERENCE between a spun and a spinless
+    // trajectory that share the same drag, so a change to C_D very nearly
+    // cancels out of it; what the crisis moves is the plate SPEED of the slow
+    // pitches (the curveball loses 0.8 mph more), not their break. All sixteen
+    // published residuals in the printed dynamics table are unchanged to 0.1 in.
     //              model IVB  model HB(arm)   published (IVB, HB)   why it resists
     const golden: Array<[string, number, number, string]> = [
       ['si', 10.143, 13.056, 'pub (8.5, 15.0): Δ +1.64 / −1.94; magnitude needs 51.1 ft'],
       ['fc', 15.249, -6.523, 'pub (7.5, −2.0): break 0.44× the ff, its own C_L 0.94× — 2.1× out'],
-      ['sl', 3.675, -13.168, 'pub (0.5, −8.0): gyro-heavy, 0.46× vs C_L 0.76× — 1.6× out'],
-      ['st', 0.284, -20.767, 'pub (−1.5, −17.0): the closest of the seven, 0.98× vs C_L 1.16×'],
-      ['cu', -19.584, -6.094, 'pub (−12.0, −6.0): 0.77× vs C_L 1.16× — 1.5× out, direction right'],
-      ['ch', 10.867, 10.594, 'pub (6.0, 14.5): Δ +4.87 / −3.91; tilt vs break 22.5° apart'],
-      ['fs', 10.034, 7.325, 'pub (2.0, 9.0): its tilt and break columns disagree by 40° — SSW'],
+      ['sl', 3.676, -13.172, 'pub (0.5, −8.0): gyro-heavy, 0.46× vs C_L 0.76× — 1.6× out'],
+      ['st', 0.285, -20.792, 'pub (−1.5, −17.0): the closest of the seven, 0.98× vs C_L 1.16×'],
+      ['cu', -19.620, -6.109, 'pub (−12.0, −6.0): 0.77× vs C_L 1.16× — 1.5× out, direction right'],
+      ['ch', 10.870, 10.597, 'pub (6.0, 14.5): Δ +4.87 / −3.91; tilt vs break 22.5° apart'],
+      ['fs', 10.037, 7.328, 'pub (2.0, 9.0): its tilt and break columns disagree by 40° — SSW'],
     ];
     expect(golden).toHaveLength(PITCHES.length - 1); // every row but the ff
     for (const [id, ivb, hb] of golden) {

@@ -80,9 +80,13 @@ test**, or an **explicitly-labelled feel knob**. There is no fifth category.
 | `R_vapor` | 2759.8 | **derived** | `R_dry / 0.62197` (molar-mass ratio) |
 | `ρ` | 0.0023770 @ ISA SL | **derived** | barometric + ideal gas + humidity split |
 | `K = ρA/2m` | 0.0054932 ft⁻¹ @ ISA SL | **derived** | see below — never hand-set |
-| `C_D` | 0.300 | **calibrated** | 94.0 mph release → 86.3 mph \|v\| at the plate, spinless, 55 ft, **ISA air** — see below |
+| `C_D` supercritical | 0.300 | **calibrated** | 94.0 mph release → 86.3 mph \|v\| at the plate, spinless, 55 ft, **ISA air** — see below. UNMOVED by stage 3b |
+| `C_D` subcritical | 0.500 | **published data** | the standard low-speed baseball drag coefficient (exact reference unverified). NOT fitted to the carry ladder — see below |
+| crisis band | Re 1.1e5 → 2.0e5 | **calibrated**, published prior | the seamed-ball drag crisis region (1e5–2e5); pinned inside it by the carry ladder |
+| crisis shape | quintic smootherstep | **assumption** | an interpolation, NOT a fit to C_D(Re) data. Quintic because the cubic costs RK4 its 4th order (measured 8.07 vs ~16) |
+| `ν` | 1.57e-4 ft²/s | **published data** | air at 70 °F SL, held FIXED — flagged; worth ~28 ft of mile-high carry |
 | `C_L(S)` | `1.5S` (S≤0.1), `0.09+0.6S` | **published data** | Alan Nathan's published baseball-aerodynamics lift fit (exact reference unverified — confirm before publication) |
-| `C_L_MAX` | 0.35 | **feel knob** | safety clamp, NOT part of the fit; bites at S = 0.4333, never in the pitch table |
+| `C_L_MAX` | 0.35 | **feel knob** | safety clamp, NOT part of the fit; bites at S = 0.4333. Never binds in the pitch table; DOES bind in the batted-ball tail — measured, ≤0.65 ft of carry |
 | `FIXED_MS` | 1000/120 | fixed | the one substep, shared by every consumer (`tuning.ts`) |
 | `BREAK_SEGMENT_FT` | 50 | **calibrated** | the ONE number stage 2 fitted — see the segment sweep below |
 | `PITCH_TEMPO` | 0.55 | **feel knob** | playback only; the sim cannot import it, and a test reads the source to prove it |
@@ -95,7 +99,8 @@ test**, or an **explicitly-labelled feel knob**. There is no fifth category.
 | `ω_bat`, bat speed | 32 rad/s, 71.5 mph | fixed | swing tracking / 2024 Statcast bat-tracking average |
 | swing axis → sweet spot | 3.2771 ft | **derived** | `v = ωR` — the two published swing numbers, cross-checked |
 | attack angle | +10° | fixed | MLB average |
-| `e_T` | **−0.20** | **calibrated** | batted-ball backspin 1900–2500 rpm; the textbook +0.20 gives 4430 — see below |
+| `e_T` | **0** | **derived** | the Coulomb STICK condition: reaching rolling costs `J_t/J_n = 0.084` against μ ≈ 0.4–0.6, so the grip fraction is forced to 1.0 — see below |
+| reference undercut | 0.56 in | **calibrated** | the swing parameter that meets BOTH published bands at `e_T = 0` (window 0.552–0.582 in) |
 | barrel | 98 mph, 26–30°, ±1°/mph | **published data** | Statcast classification, `tuning.isBarrel` |
 
 **Air density.** `airDensity(elevFt, tempF, rh)` = standard-atmosphere
@@ -121,6 +126,37 @@ honest way to change it is a better *published* fit.
 `airPhysics.test.ts` anchors both branches at fixed `S`, so an edit to either
 slope fails immediately — changing 0.6 → 0.9 previously passed the whole suite.
 
+**`C_D` is Reynolds-dependent — the drag crisis.** `dragCoef(speedFps, S)` returns
+0.500 below Re = 1.1e5 (~49 mph), 0.300 above Re = 2.0e5 (~88 mph), and a quintic
+smootherstep between. Four numbers, four categories, all stated in `tuning.ts`:
+
+- **0.300 is stage 1's calibration and it did not move** — see the paragraph
+  below, which is unchanged. A 94 mph pitch lives at Re ≥ 1.9e5 and only grazes
+  the top of the band, so it crosses the plate at 86.283 mph against 86.288 with
+  the old constant. The repair is *free* against stage 1.
+- **0.500 is published**, the standard subcritical drag coefficient of a
+  baseball (reference unverified, flagged on the same standard as `C_L`'s fit).
+  It was **not fitted to the carry ladder**: sweeping it against the six rungs
+  gives an RMS optimum near 0.545, and we kept 0.50, so the ladder is an
+  independent check that it passes rather than a fit it was built to satisfy.
+- **The Re band is calibrated with a published prior.** The seamed-ball crisis
+  sits in 1e5–2e5 (a seam trips the boundary layer far below a smooth sphere's
+  3.5e5); within that range the placement is load-bearing and the ladder fixes
+  it — 1.0e5–1.9e5 gives +15.0 ft mean, 1.1e5–2.0e5 gives +7.7, 1.2e5–2.1e5
+  gives −0.6 but starts eroding the pitch regime (plate speed 86.17 and falling).
+- **The shape is an assumption, not a fit**, and is labelled as such: we have no
+  measured `C_D(Re)` dataset here. A linear ramp over the same band is worth
+  1.5 ft of carry and 0.04 mph of plate speed. *Which* smooth shape was decided
+  by measurement rather than taste: the usual cubic smoothstep is only C¹, its
+  second-derivative jump costs RK4 its convergence order on the very pitch flight
+  `airPhysics.test.ts` refines (halving ratio 8.07 where 4th order needs ~16),
+  and the quintic restores it.
+- **ν is held fixed**, so the crisis sits at the same *speed* in every park. A
+  park-local Reynolds number (ν is 21.6 % higher a mile up) would cut the
+  mile-high bonus at 105 mph from +34.7 ft to +6.9 ft; the published altitude
+  effect is ~25–30 ft on a 400 ft fly, which favours the fixed-ν answer. That is
+  a check, not a derivation, and the flag stays.
+
 **`C_D` = 0.300, and the conditions are part of the number.** ISA air (59 °F,
 dry, `K = 0.00549317 ft⁻¹`), 55 ft of flight, spinless, and the 86.3 mph target
 is the **vector magnitude** `|v|` — which is what a radar plate speed reports.
@@ -128,7 +164,7 @@ The gravity-free closed form `v_x = v₀·exp(−K·C_D·x)` inverts to `C_D = 0
 (0.2902 in game-day air) — accurate, but a statement about `v_x`, not `|v|`.
 The model lands `|v| = 86.29`, `v_x = 85.84`. Two documented biases of ~±0.2 mph
 each remain and partly cancel: the game plays in thinner 70 °F/50 % RH air
-(86.49 mph with the same `C_D`), and 55 ft measures to the plate's rear point
+(86.48 mph with the same `C_D`), and 55 ft measures to the plate's rear point
 while plate speed is read ~1.4 ft nearer the front. "Inside the convention slop
 of the published number" is the honest claim; "dead on it" is not.
 
@@ -299,7 +335,9 @@ with `S = r·|ω_eff| / |v|` feeding `C_L(S)`.
 
 ### The carry experiment — an independent test of the aero core
 
-> ⚠ **The most valuable thing stage 3 produced, and it is a negative result.**
+> ⚠ **Stage 3's most valuable result, and stage 3b's repair of it.** The
+> experiment stands; the negative result did not survive one more step of
+> diagnosis.
 
 `C_D` and `C_L` were fixed entirely by the **pitch** regime: 0.4 s of flight,
 86–94 ft/s-decaying-little, `S ≈ 0.2` and a constant spin. A fly ball is a
@@ -317,47 +355,90 @@ actually produces. ISA sea level is 2.6 % denser and carries 2.6–5.0 ft shorte
 a mile up carries 29.4 ft further. Carry moves ~4 ft per 100 rpm of backspin, so
 a carry figure with neither air nor spin attached means nothing.
 
-| EV mph | published | model (argmax over LA) | LA_opt | residual |
-| --- | --- | --- | --- | --- |
-| 90 | 330 | 395.0 | 31.00° | **+65.0** |
-| 95 | 360 | 424.7 | 30.00° | **+64.7** |
-| 100 | 400 | 453.9 | 29.25° | **+53.9** |
-| 105 | 430 | 482.5 | 28.50° | **+52.5** |
-| 110 | 455 | 510.6 | 27.75° | **+55.6** |
-| 115 | 480 | 538.1 | 27.25° | **+58.1** |
+| EV mph | published | stage 3 (const `C_D`) | resid | stage 3b (crisis `C_D`) | LA_opt | resid |
+| --- | --- | --- | --- | --- | --- | --- |
+| 90 | 330 | 395.0 @ 31.00° | +65.0 | **345.7** | 28.50° | **+15.7** |
+| 95 | 360 | 424.7 @ 30.00° | +64.7 | **374.9** | 27.50° | **+14.9** |
+| 100 | 400 | 453.9 @ 29.25° | +53.9 | **403.6** | 26.50° | **+3.6** |
+| 105 | 430 | 482.5 @ 28.50° | +52.5 | **431.7** | 25.75° | **+1.7** |
+| 110 | 455 | 510.6 @ 27.75° | +55.6 | **459.2** | 25.25° | **+4.2** |
+| 115 | 480 | 538.1 @ 27.25° | +58.1 | **486.1** | 24.25° | **+6.1** |
 
-Mean **+58.3 ft**, uniformly positive, against a ±15 ft corroboration bar.
+Stage 3: mean **+58.3 ft**, uniformly positive, against a ±15 ft corroboration
+bar. Stage 3b: mean **+7.7 ft**, RMS 9.5, inside it.
 
-**And no constant `C_D` repairs it** — which is the interesting half. Refitting a
+**No constant `C_D` repairs it, and stage 3 was right about that.** Refitting a
 single `C_D` against the six rows (a one-off diagnostic; it needs a second
 integrator, so it is not shipped) lands at **0.385**, RMS residual 13.2 ft, and a
 residual **spread of 35 ft**: +21.5 ft at 90 mph falling monotonically to
-−13.2 ft at 115. The published ladder rises at **6.00 ft/mph**, the model at
-**5.72** with `C_D = 0.300` and only ~4.6 at `C_D = 0.385` — raising drag lowers
-the level *and* flattens the slope, so the two constraints pull opposite ways.
-Worse, `C_D = 0.385` puts the reference four-seamer at the plate at **84.1 mph**
-against the published 86.3, a 2.2 mph error where stage 1 calibrated to ±0.4. A
-single Reynolds- and spin-independent `C_D` cannot serve both regimes.
+−13.2 ft at 115. Worse, `C_D = 0.385` puts the reference four-seamer at the plate
+at **84.1 mph** against the published 86.3, a 2.2 mph error where stage 1
+calibrated to ±0.4.
 
-**Nothing was changed to absorb this.** `C_D` and `C_L` did not move; there is no
-carry factor, no per-regime coefficient and no launch-angle correction. The
-model's own ladder is pinned as goldens with the published values recorded beside
-it as residuals — stage 2's precedent for the seven resisting pitch rows — and
-`battedBallSim.test.ts` asserts the residual band directly, so a carry fudge
-smuggled in later is a test failure (verified: a 0.87 factor kills 8 tests). The
-honest reading is that the aero core needs a spin- and Reynolds-dependent `C_D`,
-which `airPhysics.dragCoef(speedFps, S)`'s signature already anticipates, and
-that fitting one is a calibration against **both** regimes at once — a later
-milestone, not a stage-3 patch.
+**What repairs it is a Reynolds-dependent `C_D` — the drag crisis**, described in
+the constants section above. It is *free* against stage 1 and 2: a pitch never
+drops below ~72 mph, so it barely samples the crisis band, and the four-seamer
+still crosses the plate at 86.283 mph. A fly ball decays to ~45 mph and samples
+all of it. **That is why one constant could not serve both regimes**, and it is
+the step stage 3 stopped one short of.
 
-What the model *does* get right, and is asserted: the carry optimum sits at
-27–31° rather than the drag-free 45° (with the spin removed it jumps to 40.5°
-and loses 65 ft, which is the contrast test), the optimum **falls monotonically**
-as exit velocity rises, backspin is worth 41.6 ft between 1000 and 2500 rpm at
-100 mph / 27°, a 400 ft fly near its optimum hangs 5.03–5.48 s, and thinner air
+**Spin-dependent `C_D` is ruled out as a standalone**, by arithmetic rather than
+by preference: holding `C_D(S = 0.211) = 0.300` for the pitch while the fly ball
+needs `C_D(S ≈ 0.30) ≈ 0.385` implies `dC_D/dS ≈ 0.95` and `C_D(0) ≈ 0.10`, an
+absurd spinless drag. The `S` argument stays in the signature and stays unread.
+
+**The launch-angle overshoot was the same defect.** Stage 3 recorded the 31.0°
+optimum at 90 mph against a briefed 25–30° as "a brief error"; that was the wrong
+adjudication. The one change that fixed the carry moved that rung to **28.5°**
+with nothing else touched. ⚠ Honest remainder: the ladder is now **28.50 → 24.25°**,
+so the *bottom* undershoots — 24.25° at 115 mph is 0.75° below the briefed 25.
+The tests assert 24–29 and say why.
+
+**Still nothing fudged.** `C_L` did not move, `C_D`'s supercritical branch did
+not move, and there is no carry factor, no per-regime coefficient and no
+launch-angle correction. The model's own ladder stays pinned as goldens with the
+published values beside it as residuals — stage 2's precedent for the seven
+resisting pitch rows — and a carry fudge smuggled in later is still a test
+failure (verified: a 0.87 factor kills 8 tests; reverting `dragCoef` to the
+constant kills 11).
+
+⚠ **The residual's dominant input is an assumption.** 2200 rpm of backspin is not
+a published column of the carry table, and the mean residual runs −9.3 ft at
+1200 rpm to +10.5 ft at 2500. So "+7.7 ft" carries ±10 ft of assumption with it,
+and the claim the tests assert is the one that survives every rung: **inside the
+±15 ft bar at every backspin from 1200 to 2500 rpm**, which the pre-repair
++58.3 ft was at none of them.
+
+⚠ **The slope argument was overstated and has been weakened.** Stage 3 compared a
+two-point *endpoint* slope — published 6.00 ft/mph against the model's 5.72 — as
+though that 0.28 were a finding. A least-squares line through the six published
+rungs has slope **6.086** with residuals −3.1, −3.5, +6.0, +5.6, +0.2, −5.2 ft:
+the table scatters ±6 ft about its own trend, so any slope claim finer than
+~0.5 ft/mph is noise. The model's 5.61 agrees to well inside that. What *is* safe
+is the SPREAD argument (a 35 ft spread against ±6 ft of scatter), and that is
+what the constant-`C_D` refit is rejected on.
+
+What the model gets right, and is asserted: the carry optimum sits at 24–29°
+rather than the drag-free 45° (with the spin removed it jumps to 37.25° and loses
+49 ft, which is the contrast test), the optimum **falls monotonically** as exit
+velocity rises, backspin is worth 24.2 ft between 1000 and 2500 rpm at
+100 mph / 27°, a 400 ft fly near its optimum hangs 5.29–5.79 s, and thinner air
 carries further through `K` alone.
 
-### The collision — two published targets that cannot both be met
+⚠ **`C_L_MAX` is a feel knob and in this regime it BINDS** — stage 1's "it never
+binds anywhere" was true of the pitch table and false here, and the extra
+end-of-flight drag sharpened it. A fly ball's `S` climbs as `|v|` decays, so the
+ladder runs clamped for up to **33 %** of a flight (90 mph rung). Measured, that
+is worth **≤0.65 ft** of carry, because the clamp only ever bites in the slow
+tail where the aero forces are small — so the ladder measures `C_L`, not the
+knob, and the knob was left at 0.35 rather than raised. Where it *is* material
+the assertion says so: the 1000→2500 rpm backspin figure is 24.2 ft clamped
+against 27.5 unclamped (14 % of it is the knob, and its 2500 rpm end runs 56 %
+clamped), and the undercut sweep's 4000–7000 rpm rows are 97–100 % clamped at
+`S` up to 1.3 — which is the clamp doing its labelled job on exactly the absurd
+inputs it exists for. `battedBallSim.test.ts` prints the accounting every run.
+
+### The collision — two published targets, met at once
 
 The bat-ball collision is **one** oblique rigid-body impulse solve: normal
 restitution with the bat's effective mass, tangential restitution with `e_T` and
@@ -366,38 +447,72 @@ backspin **and** sidespin all come out of it — there is no launch-angle curve 
 no backspin lookup, and a pulled ball hooks foul because the same solve gives it
 sidespin, not because anything scripts it.
 
-> ⚠ **`e_T` cannot satisfy both published targets.** On the reference swing
-> (0.75 in undercut, +10° attack, 90 mph pitch descending 8° at 2200 rpm, 71.5 mph
-> bat), launch angle and backspin move in **opposite** directions with `e_T`:
+> ⚠ **RETRACTED, stage 3b: "`e_T` cannot satisfy both published targets".** It
+> can. Stage 3 varied `e_T` at a **fixed 0.75 in undercut**, where launch angle
+> and backspin do move in opposite directions:
 
 | `e_T` | LA | backspin |
 | --- | --- | --- |
-| +0.46 | 26.1° | 5900 rpm | ← the LA that `LA = θ_LOC + α` predicts |
+| +0.46 | 26.2° | 5866 rpm | ← the LA that `LA = θ_LOC + α` predicts |
 | +0.20 | 29.0° | 4430 rpm | ← the textbook rigid-surface value |
-| 0.00 | 31.2° | 3325 rpm | ← exact rolling (the patch stops sliding) |
-| **−0.20** | **33.4°** | **2220 rpm** | ← **adopted**: the published backspin band |
+| **0.00** | 31.2° | 3325 rpm | ← exact rolling (the patch stops sliding) |
+| −0.20 | 33.4° | 2220 rpm | ← what stage 3 shipped |
 
-"LA 25–29°" needs `e_T ≥ +0.2`; "backspin 1900–2500 rpm" needs `e_T ≤ −0.14`.
-Disjoint, by a factor of ~2.7 in tangential impulse. Neither Coulomb friction
-(the adopted solve needs only `J_t/J_n = 0.12` against μ ≈ 0.5) nor the bat's own
-tangential recoil (worth 6.6 %) closes it. `e_T` is calibrated against
-**backspin**, because backspin is the tangential observable `e_T` controls and
-because backspin is what feeds carry. Writing the impulse as
-`J_t = −(1 + e_T)·(2m/7)·s` makes the negative value readable: `(1 + e_T) = 0.80`
-is a **grip fraction**, 1.0 being exactly rolling — the contact patch is still
-sliding forward at 20 % of its initial rate when the ball leaves. The consequence
-is that `LA ≈ θ_LOC + α_attack` **under-predicts** this model's launch angle by
-~7°, because that rule of thumb assumes the tangential velocity is almost
-entirely scrubbed off and at 80 % grip it is not.
+**But the undercut is not published data — it is a free swing parameter**, so
+holding it fixed asks whether one arbitrary swing can hit both targets, not
+whether the model can. Over the 2-D `(e_T, undercut)` region the bands overlap
+for **`e_T ∈ [−0.16, +0.02]`**: at `e_T = 0` an undercut of 0.5517 in gives
+LA 25.0°, backspin 2350 rpm and EV 101.7 mph, both bands at once.
+
+**And `e_T` is not a calibrated dial at all — it is derived.** The solve needs a
+tangential impulse of only `J_t/J_n = 0.084` to bring the contact patch to
+**rolling** (0.103 at the 0.75 in undercut stage 3 swept at), against μ ≈ 0.4–0.6
+for leather on wood: the contact sits ~5–7× inside the **stick** regime, so the
+patch must reach rolling and the grip fraction `(1 + e_T)` is forced to exactly
+**1.0**. Nothing in a rigid-body impulse solve removes tangential impulse while
+friction is in surplus, so stage 3's "still sliding forward at 20 %" had no
+mechanism behind it. The physically admissible range is `e_T ∈ [0, +0.2]` — 0 is
+Coulomb stick, positive is tangential *compliance*, which is what the textbook
+bat-ball `e_T ≈ +0.2` measures. **Admissible ∩ feasible = [0, +0.02]**, and
+**`e_T = 0`** is shipped: the principled end of it, with zero free parameters.
+
+**The reference swing's undercut moved with it, to 0.56 in** — a swing parameter,
+chosen against the two published targets rather than left at an arbitrary value.
+It gives LA **25.26°**, backspin **2391 rpm**, EV **101.60 mph**. ⚠ The
+joint-feasible window is **narrow** — 0.552 to 0.582 in, LA 25.0–25.9° — because
+it is the corner where the two published bands just overlap. That narrowness is
+the honest residue of stage 3's finding, and `batSim.test.ts` prints the region.
+
+⚠ **The "~2.7×" was a mislabel.** 2.643 is the *backspin* ratio between
+`e_T = +0.46` and `−0.20`, not a tangential impulse. The impulse gap is the ratio
+of grip fractions, and at the fixed 0.75 in undercut the bands' nearest edges are
+`e_T = +0.2024` (LA 29.0°) and `e_T = −0.1493` (2500 rpm): **1.413×**. What
+survives, stated precisely: *at any fixed undercut* the two bands are disjoint by
+1.413× in tangential impulse. The bat's own tangential recoil (4.7 % of full mass,
+7.1 % of `M_eff`) does not close that, and does not need to.
+
+`LA ≈ θ_LOC + α_attack` still **under-predicts** this model's launch angle — by
+**3.3°** on the reference swing (21.96° predicted, 25.26° produced), because the
+rule assumes the tangential velocity is entirely scrubbed off and even at 100 %
+grip it is not. Stage 3 measured that gap at ~7° at 80 % grip; it shrinks with the
+grip fraction but does not vanish.
 
 > ⚠ **The rigid-body model has no bat vibration**, so it puts the "sweet spot" in
 > the wrong place. `M_eff` peaks at the *balance point* (0.560 m) and `e` is
 > constant, so `eA` keeps rising toward the handle: 4 in toward the barrel tip
-> costs **11.25 mph** (right, and for the right reason — `M_eff` collapses), but
-> 4 in toward the handle **gains 2.66 mph**, where a real bat loses because the
+> costs **11.53 mph** (right, and for the right reason — `M_eff` collapses), but
+> 4 in toward the handle **gains 2.71 mph**, where a real bat loses because the
 > sweet spot sits on the fundamental bending node and `e` collapses away from it.
 > Both numbers are pinned as goldens so the gap stays visible. Closing it needs a
 > measured `e(z)` profile, which this stage has no data for.
+>
+> ⚠ **And it has a second, larger consequence: the model has no jamming at all.**
+> An inside pitch is a smaller aim radius — contact nearer the hands — so the same
+> rising `eA` **rewards** it. Measured on time: sweet spot 101.60 mph, 2 in inside
+> 104.26, **peak 104.62 at 3 in inside**, 4 in inside 104.31, and it does not fall
+> back below the sweet-spot value until ~6 in inside. An inside pitch makes this
+> batter stronger for six inches. Same root cause, same fix (a measured `e(z)`),
+> and it is asserted so the retraction below cannot quietly lapse.
 
 **Timing is one rotation model**, `ω_bat = 32 rad/s`, and both of its gameplay
 consequences come from the same two lines. The bat is a ray from the swing axis;
@@ -405,20 +520,28 @@ the ball travels a line at perpendicular distance `d`; so with the swing displac
 by `Δt`, `θ_c = −ω·Δt·v_p/(ωd + v_p)` and `R_c = d/cos θ_c`.
 
 - **The ball keeps moving**, and that second factor is the whole content of it.
-  The naive "spray shift = `ω·Δt`" gives 45.8° of bat rotation at 25 ms; because
-  the ball travels 3.3 ft deeper while the bat catches up, the bat is only
-  **25.5°** from square. The *ball* is nevertheless deflected **−46.9°**, past the
-  bat angle, because it keeps some tangential velocity — so the published ±35°
-  figure is reproduced, by a different mechanism than the rule of thumb it comes
-  from.
+  The naive "spray shift = `ω·Δt`" gives 45.8° of bat rotation at 25 ms; contact
+  actually happens **1.46 ft** deeper (`v_p · contactDelayS`) and the bat is only
+  **25.5°** from square when it gets there. ⚠ *Not* 3.3 ft — that is `v_p · Δt`,
+  precisely the naive quantity this bullet exists to refute, and an earlier draft
+  of this line and of `batSim.ts`'s quoted it. The *ball* is nevertheless deflected
+  **−43.8°**, past the bat angle, because it keeps some tangential velocity — so a
+  ±35°-scale spray falls out, by a different mechanism than the rule of thumb it
+  comes from. 43.8° is 1.2° **inside** the foul line: a 25 ms early swing on this
+  pitch is barely fair, which is a gameplay fact and is asserted as one, with
+  two-sided mirrored bounds rather than the one-sided `≤ −35` that would have
+  passed at −80° too.
 - **`R_c > d` for a miss in either direction**, so any mistiming drives contact out
-  toward the tip where `M_eff` collapses: 25 ms off costs 8.4 mph of exit velocity
-  and 20 ms off costs 47.5 ft of carry, early or late, with no second knob.
+  toward the tip where `M_eff` collapses: 25 ms off costs 9.2 mph of exit velocity
+  and 20 ms off costs 56.3 ft of carry, early or late, with no second knob.
 - ⚠ **It is therefore symmetric**, and does **not** reproduce "late = jammed at the
   handle". In this geometry a late swing meets the ball deeper and further out the
-  barrel, not nearer the hands; getting jammed is a property of an **inside pitch**
-  (a smaller aim radius `d`), which is `aimZM`'s job. Asserted as a symmetry so
-  nobody closes it with an asymmetric fudge.
+  barrel, not nearer the hands. ⚠ **RETRACTED, stage 3b:** an earlier version of
+  this bullet resolved that by saying getting jammed "is a property of an inside
+  pitch (a smaller aim radius `d`), which is `aimZM`'s job". It is not — see the
+  aim-radius measurement above; the model has **no jamming mechanism anywhere**,
+  and this is a second consequence of the missing `e(z)`, not a resolution. The
+  symmetry is still asserted so nobody closes it with an asymmetric fudge.
 
 ### Determinism
 
@@ -523,13 +646,15 @@ the render layer; contact resolves at the true physical state.
   mistiming penalty), `battedBallSim.ts` on stage 1's `stepBall` unmodified, plus
   `isBarrel` in `tuning.ts`. 44 new tests over two files, 93 in the baseball
   suite.
-  **Two negative results, both reported rather than absorbed.** (1) The published
-  carry ladder — an independent test of `C_D`/`C_L` in a regime they were never
-  fitted to — misses by **+58.3 ft mean**, and no constant `C_D` repairs it
-  (0.385 fits the level but flattens the slope the wrong way and breaks the
-  plate-speed calibration by 2.2 mph). (2) No `e_T` satisfies both the published
-  launch-angle and backspin targets; the bands are disjoint by ~2.7× in
-  tangential impulse. `C_D` and `C_L` did not move and no carry factor was added.
+  **Two negative results, both reported rather than absorbed — and both revisited
+  in stage 3b below.** (1) The published carry ladder — an independent test of
+  `C_D`/`C_L` in a regime they were never fitted to — missed by **+58.3 ft mean**,
+  and no constant `C_D` repairs it (0.385 fits the level but flattens the slope
+  the wrong way and breaks the plate-speed calibration by 2.2 mph). ⚠ The second
+  half of that is still true; the first was fixed by a Reynolds-dependent `C_D`.
+  (2) "No `e_T` satisfies both the published launch-angle and backspin targets"
+  — ⚠ **RETRACTED**: that sweep held the undercut fixed at a value that is not
+  published data. `C_D` and `C_L` did not move and no carry factor was added.
   A third, smaller limitation is pinned as goldens: the rigid-body collision has
   no bat vibration, so it gains 2.66 mph 4 in toward the handle where a real bat
   loses.
@@ -543,6 +668,49 @@ the render layer; contact resolves at the true physical state.
   contact snapped to a substep (6), **a 0.87 carry fudge factor (8 — the finding
   is pinned as firmly as the numbers)**, the barrel window widened to 3°/mph (1),
   and the swing axis hand-set instead of derived (8).
+- **Stage 3b — the adversarial review, and two repairs.** → **Done.** An
+  adversarial review rebuilt the ladder independently to 9 decimal places and
+  found stage 3's two negative results were one real defect and one artifact.
+  Both are fixed **in the physics**, not in the prose:
+  **(1) `dragCoef` is now Reynolds-dependent** — the drag crisis, 0.500 below
+  Re 1.1e5 to 0.300 above 2.0e5 on a quintic smootherstep. The carry residual
+  falls from **+58.3 ft to +7.7 ft** mean (RMS 9.5, inside the ±15 bar) and the
+  launch-angle optimum at 90 mph from 31.0° to 28.5°, which were the same defect;
+  stage 3's pushback that "the brief's 25–30° band is wrong" is withdrawn and
+  folded in as the second symptom. It is **free against stages 1 and 2**: the
+  four-seamer crosses the plate at 86.283 mph against 86.288, all sixteen
+  published break residuals are unchanged to 0.1 in, and the largest golden move
+  is 0.036 in on the curveball. What *did* move is the slow pitches' plate speed
+  (curveball 73.5 → 72.7 mph) and the value of backspin (~4 → ~1.5 ft per
+  100 rpm), both reported.
+  **(2) `e_T` is now DERIVED and equals 0**, the Coulomb rolling value. Stage 3's
+  "no `e_T` satisfies both published targets" is **retracted**: it swept `e_T` at
+  a fixed 0.75 in undercut, and the undercut is a free swing parameter. The 2-D
+  region says the bands overlap for `e_T ∈ [−0.16, +0.02]`; the Coulomb number
+  (`J_t/J_n = 0.084` against μ ≈ 0.4–0.6, ~5–7× inside stick) says only
+  `[0, +0.2]` is admissible; the intersection is `[0, +0.02]`. The reference
+  undercut moved to 0.56 in and the swing now meets **both** published bands at
+  once. The "~2.7×" was a mislabelled backspin ratio; the tangential-impulse gap
+  at a fixed undercut is **1.413×**.
+  **A third claim is retracted outright**: jamming is *not* "a property of an
+  inside pitch, which is `aimZM`'s job". Measured, an inside pitch makes this
+  batter **stronger** for six inches (peak EV 3 in inside, +3.0 mph). The model
+  has no jamming mechanism anywhere; it is a second consequence of the missing
+  measured `e(z)`, and it is now printed and asserted.
+  **Smaller corrections**, all with numbers: `C_L_MAX`'s "never binds anywhere"
+  comment was false for the batted ball (33 % of a ladder flight, worth ≤0.65 ft
+  — measured, printed, and the reason the knob was left at 0.35); the residual is
+  re-pinned at the precision its 2200 rpm assumption actually has (±10 ft) rather
+  than ±0.05 ft; the slope claim is weakened, because the published table scatters
+  ±6 ft about its own least-squares line (slope 6.086) and a 6.00-vs-5.72
+  comparison was finer than the data; the spray bounds are two-sided and mirrored,
+  which is what finally catches the naive-bat-angle mutation on merit; `−42.9°` →
+  `−43.8°` and `3.3 ft` → `1.46 ft` were stale/wrong numbers in shipping source.
+  **Nine more mutations were watched to fail** — see the logs at the bottom of
+  `batSim.test.ts` and `battedBallSim.test.ts`. The two that matter most: the
+  cubic smoothstep (caught by the RK4 convergence bench, which is what chose the
+  quintic) and the fixed kinematic viscosity (15 tests, including stage 1's own
+  plate-speed calibration).
 - **Stage 4 — game & scene.** `derbySim.ts`, `duelSim.ts` (3 innings, 3 outs, no
   steals/errors/subs/shifts), `ai.ts`, `StadiumGL.tsx` as a *composer* over
   `stadium/{bowl,turf,dirt,roof,crowd,lights,skyline}.ts`, HUDs, and the budget /
@@ -583,6 +751,15 @@ the render layer; contact resolves at the true physical state.
   spin/tilt data, in the break-reporting convention above, or in `C_D` — a change
   that fixes the curveball and breaks the sweeper is the failure mode that rule
   exists to prevent.
+- **`C_D` is now a CURVE, and break barely notices.** Break is a *difference*
+  between a spun and a spinless trajectory that share the same drag, so a change
+  to `C_D` very nearly cancels out of it: stage 3b's Reynolds dependence moved the
+  eight golden break rows by at most **0.036 in** (the curveball, the slowest and
+  so the only one deep in the crisis band) and left all sixteen published
+  residuals unchanged to 0.1 in. What it *does* move is the plate SPEED of the
+  slow pitches — the curveball arrives at 72.7 mph instead of 73.5. If you are
+  chasing a break error, `C_D` is not the lever; if you are chasing a plate speed,
+  it is.
 - **Break numbers only mean something with a convention attached.** 22.59 in and
   15.23 in are the *same pitch* measured over 55 ft and 45 ft. Convert published
   targets into our convention; never move a coefficient to close the gap.
@@ -621,9 +798,12 @@ the render layer; contact resolves at the true physical state.
   a leak in the projection; the leak would show up in the 10 ft figure and in
   stage 1's superposition test.
 - **A carry number without its AIR and its BACKSPIN is meaningless**, exactly as a
-  break number is without its air and its segment. 2.6–5.0 ft between ISA and
-  game-day sea level, 29.4 ft to a mile high, and ~4 ft per 100 rpm. Every carry
-  figure in this document is quoted at game-day sea level with 2200 rpm.
+  break number is without its air and its segment. 4.7 ft between ISA and
+  game-day sea level, 34.7 ft to a mile high, and ~1.5 ft per 100 rpm of backspin
+  at the ladder optimum (it was ~4 under the constant `C_D`: the drag crisis puts
+  far more drag on the slow tail, which is exactly where a high-spin ball was
+  buying its extra carry). Every carry figure in this document is quoted at
+  game-day sea level with 2200 rpm.
 - **`eA` is a FUNCTION, never the literal 0.20.** The derivation
   `1/M_eff = 1/M + (z−z_cm)²/I_cm`, `q = m/M_eff`, `eA = (e−q)/(1+q)` closes on the
   published 0.5816 kg / 0.2498 / 0.2002 triple, which is the whole reason the bat
@@ -636,9 +816,10 @@ the render layer; contact resolves at the true physical state.
   lefty's pulled ball slices instead of hooking while EV and LA stay perfect.
 - **The batted ball's "sweet spot" is in the wrong place, on purpose, for now.**
   The rigid model has no bending modes, so `eA` climbs toward the balance point:
-  4 in toward the tip costs 11.25 mph (correct), 4 in toward the handle *gains*
-  2.66 mph (incorrect). Both are golden-pinned. The fix is a measured `e(z)`, not
-  a nudge.
+  4 in toward the tip costs 11.53 mph (correct), 4 in toward the handle *gains*
+  2.71 mph (incorrect), and an *inside pitch* — a smaller aim radius — is rewarded
+  out to ~6 in, so there is **no jamming in this model at all**. All three are
+  golden-pinned. The fix is a measured `e(z)`, not a nudge.
 - **The called zone is the rule zone plus one ball RADIUS a side (19.90 in),
   not a diameter (22.81 in).** A strike is any part of the ball over any part of
   the plate and we integrate the ball's *centre*, so the centre may sit one

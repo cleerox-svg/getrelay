@@ -85,6 +85,117 @@ export const GAME_TEMP_F = 70;
 export const GAME_RH = 0.5;
 
 // ---------------------------------------------------------------------------
+// DRAG — one coefficient, two regimes, and an honest account of each number
+// ---------------------------------------------------------------------------
+//
+// `airPhysics.dragCoef(speedFps, S)` reads these. They live HERE rather than
+// beside the integrator because the physics rule demands a CATEGORY per number
+// and this is the file that keeps them, and because `airPhysics.ts` is near its
+// 500-line cap. `airPhysics.ts` re-exports `C_D_BASE` so stage-1 consumers are
+// unchanged.
+//
+// ⚠ WHY THERE ARE TWO REGIMES AT ALL. Stage 3 ran the published max-carry ladder
+// as an INDEPENDENT test of a `C_D` fitted entirely in the pitch regime, and it
+// missed by +58.3 ft mean, uniformly positive. Stage 3 also showed no single
+// CONSTANT `C_D` repairs it (0.385 fits the level, flattens the slope the wrong
+// way and puts the four-seamer at the plate at 84.1 mph against a published 86.3
+// — see `C_D_BASE`). Both of those results stand. What stage 3 stopped one step
+// short of is the resolution: a REYNOLDS-dependent `C_D`, which a real baseball
+// has and which `dragCoef(speedFps, S)`'s signature has anticipated since stage
+// 1. A pitch never drops below ~72 mph and a fly ball decays to ~45, so the two
+// regimes sample different parts of the curve — which is exactly why one
+// constant could not serve both.
+//
+// ⚠ AND SPIN-DEPENDENT `C_D` IS RULED OUT AS A STANDALONE, by arithmetic. Holding
+// C_D(S = 0.211) = 0.300 for the pitch while the fly ball needs C_D(S ≈ 0.30) ≈
+// 0.385 implies dC_D/dS ≈ 0.95 and C_D(0) ≈ 0.10 — an absurd spinless drag. The
+// `S` parameter stays in the signature (a real ball does gain a little drag with
+// spin) but nothing reads it, and it must not be made to carry this.
+
+/**
+ * Kinematic viscosity of air, ft²/s. PUBLISHED DATA (~1.57e-4 at 70 °F, sea
+ * level). Used ONLY to turn a speed into a Reynolds number.
+ *
+ * ⚠ HELD FIXED, AND THAT IS A MODELLING CHOICE WITH A MEASURED PRICE. ν = μ/ρ,
+ * so a mile-high park's ν is 21.6 % higher (ρ is 17.8 % lower, μ depends only on
+ * temperature) and the SAME speed there sits at a 17.8 % LOWER Reynolds number —
+ * deeper into the crisis, i.e. MORE drag. Holding ν fixed puts the crisis at the
+ * same SPEED in every park. Measured cost at 105 mph: the model's mile-high
+ * carry is 465.9 ft (+34.7 ft over sea level); with a park-local Re it would be
+ * 438.1 ft (+6.9 ft). The published altitude effect is ~25–30 ft on a 400 ft
+ * fly, which favours the fixed-ν answer — but that agreement is a check, not a
+ * derivation, and the honest reading is that it bounds how much the crisis
+ * PLACEMENT matters at altitude. Fixing it properly means giving `dragCoef` the
+ * park's ρ, which changes its signature and every caller; flagged, not fudged.
+ */
+export const AIR_KINEMATIC_VISC_FT2_S = 1.57e-4;
+
+/**
+ * Subcritical drag coefficient — below the crisis. PUBLISHED DATA: ~0.50 is the
+ * standard low-speed drag coefficient quoted for a baseball throughout the
+ * aerodynamics literature (and is the classic subcritical sphere value).
+ * *(Exact reference unverified — confirm before publication, the same standard
+ * `C_L`'s fit is held to. A general attribution is honest; an invented citation
+ * is not.)*
+ *
+ * ⚠ IT WAS NOT FITTED TO THE CARRY LADDER, and that is worth stating because the
+ * temptation was right there. Sweeping it against the six published rungs with
+ * `C_D_BASE` pinned gives an RMS optimum near 0.545 (RMS 5.7 ft) against 0.50's
+ * RMS 9.1 ft. We kept the published 0.50; the ladder is then an INDEPENDENT
+ * check that it passes — mean residual +7.2 ft against a ±15 ft corroboration
+ * bar — rather than a fit it was built to satisfy.
+ */
+export const C_D_SUBCRIT = 0.5;
+
+/**
+ * Supercritical drag coefficient — above the crisis. CALIBRATED, and UNMOVED by
+ * this stage: it is stage 1's number, pinned by a 94.0 mph release crossing the
+ * plate at 86.3 mph. See the long note on `airPhysics.dragCoef` for the
+ * conditions, which are part of the number. The whole point of the crisis curve
+ * is that it reproduces this: the four-seamer measures 86.283 mph against
+ * 86.288 with the old constant, a 0.005 mph move.
+ */
+export const C_D_BASE = 0.3;
+
+/**
+ * The Reynolds band the drag crisis is smoothed across. CALIBRATED, WITH A
+ * PUBLISHED PRIOR — and the two halves of that label are worth separating.
+ *
+ *   NOMINATED FROM OUTSIDE. A *seamed* ball's drag crisis sits far below a
+ *   smooth sphere's ~3.5e5, in the region 1e5–2e5, because the seams trip the
+ *   boundary layer early. (Exact reference unverified — flagged.) That range is
+ *   where these two numbers come from; they were not free to be anything.
+ *
+ *   PINNED INSIDE IT BY THE LADDER. Within that range the placement is
+ *   load-bearing and the carry ladder is what fixes it: 1.0e5–1.9e5 gives a mean
+ *   residual of +15.0 ft, 1.1e5–2.0e5 gives +7.2 ft, 1.2e5–2.1e5 gives −0.6 ft
+ *   but starts to cost the pitch regime (four-seam plate speed 86.17 mph, and
+ *   falling). 1.1e5–2.0e5 is the band that lands the ladder well inside the
+ *   corroboration bar while leaving stage 1 untouched. So: calibrated.
+ *
+ * ⚠ AND THE SHAPE IS AN ASSUMPTION, NOT A FIT. The quintic `smootherstep`
+ * between the two endpoints is an INTERPOLATION, not a measurement: we have no
+ * C_D(Re) dataset in this repo, and pretending a smootherstep is one would be
+ * the fifth category by a prettier route. Measured cost of the choice — a LINEAR
+ * ramp over the same band gives a mean carry residual of +6.2 ft (against +7.7)
+ * and a four-seam plate speed of 86.244 mph (against 86.287) — so the shape is
+ * worth ~1.5 ft of carry and ~0.04 mph of plate speed.
+ *
+ * ⚠ QUINTIC RATHER THAN THE USUAL CUBIC, FOR A MEASURED REASON. The cubic
+ * smoothstep u²(3 − 2u) is only C¹: its second derivative jumps at both ends of
+ * the band, and a 94 mph pitch decays right through the upper end. That kink
+ * costs RK4 its convergence order — measured, on `airPhysics.test.ts`'s own
+ * refinement bench, a halving ratio of 8.07 where 4th order demands ~16. The
+ * quintic is C² and restores it (15.4–16.7 across the same rungs, matching the
+ * constant-C_D baseline). A C^∞ exp-bump blend does marginally better still
+ * (16.0–16.2) for two `exp` calls per RK4 stage and is not worth it. So the
+ * shape is an assumption, but WHICH smooth shape was decided by the integrator,
+ * not by taste.
+ */
+export const RE_CRISIS_LO = 1.1e5;
+export const RE_CRISIS_HI = 2.0e5;
+
+// ---------------------------------------------------------------------------
 // The induced-break reporting convention
 // ---------------------------------------------------------------------------
 //

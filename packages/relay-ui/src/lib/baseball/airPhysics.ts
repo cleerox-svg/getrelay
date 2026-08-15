@@ -39,7 +39,15 @@
 //
 // Units: ft, s, slug (see units.ts). g is REAL — 32.174 ft/s².
 
-import { FIXED_DT, FIXED_MS } from './tuning';
+import {
+  AIR_KINEMATIC_VISC_FT2_S,
+  C_D_BASE,
+  C_D_SUBCRIT,
+  FIXED_DT,
+  FIXED_MS,
+  RE_CRISIS_HI,
+  RE_CRISIS_LO,
+} from './tuning';
 import { G_FPS2, IN_TO_FT, lbfToSlug, OZ_TO_LBF } from './units';
 
 // ---------------------------------------------------------------------------
@@ -203,10 +211,36 @@ export function spinParameter(speedFps: number, spinRadS: number): number {
 /**
  * Ceiling on C_L. FEEL KNOB (a safety clamp), explicitly NOT part of the
  * published fit below — the fit is linear and unbounded, real balls are not.
- * It bites at S = (0.35 − 0.09)/0.6 = 0.4333, roughly double the S of a
- * fully-efficient four-seamer (0.221 at 2400 rpm / 94 mph), so it never binds
- * anywhere in the pitch table and exists only so that absurd inputs — a bat
- * clipping the ball into 6000 rpm — cannot produce an absurd force.
+ * It bites at S = (0.35 − 0.09)/0.6 = 0.4333.
+ *
+ * ⚠ CORRECTED IN STAGE 3b. Stage 1 wrote "it never binds anywhere" — true of the
+ * PITCH table (a four-seamer's S is 0.221 at release and rises only a little as
+ * it decays) and false of the BATTED BALL, which stage 3 then created and stage
+ * 3's drag repair sharpened. A fly ball's S CLIMBS through the flight because
+ * spin is constant while |v| decays to ~45 mph, so a well-struck ball crosses
+ * 0.4333 on the way down and finishes clamped. Measured, at the shipped
+ * coefficients:
+ *
+ *   • the max-carry ladder at 2200 rpm runs clamped for up to 33 % of the
+ *     flight (90 mph rung) — but the clamp is worth ≤ 0.65 ft of carry at every
+ *     rung, because it only ever binds in the slow tail where the aero forces
+ *     are small. The ladder is NOT measuring this knob.
+ *   • the reference swing (0.56 in undercut, 2391 rpm) is clamped 42 % of its
+ *     flight for 1.4 ft of its 414 ft. Same story.
+ *   • the 1000 → 2500 rpm backspin sensitivity IS partly this knob: 24.2 ft
+ *     clamped against 27.5 ft unclamped, i.e. 12 % of the number, because its
+ *     2500 rpm endpoint is clamped 56 % of the flight. That test says so.
+ *   • the undercut sweep above ~0.9 in is clamped 90–100 % of the flight at
+ *     S up to 3.4. Those rows ARE the clamp — which is the clamp doing its
+ *     labelled job, since 4000–7000 rpm off a bat is exactly the absurd input
+ *     it exists for, and the published `C_L` fit has no business being
+ *     extrapolated to S = 3.
+ *
+ * It was left at 0.35 rather than raised, on the strength of those numbers: the
+ * carry results it backs move by ≤ 1.4 ft, so raising it would buy nothing real
+ * while changing every golden. Where it IS load-bearing the affected assertion
+ * says so. `battedBallSim.test.ts` prints the clamped fraction and the clamp's
+ * cost so this stays measured rather than asserted.
  */
 export const C_L_MAX = 0.35;
 
@@ -241,55 +275,73 @@ export function liftCoef(S: number): number {
 }
 
 /**
- * Drag coefficient C_D. CALIBRATED by a failing test, currently a constant.
+ * Reynolds number of a ball moving at `speedFps`, using the ball's diameter and
+ * a FIXED sea-level kinematic viscosity. DERIVED: Re = |v|·D/ν.
  *
- * Value 0.300, and the calibration is only meaningful if the conditions are
- * stated, so they are stated:
- *
- *   TARGET     a four-seamer released at 94.0 mph crosses the plate at
- *              ~86.3 mph (published Statcast averages, an ~8.2 % loss).
- *   SPEED      86.3 is the VECTOR MAGNITUDE |v|, not the horizontal component.
- *              This is the whole reason the number is 0.300 and not 0.283.
- *   AIR        ISA sea level — 59 °F, DRY, ρ = 0.0023770, K = 0.00549317 ft⁻¹.
- *   FLIGHT     55 ft, from release to the plate: 60.5 ft mound-to-plate less
- *              ~5.5 ft of release extension.
- *   SPIN       none. Drag is calibrated on a spinless ball so C_L cannot
- *              absorb any part of it.
- *
- * WHY 0.300 AND NOT THE CLOSED FORM. Gravity-free horizontal decay is exactly
- * v_x(x) = v0·exp(−K·C_D·x), which inverts to C_D = ln(94/86.3)/(K·55) =
- * 0.2829 (0.2902 in game-day 70 °F/50 % RH air). That closed form is a
- * statement about v_x, and it is accurate: integrating the real 3-D flight at
- * C_D = 0.300 gives v_x decaying with an effective exponent of 0.3005, i.e. the
- * closed form predicts v_x to 0.2 %. So C_D = 0.2829 would land v_x = 86.3 —
- * but a radar plate speed is |v|, and gravity has by then added ~13 ft/s of
- * downward velocity that v_x does not see. At C_D = 0.300 the model lands
- * |v| = 86.29 mph (v_x = 85.84). We match the published quantity, so 0.300 is
- * the right choice and 0.2829 answers a different question.
- *
- * The first guess of 0.35 gave |v| = 84.6 mph — far outside the band — so it
- * was moved. `airPhysics.test.ts` re-measures this every run against 86.3 ±0.4,
- * which pins C_D to about ±0.016.
- *
- * HONEST RESIDUAL SLOP (~±0.2 mph, ~±2 % of C_D each, and they partly cancel):
- *   • the game plays at 70 °F/50 % RH, thinner than the ISA air this is
- *     calibrated in; the same C_D there gives 86.49 mph, biasing us HIGH;
- *   • 55 ft measures to the plate's rear point, while a published plate speed
- *     is read ~1.4 ft nearer the front — so our flight is slightly long,
- *     biasing us LOW.
- * "Dead on the published number" would over-claim; "inside the convention slop
- * of the published number" is what this is.
- *
- * The `speedFps`/`S` parameters are deliberately in the signature though the
- * body ignores them: a real baseball has a mild drag crisis (C_D falls with
- * Reynolds number) and gains drag with spin. When the pitch table demands that
- * detail it goes HERE, behind this signature, so no caller changes.
+ * ⚠ ν is held fixed, so the drag crisis below sits at the same SPEED in every
+ * park. That is a modelling choice with a measured price (~28 ft of mile-high
+ * carry at 105 mph) — see `AIR_KINEMATIC_VISC_FT2_S` in tuning.ts, where the
+ * number and the reason are both written down.
  */
-export const C_D_BASE = 0.3;
+// The four drag numbers live in tuning.ts (category + basis per number) and are
+// re-exported here so stage-1 consumers import them from the integrator, exactly
+// as FIXED_MS/FIXED_DT are.
+export { C_D_BASE, C_D_SUBCRIT, RE_CRISIS_LO, RE_CRISIS_HI };
+
+export function reynolds(speedFps: number): number {
+  return (Math.abs(speedFps) * 2 * BALL_RADIUS_FT) / AIR_KINEMATIC_VISC_FT2_S;
+}
+
+/**
+ * Drag coefficient C_D(Re) — the drag crisis, smoothed across a Reynolds band.
+ *
+ *     Re ≤ RE_CRISIS_LO  →  C_D_SUBCRIT  (0.500, ~below 49 mph)
+ *     Re ≥ RE_CRISIS_HI  →  C_D_BASE     (0.300, ~above 88 mph)
+ *     between            →  quintic smootherstep between them
+ *
+ * ⚠ EVERY ONE OF THOSE FOUR NUMBERS HAS ITS CATEGORY AND ITS BASIS WRITTEN OUT
+ * IN `tuning.ts` — published (0.500), calibrated-and-unmoved (0.300),
+ * calibrated-with-a-published-prior (the band) — together with what the
+ * smoothstep SHAPE is (an assumed interpolation, not a fit to measured C_D(Re)
+ * data) and what it is measured to be worth. Read that note before touching any
+ * of them; do not re-derive it here.
+ *
+ * C_D_BASE = 0.300 IS STAGE 1'S CALIBRATION AND IT DID NOT MOVE. The conditions
+ * are part of the number: a four-seamer released at 94.0 mph, spinless, over
+ * 55 ft of ISA air (59 °F, DRY, ρ = 0.0023770, K = 0.00549317 ft⁻¹), crossing
+ * the plate at ~86.3 mph, where 86.3 is the VECTOR MAGNITUDE |v| — which is what
+ * a radar plate speed reports, and the whole reason the number is 0.300 and not
+ * the 0.2829 the gravity-free closed form v_x = v0·exp(−K·C_D·x) inverts to.
+ * That closed form is accurate to 0.2 % about v_x; it just answers a different
+ * question. `airPhysics.test.ts` re-measures the plate speed every run against
+ * 86.3 ±0.4, which pins the supercritical branch to about ±0.016.
+ *
+ * ⚠ THE CRISIS CURVE REPRODUCES IT: 86.283 mph against the old constant's
+ * 86.288. That is not luck — a 94 mph pitch is at Re = 2.3e5 at release and
+ * 1.94e5 at the plate, so it only ever grazes the top of the band, where the
+ * smoothstep is flat. The SLOWER pitches DO sample the band and DO get more
+ * drag (a 79 mph curveball loses 1.1 mph more by the plate), which moves their
+ * break — reported in pitchSim.test.ts, not absorbed.
+ *
+ * HONEST RESIDUAL SLOP on the supercritical branch (~±0.2 mph, ~±2 % of C_D
+ * each, and they partly cancel): the game plays at 70 °F/50 % RH, thinner than
+ * the ISA air this is calibrated in (86.48 mph with the same C_D, biasing HIGH);
+ * and 55 ft measures to the plate's REAR point while a published plate speed is
+ * read ~1.4 ft nearer the front (biasing LOW). "Inside the convention slop of
+ * the published number" is the claim; "dead on it" is not.
+ *
+ * `S` stays in the signature and is deliberately unread — see tuning.ts for why
+ * a spin-dependent C_D is ruled out as a standalone repair.
+ */
 export function dragCoef(speedFps: number, S: number): number {
-  void speedFps;
   void S;
-  return C_D_BASE;
+  const re = reynolds(speedFps);
+  if (re <= RE_CRISIS_LO) return C_D_SUBCRIT;
+  if (re >= RE_CRISIS_HI) return C_D_BASE;
+  const u = (re - RE_CRISIS_LO) / (RE_CRISIS_HI - RE_CRISIS_LO);
+  // Quintic smootherstep, u³(6u² − 15u + 10). The quintic rather than the cubic
+  // for a MEASURED reason, not an aesthetic one — see tuning.ts.
+  return C_D_SUBCRIT + (C_D_BASE - C_D_SUBCRIT) * u * u * u * (u * (6 * u - 15) + 10);
 }
 
 // ---------------------------------------------------------------------------

@@ -8,14 +8,24 @@
 // fence the physics cleared, and every carry number in the game becomes a
 // statement about a model nobody calibrated.
 //
-// ⚠ AND THE HEADLINE RESULT OF THIS STAGE IS THAT IT DOES NOT VALIDATE. The
-// published carry ladder is an INDEPENDENT test of a coefficient pair fitted in
-// a completely different regime — a pitch is 0.4 s at 86–94 mph with S ≈ 0.2, a
-// fly ball is 5 s of continuous deceleration from 100 mph to ~50. Run against
-// that ladder, the aero core over-carries by 44–61 ft (11–15 %) at every rung.
-// Nothing here is corrected for it: no carry factor, no per-regime C_D, no
-// second coefficient. The residual table is printed by `battedBallSim.test.ts`
-// and the finding is written up in BASEBALL.md § "The carry experiment".
+// ⚠ THE CARRY EXPERIMENT, AND HOW IT WAS RESOLVED. The published carry ladder is
+// an INDEPENDENT test of a coefficient pair fitted in a completely different
+// regime — a pitch is 0.4 s at 72–94 mph with S ≈ 0.2, a fly ball is 5 s of
+// continuous deceleration from 100 mph to ~45. Stage 3 ran it and the aero core
+// over-carried by +58.3 ft mean, uniformly positive, and correctly showed that
+// no CONSTANT C_D repairs it (0.385 fits the level, flattens the slope the wrong
+// way and breaks stage 1's plate speed by 2.2 mph).
+//
+// Stage 3b took the one further step that fixes it: a REYNOLDS-dependent C_D —
+// the drag crisis, which a real seamed ball has and which `dragCoef(speedFps, S)`
+// has anticipated since stage 1. The residual falls to +7.2 ft mean, inside the
+// ±15 ft corroboration bar, WITHOUT touching the pitch regime (the four-seamer
+// crosses the plate at 86.283 mph against 86.288 before). The same change fixes
+// a second symptom stage 3 had recorded separately and wrongly — the launch-angle
+// optimum at 90 mph, which was 31.0° against a briefed 25–30° and is now 28.5°.
+// They were one defect. STILL NO carry factor, no per-regime coefficient and no
+// launch-angle correction. The tables are printed by `battedBallSim.test.ts` and
+// the write-up is BASEBALL.md § "The carry experiment".
 //
 // No three, no Math.random, no clock, no state.
 
