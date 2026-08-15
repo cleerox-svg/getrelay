@@ -24,11 +24,16 @@ asserts against, and the roadmap. It is the source of truth.
 - Sim / data (headless, pure, **no `three`**): `packages/relay-ui/src/lib/baseball/*` —
   `units.ts`, `airPhysics.ts`, `tuning.ts`, `pitches.ts`, `zone.ts`, `parks.ts`,
   `teams.ts`, `pitchSim.ts`, `batSim.ts`, `battedBallSim.ts`, `derbySim.ts`,
-  `duelSim.ts`, `fielding.ts`, `ai.ts`, `scoring.ts`, `progress.ts`, and their `*.test.ts`.
+  `duelSim.ts`, `fielding.ts`, `ai.ts`, and their `*.test.ts`.
 - Scene (Three.js): `components/baseball/StadiumGL.tsx` + its `stadium/*` builder
   modules + `lib/baseball/{stadiumScenery,ballTexture}.ts`.
 - HUDs: `components/baseball/{BaseballScreen,BaseballMenu,DerbyGame,DuelGame}.tsx`
-  and `components/baseball/shared/*`.
+  and `components/baseball/shared/*` **except `shared/Lineup.tsx`**.
+
+**NOT yours** (owned by `baseball-progression`, so the boundary can't blur):
+`lib/baseball/{cards,lineup,scoring,progress}.ts`, `components/baseball/shared/Lineup.tsx`,
+and the `Baseball{Shop,Season,Profile,Leaderboard}.tsx` screens. You may READ them —
+card stats feed the sim as modulators — but you do not edit them.
 
 ## THE PHYSICS RULE
 > A number is either **published data**, **derived** from other numbers, **calibrated
@@ -118,9 +123,12 @@ separate scenes: they drifted, and a shared kit had to be retrofitted. A second 
 is a permanent parity tax.
 
 ## GPU budget
-Shadow maps start at **1024²** and are never raised without an on-device Android test —
-a 2048² map crashed the WebView GPU process on real hardware (`GOLF.md:218`, black
-screen, app restart required). Budget: 1 shadow-casting sun + 1 hemisphere fill +
+Shadow maps start at **1024²** and are never raised without an on-device Android test.
+GOLF.md records a 2048² map crashing the WebView GPU process on real hardware (black
+screen, app restart required) though it rendered fine in desktop/software GL; golf has
+since been re-enabled to 2048² *by request* and still carries that as an open device
+risk. Baseball does not inherit that bet — a stadium is a worse case than a golf hole
+(crowd, roof, towers, a much larger shadow volume). Budget: 1 shadow-casting sun + 1 hemisphere fill +
 baked emissives. Gate the crowd instance count behind a `pickStadiumQuality(renderer)`
 tier (copy the renderer-probing idiom from `pickWaterQuality`, `lib/golf/water.ts:105`).
 "Renders fine in SwiftShader" is **not** evidence of on-device safety.

@@ -1,6 +1,6 @@
 # Golf — in-app game (Mini-Golf + Driving Range)
 
-An in-app 3D golf game in the Relay **Games** hub (`/discover`), built with
+An in-app 3D golf game in the Relay **Games** hub (`/games`), built with
 Three.js and a hand-rolled physics sim. This doc is the source of truth for what
 exists today and the plan to reach PGA-app-level controls and visuals. Read it
 first when picking up golf work.
@@ -134,7 +134,7 @@ A data-driven **Range layout** picker (persisted, default `fairway`):
 | Course HUD + records recap | `packages/relay-ui/src/components/golf/CourseGame.tsx` |
 | Putting sim / scene / round | `src/lib/golf/puttSim.ts`, `components/golf/PuttGL.tsx`, `GolfGame.tsx` |
 | Ball material (dimple normal map) | `packages/relay-ui/src/lib/golf/ballTexture.ts` |
-| Hub wiring | `packages/relay-ui/src/routes/Fog.tsx`, `components/golf/GolfMenu.tsx` |
+| Hub wiring | `packages/relay-ui/src/routes/Games.tsx`, `components/golf/GolfMenu.tsx` |
 | Worker leaderboard + best-shot records | `packages/relay-worker/src/games.ts` (migration `0007_golf_records.sql`) |
 | Best-shot records API client | `packages/relay-ui/src/lib/api.ts` (`getGolfRecords`/`postGolfRecords`) |
 

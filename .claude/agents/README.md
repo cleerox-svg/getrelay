@@ -62,9 +62,14 @@ small.
 - Baseball cards / packs / ladder / score submission → **baseball-progression**. A new
   TABLE → **data-migrations FIRST**. A new COLUMN → `schema.sql` + a
   `deploy-worker.yml` pragma probe, never a numbered migration.
-- The shared kits (`lib/scene3d/*`, `components/games/shared/*`) are consumed by BOTH
-  golf and baseball. A change there requires **golf-visual-qa AND baseball-visual-qa** —
-  it can regress a game whose own code did not change.
+- The shared kits (`lib/scene3d/*` 3D primitives, `components/games/shared/*` HUD
+  widgets, `lib/games/*` flow machine) are consumed by BOTH golf and baseball and are
+  **owned by neither**. They are **co-owned**: the game agent that needs a change makes
+  it, and the OTHER game's agent reviews it before commit. A change there also requires
+  **golf-visual-qa AND baseball-visual-qa** — it can regress a game whose own code did
+  not change. Extracting something INTO a shared kit is a pure move + re-export: the
+  donor game's files change by their import line only, and its visual gate must confirm
+  the result is **pixel-identical**.
 
 ## Standard flow
 

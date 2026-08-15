@@ -21,7 +21,7 @@ import { ContactProfile } from './routes/ContactProfile';
 import { Contacts } from './routes/Contacts';
 import { EditGroup } from './routes/EditGroup';
 import { Feeds } from './routes/Feeds';
-import { Games } from './routes/Games';
+import { Games, GamesDeepLink } from './routes/Games';
 import { GroupInfo } from './routes/GroupInfo';
 import { LegacyChat } from './routes/LegacyChat';
 import { LegacyChats } from './routes/LegacyChats';
@@ -209,6 +209,14 @@ export function App() {
                 match, so redirecting before MainLayout renders means the tab
                 highlights on /games instead of flashing with nothing active. */}
             <Route path="/discover" element={<Navigate to="/games" replace />} />
+
+            {/* Deep link into one game — the worker's golf-challenge pushes
+                send url: '/games/golf'. Same reasoning as /discover above, so
+                it sits outside MainLayout too: GamesDeepLink validates the id
+                and redirects to /games (replace) carrying it in history
+                state, which the hub reads as its initial selection. Games are
+                state, not subroutes; see the header comment in Games.tsx. */}
+            <Route path="/games/:game" element={<GamesDeepLink />} />
 
             <Route element={<MainLayout />}>
               <Route path="/chats" element={legacy ? <LegacyChats /> : <Chats />} />
