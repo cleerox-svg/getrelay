@@ -15,12 +15,17 @@
     "cap:sync": "cap sync android",
     "cap:add:android": "cap add android",
     "cap:assets": "capacitor-assets generate --android --assetPath assets",
-    "android:build:debug": "pnpm build && pnpm cap:sync && cd android && ./gradlew assembleDebug"
+    "android:build:debug": "pnpm build && pnpm cap:sync && cd android && ./gradlew assembleDebug",
+    "cap:sync:ios": "cap sync ios",
+    "cap:add:ios": "cap add ios",
+    "cap:assets:ios": "capacitor-assets generate --ios --assetPath assets",
+    "ios:open": "pnpm build && pnpm cap:sync:ios && cap open ios"
   },
   "dependencies": {
     "@capacitor/android": "^6.2.0",
     "@capacitor/app": "^6.0.2",
     "@capacitor/core": "^6.2.0",
+    "@capacitor/ios": "^6.2.0",
     "@capacitor/push-notifications": "^6.0.4",
     "@codetrix-studio/capacitor-google-auth": "3.4.0-rc.4",
     "@emoji-mart/data": "^1.2.1",

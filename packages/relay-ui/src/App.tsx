@@ -10,6 +10,7 @@ import {
 import { App as KonstaApp } from 'konsta/react';
 import { Capacitor } from '@capacitor/core';
 import { useLegacyUi } from './lib/legacy';
+import { watchNativePushToken } from './lib/native-push';
 import { KONSTA_THEME } from './lib/platform';
 import { wireWsToStore } from './lib/store';
 import { AddContact } from './routes/AddContact';
@@ -106,6 +107,28 @@ function NativePushNavigationBridge() {
   return null;
 }
 
+// Re-registers this device's push token with the worker whenever Firebase
+// rotates it. Separate from the tap router above so each can be reasoned
+// about (and detached) on its own.
+function NativePushTokenBridge() {
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    let detach: (() => void) | undefined;
+    let cancelled = false;
+    watchNativePushToken()
+      .then((d) => {
+        if (cancelled) d();
+        else detach = d;
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      detach?.();
+    };
+  }, []);
+  return null;
+}
+
 // The Chats tab is the app's home / exit point. Pressing Android back here
 // exits (standard Android behavior at the top of the stack).
 const HOME_PATH = '/chats';
@@ -160,6 +183,7 @@ export function App() {
       <BrowserRouter>
         <SwNavigationBridge />
         <NativePushNavigationBridge />
+        <NativePushTokenBridge />
         <AndroidBackButton />
         <Routes>
           <Route path="/signin" element={<SignIn />} />

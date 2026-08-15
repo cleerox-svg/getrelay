@@ -1,0 +1,485 @@
+name: Build iOS IPA
+
+# Manual trigger. Produces:
+#   - Unsigned simulator build — compiles everything, needs no Apple account
+#   - Signed release IPA — what goes to TestFlight / the App Store
+#
+# Signed releases need these repository Secrets (all from App Store Connect →
+# Users and Access → Integrations → App Store Connect API):
+#   APPSTORE_ISSUER_ID
+#   APPSTORE_KEY_ID
+#   APPSTORE_PRIVATE_KEY      (contents of the AuthKey_XXXXXXX.p8 file)
+#   APPSTORE_TEAM_ID          (Apple Developer team id, e.g. AB12CD34EF)
+#
+# Native push (FCM) additionally needs:
+#   GOOGLE_SERVICE_INFO_PLIST (GoogleService-Info.plist for com.averrow.relay)
+# and native Google Sign-In:
+#   GOOGLE_WEB_CLIENT_ID      (shared with the Android build)
+#   GOOGLE_IOS_CLIENT_ID      (optional — derived from the plist when unset)
+#
+# There is deliberately NO certificate/provisioning-profile secret and no
+# fastlane match repo. Signing uses App Store Connect API-key *cloud signing*
+# (`xcodebuild -allowProvisioningUpdates`): Xcode mints the distribution
+# certificate and provisioning profile on Apple's side at build time, and
+# enables the App ID capabilities (Push Notifications, Sign in with Apple's
+# associated entitlements) to match the entitlements file. That removes the
+# whole class of "my cert expired / the profile is stale" release failures —
+# there is nothing to rotate by hand.
+#
+# -----------------------------------------------------------------------
+# When do you actually need to run this?
+# -----------------------------------------------------------------------
+# Same rule as Android. The Capacitor WKWebView loads from `server_url`
+# (default https://relay.averrow.com), so the iOS app is a thin shell over
+# the deployed UI. Web-only changes (routes, components, worker endpoints,
+# schema, styling) reach iOS users the moment `deploy-ui` finishes — no new
+# IPA, no App Review.
+#
+# Cut a new IPA only when something *native* changes:
+#   - Add/remove a Capacitor plugin
+#   - New Info.plist usage string / entitlement / capability
+#   - App icon or splash bundled in the IPA
+#   - Deployment target bump, bundle id or signing change
+#   - Cosmetic version bump for the store listing
+#
+# Every upload starts its own App Review, so batch native changes rather
+# than firing this per commit. `cancel-in-progress` means a newer run
+# supersedes one still building.
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "What to build"
+        type: choice
+        options: [simulator-unsigned, release-ipa]
+        default: release-ipa
+      publish:
+        description: "Auto-upload IPA to TestFlight"
+        type: boolean
+        default: false
+      server_url:
+        description: "Capacitor server URL (the WebView loads from here; blank = bundle local assets)"
+        required: false
+        default: "https://relay.averrow.com"
+      build_number:
+        description: "Override CFBundleVersion (blank = auto, minutes since 2024-01-01)"
+        required: false
+        default: ""
+
+concurrency:
+  group: build-ios
+  cancel-in-progress: true
+
+env:
+  BUNDLE_ID: com.averrow.relay
+  # Capacitor 6 scaffolds an iOS 13 target; Firebase 11's minimum is iOS 13
+  # too, but CocoaPods resolves a much newer Firebase if we let it float, so
+  # both the platform line and the pod are pinned below.
+  IOS_DEPLOYMENT_TARGET: "14.0"
+
+jobs:
+  build:
+    # Apple's toolchain is macOS-only. macos-15 ships Xcode 16, which is the
+    # minimum Apple accepts for App Store submissions.
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build web bundle
+        working-directory: packages/relay-ui
+        env:
+          # Must match the env name api.ts reads. The Pages deploy and the
+          # Android build use the same value.
+          VITE_API_BASE_URL: https://relay-api.averrow.com
+        run: pnpm exec vite build
+
+      - name: Initialise Capacitor ios project
+        working-directory: packages/relay-ui
+        env:
+          CAPACITOR_SERVER_URL: ${{ github.event.inputs.server_url }}
+          # The web OAuth client id, baked into capacitor.config.json as the
+          # native Google Sign-In serverClientId. Must equal the worker's
+          # GOOGLE_ID (the token audience it verifies). See IOS-AUTH.md.
+          GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
+          GOOGLE_IOS_CLIENT_ID: ${{ secrets.GOOGLE_IOS_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          # ios/ is not committed (same as android/) — scaffold it fresh.
+          # `cap add ios` runs `pod install` itself.
+          if [ ! -d ios ]; then
+            echo "Generating ios/ project (first build on this runner)"
+            pnpm exec cap add ios
+          else
+            pnpm exec cap sync ios
+          fi
+          test -d ios/App/App || { echo "cap add ios did not produce ios/App/App" >&2; exit 1; }
+
+      - name: Wire native push (Firebase / GoogleService-Info.plist)
+        working-directory: packages/relay-ui
+        env:
+          GOOGLE_SERVICE_INFO_PLIST: ${{ secrets.GOOGLE_SERVICE_INFO_PLIST }}
+        run: |
+          set -euo pipefail
+          # Unlike Android — where Capacitor's Gradle already applies the
+          # google-services plugin the moment the JSON exists — iOS needs the
+          # Firebase pods added explicitly, plus an AppDelegate that converts
+          # the APNs token into an FCM one. See IOS-PUSH.md for why.
+          #
+          # When the secret is unset we still add the pods and the AppDelegate
+          # (so the build stays byte-comparable), but the plist is absent and
+          # the AppDelegate skips FirebaseApp.configure() rather than trapping
+          # at launch. Native push then simply fails to register, exactly like
+          # an Android build with no google-services.json.
+          if [ -n "${GOOGLE_SERVICE_INFO_PLIST:-}" ]; then
+            printf '%s' "$GOOGLE_SERVICE_INFO_PLIST" > ios/App/App/GoogleService-Info.plist
+            # Fail loudly if it's not a valid plist for the right bundle,
+            # rather than shipping an IPA whose Firebase init misbehaves.
+            PLIST_BUNDLE=$(/usr/libexec/PlistBuddy -c "Print :BUNDLE_ID" ios/App/App/GoogleService-Info.plist)
+            if [ "$PLIST_BUNDLE" != "$BUNDLE_ID" ]; then
+              echo "GoogleService-Info.plist is for '$PLIST_BUNDLE', expected '$BUNDLE_ID'" >&2
+              exit 1
+            fi
+            echo "GoogleService-Info.plist OK for $PLIST_BUNDLE"
+          else
+            echo "GOOGLE_SERVICE_INFO_PLIST unset — native push (FCM) not wired into this build"
+          fi
+
+          # Add the Firebase pods. Pinned to a major so a surprise Firebase
+          # release can't break a release build we didn't touch.
+          if ! grep -q "FirebaseMessaging" ios/App/Podfile; then
+            /usr/bin/sed -i '' \
+              "s#^\( *\)pod 'Capacitor'#\1pod 'FirebaseCore', '~> 11.0'\n\1pod 'FirebaseMessaging', '~> 11.0'\n\1pod 'Capacitor'#" \
+              ios/App/Podfile
+          fi
+          grep -n "Firebase\|platform :ios" ios/App/Podfile
+
+          # Replace the scaffolded AppDelegate with the Firebase-aware one.
+          # Kept as a real .swift file (not a heredoc) so it is syntax-checked
+          # by review and diffable — the Android signing overlay works the
+          # same way.
+          cp "$GITHUB_WORKSPACE/.github/ios-appdelegate-firebase.swift" ios/App/App/AppDelegate.swift
+          grep -q "RELAY_APPDELEGATE_INJECTED" ios/App/App/AppDelegate.swift
+
+      - name: Patch Info.plist + entitlements
+        working-directory: packages/relay-ui/ios/App/App
+        env:
+          GOOGLE_IOS_CLIENT_ID: ${{ secrets.GOOGLE_IOS_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          PB=/usr/libexec/PlistBuddy
+
+          # Set-or-Add: PlistBuddy's Set fails on a key that doesn't exist yet
+          # and Add fails on one that does, so try Set then fall back to Add.
+          # (No apostrophes in any of these strings — they'd need escaping
+          # through two layers of quoting for no benefit.)
+          setstr() {
+            $PB -c "Set :$1 $2" Info.plist 2>/dev/null || $PB -c "Add :$1 string $2" Info.plist
+          }
+
+          # --- Camera: the in-app QR scanner calls getUserMedia. iOS kills the
+          # app outright (not a denied prompt — a crash) if the usage string
+          # is missing, so this is not optional.
+          setstr NSCameraUsageDescription "'Relay uses the camera to scan PIN QR codes.'"
+          # Photo library: picking an avatar / attachment from the WebView.
+          setstr NSPhotoLibraryUsageDescription "'Relay uses your photo library so you can send pictures and set an avatar.'"
+
+          # --- Export compliance. Relay uses only standard HTTPS/TLS, which is
+          # exempt. Declaring it here means TestFlight processes a build
+          # straight through instead of parking every single upload behind a
+          # manual "does this use encryption?" answer in App Store Connect.
+          $PB -c "Set :ITSAppUsesNonExemptEncryption false" Info.plist 2>/dev/null \
+            || $PB -c "Add :ITSAppUsesNonExemptEncryption bool false" Info.plist
+
+          # --- Background modes: `remote-notification` lets iOS hand the app a
+          # push payload while backgrounded, which is what keeps the badge and
+          # chat list current instead of only updating on next launch.
+          $PB -c "Delete :UIBackgroundModes" Info.plist 2>/dev/null || true
+          $PB -c "Add :UIBackgroundModes array" Info.plist
+          $PB -c "Add :UIBackgroundModes:0 string remote-notification" Info.plist
+
+          # --- Google Sign-In callback URL scheme. The plugin returns through
+          # a custom scheme equal to the REVERSED iOS client id. Prefer the
+          # explicit secret; otherwise read it out of GoogleService-Info.plist
+          # so the common case needs no extra secret at all.
+          REVERSED=""
+          if [ -n "${GOOGLE_IOS_CLIENT_ID:-}" ]; then
+            # com.googleusercontent.apps.<id> — reverse the dotted client id.
+            REVERSED=$(echo "$GOOGLE_IOS_CLIENT_ID" | awk -F'.apps.googleusercontent.com' '{print $1}' | awk '{print "com.googleusercontent.apps."$0}')
+          elif [ -f GoogleService-Info.plist ]; then
+            REVERSED=$($PB -c "Print :REVERSED_CLIENT_ID" GoogleService-Info.plist 2>/dev/null || echo "")
+          fi
+          if [ -n "$REVERSED" ]; then
+            $PB -c "Delete :CFBundleURLTypes" Info.plist 2>/dev/null || true
+            $PB -c "Add :CFBundleURLTypes array" Info.plist
+            $PB -c "Add :CFBundleURLTypes:0 dict" Info.plist
+            $PB -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" Info.plist
+            $PB -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string $REVERSED" Info.plist
+            echo "Registered Google Sign-In URL scheme: $REVERSED"
+          else
+            echo "WARNING: no iOS Google client id — native Google Sign-In will not work (see IOS-AUTH.md)"
+          fi
+
+          # --- Push entitlement. `production` is correct for both TestFlight
+          # and the App Store; APNs treats a development-signed build's token
+          # as sandbox automatically, so there's no separate debug variant to
+          # maintain here.
+          cat > App.entitlements <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>aps-environment</key>
+              <string>production</string>
+          </dict>
+          </plist>
+          PLIST
+
+          $PB -c "Print" Info.plist | head -40
+
+      - name: Generate native app icon + splash
+        working-directory: packages/relay-ui
+        run: |
+          set -euo pipefail
+          # Same two-step as Android: render the @capacitor/assets source
+          # images from the canonical public/ SVGs, then generate the native
+          # asset catalog. Keeps the iOS icon in lockstep with the favicon,
+          # PWA icon and Android launcher icon — one source of truth.
+          node scripts/build-native-icons.mjs
+          pnpm cap:assets:ios
+          # Sanity check: fail loudly if the app icon wasn't written, rather
+          # than shipping an IPA with Capacitor's teal placeholder.
+          ls ios/App/App/Assets.xcassets/AppIcon.appiconset/ | head
+
+          # App Store Connect REJECTS an app icon that carries an alpha
+          # channel, and it does so at upload — after a full signed build and
+          # archive. build-native-icons.mjs already emits an opaque
+          # icon-only.png, but @capacitor/assets is free to re-encode with an
+          # alpha channel, so flatten whatever it produced and assert the
+          # result. Cheap here; a wasted release cycle otherwise.
+          node -e '
+            const sharp = require("sharp");
+            const fs = require("fs");
+            const dir = "ios/App/App/Assets.xcassets/AppIcon.appiconset";
+            (async () => {
+              for (const f of fs.readdirSync(dir).filter((f) => f.endsWith(".png"))) {
+                const p = `${dir}/${f}`;
+                const meta = await sharp(p).metadata();
+                if (!meta.hasAlpha) continue;
+                const flat = await sharp(p).flatten({ background: "#0A0A0A" }).png().toBuffer();
+                fs.writeFileSync(p, flat);
+                console.log("flattened alpha out of", f);
+              }
+              for (const f of fs.readdirSync(dir).filter((f) => f.endsWith(".png"))) {
+                if ((await sharp(`${dir}/${f}`).metadata()).hasAlpha) {
+                  console.error("app icon still has an alpha channel:", f);
+                  process.exit(1);
+                }
+              }
+              console.log("app icons verified opaque");
+            })();
+          '
+
+      - name: Set version + build number
+        working-directory: packages/relay-ui/ios/App
+        env:
+          OVERRIDE_BN: ${{ github.event.inputs.build_number }}
+        run: |
+          set -euo pipefail
+          # CFBundleVersion must strictly increase per upload to App Store
+          # Connect (Apple rejects duplicates) — the same constraint Android's
+          # versionCode has, so use the same derivation: minutes since
+          # 2024-01-01 UTC. Always increases, never repeats on a re-run the
+          # way github.run_number can.
+          if [ -n "${OVERRIDE_BN:-}" ]; then
+            BN="$OVERRIDE_BN"
+          else
+            EPOCH_2024=1704067200  # 2024-01-01T00:00:00Z
+            NOW=$(date -u +%s)
+            BN=$(( (NOW - EPOCH_2024) / 60 ))
+          fi
+          SHORT_SHA=$(git -C "$GITHUB_WORKSPACE" rev-parse --short HEAD)
+          echo "Using CFBundleVersion=${BN} (sha ${SHORT_SHA})"
+
+          # Write into the pbxproj rather than Info.plist: Capacitor's Info.plist
+          # uses $(MARKETING_VERSION)/$(CURRENT_PROJECT_VERSION) build settings.
+          PBX=App.xcodeproj/project.pbxproj
+          /usr/bin/sed -i '' -E "s/CURRENT_PROJECT_VERSION = [^;]+;/CURRENT_PROJECT_VERSION = ${BN};/g" "$PBX"
+          /usr/bin/sed -i '' -E "s/MARKETING_VERSION = [^;]+;/MARKETING_VERSION = 0.1.0;/g" "$PBX"
+          /usr/bin/sed -i '' -E "s/IPHONEOS_DEPLOYMENT_TARGET = [^;]+;/IPHONEOS_DEPLOYMENT_TARGET = ${IOS_DEPLOYMENT_TARGET};/g" "$PBX"
+
+          # Point the app target at the entitlements file written earlier.
+          # This goes in the PROJECT, not on the xcodebuild command line: a
+          # command-line build setting applies to every target in the build,
+          # so the Pods targets would each try to sign with Relay's push
+          # entitlement and fail. PRODUCT_BUNDLE_IDENTIFIER only appears in
+          # this app project (Pods live in a separate Pods.xcodeproj), which
+          # makes it a safe anchor.
+          if ! grep -q "CODE_SIGN_ENTITLEMENTS" "$PBX"; then
+            /usr/bin/sed -i '' -E \
+              "s#^([[:space:]]*)PRODUCT_BUNDLE_IDENTIFIER = (.*);#\1CODE_SIGN_ENTITLEMENTS = App/App.entitlements;\n\1PRODUCT_BUNDLE_IDENTIFIER = \2;#" \
+              "$PBX"
+          fi
+
+          # Capacitor derives the bundle id from capacitor.config appId. If it
+          # ever drifts from what we sign/upload as, fail here rather than at
+          # the App Store Connect upload.
+          if ! grep -q "PRODUCT_BUNDLE_IDENTIFIER = ${BUNDLE_ID};" "$PBX"; then
+            echo "ERROR: project bundle id is not ${BUNDLE_ID}:" >&2
+            grep -n "PRODUCT_BUNDLE_IDENTIFIER" "$PBX" >&2
+            exit 1
+          fi
+          grep -E "CURRENT_PROJECT_VERSION|MARKETING_VERSION|CODE_SIGN_ENTITLEMENTS" "$PBX" | head -6
+
+      - name: Re-run pod install (Firebase pods + deployment target)
+        working-directory: packages/relay-ui/ios/App
+        run: |
+          set -euo pipefail
+          /usr/bin/sed -i '' -E "s/^platform :ios, .*/platform :ios, '${IOS_DEPLOYMENT_TARGET}'/" Podfile
+          pod install --repo-update
+          # The Firebase pods must actually be in the workspace — a silent
+          # resolution failure here would surface much later as an obscure
+          # "No such module 'FirebaseCore'" compile error.
+          grep -q "FirebaseMessaging" Podfile.lock
+
+      # ---- Unsigned path: compiles everything, needs no Apple account ----
+      - name: Build for simulator (unsigned)
+        if: ${{ github.event.inputs.build_type == 'simulator-unsigned' }}
+        working-directory: packages/relay-ui/ios/App
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      # ---- Signed path: App Store Connect API key does the signing ----
+      - name: Install App Store Connect API key
+        if: ${{ github.event.inputs.build_type == 'release-ipa' }}
+        env:
+          ASC_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+          ASC_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ASC_KEY:-}" ] || [ -z "${ASC_KEY_ID:-}" ]; then
+            echo "ERROR: APPSTORE_PRIVATE_KEY / APPSTORE_KEY_ID are not set. See IOS.md." >&2
+            exit 1
+          fi
+          # xcodebuild discovers API keys from this exact path + filename.
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          printf '%s' "$ASC_KEY" > "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+
+      - name: Archive (cloud signing)
+        if: ${{ github.event.inputs.build_type == 'release-ipa' }}
+        working-directory: packages/relay-ui/ios/App
+        env:
+          ASC_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          ASC_TEAM_ID: ${{ secrets.APPSTORE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          # -allowProvisioningUpdates is what makes this hands-off: with the
+          # API key present, Xcode creates/renews the distribution cert and
+          # provisioning profile on Apple's side, and registers the App ID
+          # capabilities implied by App.entitlements (i.e. Push Notifications).
+          xcodebuild \
+            -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Relay.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            DEVELOPMENT_TEAM="$ASC_TEAM_ID" \
+            archive
+
+      - name: Export IPA
+        id: export
+        if: ${{ github.event.inputs.build_type == 'release-ipa' }}
+        env:
+          ASC_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          ASC_TEAM_ID: ${{ secrets.APPSTORE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>app-store-connect</string>
+              <key>teamID</key>
+              <string>${ASC_TEAM_ID}</string>
+              <key>signingStyle</key>
+              <string>automatic</string>
+              <key>uploadSymbols</key>
+              <true/>
+              <key>destination</key>
+              <string>export</string>
+          </dict>
+          </plist>
+          PLIST
+          xcodebuild \
+            -exportArchive \
+            -archivePath "$RUNNER_TEMP/Relay.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          ls -la "$RUNNER_TEMP/export"
+          # Don't assume the filename: Capacitor's Xcode target is called
+          # "App", so the export is App.ipa unless the product name is
+          # changed — resolve it instead of hardcoding either spelling.
+          IPA=$(find "$RUNNER_TEMP/export" -maxdepth 1 -name '*.ipa' | head -1)
+          if [ -z "$IPA" ]; then echo "no .ipa produced by -exportArchive" >&2; exit 1; fi
+          echo "ipa-path=$IPA" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        if: ${{ github.event.inputs.build_type == 'release-ipa' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-ios-ipa
+          path: ${{ runner.temp }}/export/*.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload to TestFlight
+        if: ${{ github.event.inputs.build_type == 'release-ipa' && github.event.inputs.publish == 'true' }}
+        uses: apple-actions/upload-testflight-build@v5
+        with:
+          app-path: ${{ steps.export.outputs.ipa-path }}
+          issuer-id: ${{ secrets.APPSTORE_ISSUER_ID }}
+          api-key-id: ${{ secrets.APPSTORE_KEY_ID }}
+          api-private-key: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+          # Already declared via ITSAppUsesNonExemptEncryption in Info.plist;
+          # passing it here too keeps the build from parking in "Waiting for
+          # export compliance" if that key ever fails to apply.
+          uses-non-exempt-encryption: "false"

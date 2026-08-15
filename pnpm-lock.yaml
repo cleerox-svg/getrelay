@@ -26,6 +26,9 @@ importers:
       '@capacitor/core':
         specifier: ^6.2.0
         version: 6.2.1
+      '@capacitor/ios':
+        specifier: ^6.2.0
+        version: 6.2.1(@capacitor/core@6.2.1)
       '@capacitor/push-notifications':
         specifier: ^6.0.4
         version: 6.0.5(@capacitor/core@6.2.1)
@@ -247,6 +250,11 @@ packages:
 
   '@capacitor/core@6.2.1':
     resolution: {integrity: sha512-urZwxa7hVE/BnA18oCFAdizXPse6fCKanQyEqpmz6cBJ2vObwMpyJDG5jBeoSsgocS9+Ax+9vb4ducWJn0y2qQ==}
+
+  '@capacitor/ios@6.2.1':
+    resolution: {integrity: sha512-tbMlQdQjxe1wyaBvYVU1yTojKJjgluZQsJkALuJxv/6F8QTw5b6vd7X785O/O7cMpIAZfUWo/vtAHzFkRV+kXw==}
+    peerDependencies:
+      '@capacitor/core': ^6.2.0
 
   '@capacitor/push-notifications@6.0.5':
     resolution: {integrity: sha512-CsRmb0cnZd9Uwx24ym4My5fNKrQvwI4D51aMEph5pUZy+LAjp6q0y4NJe8DEgwaVdAqVLbb4rqn75AZ4WSiFYg==}
@@ -3781,6 +3789,10 @@ snapshots:
   '@capacitor/core@6.2.1':
     dependencies:
       tslib: 2.8.1
+
+  '@capacitor/ios@6.2.1(@capacitor/core@6.2.1)':
+    dependencies:
+      '@capacitor/core': 6.2.1
 
   '@capacitor/push-notifications@6.0.5(@capacitor/core@6.2.1)':
     dependencies:

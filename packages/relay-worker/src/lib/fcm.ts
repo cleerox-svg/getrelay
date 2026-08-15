@@ -1,9 +1,16 @@
 // Firebase Cloud Messaging (HTTP v1) sender for Cloudflare Workers.
 //
-// Native Android (and iOS, if ever built) can't use Web Push — the
-// Capacitor WebView doesn't expose the PushManager API. Those installs
-// register an FCM device token instead (via @capacitor/push-notifications),
-// and this module delivers the same notification payloads to them.
+// Native Android and iOS can't use Web Push — the Capacitor WebView doesn't
+// expose the PushManager API. Those installs register an FCM device token
+// instead (via @capacitor/push-notifications), and this module delivers the
+// same notification payloads to them.
+//
+// iOS rides the same path on purpose: Firebase relays to APNs on our behalf
+// once the APNs auth key (.p8) is uploaded to the Firebase project, so both
+// platforms share one sender, one service-account credential, and one
+// native_push_tokens table. Talking to APNs directly would mean a second
+// sender AND is HTTP/2-only, which the local workerd dev runtime can't do.
+// See packages/relay-ui/IOS-PUSH.md.
 //
 // Auth is the FCM HTTP v1 flow: sign a short-lived JWT with the service
 // account's private key, exchange it for an OAuth2 access token, and POST
@@ -172,11 +179,53 @@ export async function sendFcm(
   if (typeof opts.ttlSeconds === 'number' && Number.isFinite(opts.ttlSeconds)) {
     android.ttl = `${Math.max(0, Math.floor(opts.ttlSeconds))}s`;
   }
+
+  // iOS installs register FCM tokens too (Firebase relays to APNs), so every
+  // message carries an `apns` block alongside `android`. FCM applies only the
+  // block matching the token's platform and ignores the other, so one message
+  // shape serves both — no per-platform branching, and no second sender.
+  //
+  // The three knobs mirror the Android ones one-for-one:
+  //   apns-priority 10/5   ↔ android.priority HIGH/NORMAL
+  //   apns-expiration      ↔ android.ttl
+  //   apns-collapse-id     ↔ android.notification.tag
+  const apnsHeaders: Record<string, string> = {
+    // 10 = deliver immediately (alert pushes); 5 = power-considerate, which
+    // is what a non-urgent payload should use.
+    'apns-priority': opts.highPriority === false ? '5' : '10',
+  };
+  if (tag) {
+    // APNs caps collapse-id at 64 BYTES and 400s the whole request if you
+    // exceed it. Our tags are short ascii ("chat-<id>", "nhl-<key>"), but
+    // truncate defensively rather than lose the push.
+    apnsHeaders['apns-collapse-id'] = tag.slice(0, 64);
+  }
+  if (typeof opts.ttlSeconds === 'number' && Number.isFinite(opts.ttlSeconds)) {
+    // Unlike android.ttl (a *duration*), apns-expiration is an ABSOLUTE unix
+    // timestamp. 0 is special-cased by APNs as "try once, then drop", which
+    // is exactly what a 0-second TTL means, so pass it straight through.
+    const ttl = Math.max(0, Math.floor(opts.ttlSeconds));
+    apnsHeaders['apns-expiration'] = ttl === 0 ? '0' : String(Math.floor(Date.now() / 1000) + ttl);
+  }
+  const apns = {
+    headers: apnsHeaders,
+    payload: {
+      aps: {
+        sound: 'default',
+        // Groups this app's notifications in Notification Center the way
+        // Android's channel grouping does. Collapsing is apns-collapse-id
+        // above; thread-id only affects stacking.
+        ...(tag ? { 'thread-id': tag } : {}),
+      },
+    },
+  };
+
   const message = {
     token,
     notification: { title, body: bodyText },
     data,
     android,
+    apns,
   };
 
   const res = await fetch(

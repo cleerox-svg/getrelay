@@ -80,6 +80,15 @@ function androidOf(body: Record<string, unknown>): Record<string, unknown> {
   return message.android as Record<string, unknown>;
 }
 
+// Same, for the iOS half of the message.
+function apnsOf(body: Record<string, unknown>): {
+  headers: Record<string, string>;
+  payload: { aps: Record<string, unknown> };
+} {
+  const message = body.message as Record<string, unknown>;
+  return message.apns as { headers: Record<string, string>; payload: { aps: Record<string, unknown> } };
+}
+
 beforeAll(async () => {
   saJson = await makeServiceAccountJson();
   fetchMock.activate();
@@ -127,5 +136,71 @@ describe('sendFcm android.ttl', () => {
     mockFcmSend((b) => (neg = b));
     await sendFcm(fcmEnv(), 'device-token-4', { title: 'T', body: 'B' }, { ttlSeconds: -5 });
     expect(androidOf(neg).ttl).toBe('0s');
+  });
+});
+
+// iOS installs register FCM tokens too (Firebase relays to APNs), so the same
+// message must carry an `apns` block whose urgency/expiry/collapse mirror the
+// android one. FCM applies only the block matching the token's platform.
+describe('sendFcm apns', () => {
+  it('mirrors android priority + collapse key and sets an absolute expiration', async () => {
+    let captured: Record<string, unknown> = {};
+    mockFcmSend((b) => (captured = b));
+
+    const before = Math.floor(Date.now() / 1000);
+    await sendFcm(
+      fcmEnv(),
+      'ios-token-1',
+      { title: 'T', body: 'B', tag: 'sports-MLB-141-start' },
+      { highPriority: true, ttlSeconds: 900 },
+    );
+    const after = Math.floor(Date.now() / 1000);
+
+    const apns = apnsOf(captured);
+    expect(apns.headers['apns-priority']).toBe('10');
+    expect(apns.headers['apns-collapse-id']).toBe('sports-MLB-141-start');
+    // apns-expiration is an ABSOLUTE unix timestamp, not a duration — the
+    // distinction that makes this worth a test.
+    const exp = Number(apns.headers['apns-expiration']);
+    expect(exp).toBeGreaterThanOrEqual(before + 900);
+    expect(exp).toBeLessThanOrEqual(after + 900);
+    expect(apns.payload.aps.sound).toBe('default');
+    expect(apns.payload.aps['thread-id']).toBe('sports-MLB-141-start');
+  });
+
+  it('uses priority 5 for non-urgent payloads and omits expiration without a ttl', async () => {
+    let captured: Record<string, unknown> = {};
+    mockFcmSend((b) => (captured = b));
+
+    await sendFcm(fcmEnv(), 'ios-token-2', { title: 'T', body: 'B' }, { highPriority: false });
+
+    const apns = apnsOf(captured);
+    expect(apns.headers['apns-priority']).toBe('5');
+    expect('apns-expiration' in apns.headers).toBe(false);
+    expect('apns-collapse-id' in apns.headers).toBe(false);
+    expect('thread-id' in apns.payload.aps).toBe(false);
+  });
+
+  it('passes a zero ttl through as "0" (APNs: try once, then drop)', async () => {
+    let captured: Record<string, unknown> = {};
+    mockFcmSend((b) => (captured = b));
+
+    await sendFcm(fcmEnv(), 'ios-token-3', { title: 'T', body: 'B' }, { ttlSeconds: 0 });
+
+    // 0 must NOT become "now + 0" — APNs treats a literal 0 as its own mode,
+    // and a computed timestamp would be indistinguishable from an expiry.
+    expect(apnsOf(captured).headers['apns-expiration']).toBe('0');
+  });
+
+  it('truncates an over-long collapse id to the 64-byte APNs limit', async () => {
+    let captured: Record<string, unknown> = {};
+    mockFcmSend((b) => (captured = b));
+
+    const longTag = 'c'.repeat(200);
+    await sendFcm(fcmEnv(), 'ios-token-4', { title: 'T', body: 'B', tag: longTag }, {});
+
+    // Over 64 bytes and APNs 400s the whole request — better a truncated
+    // collapse key than a dropped notification.
+    expect(apnsOf(captured).headers['apns-collapse-id']).toBe('c'.repeat(64));
   });
 });

@@ -2,7 +2,14 @@ import { Hono } from 'hono';
 import type { Env } from './env';
 import { readAuthedUser } from './auth';
 import { sendPush, type PushSubscription, type VapidKeys, type SendResult } from './lib/web-push';
-import { fcmConfigured, pushFcmToUser, type NativePushPayload } from './lib/fcm';
+import {
+  fcmConfigured,
+  pruneDeadTokens,
+  pushFcmToUser,
+  sendFcm,
+  type FcmSendResult,
+  type NativePushPayload,
+} from './lib/fcm';
 
 export function pushRoutes() {
   const app = new Hono<{ Bindings: Env }>();
@@ -136,6 +143,19 @@ export function pushRoutes() {
     }
     const platform = body?.platform === 'ios' ? 'ios' : 'android';
 
+    // Guard against the one iOS failure mode that is otherwise SILENT.
+    //
+    // @capacitor/push-notifications hands back the raw *APNs* device token on
+    // iOS (64 hex chars), not an FCM token — the iOS build only yields an FCM
+    // token because build-ios.yml patches AppDelegate.swift to swap it (see
+    // IOS-PUSH.md). If that patch ever stops applying, registration still
+    // "succeeds", the token still stores, and every later send just fails
+    // deep inside FCM where nobody is looking. Reject it at the door instead,
+    // so the Profile toggle surfaces it on the very first tap.
+    if (platform === 'ios' && /^[0-9a-f]{64}$/i.test(token)) {
+      return c.json({ error: 'apns_token_not_fcm' }, 400);
+    }
+
     // A token is unique to a device+app install, so re-registering (or a
     // token that moved to a new account) just re-points the row.
     await c.env.DB.prepare(
@@ -170,6 +190,74 @@ export function pushRoutes() {
         .run();
     }
     return c.json({ ok: true });
+  });
+
+  // POST /me/push/native/test — the native twin of /me/push/test. Fires a
+  // test push to every FCM device token this user has and returns the raw
+  // per-token result (status + first 400 chars of the FCM error body).
+  //
+  // This is the only way to tell the three native failure modes apart from
+  // the phone, without server logs: worker has no FCM credentials
+  // (`fcm_not_configured`), the build never registered a token
+  // (`no_tokens`), or FCM itself is rejecting the send (a real status +
+  // body — e.g. an iOS token with no APNs auth key uploaded to Firebase
+  // comes back as a 401/404 naming the missing key).
+  app.post('/me/push/native/test', async (c) => {
+    const me = await readAuthedUser(c.env, c.req.raw);
+    if (!me) return c.json({ error: 'unauthorized' }, 401);
+
+    if (!fcmConfigured(c.env)) return c.json({ error: 'fcm_not_configured' }, 503);
+
+    const rows = await c.env.DB.prepare(
+      `SELECT token, platform FROM native_push_tokens WHERE user_id = ?`,
+    )
+      .bind(me.id)
+      .all<{ token: string; platform: string }>();
+    const toks = rows.results ?? [];
+    if (toks.length === 0) return c.json({ error: 'no_tokens' }, 404);
+
+    const payload: NativePushPayload = {
+      title: 'Relay test',
+      body: 'If you can see this, native push is working on this device.',
+      chatId: '',
+      tag: 'relay-test',
+    };
+
+    const sent = await Promise.all(
+      toks.map(async (t) => {
+        const r = await sendFcm(c.env, t.token, payload, { highPriority: true }).catch(
+          (err) =>
+            ({
+              token: t.token,
+              ok: false,
+              status: 0,
+              unregistered: false,
+              body: String(err).slice(0, 400),
+            }) as FcmSendResult,
+        );
+        return { platform: t.platform, result: r };
+      }),
+    );
+
+    // Mirror the send paths: drop anything FCM reports as permanently gone so
+    // a repeat test only shows live devices.
+    await pruneDeadTokens(
+      c.env,
+      sent.map((s) => s.result),
+    );
+
+    return c.json({
+      results: sent.map(({ platform: p, result: r }) => ({
+        platform: p,
+        // Never echo the whole device token back to the client — the tail is
+        // enough to tell two devices apart.
+        tokenTail: r.token.slice(-8),
+        ok: r.ok,
+        status: r.status,
+        unregistered: r.unregistered,
+        body: r.body,
+      })),
+    });
   });
 
   // DELETE /me/push/subscribe?endpoint=... — UI calls when user disables
