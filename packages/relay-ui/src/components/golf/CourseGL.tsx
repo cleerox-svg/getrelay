@@ -49,11 +49,16 @@ import {
   TURF_ROUGHNESS,
 } from '../../lib/golf/scenery';
 import {
+  attachBankWetness,
   attachWaterDepth,
+  bankWetnessFromHeight,
+  makeReeds,
   makeWater,
   makeWaterFX,
+  makeWetBankMaterial,
   pickWaterQuality,
   readWaterQualityOverride,
+  reedRingAnchors,
 } from '../../lib/golf/water';
 import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
 import type { GolfCosmetics } from '../../lib/golf/cosmetics';
@@ -1121,6 +1126,11 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
     // lazily on the first water hazard and shared across all of a hole's water
     // meshes (one material, one per-frame update, one reflection pass).
     let waterKit: ReturnType<typeof makeWater> | null = null;
+    // The damp band at the waterline + the reed belt that breaks the pond's
+    // outline. Both are shoreline features, so they are built lazily alongside
+    // the first water hazard and shared across all of a hole's ponds.
+    let wetBankMat: ReturnType<typeof makeWetBankMaterial> | null = null;
+    let reedKit: ReturnType<typeof makeReeds> | null = null;
     // Every pond's level, so a splash lands ON the surface it went into (a hole
     // may carry more than one, at different elevations).
     const waterPools: { d: number; x: number; r: number; y: number }[] = [];
@@ -1205,6 +1215,91 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
         scene.add(water);
         waterKit.addSurface(water);
         waterPools.push({ d: hz.d, x: hz.x, r: hz.r * WATER_OVER, y: waterY });
+
+        // --- Wet bank ------------------------------------------------
+        // A damp, glossier band of soil straddling the waterline. It is a
+        // terrain-FOLLOWING annulus whose alpha is driven by each vertex's
+        // height above the waterline (attachBankWetness), so the band hugs the
+        // real shoreline wherever the level surface happens to meet the bank —
+        // it can't drift off the water's edge the way a fixed-radius ring would.
+        // This is what makes the water look like it TOUCHES the land instead of
+        // sitting on top of it.
+        const groundY = (d: number, x: number) => heightAt(hole, d, x);
+        const bankGeo = track(
+          buildOrganicAnnulus(
+            hzSeed,
+            hz.d,
+            hz.x,
+            hz.r * 0.86,
+            hz.r * 1.04,
+            groundY,
+            0.03,
+            radialUV,
+            8,
+            96,
+          ),
+        );
+        // Height ALONE is not enough here: the water pad grades the surround
+        // level, so ground sits within inches of the waterline for yards outward
+        // and a purely height-driven band floods the whole shoulder (it did —
+        // the pond came back wearing a wide chocolate ring). Multiply the shared
+        // height profile by a horizontal falloff measured from the pond's own
+        // organic edge, so the damp band stays a band.
+        const BANK_BAND_YD = 1.1;
+        attachBankWetness(bankGeo, (wx, wz) => {
+          const pd = -wz;
+          const dx = wx - hz.x;
+          const dd = pd - hz.d;
+          const ang = Math.atan2(dd, dx);
+          const rEdge = edgeRadius(hzSeed, ang, hz.r);
+          // Distance outward from the waterline (~0.94·rEdge, see WATER_LIP).
+          const fromShore = Math.abs(Math.hypot(dx, dd) - rEdge * 0.94);
+          // Smoothstep, not linear: a linear falloff ends on a visible edge and
+          // the band reads as a drawn outline rather than damp ground.
+          const k = Math.max(0, 1 - fromShore / BANK_BAND_YD);
+          const radial = k * k * (3 - 2 * k);
+          return bankWetnessFromHeight(heightAt(hole, pd, wx) - waterY) * radial;
+        });
+        wetBankMat ??= makeWetBankMaterial(track);
+        const bank = new THREE.Mesh(bankGeo, wetBankMat);
+        bank.receiveShadow = false;
+        scene.add(bank);
+
+        // --- Reeds ---------------------------------------------------
+        // Tufts planted where the bank meets the water. The waterline radius is
+        // found by BISECTION on the terrain (the basin dishes, so height rises
+        // monotonically outward), not assumed from hz.r — so the reeds land on
+        // the actual shore for any basin profile, and a hole with a different
+        // depth or wobble needs no new numbers.
+        const shoreAt = (angle: number) => {
+          const rEdge = edgeRadius(hzSeed, angle, hz.r);
+          const at = (r: number) =>
+            heightAt(hole, hz.d + Math.sin(angle) * r, hz.x + Math.cos(angle) * r);
+          // Target just at the waterline; the rim itself sits WATER_LIP above it.
+          const target = waterY + 0.012;
+          let lo = rEdge * 0.3;
+          let hi = rEdge;
+          if (at(hi) < target) return null; // never surfaces — no shore here
+          for (let i = 0; i < 18; i++) {
+            const mid = (lo + hi) / 2;
+            if (at(mid) < target) lo = mid;
+            else hi = mid;
+          }
+          // Step a little further up the bank so the tuft is rooted in damp
+          // ground rather than standing in open water.
+          const r = Math.min(rEdge * 1.05, hi + 0.35);
+          const px = hz.x + Math.cos(angle) * r;
+          const pd = hz.d + Math.sin(angle) * r;
+          return { x: px, y: heightAt(hole, pd, px) - 0.05, z: -pd };
+        };
+        reedKit ??= makeReeds(track);
+        const anchors = reedRingAnchors(hzSeed, 30, shoreAt);
+        if (anchors.length > 0) {
+          const reedGeo = track(reedKit.build(anchors, hzSeed));
+          const reeds = new THREE.Mesh(reedGeo, reedKit.material);
+          reeds.castShadow = true;
+          scene.add(reeds);
+        }
       } else if (hz.kind === 'bunker') {
         // A DISHED sand cap that samples the heightfield (the basin bowl) along
         // the ORGANIC outline, so a ball — which rests on the terrain height —
@@ -2265,6 +2360,8 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
       // cross-scroll, the sun glint rides the crests) and integrate any live
       // splash. Identical hooks in the Range and Putt.
       if (waterKit) waterKit.update(now / 1000);
+      // Reeds sway off the same clock and the same wind as the waves.
+      if (reedKit) reedKit.update(now / 1000);
       waterFX.update(now, dt);
 
       // Sim state (used for the tracer gate below and the aim-hide logic).
@@ -2277,10 +2374,10 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
       if (waterKit && (st.windAlong !== lastWindAlong || st.windCross !== lastWindCross)) {
         lastWindAlong = st.windAlong;
         lastWindCross = st.windCross;
-        waterKit.setWind(
-          windBearing(st.windAlong, st.windCross),
-          windMph(st.windAlong, st.windCross),
-        );
+        const bearing = windBearing(st.windAlong, st.windCross);
+        const mph = windMph(st.windAlong, st.windCross);
+        waterKit.setWind(bearing, mph);
+        reedKit?.setWind(bearing, mph);
       }
 
       // --- SFX (render-side only; the sim is never touched) ----------------

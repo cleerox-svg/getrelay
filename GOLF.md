@@ -119,7 +119,7 @@ A data-driven **Range layout** picker (persisted, default `fairway`):
 | Area | Path |
 |---|---|
 | Shared scene kit (turf/sky/trees/fog) | `packages/relay-ui/src/lib/golf/scenery.ts` |
-| Shared WATER (level geometry, Gerstner waves, Fresnel + sky/planar reflection, foam, splash, quality tiers) | `packages/relay-ui/src/lib/golf/water.ts` |
+| Shared WATER (level geometry, Gerstner waves, Fresnel + sky/planar reflection, foam, splash, wet bank, reeds, quality tiers) | `packages/relay-ui/src/lib/golf/water.ts` |
 | Headless screenshot harness | `packages/relay-ui/scripts/shoot-golf.mjs` + `golfpreview.html` + `src/golfpreview.tsx` |
 | Range physics/sim (headless) | `packages/relay-ui/src/lib/golf/rangeSim.ts` |
 | Sim tests / harness | `packages/relay-ui/src/lib/golf/rangeSim.test.ts` |
@@ -460,6 +460,33 @@ What it does now:
 - **`makeWaterFX`**: the droplet crown + expanding ripple rings, seeded so
   screenshots are stable. This existed only in the Range; the Course played a
   splash SOUND and drew nothing, and Putt had neither.
+
+**Shoreline (`makeWetBankMaterial` / `makeReeds`).** Two features that live on
+the water's EDGE rather than its surface, and between them do as much for the
+illusion as the shader does:
+
+- **Wet bank** — a dark, low-roughness overlay revealed by per-vertex alpha
+  (`attachBankWetness`), straddling the waterline. It is what makes the water
+  look like it TOUCHES the land instead of sitting on top of it. Height above
+  the waterline alone is NOT enough to place it: the water pad grades the
+  surround level, so ground stays within inches of the waterline for yards
+  outward and a purely height-driven band floods the whole shoulder. Multiply
+  the shared height profile (`bankWetnessFromHeight`) by a horizontal falloff
+  from the shore — smoothstepped, or the band's outer edge reads as a drawn
+  outline.
+- **Reeds** — clumped tufts of cattails at the margin. A pond's outline is the
+  most artificial thing left in frame once the surface reads right; reeds break
+  that curve and, being tall, give the water something to be *behind*. Blades
+  and cattail heads bake into ONE merged geometry per belt (one draw call, both
+  coloured per vertex) and sway in the vertex shader — injected into a standard
+  material via `onBeforeCompile`, so they keep the scene's lighting, shadows and
+  fog — off the SAME wind that drives the waves. Placement clumps deliberately:
+  an evenly-spaced ring reads as landscaping and walls the pond off from the
+  player. The Course finds its shoreline by BISECTING the terrain (the basin
+  dishes, so height rises monotonically outward) rather than assuming a radius,
+  so any basin profile works; Putt uses the rectangular variants
+  (`makeWetBankRect` / `reedRectAnchors`). The Range lake's only shoreline is
+  the distant fence line, so it takes neither.
 
 **Quality tiers.** `pickWaterQuality(renderer)` returns `high | medium | low`,
 overridable with **`?water=high|medium|low`** on the preview page so the extra
