@@ -20,11 +20,19 @@ import { fileURLToPath } from 'node:url';
 const SIM_DIR = dirname(fileURLToPath(import.meta.url));
 const UI_SRC = join(SIM_DIR, '..', '..');
 const COMPONENT_DIR = join(UI_SRC, 'components', 'baseball');
+const STADIUM_DIR = join(COMPONENT_DIR, 'stadium');
 
 /** Line caps, per the baseball charter. Tests are exempt — see below. */
 const LIB_CAP = 500;
 const COMPONENT_CAP = 700;
 const STADIUM_GL_CAP = 900;
+/**
+ * The `stadium/*` scene builders. Same 500 as a lib module, and for the same
+ * reason: a builder is a single-purpose `(ctx) => handle` function, and one that
+ * needs 500 lines is two builders. This cap is what stops `StadiumGL.tsx`'s
+ * 900-line allowance being met by moving the monolith one directory down.
+ */
+const BUILDER_CAP = 500;
 
 /**
  * Tests are EXEMPT from the line cap, deliberately. A test file's length is
@@ -109,19 +117,64 @@ describe('budget guard', () => {
     expect(isShipping('pitchSim.test.ts')).toBe(false);
   });
 
-  it(`components/baseball: ${COMPONENT_CAP} lines, StadiumGL ${STADIUM_GL_CAP}`, () => {
-    // Stage 4 fills this directory. The cap is written NOW, before the first
-    // component exists, so that StadiumGL.tsx is composed against a number
-    // rather than measured against one after the fact. It is deliberately not a
-    // no-op waiting to be forgotten: the moment a .tsx lands here it is capped.
-    const names = filesIn(COMPONENT_DIR, (n) => n.endsWith('.tsx') || n.endsWith('.ts'));
-    const over = names
-      .map((n) => ({
+  it(`components/baseball: ${COMPONENT_CAP} lines, StadiumGL ${STADIUM_GL_CAP}, builders ${BUILDER_CAP}`, () => {
+    // The cap was written before the first component existed, so that
+    // StadiumGL.tsx was composed against a number rather than measured against
+    // one after the fact. It is deliberately not a no-op waiting to be
+    // forgotten: the moment a .tsx lands here it is capped.
+    const rows = [
+      ...filesIn(COMPONENT_DIR, (n) => n.endsWith('.tsx') || n.endsWith('.ts')).map((n) => ({
         n,
         lines: lineCount(join(COMPONENT_DIR, n)),
         cap: n === 'StadiumGL.tsx' ? STADIUM_GL_CAP : COMPONENT_CAP,
-      }))
-      .filter((r) => r.lines > r.cap);
+      })),
+      ...filesIn(STADIUM_DIR, (n) => n.endsWith('.ts') || n.endsWith('.tsx')).map((n) => ({
+        n: `stadium/${n}`,
+        lines: lineCount(join(STADIUM_DIR, n)),
+        cap: BUILDER_CAP,
+      })),
+    ].sort((a, b) => b.lines - a.lines);
+
+    if (rows.length) {
+      // eslint-disable-next-line no-console
+      console.log(
+        '\n[BUDGET — components/baseball]\n' +
+          rows
+            .map(
+              (r) =>
+                `  ${String(r.lines).padStart(4)}  ${((r.lines / r.cap) * 100)
+                  .toFixed(0)
+                  .padStart(3)} %  ${r.n}  (cap ${r.cap})`,
+            )
+            .join('\n') +
+          '\n  StadiumGL is a COMPOSER: renderer, cameras, loop. Geometry lives in stadium/*.\n',
+      );
+    }
+
+    const over = rows.filter((r) => r.lines > r.cap);
     expect(over.map((r) => `${r.n} is ${r.lines} lines (cap ${r.cap})`)).toEqual([]);
+  });
+
+  it('only StadiumGL and its stadium/* builders may import three', () => {
+    // The lazy boundary, asserted rather than intended. `three` is a 560 kB
+    // chunk; one import of a stadium builder from a HUD component would drag it
+    // into whatever chunk that HUD lands in. The allowed set is exactly the
+    // scene: StadiumGL.tsx as the composer, and the builders it composes.
+    const offenders: string[] = [];
+    const scan = (dir: string, prefix: string, allowed: (n: string) => boolean) => {
+      for (const name of filesIn(dir, (n) => n.endsWith('.ts') || n.endsWith('.tsx'))) {
+        if (allowed(name)) continue;
+        const text = readFileSync(join(dir, name), 'utf8');
+        text.split('\n').forEach((line, i) => {
+          if (/^\s*(\/\/|\/\*|\*)/.test(line)) return;
+          if (/\bfrom\s+['"]three(\/|['"])/.test(line)) {
+            offenders.push(`${prefix}${name}:${i + 1}  ${line.trim()}`);
+          }
+        });
+      }
+    };
+    scan(COMPONENT_DIR, '', (n) => n === 'StadiumGL.tsx');
+    scan(STADIUM_DIR, 'stadium/', () => true);
+    expect(offenders, `three imported outside the scene:\n${offenders.join('\n')}`).toEqual([]);
   });
 });
