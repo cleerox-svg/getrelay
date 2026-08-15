@@ -19,7 +19,11 @@ export type GameScreen = 'menu' | 'guess' | 'free' | 'results';
 
 // The same-path history marker written when entering guess/free. `fog` is
 // the legacy key from when the hub was Fog-anchored; it is read but never
-// written — see the compatibility shim below.
+// written, and is believed unreachable — see the note at the read below.
+//
+// NOTE the hub's deep-link entry state (routes/Games.tsx) deliberately uses
+// a DIFFERENT key, `hubGame`. It must never collide with these: a hub entry
+// that looked like a marker would trip the stale-marker branch on mount.
 type GameHistoryState = { game?: 'guess' | 'free'; fog?: 'guess' | 'free' } | null;
 
 export function useGameFlow() {
@@ -38,13 +42,21 @@ export function useGameFlow() {
 
   const location = useLocation();
   const nav = useNavigate();
-  // COMPAT (one release): accept the old `fog` key as well as the new
-  // `game` one. The UI deploys independently, so a user mid-session can
-  // have a history entry pushed by the previous build still on their
-  // stack — reading only `game` would treat it as "no marker" and make
-  // back skip the pause step. Writes below use `game` only, so once every
-  // client has reloaded onto this build the `?? state?.fog` fallback (and
-  // the `fog` field on GameHistoryState) can be dropped.
+  // Belt-and-braces: accept the legacy `fog` key as well as the new `game`
+  // one. Writes below use `game` only.
+  //
+  // Be honest about this: the fallback is believed UNREACHABLE, not
+  // load-bearing. A `fog` marker was only ever pushed onto a /discover
+  // entry, and App.tsx's `<Navigate to="/games" replace />` carries no
+  // state, so the redirect drops it; and on a fresh load the hub starts
+  // with no game selected, so this hook is not even mounted to observe it.
+  // It is kept only because a dead read costs nothing and the failure mode
+  // it guards (back silently skipping the pause step mid-game) is bad.
+  //
+  // So do NOT "fix" the redirect to forward `state` in order to make this
+  // reachable — that would resurrect the legacy key instead of retiring it.
+  // Drop the `?? state?.fog` fallback and the `fog` field whenever this
+  // file is next touched.
   const state = location.state as GameHistoryState;
   const histGame = state?.game ?? state?.fog;
   const histGameRef = useRef(histGame);

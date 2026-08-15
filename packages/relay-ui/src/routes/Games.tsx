@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, Navigate, useLocation, useParams } from 'react-router-dom';
 import { Navbar, Page } from 'konsta/react';
 import { Avatar } from '../components/Avatar';
 import { BrandTitle } from '../components/BrandTitle';
@@ -20,9 +20,11 @@ import { getGolfStats } from '../lib/golf/stats';
 // lib/games/useGameFlow.ts); hub↔menu is plain state with a "‹ Games"
 // affordance handled by each screen's onExitToHub.
 
+export type GameId = 'fog' | 'tune' | 'golf';
+
 // The chiclet grid, as data so adding a game is one more entry. `id`
 // drives which screen renders; `icon` is a flat SVG under /public/games.
-const GAMES: { id: 'fog' | 'tune' | 'golf'; title: string; subtitle: string; icon: string }[] = [
+const GAMES: { id: GameId; title: string; subtitle: string; icon: string }[] = [
   {
     id: 'fog',
     title: 'Fog',
@@ -45,8 +47,38 @@ const GAMES: { id: 'fog' | 'tune' | 'golf'; title: string; subtitle: string; ico
 
 // Flat SVG icon path for a game id, sourced from the GAMES data above so the
 // hub landing and any future chiclet consumers share one asset map.
-const iconOf = (id: 'fog' | 'tune' | 'golf'): string =>
-  GAMES.find((g) => g.id === id)?.icon ?? '';
+const iconOf = (id: GameId): string => GAMES.find((g) => g.id === id)?.icon ?? '';
+
+// History-state key carrying the deep-linked game from GamesDeepLink to the
+// hub. Deliberately NOT `game`: useGameFlow owns `state.game` for its
+// back-gesture marker, and the two must not be mistaken for each other.
+type HubEntryState = { hubGame?: GameId } | null;
+
+// Deep-link entry for /games/:game — the path the worker's golf-challenge
+// pushes carry (relay-worker/src/games.ts sends url: '/games/golf', which
+// sw.js hands to App's SwNavigationBridge). Games are NOT subroutes (see the
+// header comment), so this does not render the hub at /games/golf; it
+// normalizes the URL back to /games and passes the validated id along in
+// history state, which <Games> reads once as its initial selection.
+//
+// Redirecting rather than rendering here keeps two invariants:
+//  - the tab bar's active check is an exact `pathname === '/games'`
+//    (MainLayout.tsx), so sitting on /games/golf would leave the Games tab
+//    unhighlighted — the same reason the /discover redirect lives outside
+//    the MainLayout group;
+//  - useGameFlow pushes its back-gesture marker at `location.pathname`, so
+//    an un-normalized path would leak /games/golf into the in-game history
+//    entries and, on exit, into the URL the user is left on.
+// `replace` means history depth after the deep link is identical to landing
+// on /games directly, which is what useGameFlow's depth invariant assumes.
+// An unknown id (/games/bogus) redirects with no state, so the hub renders —
+// degrading to the grid instead of falling through to /chats.
+export function GamesDeepLink() {
+  const { game } = useParams();
+  const id = GAMES.find((g) => g.id === game)?.id;
+  const state: HubEntryState = id ? { hubGame: id } : null;
+  return <Navigate to="/games" replace state={state} />;
+}
 
 export function Games() {
   const me = useStore((s) => s.me);
@@ -58,7 +90,16 @@ export function Games() {
   // Which mini game the Games hub is showing. null = the chiclet grid
   // (hub). Each game's standalone screen owns its own menu/game/results
   // flow and the back-gesture choreography (via useGameFlow).
-  const [selected, setSelected] = useState<'fog' | 'tune' | 'golf' | null>(null);
+  //
+  // Seeded once, on mount, from the history state GamesDeepLink leaves
+  // behind for a /games/:game deep link (a push-notification tap). Read in
+  // the lazy initializer on purpose: it is a one-shot entry hint, not a
+  // binding. Later navigations rewrite that entry's state (useGameFlow's
+  // marker, and its `state: null` reset) without ever yanking the user out
+  // of the game they're in, and switching games from the hub still touches
+  // no history at all.
+  const entry = useLocation().state as HubEntryState;
+  const [selected, setSelected] = useState<GameId | null>(() => entry?.hubGame ?? null);
 
   return (
     <Page>
