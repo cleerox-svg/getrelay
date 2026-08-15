@@ -328,7 +328,7 @@ export function aeroAccel(v: Vec3, omega: Vec3, K: number): Vec3 {
   // magnitude is K·C_L·|v|² — same v² law as drag, different direction.
   if (omegaEffMag > 1e-9) {
     const axis = vScale(omegaEff, 1 / omegaEffMag);
-    const m = vCross(v, axis);
+    const m = vCross(axis, v);
     const kl = K * liftCoef(S) * speed;
     a.x += kl * m.x;
     a.y += kl * m.y;
