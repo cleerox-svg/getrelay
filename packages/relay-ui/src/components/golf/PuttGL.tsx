@@ -21,11 +21,15 @@ import {
   TURF_ROUGHNESS,
 } from '../../lib/golf/scenery';
 import {
+  makeReeds,
   makeWater,
   makeWaterFX,
   makeWaterPlane,
+  makeWetBankMaterial,
+  makeWetBankRect,
   pickWaterQuality,
   readWaterQualityOverride,
+  reedRectAnchors,
   type WaterKit,
 } from '../../lib/golf/water';
 import { FIXED_MS, MAX_LAUNCH_SPEED } from '../../lib/golf/tuning';
@@ -475,6 +479,11 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
     let waterKit: WaterKit | null = null;
     // Shared splash FX, so a putt into the drink looks like a course shot does.
     const waterFX = makeWaterFX(scene, track);
+    // The same damp bank + reed belt the Course pond gets, on the rectangular
+    // board ponds — same material, same profile, rectangular placement.
+    let wetBankMat: ReturnType<typeof makeWetBankMaterial> | null = null;
+    let reedKit: ReturnType<typeof makeReeds> | null = null;
+    let hazardIndex = 0;
     // Lifted clear of the board so a wave trough can't clip through it, and
     // given a deep nominal depth so the pond reads as water rather than as an
     // all-foam puddle (the board is flat — there is no modeled basin).
@@ -514,6 +523,36 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
         mesh.position.set(wx(cx), waterY, wz(cy));
         scene.add(mesh);
         waterKit.addSurface(mesh);
+
+        // Damp band straddling the pond's border.
+        wetBankMat ??= makeWetBankMaterial(track);
+        // Stronger than the Course's: this band sits on flat board turf with no
+        // terrain shading to help it read, and the camera looks almost straight
+        // down at it.
+        const bankGeo = track(makeWetBankRect(rw, rh, 1.1, 0.55));
+        const bankMesh = new THREE.Mesh(bankGeo, wetBankMat);
+        bankMesh.position.set(wx(cx), y + 0.02, wz(cy));
+        scene.add(bankMesh);
+
+        // Reeds along the border. Seeded per hazard so two ponds on one board
+        // don't get identical stands.
+        reedKit ??= makeReeds(track);
+        const seed = (hazardIndex + 1) * 0x9e37;
+        const anchors = reedRectAnchors(seed, rw, rh, 2.6, 0.25).map((a) => ({
+          ...a,
+          x: a.x + wx(cx),
+          y,
+          z: a.z + wz(cy),
+          // Mini-golf reads as miniature, so the reeds scale with the board.
+          scale: (a.scale ?? 1) * 1.2,
+        }));
+        if (anchors.length > 0) {
+          const reedGeo = track(reedKit.build(anchors, seed));
+          const reeds = new THREE.Mesh(reedGeo, reedKit.material);
+          reeds.castShadow = true;
+          scene.add(reeds);
+        }
+        hazardIndex++;
       } else {
         const sandTex = track(makeSandTexture());
         const mat = track(new THREE.MeshStandardMaterial({ map: sandTex, roughness: 1 }));
@@ -1041,6 +1080,7 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
       flag.rotation.z = Math.sin(t * 2) * 0.12;
       flag.position.x = flagBaseX + Math.sin(t * 3) * 0.2;
       if (waterKit) waterKit.update(t);
+      reedKit?.update(t);
       waterFX.update(now, dt);
 
       // Sink burst integration.

@@ -985,3 +985,479 @@ export function makeWaterFX(scene: THREE.Scene, track: Track): WaterFX {
 
   return { splash, update };
 }
+
+// --- Wet bank --------------------------------------------------------------
+
+/** How far ABOVE the waterline damp ground reaches (yd). */
+const WET_ABOVE_YD = 0.34;
+/** How far BELOW the waterline the damp band keeps its full strength (yd). */
+const WET_BELOW_YD = 0.22;
+/** Damp soil colour. Dark and slightly glossy — a wet bank catches the sun. */
+const WET_BANK_COLOR = 0x4a3d29;
+
+/**
+ * The shared damp-bank material: a dark, low-roughness overlay laid on the
+ * terrain and revealed by per-vertex alpha (see attachBankWetness).
+ *
+ * Soil right at a waterline is darker and glossier than the dry ground a foot
+ * further up, and that band is one of the strongest "this is really water"
+ * cues there is — arguably more than anything happening on the surface itself,
+ * because it is the only thing that says the water TOUCHES the land rather than
+ * being laid on top of it.
+ *
+ * Roughness is uniform (a per-vertex roughness would need a map), which is fine:
+ * the material is only visible where the alpha reveals it, i.e. exactly the
+ * band that should be damp.
+ */
+export function makeWetBankMaterial(track: Track): THREE.MeshStandardMaterial {
+  return track(
+    new THREE.MeshStandardMaterial({
+      color: WET_BANK_COLOR,
+      roughness: 0.42,
+      metalness: 0,
+      vertexColors: true,
+      transparent: true,
+      // An overlay lying ON the ground: it must not fight the terrain or the
+      // water for the depth buffer.
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+      side: THREE.DoubleSide,
+    }),
+  );
+}
+
+/**
+ * The damp-band profile as a function of a point's height above the waterline
+ * (negative under water): full strength from a little below the line up to the
+ * line itself, then drying out over WET_ABOVE_YD of rising bank.
+ *
+ * Exported so a scene can COMBINE it with its own constraints. Height alone is
+ * not enough on this course: `heightAt` grades a water hazard's surround level
+ * (the water pad), so ground stays within a few inches of the waterline for
+ * yards outward and a purely height-driven band floods the whole shoulder.
+ * Multiply this by a horizontal falloff from the shoreline and it behaves.
+ */
+export function bankWetnessFromHeight(aboveWater: number): number {
+  return aboveWater >= 0
+    ? Math.max(0, 1 - aboveWater / WET_ABOVE_YD)
+    : Math.max(0, 1 + aboveWater / WET_BELOW_YD);
+}
+
+/**
+ * Write the per-vertex alpha that reveals the damp band.
+ *
+ * `wetnessAt` returns 0..1 for a world XZ — normally
+ * `bankWetnessFromHeight(...)` combined with whatever horizontal falloff the
+ * pond's shape implies. Driving it per-vertex (rather than from a fixed radius)
+ * is what lets the band hug the real, wobbly shoreline on any pond, the same
+ * way the water surface's depth attribute does.
+ *
+ * three reads a 4-component `color` attribute as RGB + alpha when the material
+ * is `transparent` and `vertexColors` is on, so RGB stays white and the
+ * material's own colour supplies the tone.
+ */
+export function attachBankWetness(
+  geo: THREE.BufferGeometry,
+  wetnessAt: (x: number, z: number) => number,
+  strength = 0.38,
+): THREE.BufferGeometry {
+  const pos = geo.getAttribute('position');
+  const n = pos.count;
+  const col = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    const w = Math.max(0, Math.min(1, wetnessAt(pos.getX(i), pos.getZ(i))));
+    const j = i * 4;
+    col[j] = 1;
+    col[j + 1] = 1;
+    col[j + 2] = 1;
+    col[j + 3] = w * strength;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 4));
+  return geo;
+}
+
+// --- Reeds -----------------------------------------------------------------
+
+/** One tuft of reeds to plant: a world position, a facing and a size multiplier. */
+export interface ReedAnchor {
+  x: number;
+  y: number;
+  z: number;
+  /** Radians. Blades fan around this, and leans point away from the water. */
+  yaw: number;
+  /** Size multiplier on the default reed height. */
+  scale?: number;
+}
+
+export interface ReedKit {
+  /** Shared reed material (blades + cattail heads, one draw call per belt). */
+  material: THREE.MeshStandardMaterial;
+  /** Build a merged belt geometry for a set of tufts. Attach to `material`. */
+  build: (anchors: ReedAnchor[], seed: number) => THREE.BufferGeometry;
+  /** Per-frame sway. `t` is elapsed seconds. */
+  update: (t: number) => void;
+  /** Drive sway direction + strength from the hole wind. */
+  setWind: (dirRad: number, mph: number) => void;
+}
+
+const REED_HEIGHT_YD = 1.5;
+const REED_BLADE_W = 0.085;
+const BLADE_LEVELS = 4;
+const BLADES_PER_TUFT = 12;
+const REED_BASE_COLOR = new THREE.Color(0x3d5c2a);
+const REED_TIP_COLOR = new THREE.Color(0x8fae52);
+const CATTAIL_COLOR = new THREE.Color(0x6b4a2a);
+
+/**
+ * Reeds at the water's edge.
+ *
+ * The pond outline is the most artificial thing left in the frame once the
+ * surface itself reads correctly — a geometrically perfect curve where land
+ * meets water. Tufts of reeds break that line, and being tall they also give
+ * the pond something to be BEHIND, which reads as depth.
+ *
+ * Everything is baked into ONE merged geometry per belt (one draw call for a
+ * whole pond's reeds, blades and cattail heads together via vertex colours) and
+ * swayed in the vertex shader off the same wind that drives the waves, so a
+ * breezy hole moves its water and its reeds together.
+ *
+ * Deterministic: placement and per-blade jitter come from a seeded mulberry32,
+ * never Math.random, so the screenshot harness stays reproducible.
+ */
+export function makeReeds(track: Track): ReedKit {
+  const uniforms = {
+    uReedTime: { value: 0 },
+    uReedWind: { value: new THREE.Vector2(0.7071, 0.7071) },
+    uReedSway: { value: 0.06 },
+  };
+
+  const material = track(
+    new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.9,
+      metalness: 0,
+      // Blades are single-sided strips; without DoubleSide half of every tuft
+      // vanishes depending on which way the camera looks at it.
+      side: THREE.DoubleSide,
+    }),
+  );
+  // Sway injected into the standard material rather than written as a bespoke
+  // ShaderMaterial, so reeds keep the scene's lighting, shadows and fog for free.
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uReedTime = uniforms.uReedTime;
+    shader.uniforms.uReedWind = uniforms.uReedWind;
+    shader.uniforms.uReedSway = uniforms.uReedSway;
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+         uniform float uReedTime;
+         uniform vec2  uReedWind;
+         uniform float uReedSway;
+         attribute float aSway;
+         attribute float aPhase;`,
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+         // Bend downwind, strongest at the tip (aSway is ~t² up the blade), with
+         // a per-tuft phase so a belt ripples instead of moving as one board.
+         float gust = 0.62 + 0.38 * sin(uReedTime * 1.7 + aPhase);
+         transformed.xz += uReedWind * (uReedSway * aSway * gust);`,
+      );
+  };
+
+  const build = (anchors: ReedAnchor[], seed: number): THREE.BufferGeometry =>
+    buildReedBelt(anchors, seed);
+
+  return {
+    material,
+    build,
+    update: (t: number) => {
+      uniforms.uReedTime.value = t;
+    },
+    setWind: (dirRad: number, mph: number) => {
+      const dir = uniforms.uReedWind.value;
+      dir.set(Math.sin(dirRad), -Math.cos(dirRad)).normalize();
+      // Reeds lean noticeably in a breeze and are never quite still in calm.
+      const k = Math.min(1, Math.max(0, mph / WIND_FULL_MPH));
+      uniforms.uReedSway.value = 0.04 + 0.26 * k;
+    },
+  };
+}
+
+// Scratch arrays for the belt builder — one growable set, reused per belt.
+interface ReedBuffers {
+  pos: number[];
+  col: number[];
+  sway: number[];
+  phase: number[];
+  idx: number[];
+}
+
+/** A tapered, leaning blade as a 4-level strip (6 triangles). */
+function pushBlade(
+  b: ReedBuffers,
+  ox: number,
+  oy: number,
+  oz: number,
+  yaw: number,
+  height: number,
+  width: number,
+  lean: number,
+  phase: number,
+): { tipX: number; tipY: number; tipZ: number } {
+  // `right` spans the blade's width; `fall` is the direction it leans.
+  const fx = Math.cos(yaw);
+  const fz = Math.sin(yaw);
+  const rx = -fz;
+  const rz = fx;
+  const base = b.pos.length / 3;
+  let tipX = ox;
+  let tipY = oy + height;
+  let tipZ = oz;
+  for (let k = 0; k < BLADE_LEVELS; k++) {
+    const t = k / (BLADE_LEVELS - 1);
+    const w = (width * Math.pow(1 - t, 0.7)) / 2;
+    const bend = lean * t * t;
+    const cx = ox + fx * bend;
+    const cy = oy + height * t;
+    const cz = oz + fz * bend;
+    if (k === BLADE_LEVELS - 1) {
+      tipX = cx;
+      tipY = cy;
+      tipZ = cz;
+    }
+    const c = REED_BASE_COLOR.clone().lerp(REED_TIP_COLOR, t);
+    for (const s of [-1, 1]) {
+      b.pos.push(cx + rx * w * s, cy, cz + rz * w * s);
+      b.col.push(c.r, c.g, c.b);
+      b.sway.push(t * t);
+      b.phase.push(phase);
+    }
+  }
+  for (let k = 0; k < BLADE_LEVELS - 1; k++) {
+    const a = base + k * 2;
+    b.idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+  }
+  return { tipX, tipY, tipZ };
+}
+
+/** A cattail head: a short 5-sided prism riding near a blade's tip. */
+function pushCattail(
+  b: ReedBuffers,
+  cx: number,
+  cy: number,
+  cz: number,
+  r: number,
+  halfLen: number,
+  sway: number,
+  phase: number,
+): void {
+  const SIDES = 5;
+  const base = b.pos.length / 3;
+  for (let ring = 0; ring < 2; ring++) {
+    const y = cy + (ring === 0 ? -halfLen : halfLen);
+    // Taper the top ring so the head reads as a rounded seed spike, not a pipe.
+    const rr = ring === 0 ? r : r * 0.72;
+    for (let s = 0; s < SIDES; s++) {
+      const a = (s / SIDES) * Math.PI * 2;
+      b.pos.push(cx + Math.cos(a) * rr, y, cz + Math.sin(a) * rr);
+      b.col.push(CATTAIL_COLOR.r, CATTAIL_COLOR.g, CATTAIL_COLOR.b);
+      b.sway.push(sway);
+      b.phase.push(phase);
+    }
+  }
+  for (let s = 0; s < SIDES; s++) {
+    const s1 = (s + 1) % SIDES;
+    const a0 = base + s;
+    const a1 = base + s1;
+    const c0 = base + SIDES + s;
+    const c1 = base + SIDES + s1;
+    b.idx.push(a0, c0, a1, a1, c0, c1);
+  }
+  // Cap the top so the spike isn't hollow when seen from above.
+  for (let s = 1; s < SIDES - 1; s++) {
+    b.idx.push(base + SIDES, base + SIDES + s, base + SIDES + s + 1);
+  }
+}
+
+/**
+ * Bake a whole belt of reed tufts into one geometry.
+ *
+ * Blades and cattail heads share the buffer (and so the material and the draw
+ * call) by carrying their colour per vertex.
+ */
+export function buildReedBelt(anchors: ReedAnchor[], seed: number): THREE.BufferGeometry {
+  const rnd = splashRng(seed >>> 0 || 1);
+  const b: ReedBuffers = { pos: [], col: [], sway: [], phase: [], idx: [] };
+  for (const a of anchors) {
+    const scale = a.scale ?? 1;
+    const phase = rnd() * Math.PI * 2;
+    for (let i = 0; i < BLADES_PER_TUFT; i++) {
+      // Fan the blades around the anchor's facing, and jitter each one's base so
+      // a tuft reads as a clump rather than a starburst from a single point.
+      const yaw = a.yaw + (rnd() - 0.5) * 1.6;
+      const off = rnd() * 0.3;
+      const offAng = rnd() * Math.PI * 2;
+      const h = REED_HEIGHT_YD * scale * (0.62 + rnd() * 0.62);
+      const lean = h * (0.1 + rnd() * 0.22);
+      const tip = pushBlade(
+        b,
+        a.x + Math.cos(offAng) * off,
+        a.y,
+        a.z + Math.sin(offAng) * off,
+        yaw,
+        h,
+        REED_BLADE_W * scale,
+        lean,
+        phase,
+      );
+      // Roughly a third of the blades carry a cattail — all of them reads as a
+      // planted crop rather than a wild margin.
+      if (rnd() < 0.34) {
+        pushCattail(
+          b,
+          tip.tipX,
+          tip.tipY - h * 0.13,
+          tip.tipZ,
+          REED_BLADE_W * scale * 0.85,
+          h * 0.14,
+          0.82,
+          phase,
+        );
+      }
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(b.pos, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(b.col, 3));
+  geo.setAttribute('aSway', new THREE.Float32BufferAttribute(b.sway, 1));
+  geo.setAttribute('aPhase', new THREE.Float32BufferAttribute(b.phase, 1));
+  geo.setIndex(b.idx);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * A damp band for a RECTANGULAR pond — the flat-bedded case (a mini-golf
+ * board), where there is no modeled bank for the height profile to read. The
+ * band is measured inward/outward from the pond's border instead, but uses the
+ * SAME material and the same asymmetry (a little into the water, further onto
+ * the land) as the Course's terrain-driven one.
+ */
+export function makeWetBankRect(
+  width: number,
+  depth: number,
+  band: number,
+  strength?: number,
+): THREE.BufferGeometry {
+  const outer = band * 1.2;
+  const w = width + outer * 2;
+  const d = depth + outer * 2;
+  const seg = 2 + Math.round(Math.max(w, d) / 0.35);
+  const geo = new THREE.PlaneGeometry(w, d, seg, seg);
+  geo.rotateX(-Math.PI / 2);
+  const hw = width / 2;
+  const hd = depth / 2;
+  return attachBankWetness(
+    geo,
+    (x, z) => {
+      // Signed distance to the pond's border: negative inside, positive outside.
+      const dx = Math.abs(x) - hw;
+      const dz = Math.abs(z) - hd;
+      const outside = Math.hypot(Math.max(dx, 0), Math.max(dz, 0));
+      const inside = Math.min(Math.max(dx, dz), 0);
+      const signed = outside > 0 ? outside : inside;
+      return bankWetnessFromHeight((signed * WET_ABOVE_YD) / band);
+    },
+    strength,
+  );
+}
+
+/** Tufts spaced around a RECTANGULAR pond's border, clumped the same way. */
+export function reedRectAnchors(
+  seed: number,
+  width: number,
+  depth: number,
+  spacing: number,
+  inset = 0,
+): ReedAnchor[] {
+  const rnd = splashRng((seed ^ 0x2eed) >>> 0 || 11);
+  const phaseA = rnd() * Math.PI * 2;
+  const phaseB = rnd() * Math.PI * 2;
+  const hw = width / 2 - inset;
+  const hd = depth / 2 - inset;
+  const out: ReedAnchor[] = [];
+  const edge = (
+    ax: number,
+    az: number,
+    bx: number,
+    bz: number,
+    yaw: number,
+  ) => {
+    const len = Math.hypot(bx - ax, bz - az);
+    const n = Math.max(1, Math.round(len / spacing));
+    for (let i = 0; i <= n; i++) {
+      const t = i / n;
+      // Same clumping idea as the ring: a few stands with clear water between,
+      // not a continuous fringe. Low frequency, or the gaps are too fine to read
+      // and the pond just looks hemmed.
+      if (Math.sin(t * 4.3 + phaseA) + 0.5 * Math.sin(t * 7.1 + phaseB) < 0.05) continue;
+      out.push({
+        x: ax + (bx - ax) * t,
+        y: 0,
+        z: az + (bz - az) * t,
+        yaw,
+        scale: 0.7 + rnd() * 0.35,
+      });
+    }
+  };
+  edge(-hw, -hd, hw, -hd, -Math.PI / 2);
+  edge(hw, hd, -hw, hd, Math.PI / 2);
+  edge(-hw, hd, -hw, -hd, Math.PI);
+  edge(hw, -hd, hw, hd, 0);
+  return out;
+}
+
+/**
+ * Tufts spaced around a closed shoreline, in CLUMPS rather than a continuous
+ * fringe — a ring of evenly-spaced reeds reads as landscaping, and it walls the
+ * pond off from the player. Two low-frequency waves against the angle open and
+ * close gaps, so each pond gets a few natural-looking stands with clear water
+ * between them, identically every load.
+ *
+ * `shoreAt` returns the world point (and its ground height) where the bank meets
+ * the water at a given angle; the caller owns that, since only it knows the
+ * pond's shape and terrain.
+ */
+export function reedRingAnchors(
+  seed: number,
+  slots: number,
+  shoreAt: (angle: number) => { x: number; y: number; z: number } | null,
+): ReedAnchor[] {
+  const rnd = splashRng((seed ^ 0x5eed) >>> 0 || 7);
+  const phaseA = rnd() * Math.PI * 2;
+  const phaseB = rnd() * Math.PI * 2;
+  const out: ReedAnchor[] = [];
+  for (let i = 0; i < slots; i++) {
+    const ang = (i / slots) * Math.PI * 2;
+    // Clumping field: positive stretches grow reeds, negative stretches stay open.
+    const density = Math.sin(ang * 3 + phaseA) + 0.45 * Math.sin(ang * 7 + phaseB);
+    if (density < -0.35) continue;
+    const p = shoreAt(ang + (rnd() - 0.5) * 0.06);
+    if (!p) continue;
+    out.push({
+      x: p.x,
+      y: p.y,
+      z: p.z,
+      // Lean away from the pond centre, i.e. outward along the radius.
+      yaw: ang,
+      // Taller in the middle of a clump, shorter at its edges.
+      scale: 0.72 + 0.5 * Math.min(1, Math.max(0, density + 0.4)) + rnd() * 0.22,
+    });
+  }
+  return out;
+}
