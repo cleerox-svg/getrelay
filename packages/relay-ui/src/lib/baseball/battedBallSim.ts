@@ -18,9 +18,9 @@
 //
 // Stage 3b took the one further step that fixes it: a REYNOLDS-dependent C_D —
 // the drag crisis, which a real seamed ball has and which `dragCoef(speedFps, S)`
-// has anticipated since stage 1. The residual falls to +7.2 ft mean, inside the
-// ±15 ft corroboration bar, WITHOUT touching the pitch regime (the four-seamer
-// crosses the plate at 86.283 mph against 86.288 before). The same change fixes
+// has anticipated since stage 1. The residual falls to +7.7 ft mean (RMS 9.5),
+// inside the ±15 ft corroboration bar, WITHOUT touching the pitch regime (the
+// four-seamer crosses the plate at 86.287 mph against 86.288 before). The same change fixes
 // a second symptom stage 3 had recorded separately and wrongly — the launch-angle
 // optimum at 90 mph, which was 31.0° against a briefed 25–30° and is now 28.5°.
 // They were one defect. STILL NO carry factor, no per-regime coefficient and no
@@ -270,9 +270,16 @@ export function maxCarry(
 
 /**
  * Ground distance at which the flight reaches a given height on the way DOWN,
- * interpolated analytically. This is what `parks.ts` will intersect against a
- * fence height, so the fence you see is the fence you clear; returned null if
- * the ball never gets that high.
+ * interpolated analytically. This is what `parks.ts` intersects against a fence
+ * height, so the fence you see is the fence you clear; returns null if the ball
+ * never gets that high.
+ *
+ * ⚠ THIS — NOT `carryFt` — IS WHAT "A 400 FOOT HOME RUN" MEANS in this game.
+ * Carry is measured to z = 0, so a 400 ft carry lands at the BASE of a 400 ft
+ * wall; clearing a 10 ft wall at Harbourfront's dead centre takes 408.99 ft of
+ * carry, i.e. `distanceAtHeight(flight, 10) = 400`. The two differ by more than
+ * a wall's worth and the difference is a home run. Same note on
+ * `parks.resolveFence`, which is the other end of the same convention.
  */
 export function distanceAtHeight(flight: BattedFlight, heightFt: number): number | null {
   const { t, x, y, z } = flight.track;

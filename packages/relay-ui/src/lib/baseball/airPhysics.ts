@@ -316,8 +316,9 @@ export function reynolds(speedFps: number): number {
  * question. `airPhysics.test.ts` re-measures the plate speed every run against
  * 86.3 ±0.4, which pins the supercritical branch to about ±0.016.
  *
- * ⚠ THE CRISIS CURVE REPRODUCES IT: 86.283 mph against the old constant's
- * 86.288. That is not luck — a 94 mph pitch is at Re = 2.3e5 at release and
+ * ⚠ THE CRISIS CURVE REPRODUCES IT: 86.287 mph against the old constant's
+ * 86.288 (86.283 was the cubic smoothstep's figure, stale since the shape became
+ * a quintic). That is not luck — a 94 mph pitch is at Re = 2.3e5 at release and
  * 1.94e5 at the plate, so it only ever grazes the top of the band, where the
  * smoothstep is flat. The SLOWER pitches DO sample the band and DO get more
  * drag (a 79 mph curveball loses 1.1 mph more by the plate), which moves their

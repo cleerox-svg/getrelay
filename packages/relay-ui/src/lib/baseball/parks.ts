@@ -25,7 +25,7 @@ import type { BattedFlight } from './battedBallSim';
 import type { AirConditions } from './pitchSim';
 import { MPH_TO_FPS } from './units';
 import { pchipAt, pchipSlopes } from './pchip';
-import { makeWind, mulberry32, windBearing, windMph } from '../golf/wind';
+import { makeWind, mulberry32, windMph } from '../golf/wind';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,19 +49,36 @@ export interface FenceSample {
 }
 
 /**
- * How the open-air wind is drawn. The DRAW itself is golf's `makeWind`; this is
+ * How the open-air wind is drawn. The MAGNITUDE is golf's `makeWind`; this is
  * the per-park shaping of it.
  *
- * FEEL KNOBS, all three — a park's prevailing wind is a real published quantity
- * but we are not modelling a real park, and nothing in the physics is calibrated
+ * FEEL KNOBS, all three — a park's wind rose is a real published quantity but we
+ * are not modelling a real park, and nothing in the physics is calibrated
  * against these. What is NOT a feel knob is the channel: the drawn wind becomes
  * a genuine air-relative velocity in `simulateBattedBall`, so turning these up
  * moves real carry.
+ *
+ * ⚠ THE BEARING FIELD IS NAMED FOR WHAT IT IS, AFTER A REVIEW CAUGHT IT NOT
+ * BEING. It used to be called `prevailingDeg` while being the LEAST likely
+ * bearing the sampler produced: the old mapping ran golf's `windBearing`
+ * (`atan2(cross, along)`) through the window, and golf damps `along` to 0.6× so
+ * that `cross` dominates, which piles the mapped bearing up at ±swingDeg/2.
+ * Measured over 4000 seeds at Harbourfront (window ±60°): 0° drew 3.1 % and
+ * ±30° drew 7.2 % each. That bimodality was an artefact of an upstream damping
+ * constant, not a choice anybody made, and a field named "prevailing" that is
+ * the rarest outcome is a trap for whoever authors the next park.
+ *
+ * The bearing is now drawn UNIFORMLY across the window, which is a statement
+ * about the WINDOW rather than a distribution this file invented — and it is the
+ * honest ceiling on what one draw can express, because golf's underlying angle
+ * is uniform on the full circle, so no mapping of it yields a genuine peak
+ * without inventing one. `bearingCentreDeg` is therefore the centre and the mean
+ * of the window; it is deliberately NOT called a prevailing wind.
  */
 export interface WindProfile {
-  /** Prevailing bearing, deg, in the same frame as `FenceSample.bearingDeg`. */
-  prevailingDeg: number;
-  /** Half-width of the bearing swing about `prevailingDeg`, deg. */
+  /** Centre of the bearing window, deg, in `FenceSample.bearingDeg`'s frame. */
+  bearingCentreDeg: number;
+  /** Half-width of the UNIFORM bearing window about `bearingCentreDeg`, deg. */
   swingDeg: number;
   /** Multiplier on the shared sampler's magnitude. 1.0 ⇒ roughly 1.5–10 mph. */
   gustScale: number;
@@ -159,9 +176,23 @@ export interface ParkConditions {
  * ⚠ ONE PRNG. `mulberry32` and `makeWind` are golf's, imported rather than
  * re-implemented; the only thing this file adds is the shaping and the UNIT
  * CONVERSION at the edge. Golf's sampler is unitless in its own arcade space, so
- * its own `windMph`/`windBearing` readers are what turn a draw into mph and a
- * bearing — the same two functions the golf HUD prints from, which is precisely
- * why they are the right ones to reuse instead of inventing a distribution.
+ * its own `windMph` reader is what turns a draw into mph — the same function the
+ * golf HUD prints from, which is precisely why it is the right one to reuse
+ * instead of inventing a magnitude distribution.
+ *
+ * ⚠ THE BEARING IS DRAWN HERE AND NOT READ OUT OF GOLF, and `WindProfile`'s note
+ * says why: golf's `windBearing` carries golf's own 0.6× along-damping, which
+ * made the window's EDGES the likely bearings. It is drawn from the same seeded
+ * `mulberry32` stream as the temperature and the humidity — still one PRNG, one
+ * seed, one reproducible draw — and uniformly across the window, which needs no
+ * knowledge of golf's internals and so cannot be silently re-shaped by a golf
+ * retune. `parks.test.ts` pins golf's magnitude readers as a TRIPWIRE for the
+ * coupling that remains.
+ *
+ * ⚠ CHANGING THE DRAW ORDER OR ADDING A CALL RE-ROLLS EVERY SEED. The five draws
+ * below (temperature, humidity, `makeWind`'s two, bearing) are one stream, so an
+ * insertion anywhere above shifts every downstream draw. That is not a bug, but
+ * it does mean the per-seed table in `parks.test.ts` is expected to move.
  *
  * ⚠ THE WIND IS HORIZONTAL, deliberately. `simulateBattedBall` integrates a
  * uniform wind as a Galilean boost into the air frame, which is EXACT for a
@@ -186,9 +217,9 @@ export function parkConditions(park: Park, wantClosed: boolean, seed: number): P
   const rh = OPEN_RH_MIN + rng() * (OPEN_RH_MAX - OPEN_RH_MIN);
   const raw = makeWind(rng);
   const speedMph = windMph(raw.along, raw.cross) * park.wind.open.gustScale;
-  // Golf's bearing runs the full circle; map it onto this park's swing window.
-  const swing = (windBearing(raw.along, raw.cross) / Math.PI) * park.wind.open.swingDeg;
-  const bearingDeg = park.wind.open.prevailingDeg + swing;
+  // Uniform across the park's window: centre ± swing. See the note above.
+  const swing = (rng() * 2 - 1) * park.wind.open.swingDeg;
+  const bearingDeg = park.wind.open.bearingCentreDeg + swing;
   const b = (bearingDeg * Math.PI) / 180;
   const fps = speedMph * MPH_TO_FPS;
   return {
@@ -232,6 +263,15 @@ const bearingOf = (x: number, y: number): number => (Math.atan2(y, -x) * 180) / 
  * `crossingFraction` every other event in this game uses: a ball arriving at the
  * wall at 70 mph covers 0.86 ft per substep, and snapping to a substep boundary
  * would quantise a home-run call by most of a foot of wall.
+ *
+ * ⚠ WHICH 400 A "400 FOOT HOME RUN" MEANS — stated here because this is the
+ * function that decides it, and a code reader looks here before he looks at the
+ * test. `fence.distFt` is compared against the ball's GROUND DISTANCE AT THE
+ * FENCE PLANE, and the wall then has to be cleared in HEIGHT as a second test.
+ * That is NOT the same as carry: a ball whose carry is exactly 400 ft lands at
+ * the base of a 400 ft wall, and clearing a 10 ft wall at dead centre takes
+ * 408.99 ft of carry. `parks.test.ts` prints both columns beside each other and
+ * BASEBALL.md § "Home-run resolution" carries the same convention.
  *
  * ⚠ THE ROOF DEFLECTION MODEL, STATED PLAINLY: there isn't one. What is enforced
  * is the DIMENSION — a ball that reaches `roofPeakFt` under a closed roof cannot
@@ -331,7 +371,7 @@ export function validatePark(p: Park): string[] {
   if (p.wind.closed !== null) e.push('wind.closed must be null — a closed roof has no wind');
 
   const w = p.wind.open;
-  if (!Number.isFinite(w.prevailingDeg)) e.push('wind.open.prevailingDeg is not finite');
+  if (!Number.isFinite(w.bearingCentreDeg)) e.push('wind.open.bearingCentreDeg is not finite');
   if (!(w.swingDeg >= 0 && w.swingDeg <= 180)) e.push(`wind.open.swingDeg ${w.swingDeg} not 0..180`);
   if (!(w.gustScale >= 0)) e.push(`wind.open.gustScale ${w.gustScale} is negative`);
 
@@ -381,7 +421,7 @@ export const HARBOURFRONT: Park = {
     { bearingDeg: 45, distFt: 328, heightFt: 10 },
   ],
   foulTerritoryFt: 28,
-  wind: { open: { prevailingDeg: 0, swingDeg: 60, gustScale: 1 }, closed: null },
+  wind: { open: { bearingCentreDeg: 0, swingDeg: 60, gustScale: 1 }, closed: null },
 };
 
 /**
@@ -405,7 +445,7 @@ export const ALPINE_HEIGHTS: Park = {
     { bearingDeg: 45, distFt: 350, heightFt: 8 },
   ],
   foulTerritoryFt: 22,
-  wind: { open: { prevailingDeg: 10, swingDeg: 90, gustScale: 1.2 }, closed: null },
+  wind: { open: { bearingCentreDeg: 10, swingDeg: 90, gustScale: 1.2 }, closed: null },
 };
 
 export const PARKS: Park[] = [HARBOURFRONT, ALPINE_HEIGHTS];

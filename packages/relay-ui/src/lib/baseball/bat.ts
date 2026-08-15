@@ -218,6 +218,23 @@ export const ATTACK_ANGLE_DEG = 10;
  * principled end. At 0.56 in of undercut the reference swing gives LA 25.3°,
  * backspin 2391 rpm, EV 101.6 mph — both bands, at once, with no dial turned.
  * `batSim.test.ts` prints the whole 2-D region.
+ *
+ * ⚠ AND THE PRICE OF THE TIEBREAK, STATED WHERE THE CLAIM IS, because "DERIVED,
+ * zero free parameters" is only true of the collision solve and not of the
+ * swing that feeds it. Two qualifications, both of which BASEBALL.md's category
+ * table already carries and this note did not:
+ *
+ *   • It is derived WITHIN A STATED MODEL — rigid bodies, Coulomb friction, no
+ *     tangential compliance. The published bat-ball `e_T ≈ +0.2` measures
+ *     exactly the compliance this model omits, and the feasible window above
+ *     ([0, +0.02]) EXCLUDES it. So the derivation closes against its own
+ *     assumptions; it does not overturn the published figure.
+ *   • The free parameter did not vanish, it MIGRATED. Fixing `e_T` at 0 forced
+ *     the reference undercut from 0.75 in to 0.56 (joint window 0.552–0.582 in,
+ *     0.03 in wide), and that undercut is CALIBRATED — chosen so the two
+ *     published bands are met. One dial replaced another; the trade is that the
+ *     new one is a swing input with an admitted range rather than a coefficient
+ *     with no mechanism.
  */
 export const E_T = 0;
 /**

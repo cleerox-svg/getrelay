@@ -6,7 +6,8 @@
 // beside them so a drift is a diff and not a shrug.
 
 import { describe, expect, it } from 'vitest';
-import { vec3 } from './airPhysics';
+import { aeroAccel, aeroScale, airDensity, crossingFraction, vAdd, vLerp, vScale, vSub, vec3 } from './airPhysics';
+import type { Vec3 } from './airPhysics';
 import {
   CONTACT_HEIGHT_FT,
   distanceAtHeight,
@@ -31,6 +32,8 @@ import {
 } from './parks';
 import type { Park } from './parks';
 import { GAME_AIR } from './pitchSim';
+import { FIXED_DT } from './tuning';
+import { makeWind, mulberry32, windMph } from '../golf/wind';
 
 const log = (s: string) => {
   // eslint-disable-next-line no-console
@@ -215,7 +218,7 @@ describe('parks as data', () => {
       ],
       foulTerritoryFt: 0,
       wind: {
-        open: { prevailingDeg: Number.NaN, swingDeg: 400, gustScale: -1 },
+        open: { bearingCentreDeg: Number.NaN, swingDeg: 400, gustScale: -1 },
         closed: {} as never,
       },
     };
@@ -228,7 +231,7 @@ describe('parks as data', () => {
     expect(errs.join('|')).toContain('foulTerritoryFt');
     expect(errs.join('|')).toContain("roofPeakFt must be 0 when roof is 'none'");
     expect(errs.join('|')).toContain('wind.closed must be null');
-    expect(errs.join('|')).toContain('prevailingDeg is not finite');
+    expect(errs.join('|')).toContain('bearingCentreDeg is not finite');
     expect(errs.join('|')).toContain('swingDeg 400');
     expect(errs.join('|')).toContain('gustScale -1');
     expect(errs.join('|')).toContain('must start at the LF line');
@@ -381,6 +384,77 @@ describe('the roof', () => {
     expect(parkConditions(HARBOURFRONT, false, 7)).toEqual(parkConditions(HARBOURFRONT, false, 7));
   });
 
+  it('the bearing window is UNIFORM, so its centre is not its rarest bearing', () => {
+    // ⚠ THE REGRESSION THIS EXISTS FOR. The bearing used to be golf's
+    // `windBearing` mapped onto the window, and golf damps `along` to 0.6× so
+    // that `cross` dominates — which piled `atan2(cross, along)` up near ±π/2
+    // and made the mapped bearing BIMODAL at ±swingDeg/2. Measured then, over
+    // these same 4000 seeds: the centre drew 3.1 % and ±30° drew 7.2 % each, so
+    // the field then called `prevailingDeg` was the LEAST likely outcome it had.
+    //
+    // Asserted as a SHAPE, not as a golden: every 5° bucket inside the window
+    // gets a fair share and none of them is a spike. A histogram is the only
+    // thing that can see this class of bug — no single seed can.
+    const N = 4000;
+    const swing = HARBOURFRONT.wind.open.swingDeg;
+    const centre = HARBOURFRONT.wind.open.bearingCentreDeg;
+    const buckets = new Map<number, number>();
+    let inWindow = 0;
+    for (let seed = 1; seed <= N; seed++) {
+      const b = parkConditions(HARBOURFRONT, false, seed).windBearingDeg;
+      if (Math.abs(b - centre) <= swing + 1e-9) inWindow++;
+      buckets.set(Math.floor(b / 10) * 10, (buckets.get(Math.floor(b / 10) * 10) ?? 0) + 1);
+    }
+    const keys = [...buckets.keys()].sort((a, b) => a - b);
+    const pct = keys.map((k) => (100 * (buckets.get(k) ?? 0)) / N);
+    log(
+      `\n[WIND BEARING — ${N} seeds, window ${centre}° ± ${swing}°, 10° buckets]\n  ` +
+        keys.map((k, i) => `${String(k).padStart(4)}°:${(pct[i] ?? 0).toFixed(1)}`).join('  ') +
+        `\n  centre bucket ${(pct[keys.indexOf(0)] ?? 0).toFixed(1)} % vs edge buckets ${(
+          pct[0] ?? 0
+        ).toFixed(1)} / ${(pct[pct.length - 1] ?? 0).toFixed(1)} % — the old mapping gave 3.1 vs 7.2.\n`,
+    );
+    expect(inWindow).toBe(N); // never outside the window at all
+    expect(keys.length).toBe((2 * swing) / 10); // and it fills the whole window
+    // Uniform to within sampling noise: the expected share is 100/12 = 8.33 %.
+    const expectedPct = 100 / keys.length;
+    for (const p of pct) {
+      expect(p).toBeGreaterThan(expectedPct * 0.75);
+      expect(p).toBeLessThan(expectedPct * 1.25);
+    }
+    // The centre is not the rarest bucket — the assertion the old sampler failed.
+    const centreShare = pct[keys.indexOf(0)] ?? 0;
+    expect(centreShare).toBeGreaterThan(Math.min(...pct) - 1e-9);
+    expect(centreShare).toBeGreaterThan(0.7 * Math.max(...pct));
+  });
+
+  it('⚠ TRIPWIRE on golf\'s wind sampler — an upstream retune must not land silently', () => {
+    // ⚠ THIS ASSERTS NOTHING ABOUT BASEBALL. `parkConditions` reuses golf's
+    // `makeWind`/`windMph` rather than forking a second sampler (the charter's
+    // flag-not-fork rule), and golf is mid-audit — so a golf retune moves this
+    // game's winds. Three separate mutations of `lib/golf/wind.ts` used to pass
+    // this whole suite: `windMph`'s ×2.5 → ×1.0, doubling `makeWind`'s
+    // magnitude, and deleting the 0.6 along-damping. Flag-not-fork is right;
+    // flag-without-a-tripwire is not.
+    //
+    // If this fails, NOTHING IS WRONG WITH BASEBALL: read the golf diff, decide
+    // whether the new wind is one this game wants, and re-golden deliberately.
+    expect(windMph(3, 4)).toBeCloseTo(12.5, 12); // hypot × 2.5
+    expect(windMph(0, 1)).toBeCloseTo(2.5, 12);
+    const w = makeWind(mulberry32(7));
+    expect(w.along).toBeCloseTo(0.23571815946921332, 12);
+    expect(w.cross).toBeCloseTo(0.9576636792870686, 12);
+    // ...and the composite the game actually plays, at one fixed seed.
+    const c = parkConditions(HARBOURFRONT, false, 7);
+    log(
+      `[TRIPWIRE] golf seed 7 ⇒ along ${w.along.toFixed(6)}, cross ${w.cross.toFixed(
+        6,
+      )}; Harbourfront seed 7 ⇒ ${c.windSpeedMph.toFixed(6)} mph @ ${c.windBearingDeg.toFixed(6)}°\n`,
+    );
+    expect(c.windSpeedMph).toBeCloseTo(6.394447498974202, 9);
+    expect(c.windBearingDeg).toBeCloseTo(2.5734322238713503, 9);
+  });
+
   it('geometry decides whether the roof can be shut at all', () => {
     expect(roofClosed(HARBOURFRONT, true)).toBe(true);
     expect(roofClosed(HARBOURFRONT, false)).toBe(false);
@@ -426,32 +500,74 @@ describe('the roof', () => {
 // ---------------------------------------------------------------------------
 
 describe('wind is a Galilean boost, not a second integrator', () => {
-  it('reproduces the air-frame trajectory translated by w·t, exactly', () => {
-    // The identity the derivation claims: flying with launch velocity v in a
-    // uniform wind w is flying with (v − w) in still air, then sliding the whole
-    // trajectory downwind. If that is true, the two agree to rounding at EVERY
-    // sample — which "add a wind acceleration term" would not do.
-    const w = vec3(-9, 4, 0);
-    const l = launchFromAngles(101, 28, -6, BACKSPIN_RPM);
-    const windy = simulateBattedBall(l, GAME_AIR, w);
-    const still = simulateBattedBall(
-      { p: l.p, v: vec3(l.v.x - w.x, l.v.y - w.y, l.v.z - w.z), omega: l.omega },
-      GAME_AIR,
-    );
-    expect(windy.track.t.length).toBe(still.track.t.length);
-    expect(windy.hangS).toBe(still.hangS);
-    let worst = 0;
-    for (let i = 0; i < windy.track.t.length; i++) {
-      const t = windy.track.t[i] ?? 0;
-      worst = Math.max(
-        worst,
-        Math.abs((windy.track.x[i] ?? 0) - ((still.track.x[i] ?? 0) + w.x * t)),
-        Math.abs((windy.track.y[i] ?? 0) - ((still.track.y[i] ?? 0) + w.y * t)),
-        Math.abs((windy.track.z[i] ?? 0) - (still.track.z[i] ?? 0)),
-      );
+  it('agrees with an INDEPENDENT ground-frame integration that carries the wind', () => {
+    // ⚠ WHAT THIS TEST USED TO DO, AND WHY IT WAS REPLACED. It compared the
+    // boosted flight against `p_air + w·t` recomputed from a BIT-IDENTICAL
+    // air-frame integration — i.e. it evaluated the same expression on both
+    // sides and reported 0.00e+0 ft over 652 substeps. The number was real and
+    // the derivation is correct, but the evidence was CIRCULAR: it could not
+    // have printed anything else. It killed a sign flip and a `dt`-for-`t`
+    // slip and nothing more.
+    //
+    // The honest test is an independent integration in the GROUND frame with
+    // the wind carried inside the accelerator — `a(v) = aeroAccel(v − w)`,
+    // which is the "add a wind term" implementation the boost claims to
+    // replace. Same RK4, same coefficients, different arithmetic path, so the
+    // agreement is a real measurement with a real (tiny) nonzero residual.
+    const K = aeroScale(airDensity(GAME_AIR.elevFt, GAME_AIR.tempF, GAME_AIR.rh));
+    let table = '\n[WIND = GALILEAN BOOST — boost vs a ground-frame RK4 carrying the wind]\n';
+    for (const w of [vec3(-9, 4, 0), vec3(14.6667, 0, 0), vec3(0, -20, 0)]) {
+      const l = launchFromAngles(101, 28, -6, BACKSPIN_RPM);
+      const boosted = simulateBattedBall(l, GAME_AIR, w);
+      const acc = (v: Vec3) => aeroAccel(vSub(v, w), l.omega, K);
+      let s = { p: l.p, v: l.v };
+      let t = 0;
+      let i = 0;
+      let worst = 0;
+      const compare = (st: { p: Vec3 }, tt: number, idx: number) => {
+        worst = Math.max(
+          worst,
+          Math.abs(st.p.x - (boosted.track.x[idx] ?? NaN)),
+          Math.abs(st.p.y - (boosted.track.y[idx] ?? NaN)),
+          Math.abs(st.p.z - (boosted.track.z[idx] ?? NaN)),
+          Math.abs(tt - (boosted.track.t[idx] ?? NaN)),
+        );
+      };
+      compare(s, 0, 0);
+      for (;;) {
+        const a1 = acc(s.v);
+        const v2 = vAdd(s.v, vScale(a1, FIXED_DT / 2));
+        const a2 = acc(v2);
+        const v3 = vAdd(s.v, vScale(a2, FIXED_DT / 2));
+        const a3 = acc(v3);
+        const v4 = vAdd(s.v, vScale(a3, FIXED_DT));
+        const a4 = acc(v4);
+        const next = {
+          p: vAdd(s.p, vScale(vAdd(vAdd(s.v, vScale(vAdd(v2, v3), 2)), v4), FIXED_DT / 6)),
+          v: vAdd(s.v, vScale(vAdd(vAdd(a1, vScale(vAdd(a2, a3), 2)), a4), FIXED_DT / 6)),
+        };
+        i++;
+        const f = crossingFraction(s.p.z, next.p.z, 0);
+        if (f !== null) {
+          t += f * FIXED_DT;
+          compare({ p: vLerp(s.p, next.p, f) }, t, i);
+          break;
+        }
+        s = next;
+        t += FIXED_DT;
+        compare(s, t, i);
+      }
+      table += `  w = (${w.x.toFixed(1)}, ${w.y.toFixed(1)}) ft/s: ${i + 1} samples, worst |Δ| ${worst.toExponential(
+        2,
+      )} ft over the whole flight\n`;
+      // A REAL tolerance: the residual is accumulated floating-point difference
+      // between two arithmetic paths, ~1e-12 ft on a 400 ft flight. Tight enough
+      // that a sign, a dropped term or a `dt`-for-`t` slip is orders out.
+      expect(i + 1).toBe(boosted.track.t.length);
+      expect(worst).toBeLessThan(1e-9);
+      expect(worst).toBeGreaterThan(0); // it is a measurement, not an identity
     }
-    log(`\n[WIND = GALILEAN BOOST] worst per-sample disagreement over ${windy.track.t.length} substeps: ${worst.toExponential(2)} ft\n`);
-    expect(worst).toBeLessThan(1e-9);
+    log(table);
   });
 
   it('zero wind is byte-identical to no wind at all, and a real wind is not', () => {

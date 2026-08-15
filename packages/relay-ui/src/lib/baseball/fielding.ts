@@ -57,8 +57,10 @@ export const FIELDER_REACTION_S = 0.5;
  * Time from a standing start to sprint speed, s. PUBLISHED DATA (~1.8 s).
  * ⚠ NOT COSMETIC: an instantly-sprinting fielder is over-credited v·t/2 = 24.3 ft
  * on every play longer than the ramp — enough to turn a gap double into a routine
- * out. The published catch envelope (~100 ft on a 4 s hang is a five-star play)
- * is only reachable WITH the ramp; without it the model gives 118 ft.
+ * out. On a 4 s hang this model covers 70.2 ft against the instant-sprint
+ * model's 94.5 (both printed by `fielding.test.ts`), and the published catch
+ * envelope says ~100 ft on a 4 s hang is a FIVE-STAR play — so the 94.5 version
+ * would price a five-star play as very nearly routine.
  */
 export const FIELDER_TIME_TO_SPEED_S = 1.8;
 
@@ -83,8 +85,25 @@ export const DEFENSE_SPAN = 0.3;
 export const GROUND_INTERCEPT_FT = 26;
 
 /**
- * Radius of the infield dirt, ft. DERIVED from the published 95 ft infield arc
- * struck from the pitcher's plate. Not a round number somebody liked.
+ * Radius of the infield dirt as this model uses it — a PLATE-CENTRED circle, ft.
+ *
+ * Its VALUE is derived: `RUBBER_D_FT + 95` is where the published 95 ft infield
+ * arc, struck from the pitcher's plate, crosses the centre-field line. Not a
+ * round number somebody liked.
+ *
+ * ⚠ BUT THE GEOMETRY IS AN APPROXIMATION AND THE LABEL USED TO HIDE IT. The real
+ * arc is centred on the RUBBER and this is used as a radius from the PLATE, and
+ * the two only coincide at dead centre. The true arc's distance from the plate
+ * is 155.5 ft at 0°, 149.6 at 20°, 135.1 at 38° (where the corners stand) and
+ * 127.6 at the foul line — so one plate-centred circle over-states the dirt by
+ * up to 27.9 ft down the lines. That matters: `distFt < INFIELD_DEPTH_FT` is
+ * what caps an unfielded ball at a single, so a 140 ft ball down the line is
+ * treated as an infield chopper when it landed on the outfield grass.
+ *
+ * Left as one circle DELIBERATELY, for now: making it bearing-dependent is a
+ * behaviour change to the lookup (it moves the ladder), and the smallest-model
+ * rule says that lands with the rolling phase that supersedes
+ * `GROUND_INTERCEPT_FT`, not before it. Flagged here rather than mislabelled.
  */
 export const INFIELD_DEPTH_FT = RUBBER_D_FT + 95;
 
@@ -193,11 +212,22 @@ export function fieldBattedBall(inp: FieldingInput, defense = 0.5): FieldingPlay
   // it the miss arithmetic scores it a double. The landing-point limitation
   // showing its teeth; capped honestly until there is a rolling phase.
   if (inp.distFt < INFIELD_DEPTH_FT) return { ...base, result: 'SINGLE' };
-  // max(0, …): depth is a CREDIT, never a debit. Left unclamped it silently did
-  // the infield cap's job for shallow balls, which is how a mutation of that cap
-  // survived the first pass — two mechanisms covering one case, so neither was
-  // actually tested. One mechanism now, and the mutation kills.
-  const xb = missFt + XB_DEPTH_PER_FT * Math.max(0, inp.distFt - INFIELD_DEPTH_FT);
+  // Depth beyond the infield is a CREDIT, and it can only be positive HERE
+  // because the line above has already returned for everything shallower. It
+  // used to carry a `Math.max(0, …)` as well; that clamp was PROVABLY
+  // unreachable, so it is deleted rather than kept for comfort.
+  //
+  // ⚠ AND THE HONEST CONSEQUENCE, MEASURED RATHER THAN ASSERTED AWAY. With the
+  // clamp gone the two clauses are equivalent IN EFFECT: swept over the whole
+  // infield (every distance, bearing, hang and rating), the index this line
+  // would produce for a shallow ball peaks at 39.25 against the 68 ft
+  // single/double threshold, so deleting the cap above would not change a single
+  // call — its mutation is unobservable, not merely unobserved. The cap stays
+  // because it is the explicit statement of the rule and because that 28.75 ft
+  // of margin is an artefact of today's feel knobs, not a theorem; the day a
+  // knob narrows it, the cap becomes load-bearing. `fielding.test.ts` measures
+  // the margin so that day is a test failure rather than a surprise.
+  const xb = missFt + XB_DEPTH_PER_FT * (inp.distFt - INFIELD_DEPTH_FT);
   if (xb < XB_DOUBLE_FT) return { ...base, result: 'SINGLE' };
   if (xb < XB_TRIPLE_FT) return { ...base, result: 'DOUBLE' };
   return { ...base, result: 'TRIPLE' };

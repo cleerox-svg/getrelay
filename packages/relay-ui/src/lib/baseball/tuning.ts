@@ -151,10 +151,17 @@ export const AIR_KINEMATIC_VISC_FT2_S = 1.57e-4;
  *
  * ⚠ IT WAS NOT FITTED TO THE CARRY LADDER, and that is worth stating because the
  * temptation was right there. Sweeping it against the six published rungs with
- * `C_D_BASE` pinned gives an RMS optimum near 0.545 (RMS 5.7 ft) against 0.50's
- * RMS 9.1 ft. We kept the published 0.50; the ladder is then an INDEPENDENT
- * check that it passes — mean residual +7.2 ft against a ±15 ft corroboration
- * bar — rather than a fit it was built to satisfy.
+ * `C_D_BASE` and the band pinned gives an RMS optimum near 0.5375 (RMS 5.6 ft)
+ * against 0.50's RMS 9.5 ft. We kept the published 0.50; the ladder is then an
+ * INDEPENDENT check that it passes — mean residual +7.7 ft against a ±15 ft
+ * corroboration bar — rather than a fit it was built to satisfy.
+ *
+ * (This note used to read 0.545 / RMS 5.7 / RMS 9.1 / mean +7.2. Those were
+ * measured against the CUBIC smoothstep and never re-run when the shape became a
+ * quintic — see `RE_CRISIS_LO`'s note, which had gone stale the same way. The
+ * cubic still gives mean +7.17 / RMS 9.06 today, so nothing drifted: the prose
+ * was simply describing a curve the game no longer integrates. Every number in
+ * this block is the shipped quintic's.)
  */
 export const C_D_SUBCRIT = 0.5;
 
@@ -163,8 +170,11 @@ export const C_D_SUBCRIT = 0.5;
  * this stage: it is stage 1's number, pinned by a 94.0 mph release crossing the
  * plate at 86.3 mph. See the long note on `airPhysics.dragCoef` for the
  * conditions, which are part of the number. The whole point of the crisis curve
- * is that it reproduces this: the four-seamer measures 86.283 mph against
- * 86.288 with the old constant, a 0.005 mph move.
+ * is that it reproduces this: the four-seamer measures 86.287 mph against
+ * 86.288 with the old constant, a 0.001 mph move. (Measured at `FIXED_DT` and
+ * again at 64× refinement — 86.2874 both times, so this is the physics and not
+ * the substep. It read 86.283 here until stage 4's audit: that was the cubic
+ * smoothstep's figure, left behind when the shape became a quintic.)
  */
 export const C_D_BASE = 0.3;
 
@@ -179,10 +189,14 @@ export const C_D_BASE = 0.3;
  *
  *   PINNED INSIDE IT BY THE LADDER. Within that range the placement is
  *   load-bearing and the carry ladder is what fixes it: 1.0e5–1.9e5 gives a mean
- *   residual of +15.0 ft, 1.1e5–2.0e5 gives +7.2 ft, 1.2e5–2.1e5 gives −0.6 ft
- *   but starts to cost the pitch regime (four-seam plate speed 86.17 mph, and
+ *   residual of +15.5 ft, 1.1e5–2.0e5 gives +7.7 ft, 1.2e5–2.1e5 gives −0.1 ft
+ *   but starts to cost the pitch regime (four-seam plate speed 86.244 mph, and
  *   falling). 1.1e5–2.0e5 is the band that lands the ladder well inside the
  *   corroboration bar while leaving stage 1 untouched. So: calibrated.
+ *   (Re-measured in stage 4's audit. The +15.0 / +7.2 / −0.6 / 86.17 this note
+ *   carried are the CUBIC smoothstep's numbers for the same three bands —
+ *   re-measured, the cubic still gives exactly those — so the ladder did not
+ *   drift; the prose was never re-run after the shape changed below.)
  *
  * ⚠ AND THE SHAPE IS AN ASSUMPTION, NOT A FIT. The quintic `smootherstep`
  * between the two endpoints is an INTERPOLATION, not a measurement: we have no
@@ -202,6 +216,26 @@ export const C_D_BASE = 0.3;
  * (16.0–16.2) for two `exp` calls per RK4 stage and is not worth it. So the
  * shape is an assumption, but WHICH smooth shape was decided by the integrator,
  * not by taste.
+ *
+ * ⚠ THOSE RATIOS ARE THE PITCH BENCH'S, AND ONLY THE PITCH BENCH'S. A review
+ * asked whether "15.4–16.7" is a property of the game or of that one flight, and
+ * it is the latter. Re-measured on a BATTED ball (100 mph, 27°, 4 s, successive
+ * halvings of `FIXED_DT`) the picture is:
+ *
+ *   • at 1200 rpm or 0 rpm the ratios are 24.5 / 20.2 before the flight hits a
+ *     ~1e-12 ft roundoff floor — comfortably ≥ 16, i.e. the crisis shape is not
+ *     the limiting kink out there either;
+ *   • at the reference 2200 rpm they collapse to 2.0 / 3.1 / 7.4 with 150× the
+ *     absolute error (3.4e-7 ft at 120 Hz). That is NOT the smoothstep: it is
+ *     `C_L_MAX`, a hard `Math.min` clamp that binds for ~17 % of that flight and
+ *     is only C⁰. On a fly ball the lift clamp, not `dragCoef`, is what sets the
+ *     observed order.
+ *
+ * Both findings are recorded rather than acted on: 3.4e-7 ft of integration
+ * error on a 400 ft flight is eleven orders below anything gameplay can see, and
+ * softening `C_L_MAX` would move carry, which is a calibration question and not
+ * a numerics one. The quintic argument stands on the pitch bench, where it was
+ * made and where the pitch table is asserted.
  */
 export const RE_CRISIS_LO = 1.1e5;
 export const RE_CRISIS_HI = 2.0e5;

@@ -108,7 +108,7 @@ test**, or an **explicitly-labelled feel knob**. There is no fifth category.
 | fielder sprint speed | 27 ft/s | **published data** | league-average sprint speed |
 | fielder reaction | 0.5 s | **published data** | the reaction leg of published route work (reference unverified) |
 | time to sprint speed | 1.8 s | **published data** | ⇒ `a = v/t = 15 ft/s²`, **derived**. Worth 24.3 ft of reach |
-| infield dirt radius | 155.5 ft | **derived** | `RUBBER_D_FT + 95` (the published 95 ft infield arc) |
+| infield dirt radius | 155.5 ft | **derived value, approximate geometry** | `RUBBER_D_FT + 95` — where the published 95 ft arc, struck from the RUBBER, crosses the CF line. Used as a PLATE-centred circle, which over-states the dirt by up to 27.9 ft down the lines; flagged on the constant, not fixed (it would move the ladder) |
 | `GROUND_INTERCEPT_FT`, `XB_*`, `DEFENSE_SPAN` | 26 ft, 68/130 ft, ±15 % | **feel knobs** | the fielding lookup's bands — see the fielding section |
 
 **Air density.** `airDensity(elevFt, tempF, rh)` = standard-atmosphere
@@ -140,25 +140,37 @@ smootherstep between. Four numbers, four categories, all stated in `tuning.ts`:
 
 - **0.300 is stage 1's calibration and it did not move** — see the paragraph
   below, which is unchanged. A 94 mph pitch lives at Re ≥ 1.9e5 and only grazes
-  the top of the band, so it crosses the plate at 86.283 mph against 86.288 with
+  the top of the band, so it crosses the plate at 86.287 mph against 86.288 with
   the old constant. The repair is *free* against stage 1.
 - **0.500 is published**, the standard subcritical drag coefficient of a
   baseball (reference unverified, flagged on the same standard as `C_L`'s fit).
   It was **not fitted to the carry ladder**: sweeping it against the six rungs
-  gives an RMS optimum near 0.545, and we kept 0.50, so the ladder is an
-  independent check that it passes rather than a fit it was built to satisfy.
+  gives an RMS optimum near 0.5375 (RMS 5.6 ft against 0.50's 9.5), and we kept
+  0.50, so the ladder is an independent check that it passes rather than a fit it
+  was built to satisfy.
 - **The Re band is calibrated with a published prior.** The seamed-ball crisis
   sits in 1e5–2e5 (a seam trips the boundary layer far below a smooth sphere's
   3.5e5); within that range the placement is load-bearing and the ladder fixes
-  it — 1.0e5–1.9e5 gives +15.0 ft mean, 1.1e5–2.0e5 gives +7.7, 1.2e5–2.1e5
-  gives −0.6 but starts eroding the pitch regime (plate speed 86.17 and falling).
+  it — 1.0e5–1.9e5 gives +15.5 ft mean, 1.1e5–2.0e5 gives +7.7, 1.2e5–2.1e5
+  gives −0.1 but starts eroding the pitch regime (plate speed 86.244 and
+  falling). ⚠ The +15.0 / −0.6 / 86.17 this line used to quote were the *cubic*
+  smoothstep's figures for the same three bands, left behind when the shape
+  became a quintic; re-measured in stage 4's audit, the cubic still gives exactly
+  those, so nothing drifted — only the prose was describing the wrong curve.
 - **The shape is an assumption, not a fit**, and is labelled as such: we have no
   measured `C_D(Re)` dataset here. A linear ramp over the same band is worth
   1.5 ft of carry and 0.04 mph of plate speed. *Which* smooth shape was decided
   by measurement rather than taste: the usual cubic smoothstep is only C¹, its
   second-derivative jump costs RK4 its convergence order on the very pitch flight
   `airPhysics.test.ts` refines (halving ratio 8.07 where 4th order needs ~16),
-  and the quintic restores it.
+  and the quintic restores it. ⚠ **Those ratios are that pitch bench's, not a
+  global property.** Re-measured on a batted ball (100 mph / 27°, 4 s): at 1200
+  or 0 rpm the halving ratios are 24.5 / 20.2 down to a ~1e-12 ft roundoff floor,
+  but at the reference 2200 rpm they collapse to 2.0 / 3.1 / 7.4 with 150× the
+  absolute error — and that is **`C_L_MAX`**, a C⁰ `Math.min` clamp binding for
+  ~17 % of the flight, not `dragCoef`. On a fly ball the lift clamp is the
+  limiting kink. Recorded, not acted on: 3.4e-7 ft at 120 Hz is eleven orders
+  below anything gameplay can see, and softening the clamp would move carry.
 - **ν is held fixed**, so the crisis sits at the same *speed* in every park. A
   park-local Reynolds number (ν is 21.6 % higher a mile up) would cut the
   mile-high bonus at 105 mph from +34.7 ft to +6.9 ft; the published altitude
@@ -386,7 +398,7 @@ calibrated to ±0.4.
 **What repairs it is a Reynolds-dependent `C_D` — the drag crisis**, described in
 the constants section above. It is *free* against stage 1 and 2: a pitch never
 drops below ~72 mph, so it barely samples the crisis band, and the four-seamer
-still crosses the plate at 86.283 mph. A fly ball decays to ~45 mph and samples
+still crosses the plate at 86.287 mph. A fly ball decays to ~45 mph and samples
 all of it. **That is why one constant could not serve both regimes**, and it is
 the step stage 3 stopped one short of.
 
@@ -579,13 +591,46 @@ of a symmetric park. C¹ over C² is deliberate: no-overshoot is a *correctness*
 property of a gameplay boundary; curvature smoothness is cosmetic. Outside
 ±45° the curve is **clamped, not extrapolated**.
 
+⚠ **And it is now tested, which it was not.** `pchip.ts` shipped without a test
+file: the only assertion that could see the interpolant was `parks.test.ts`'s
+"it is not secretly linear" line, and a stage-4 review measured how thin that
+was — zeroing every **interior knot slope** (deleting Fritsch–Carlson, keeping
+the Hermite basis) moves Harbourfront's fence by up to **4.97 ft** and Alpine's
+by **5.33**; zeroing *every* slope moves Harbourfront **6.54 ft** and Alpine's
+wall **height 2.67 ft**. All 124 tests passed either way. A 5 ft error in fence distance is a
+home run that isn't. `pchip.test.ts` now asserts the properties the choice rests
+on — interpolation at the knots, **exact reproduction of a straight line** (the
+one a wrong knot slope cannot fake), no-overshoot against an unlimited Hermite
+that dips to −0.074 on the same data, locality (a moved sample changes the curve
+by 0.52 beside it and by **exactly 0** past its second neighbour), zero slope at
+an extremum, and the degenerate 0/1/2-knot cases — and then pins **GOLDEN
+off-knot fence distances** at −33°, −12° and +12° in both parks, because every
+property above is *also* true of an interpolant with the wrong slopes in it.
+
 **The roof is a real mechanic.** Closed ⇒ wind is **exactly** `vec3(0,0,0)` (the
 test asserts `=== 0`, not a tolerance), the temperature is pinned to 72 °F and the
 humidity to 40 %, so ρ and therefore `K` are constants and **the park is
 deterministic**: two unrelated seeds give byte-identical `track` arrays and an
 identical `carryFt` to the last bit. That is what ranked play will default to.
-Open ⇒ a seeded draw of temperature, humidity and wind — measured, 429–439 ft on
+Open ⇒ a seeded draw of temperature, humidity and wind — measured, 427–438 ft on
 the same 103 mph swing against 422.6 ft with the roof shut.
+
+⚠ **The wind's bearing window is UNIFORM, and the field that centres it is no
+longer called `prevailingDeg`.** It was, and it was the *least* likely bearing
+the sampler produced: the old mapping ran golf's `windBearing`
+(`atan2(cross, along)`) onto the window, and golf damps `along` to 0.6× so
+`cross` dominates — which piles the mapped bearing at **±swingDeg/2**. Measured
+over 4000 seeds at Harbourfront (window ±60°): 0° drew **3.1 %**, ±30° drew
+**7.2 %** each. That bimodality was an artefact of an upstream damping constant,
+not a model choice, and a field named "prevailing" that is the rarest outcome is
+a trap for the next park author. The bearing is now drawn uniformly across
+`bearingCentreDeg ± swingDeg` **from the same seeded `mulberry32` stream** as the
+temperature and humidity — one PRNG still, and no dependence on golf's internals,
+so a golf retune cannot silently re-shape it. Uniform rather than peaked is the
+honest ceiling: golf's underlying angle is uniform on the full circle, so no
+mapping of one draw yields a genuine mode without inventing a distribution.
+`parks.test.ts` asserts the histogram's *shape*, which is the only thing that can
+see this class of bug — no single seed can.
 
 ⚠ **The 282 ft ceiling is enforced but essentially never bites**, and that is a
 finding, not a bug. A ball reaches it only above **~120.2 mph** exit velocity hit
@@ -601,9 +646,16 @@ the *air-relative* velocity and gravity is invariant under a uniform translation
 so in a frame moving with a uniform wind `w` the equations of motion are exactly
 the ones `stepBall` already solves: integrate from `v − w`, then add `w·t` back to
 every sampled position. Stage 1's integrator, stage 1's coefficients, no copy —
-and the equivalence is an **identity a test asserts to the last bit** (measured
-disagreement 0.00e+0 ft over 652 substeps), which "add a wind acceleration term"
-could not be. Two conditions come with it and both are enforced: `w` must be
+and the equivalence is an identity — asserted against an **independent
+ground-frame RK4 that carries the wind inside the accelerator** (`a(v) =
+aeroAccel(v − w)`, i.e. the "add a wind term" implementation the boost replaces),
+worst |Δ| **5.7e-13 … 1.4e-12 ft** over three winds and full flights. ⚠ That test
+used to compare the boost against `p_air + w·t` recomputed from a *bit-identical*
+air-frame integration and report `0.00e+0 ft over 652 substeps`. The number was
+real and the derivation is right, but the evidence was **circular** — both sides
+evaluated the same expression, so it could not have printed anything else, and it
+killed only a sign flip and a `dt`-for-`t` slip. The residual is now small and
+**nonzero**, which is what a measurement looks like. Two conditions come with it and both are enforced: `w` must be
 **horizontal** (the ground crossing is solved on `z`, which is frame-invariant
 only while `w.z = 0`; `w.z` is ignored, not silently integrated) and **uniform and
 constant**. With `w = 0` the boost is skipped outright, so every stage 1–3 golden
@@ -654,15 +706,18 @@ corrected, and the fixed-ν choice is better supported than before.
 
 Landing point + hang time + **one** defender rating → out / 1B / 2B / 3B / HR.
 No stolen bases, errors, substitutions, shifts, positioning, throws, cutoffs or
-baserunner state. `fielding.ts` is 204 lines and the charter's cap is the design.
+baserunner state. `fielding.ts` is 225 lines and the charter's cap is the design.
 
 - **The alignment is a constant** — seven standing positions, polar from the
   plate. That constant *is* the "no shifts" rule expressed as data.
 - **Reach ramps.** `react (0.5 s) → accelerate (1.8 s to 27 ft/s) → sprint`. The
   ramp is not cosmetic: an instantly-sprinting fielder is over-credited
-  `v·t/2 = 24.3 ft` on every play, and the published catch envelope (~100 ft on a
-  4 s hang is a five-star play) is only reachable with it — 70.2 ft against the
-  naive 94.5.
+  `v·t/2 = 24.3 ft` on every play. On a 4 s hang the ramped model covers
+  **70.2 ft** against the instant-sprint model's **94.5**, and the published
+  envelope prices ~100 ft on a 4 s hang as a *five-star* play — so the 94.5
+  version would make a five-star play nearly routine. (`fielding.ts` claimed
+  "118 ft" for the naive figure until stage 4's audit; its own test has printed
+  94.5 all along.)
 - **The rating reaches exactly one quantity**, `reachFt`, over ±15 %. Measured, it
   flips a real play: a 310 ft ball with a 4.0 s hang 76.3 ft from the LF is a
   single at 0.0 and an out at 1.0.
@@ -681,6 +736,25 @@ bearing, not tidy: a chopper landing 7 ft in front of the plate is 100 ft from
 the nearest fielder's *standing spot*, and without it the miss arithmetic scores
 it a double. When the duel wants real infield play the fix is a rolling phase,
 and both are deleted rather than tuned.
+
+⚠ **Two audit corrections, stage 4b.** (1) The extra-base index carried a
+`Math.max(0, …)` on the depth credit that was **provably unreachable** — the
+infield-cap clause above it has already returned for everything shallower — so
+"one mechanism now" was not true, it was one live mechanism and one dead one.
+The dead branch is deleted. ⚠ Deleting it exposed something the clamp had been
+hiding: the two clauses are equivalent **in effect**. Swept over the entire
+infield (every distance, bearing, hang time and rating), the index a shallow ball
+could reach without the cap peaks at **39.25** against the 68 ft single/double
+threshold — so deleting the *cap* changes no call either, and its mutation is
+**unobservable rather than merely unobserved**. The cap stays (it is the explicit
+statement of the rule, and 28.75 ft of margin is an artefact of today's feel
+knobs, not a theorem) and `fielding.test.ts` now **measures the margin**, so the
+day a knob narrows it is a test failure rather than a wrong call. (2) The named
+batted-ball ladder in `fielding.test.ts` is now labelled **GOLDEN** in the test
+name and in the printed table: nothing outside this repo publishes "a 355 ft fly
+with a 4.6 s hang is an out", so every row is frozen model output and a row that
+moves is a decision to make, not a bug to fix. That distinction is what separates
+it from the carry ladder, whose right-hand column really is published.
 
 ### Determinism
 
@@ -721,9 +795,10 @@ the render layer; contact resolves at the true physical state.
 | `packages/relay-ui/src/lib/baseball/battedBallSim.ts` | The flight, on stage 1's `stepBall` — never a second integrator. `launchFromAngles` (published EV/LA/spray/spin → a launch state), `simulateBattedBall` with the analytic ground crossing, `maxCarry` (argmax over LA), `distanceAtHeight` for the fence |
 | `packages/relay-ui/src/lib/baseball/battedBallSim.test.ts` | The carry bench and stage 3's central experiment: prints the carry-ladder residual table in both airs, the spin sensitivity, the altitude ladder and the end-to-end undercut sweep; asserts the model's goldens, the +58 ft residual as a finding, and the lift structure |
 | `packages/relay-ui/src/lib/baseball/pchip.ts` | Monotone cubic Hermite (Fritsch–Carlson) + the argument for it against linear and against a natural cubic. Extracted from `parks.ts` at the 500-line cap — extraction, not a raised cap |
+| `packages/relay-ui/src/lib/baseball/pchip.test.ts` | The interpolator bench, added by stage 4's audit — `pchip.ts` shipped with no test and a mutation that zeroed every interior knot slope moved the fence 4.97 ft with the suite still green. Asserts interpolation, exact reproduction of a straight line, no-overshoot against an unlimited Hermite, locality, zero slope at an extremum, the degenerate cases, and GOLDEN off-knot fence distances |
 | `packages/relay-ui/src/lib/baseball/parks.ts` | The park as DATA + `fenceAt` (pchip through the sampled wall), the roof mechanic (`roofClosed`, `parkConditions` — exactly-zero wind and pinned air when shut), `resolveFence` (analytic fence crossing → homeRun/offWall/foul/roof/inPlay) and `validatePark()`. Read by the physics AND by stage 4's geometry |
-| `packages/relay-ui/src/lib/baseball/parks.test.ts` | The park bench: prints the fence tables (pchip vs linear, with the knot-slope jump), the roof-open weather draw, the roof ceiling ladder, the wind boost identity and the altitude ladder; asserts the 400/395 wall boundary, the foul pole, `wind === 0` under a shut roof, byte-identical trajectories across seeds, and the altitude result against the published 25–30 ft band |
-| `packages/relay-ui/src/lib/baseball/fielding.ts` | The deliberately tiny defence: fixed alignment, a ramped reach, one defender rating, → out / 1B / 2B / 3B / HR. 200 lines, and the cap is the design |
+| `packages/relay-ui/src/lib/baseball/parks.test.ts` | The park bench: prints the fence tables (pchip vs linear, with the knot-slope jump), the roof-open weather draw, the roof ceiling ladder, the wind-bearing histogram, the wind boost against an independent ground-frame RK4, and the altitude ladder; asserts the 400/395 wall boundary, the foul pole, `wind === 0` under a shut roof, byte-identical trajectories across seeds, the uniform bearing window, a TRIPWIRE on golf's wind sampler, and the altitude result against the published 25–30 ft band |
+| `packages/relay-ui/src/lib/baseball/fielding.ts` | The deliberately tiny defence: fixed alignment, a ramped reach, one defender rating, → out / 1B / 2B / 3B / HR. 225 lines, and the cap is the design |
 | `packages/relay-ui/src/lib/baseball/fielding.test.ts` | The fielding bench: prints the reach ladder and a named batted-ball ladder; asserts the catch boundary exactly on the reach, the single/double index boundary, the foul-territory boundary, the rating's ±15 % span, and the landing-point limitation |
 | `packages/relay-ui/src/lib/baseball/determinism.test.ts` | Source-reading guard: no `Math.random`, `Date.now`, `performance.` or `new Date` in any baseball source |
 | `packages/relay-ui/src/lib/baseball/budget.test.ts` | Anti-bloat guard: 500-line cap per shipping `lib/baseball` module (tests exempt), 700 per component, 900 for `StadiumGL.tsx`; no `three` in the sim; no barrel `index.ts` |
@@ -822,7 +897,7 @@ the render layer; contact resolves at the true physical state.
   launch-angle optimum at 90 mph from 31.0° to 28.5°, which were the same defect;
   stage 3's pushback that "the brief's 25–30° band is wrong" is withdrawn and
   folded in as the second symptom. It is **free against stages 1 and 2**: the
-  four-seamer crosses the plate at 86.283 mph against 86.288, all sixteen
+  four-seamer crosses the plate at 86.287 mph against 86.288, all sixteen
   published break residuals are unchanged to 0.1 in, and the largest golden move
   is 0.036 in on the curveball. What *did* move is the slow pitches' plate speed
   (curveball 73.5 → 72.7 mph) and the value of backspin (~4 → ~1.5 ft per
@@ -858,9 +933,9 @@ the render layer; contact resolves at the true physical state.
 - **Stage 4 — parks, fences, roof, fielding.** → **Done.** `parks.ts` (the `Park`
   shape, `Harbourfront Dome` and `Alpine Heights` as data, `fenceAt`, the roof
   mechanic, `resolveFence`, `validatePark`), `pchip.ts` (extracted at the cap),
-  `fielding.ts` (204 lines), and a wind term in `battedBallSim` implemented as an
+  `fielding.ts` (225 lines), and a wind term in `battedBallSim` implemented as an
   **exact Galilean boost** so there is still exactly one integrator. 28 new tests
-  over two files, **124 in the baseball suite**. `C_D`, `C_L`, `e_T`, the Reynolds
+  over two files, **124 in the baseball suite** (134 after stage 4b). `C_D`, `C_L`, `e_T`, the Reynolds
   band and `ν` were **not** touched.
   **The findings, reported rather than absorbed.** (1) The altitude effect is
   **+29.1 ft on a 400 ft fly at 5200 ft**, inside the published 25–30 band —
@@ -889,9 +964,58 @@ the render layer; contact resolves at the true physical state.
   ⚠ **Two of those survived the first pass and both were real gaps**, not test
   noise: removing the infield-hit cap changed nothing because an unclamped depth
   term was silently doing the same job (two mechanisms covering one case, so
-  neither was tested — the clamp was restored and the cap is now load-bearing),
-  and pinning the fence *height* to its first sample changed nothing because M1's
-  wall is a uniform 10 ft. Both are now asserted.
+  neither was tested), and pinning the fence *height* to its first sample changed
+  nothing because M1's wall is a uniform 10 ft. Both are now asserted. ⚠ The
+  first repair was itself half-right and stage 4b finished it: the clamp it
+  restored is **unreachable**, so the file still had one live mechanism and one
+  dead one. The dead branch is now deleted.
+- **Stage 4b — the adversarial review of 3b and 4.** → **Done.** No blockers: the
+  drag repair, the quintic finding, the roof analysis and the altitude result all
+  reproduced independently. Three real gaps, all of the form "a mutation passes
+  124/124", and a set of stale-prose corrections. **No physics constant moved.**
+  **(1) `pchip.ts` had no test** — see the interpolator paragraph above.
+  `pchip.test.ts` (7 tests) now covers the Fritsch–Carlson properties and pins
+  golden off-knot fence distances; the zero-interior-slope mutation dies in three
+  of them and the zero-every-slope mutation in four. (The review quoted 6.53 ft
+  and 2.65 ft for the fence move; those are the *all*-slopes numbers, 6.54 and
+  2.67 here — the interior-only mutation it describes moves 4.97. Both die.)
+  **(2) The golf wind coupling had no tripwire.** Three mutations of
+  `lib/golf/wind.ts` each passed the whole suite (`windMph`'s ×2.5 → ×1.0,
+  doubling `makeWind`'s magnitude, deleting the 0.6 along-damping), so a golf
+  retune moved this game's winds silently. `parks.test.ts` now pins `windMph` and
+  a `makeWind` draw directly, labelled as an **upstream** tripwire rather than as
+  a statement about baseball.
+  **(3) `prevailingDeg` was the *least* likely bearing** — remapped and renamed;
+  see the wind paragraph above.
+  **(4) The Galilean-boost evidence was circular** — replaced with an independent
+  ground-frame RK4; see the wind-boost paragraph.
+  **And one nit that grew.** Deleting `fielding.ts`'s unreachable
+  `Math.max(0, …)` showed that the infield cap and the depth term are equivalent
+  in effect over the whole infield (margin 39.25 vs 68), so the cap's mutation
+  cannot be killed by any input. The margin is now measured and asserted instead
+  — see the fielding section.
+  **Prose corrections, every one re-measured:** the carry ladder is **+7.71 ft**
+  mean / **RMS 9.49** (`tuning.ts` and `battedBallSim.ts` said +7.2 / 9.1), the
+  three-band table is **+15.49 / +7.71 / −0.06** with the high band's plate speed
+  **86.244** (said +15.0 / +7.2 / −0.6 and 86.17), the four-seam plate speed is
+  **86.287** (said 86.283), and the `C_D_SUBCRIT` sweep's RMS optimum is
+  **0.5375** (said 0.545). ⚠ **Every one of those stale figures is the CUBIC
+  smoothstep's** — re-measured, the cubic still gives exactly them — so nothing
+  drifted: the prose was never re-run when 3b changed the shape to a quintic.
+  Also corrected: `fielding.ts`'s "118 ft" naive reach (its own test prints
+  **94.5**), `INFIELD_DEPTH_FT`'s DERIVED label (the 95 ft arc is struck from the
+  rubber and used as a plate-centred radius — up to 27.9 ft apart at the lines),
+  `bat.ts`'s "zero free parameters" (true of the collision solve; the free
+  parameter migrated to the newly-calibrated 0.56 in undercut), the "which 400"
+  convention now stated on `resolveFence` and `distanceAtHeight` themselves, the
+  quintic ratios scoped to the pitch bench they were measured on, and the
+  fielding ladder marked GOLDEN.
+  **A finding of its own, recorded not acted on:** on a batted-ball flight it is
+  **`C_L_MAX`**, not the crisis shape, that limits RK4's observed order — 2.0 /
+  3.1 / 7.4 halving ratios and 150× the absolute error at the reference 2200 rpm,
+  against 24.5 / 20.2 at spins where the clamp never binds. 3.4e-7 ft at 120 Hz
+  is far below anything gameplay can see, and softening the clamp would move
+  carry.
 - **Stage 5 — game & scene.** `derbySim.ts`, `duelSim.ts` (3 innings, 3 outs, no
   steals/errors/subs/shifts), `ai.ts`, `StadiumGL.tsx` as a *composer* over
   `stadium/{bowl,turf,dirt,roof,crowd,lights,skyline}.ts`, HUDs, and the budget /

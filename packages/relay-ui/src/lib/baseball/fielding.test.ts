@@ -95,7 +95,19 @@ describe('how far a fielder gets', () => {
 // ---------------------------------------------------------------------------
 
 describe('the batted-ball ladder', () => {
-  it('reads the way baseball reads', () => {
+  it('⚠ GOLDEN: the model\'s own ladder, named so a drift reads as a wrong call', () => {
+    // ⚠ EVERY ROW BELOW IS MODEL OUTPUT FROZEN, NOT PUBLISHED DATA, and the
+    // table has to say so as loudly as the header does. Nothing outside this
+    // repo publishes "a 355 ft fly to the LC gap with a 4.6 s hang is an out";
+    // what the rows encode is that the LOOKUP reads the way baseball reads, and
+    // they are pinned as goldens so that a change to any of the feel knobs
+    // (GROUND_INTERCEPT_FT, XB_*, DEFENSE_SPAN, CORNER_DEG) surfaces as a
+    // specific wrong call rather than as a table nobody re-read.
+    //
+    // The distinction matters for what you do when one fails: a golden that
+    // moves is a decision to make, not a bug to fix. Compare the carry ladder in
+    // `battedBallSim.test.ts`, where the right-hand column IS published and a
+    // residual moving is evidence about the physics.
     const cases: Array<[string, number, number, number, string]> = [
       ['routine grounder to SS', 120, -20, 1.05, 'OUT'],
       ['chopper to third', 95, -36, 1.3, 'OUT'],
@@ -112,7 +124,7 @@ describe('the batted-ball ladder', () => {
       ['scorched into the LC gap', 405, -19, 3.2, 'TRIPLE'],
     ];
     let table =
-      '\n[FIELDING LADDER — defence 0.5]\n' +
+      '\n[FIELDING LADDER — defence 0.5. ⚠ GOLDEN: every call is model output]\n' +
       '  batted ball                   dist  bear  hang   near   gap   reach   miss   call\n';
     for (const [name, d, b, h, want] of cases) {
       const p = fieldBattedBall(ball(d, b, h), 0.5);
@@ -173,6 +185,44 @@ describe('boundaries', () => {
         4,
       )} ft it is an OUT, at ${(reach + 0.01).toFixed(4)} ft it is a ${justOut.result}.\n`,
     );
+  });
+
+  it('⚠ the infield cap and the depth term overlap — the margin, measured', () => {
+    // ⚠ A MUTATION THAT CANNOT BE KILLED, MEASURED INSTEAD OF IGNORED.
+    // `fieldBattedBall` caps any unfielded ball landing on the dirt at a single,
+    // and then indexes deeper balls on `miss + 0.3·(dist − INFIELD)`. Deleting
+    // the CAP changes no call at all, because for a shallow ball that index is
+    // negative-shifted enough to stay under the single/double threshold anyway.
+    // That is not a testing gap in the shipped model — it is the two clauses
+    // overlapping in effect — but it does mean the cap's mutation is
+    // unobservable, so what is asserted here is the MARGIN that makes it so.
+    // If a feel knob ever narrows this, the cap becomes load-bearing and this
+    // test says so before a wrong call does.
+    let worst = -Infinity;
+    let at = '';
+    for (let d = 0; d < INFIELD_DEPTH_FT; d += 0.5) {
+      for (let b = -45; b <= 45; b += 1) {
+        for (let h = 0.2; h <= 6; h += 0.2) {
+          for (const def of [0, 0.5, 1]) {
+            const mul = 1 + (def - 0.5) * DEFENSE_SPAN;
+            const miss = Math.max(0, nearestFielder(b, d).gapFt - (sprintFt(h) + GROUND_INTERCEPT_FT) * mul);
+            if (miss === 0) continue; // an out either way — the cap never sees it
+            const xb = miss + XB_DEPTH_PER_FT * (d - INFIELD_DEPTH_FT);
+            if (xb > worst) {
+              worst = xb;
+              at = `${d} ft / ${b}° / ${h.toFixed(1)} s / defence ${def}`;
+            }
+          }
+        }
+      }
+    }
+    log(
+      `\n[OVERLAP] with the infield cap removed, the deepest index any ball on the dirt\n` +
+        `  could reach is ${worst.toFixed(2)} against the ${XB_DOUBLE_FT} ft single/double threshold` +
+        ` (at ${at}),\n  i.e. ${(XB_DOUBLE_FT - worst).toFixed(2)} ft of margin. The cap is currently belt-and-braces.\n`,
+    );
+    expect(worst).toBeLessThan(XB_DOUBLE_FT);
+    expect(worst).toBeCloseTo(39.25, 1); // GOLDEN — the margin, so a knob move shows
   });
 
   it('the single/double boundary sits exactly on XB_DOUBLE_FT', () => {
