@@ -89,6 +89,14 @@ test**, or an **explicitly-labelled feel knob**. There is no fifth category.
 | release `d`, `h`, side | 54.0, 5.8, 1.9 ft | fixed | league-average Statcast release (6.5 ft extension) |
 | zone | 17 in × 1.60–3.40 ft | fixed | rule book + league-average per-batter zone |
 | called zone | 19.90 in × 2.042 ft | **derived** | rule zone + one BALL RADIUS a side (any part of the ball over any part of the plate) |
+| bat M, z_cm, I_cm | 0.879 kg, 0.560 m, 0.0440 kg·m² | fixed | measured 33 in / 31 oz wood-bat swing weight (SI, as published) |
+| bat-ball COR `e` | 0.50 | fixed | BBCOR ceiling / measured wood value at the sweet spot |
+| `M_eff`, `q`, `eA` | 0.5816 kg, 0.2498, **0.2002** @ 0.72 m | **derived** | `1/M_eff = 1/M + (z−z_cm)²/I_cm`, `q = m/M_eff`, `eA = (e−q)/(1+q)` |
+| `ω_bat`, bat speed | 32 rad/s, 71.5 mph | fixed | swing tracking / 2024 Statcast bat-tracking average |
+| swing axis → sweet spot | 3.2771 ft | **derived** | `v = ωR` — the two published swing numbers, cross-checked |
+| attack angle | +10° | fixed | MLB average |
+| `e_T` | **−0.20** | **calibrated** | batted-ball backspin 1900–2500 rpm; the textbook +0.20 gives 4430 — see below |
+| barrel | 98 mph, 26–30°, ±1°/mph | **published data** | Statcast classification, `tuning.isBarrel` |
 
 **Air density.** `airDensity(elevFt, tempF, rh)` = standard-atmosphere
 barometric pressure `p(h) = p₀(1 − 6.87535e-6·h)^5.2559`, then the ideal gas law
@@ -289,6 +297,129 @@ with `S = r·|ω_eff| / |v|` feeding `C_L(S)`.
 > toward the same shape and the pitch table is unreachable. `S` is computed from
 > `|ω_eff|` too, so gyro spin correctly stops inflating `C_L` as well.
 
+### The carry experiment — an independent test of the aero core
+
+> ⚠ **The most valuable thing stage 3 produced, and it is a negative result.**
+
+`C_D` and `C_L` were fixed entirely by the **pitch** regime: 0.4 s of flight,
+86–94 ft/s-decaying-little, `S ≈ 0.2` and a constant spin. A fly ball is a
+different regime in every one of those variables — 5 s of flight, a continuous
+decay from 100 mph to ~50 mph, and therefore an `S` that **climbs** through the
+flight as `|v|` falls. The published max-carry ladder is therefore an
+**independent** test of the same two coefficients at a regime nothing fitted
+them to. It does not corroborate them.
+
+**The air and the spin are part of the number**, exactly as they are for break.
+Quoted at **game-day sea level (0 ft, 70 °F, 50 % RH, ρ = 0.0023168)** — the air
+the game is played in — with **2200 rpm** of backspin, the midpoint of the band
+`e_T` is calibrated against and within 200 rpm of what the reference swing
+actually produces. ISA sea level is 2.6 % denser and carries 2.6–5.0 ft shorter;
+a mile up carries 29.4 ft further. Carry moves ~4 ft per 100 rpm of backspin, so
+a carry figure with neither air nor spin attached means nothing.
+
+| EV mph | published | model (argmax over LA) | LA_opt | residual |
+| --- | --- | --- | --- | --- |
+| 90 | 330 | 395.0 | 31.00° | **+65.0** |
+| 95 | 360 | 424.7 | 30.00° | **+64.7** |
+| 100 | 400 | 453.9 | 29.25° | **+53.9** |
+| 105 | 430 | 482.5 | 28.50° | **+52.5** |
+| 110 | 455 | 510.6 | 27.75° | **+55.6** |
+| 115 | 480 | 538.1 | 27.25° | **+58.1** |
+
+Mean **+58.3 ft**, uniformly positive, against a ±15 ft corroboration bar.
+
+**And no constant `C_D` repairs it** — which is the interesting half. Refitting a
+single `C_D` against the six rows (a one-off diagnostic; it needs a second
+integrator, so it is not shipped) lands at **0.385**, RMS residual 13.2 ft, and a
+residual **spread of 35 ft**: +21.5 ft at 90 mph falling monotonically to
+−13.2 ft at 115. The published ladder rises at **6.00 ft/mph**, the model at
+**5.72** with `C_D = 0.300` and only ~4.6 at `C_D = 0.385` — raising drag lowers
+the level *and* flattens the slope, so the two constraints pull opposite ways.
+Worse, `C_D = 0.385` puts the reference four-seamer at the plate at **84.1 mph**
+against the published 86.3, a 2.2 mph error where stage 1 calibrated to ±0.4. A
+single Reynolds- and spin-independent `C_D` cannot serve both regimes.
+
+**Nothing was changed to absorb this.** `C_D` and `C_L` did not move; there is no
+carry factor, no per-regime coefficient and no launch-angle correction. The
+model's own ladder is pinned as goldens with the published values recorded beside
+it as residuals — stage 2's precedent for the seven resisting pitch rows — and
+`battedBallSim.test.ts` asserts the residual band directly, so a carry fudge
+smuggled in later is a test failure (verified: a 0.87 factor kills 8 tests). The
+honest reading is that the aero core needs a spin- and Reynolds-dependent `C_D`,
+which `airPhysics.dragCoef(speedFps, S)`'s signature already anticipates, and
+that fitting one is a calibration against **both** regimes at once — a later
+milestone, not a stage-3 patch.
+
+What the model *does* get right, and is asserted: the carry optimum sits at
+27–31° rather than the drag-free 45° (with the spin removed it jumps to 40.5°
+and loses 65 ft, which is the contrast test), the optimum **falls monotonically**
+as exit velocity rises, backspin is worth 41.6 ft between 1000 and 2500 rpm at
+100 mph / 27°, a 400 ft fly near its optimum hangs 5.03–5.48 s, and thinner air
+carries further through `K` alone.
+
+### The collision — two published targets that cannot both be met
+
+The bat-ball collision is **one** oblique rigid-body impulse solve: normal
+restitution with the bat's effective mass, tangential restitution with `e_T` and
+angular impulse on a uniform sphere. Exit velocity, launch angle, spray angle,
+backspin **and** sidespin all come out of it — there is no launch-angle curve and
+no backspin lookup, and a pulled ball hooks foul because the same solve gives it
+sidespin, not because anything scripts it.
+
+> ⚠ **`e_T` cannot satisfy both published targets.** On the reference swing
+> (0.75 in undercut, +10° attack, 90 mph pitch descending 8° at 2200 rpm, 71.5 mph
+> bat), launch angle and backspin move in **opposite** directions with `e_T`:
+
+| `e_T` | LA | backspin |
+| --- | --- | --- |
+| +0.46 | 26.1° | 5900 rpm | ← the LA that `LA = θ_LOC + α` predicts |
+| +0.20 | 29.0° | 4430 rpm | ← the textbook rigid-surface value |
+| 0.00 | 31.2° | 3325 rpm | ← exact rolling (the patch stops sliding) |
+| **−0.20** | **33.4°** | **2220 rpm** | ← **adopted**: the published backspin band |
+
+"LA 25–29°" needs `e_T ≥ +0.2`; "backspin 1900–2500 rpm" needs `e_T ≤ −0.14`.
+Disjoint, by a factor of ~2.7 in tangential impulse. Neither Coulomb friction
+(the adopted solve needs only `J_t/J_n = 0.12` against μ ≈ 0.5) nor the bat's own
+tangential recoil (worth 6.6 %) closes it. `e_T` is calibrated against
+**backspin**, because backspin is the tangential observable `e_T` controls and
+because backspin is what feeds carry. Writing the impulse as
+`J_t = −(1 + e_T)·(2m/7)·s` makes the negative value readable: `(1 + e_T) = 0.80`
+is a **grip fraction**, 1.0 being exactly rolling — the contact patch is still
+sliding forward at 20 % of its initial rate when the ball leaves. The consequence
+is that `LA ≈ θ_LOC + α_attack` **under-predicts** this model's launch angle by
+~7°, because that rule of thumb assumes the tangential velocity is almost
+entirely scrubbed off and at 80 % grip it is not.
+
+> ⚠ **The rigid-body model has no bat vibration**, so it puts the "sweet spot" in
+> the wrong place. `M_eff` peaks at the *balance point* (0.560 m) and `e` is
+> constant, so `eA` keeps rising toward the handle: 4 in toward the barrel tip
+> costs **11.25 mph** (right, and for the right reason — `M_eff` collapses), but
+> 4 in toward the handle **gains 2.66 mph**, where a real bat loses because the
+> sweet spot sits on the fundamental bending node and `e` collapses away from it.
+> Both numbers are pinned as goldens so the gap stays visible. Closing it needs a
+> measured `e(z)` profile, which this stage has no data for.
+
+**Timing is one rotation model**, `ω_bat = 32 rad/s`, and both of its gameplay
+consequences come from the same two lines. The bat is a ray from the swing axis;
+the ball travels a line at perpendicular distance `d`; so with the swing displaced
+by `Δt`, `θ_c = −ω·Δt·v_p/(ωd + v_p)` and `R_c = d/cos θ_c`.
+
+- **The ball keeps moving**, and that second factor is the whole content of it.
+  The naive "spray shift = `ω·Δt`" gives 45.8° of bat rotation at 25 ms; because
+  the ball travels 3.3 ft deeper while the bat catches up, the bat is only
+  **25.5°** from square. The *ball* is nevertheless deflected **−46.9°**, past the
+  bat angle, because it keeps some tangential velocity — so the published ±35°
+  figure is reproduced, by a different mechanism than the rule of thumb it comes
+  from.
+- **`R_c > d` for a miss in either direction**, so any mistiming drives contact out
+  toward the tip where `M_eff` collapses: 25 ms off costs 8.4 mph of exit velocity
+  and 20 ms off costs 47.5 ft of carry, early or late, with no second knob.
+- ⚠ **It is therefore symmetric**, and does **not** reproduce "late = jammed at the
+  handle". In this geometry a late swing meets the ball deeper and further out the
+  barrel, not nearer the hands; getting jammed is a property of an **inside pitch**
+  (a smaller aim radius `d`), which is `aimZM`'s job. Asserted as a symmetry so
+  nobody closes it with an asymmetric fudge.
+
 ### Determinism
 
 `FIXED_MS = 1000/120` is shared by the live rAF loop, the headless `predict()`,
@@ -322,6 +453,11 @@ the render layer; contact resolves at the true physical state.
 | `packages/relay-ui/src/lib/baseball/pitches.ts` | The eight-row arsenal as DATA + `tiltAngleRad` / `spinVector` (tilt clock → real spin axis, gyro fraction included) + `validatePitches()`. The IVB/HB columns are TEST TARGETS and are never read by the sim |
 | `packages/relay-ui/src/lib/baseball/pitchSim.ts` | Release-aim solve, the flight on stage 1's RK4, the sampled `PitchTrack` at TRUE physical time, the analytic plate crossing, and `measureBreak` on the pinned convention. Does not import `PITCH_TEMPO`, and a test reads the file to keep it that way |
 | `packages/relay-ui/src/lib/baseball/pitchSim.test.ts` | The pitching bench: prints the segment sweep, the ratio-structure table, the per-pitch dynamics table, the pure-gyro and track tables; asserts the plate-speed loss, the aim solve, the ordering, determinism and the golden break values |
+| `packages/relay-ui/src/lib/baseball/bat.ts` | The bat as DATA + derivations: the SI bridge, the published 33 in / 31 oz spec, `effectiveMassKg` / `massRatio` / `collisionEfficiency` (all derived, `eA` is a function so nobody can write the literal 0.20), the swing constants and the calibrated `e_T`. Split from `batSim.ts` at the 500-line cap, the same way `pitches.ts` is split from `pitchSim.ts` |
+| `packages/relay-ui/src/lib/baseball/batSim.ts` | THE collision: one oblique rigid-body impulse solve in the line-of-centres frame producing EV, LA, spray, backspin AND sidespin together; the one swing rotation model (`contactGeometry`); the polar/axial handedness mirror; `decomposeSpin` |
+| `packages/relay-ui/src/lib/baseball/batSim.test.ts` | The collision bench: prints the contact-point ladder, the collision grid and the timing table; asserts the derivations, the `(1+e)/(1+q) ≡ 1+eA` identity, the zero-obliquity closed form, the backspin band, the hook/slice signs and the handedness mirror |
+| `packages/relay-ui/src/lib/baseball/battedBallSim.ts` | The flight, on stage 1's `stepBall` — never a second integrator. `launchFromAngles` (published EV/LA/spray/spin → a launch state), `simulateBattedBall` with the analytic ground crossing, `maxCarry` (argmax over LA), `distanceAtHeight` for the fence |
+| `packages/relay-ui/src/lib/baseball/battedBallSim.test.ts` | The carry bench and stage 3's central experiment: prints the carry-ladder residual table in both airs, the spin sensitivity, the altitude ladder and the end-to-end undercut sweep; asserts the model's goldens, the +58 ft residual as a finding, and the lift structure |
 | `packages/relay-ui/src/lib/baseball/determinism.test.ts` | Source-reading guard: no `Math.random`, `Date.now`, `performance.` or `new Date` in any baseball source |
 | `packages/relay-ui/src/lib/baseball/budget.test.ts` | Anti-bloat guard: 500-line cap per shipping `lib/baseball` module (tests exempt), 700 per component, 900 for `StadiumGL.tsx`; no `three` in the sim; no barrel `index.ts` |
 | `packages/relay-ui/src/lib/baseball/ip.test.ts` | Source-reading guard: no club nickname, real park name or `mlbstatic` host in the shipped game |
@@ -378,10 +514,35 @@ the render layer; contact resolves at the true physical state.
   shape is ruled out by a monotonicity inversion in the published table rather
   than by assertion. Three more mutations were watched to fail — see
   `pitchSim.test.ts`'s log.
-- **Stage 3 — hitting.** `batSim.ts` (bat inertia, COR, derived `M_eff`/`q`/`eA`,
-  calibrated `e_T`), `battedBallSim.ts` on the *same* `airPhysics` integrator,
-  `parks.ts` (fence data read by physics *and* geometry, so the fence you see is
-  the fence you clear), `fielding.ts` as a landing-point + hang-time lookup.
+- **Stage 3 — hitting.** → **Done** for the collision and the flight; `parks.ts`
+  and `fielding.ts` were **not** in this slice and remain open. `bat.ts` (the
+  published bat spec, the one SI bridge, derived `M_eff`/`q`/`eA` reproducing the
+  published 0.5816 kg / 0.2498 / 0.2002 triple, the swing constants, calibrated
+  `e_T`), `batSim.ts` (one oblique impulse solve producing EV, LA, spray,
+  backspin and sidespin together; one rotation model producing spray *and* the
+  mistiming penalty), `battedBallSim.ts` on stage 1's `stepBall` unmodified, plus
+  `isBarrel` in `tuning.ts`. 44 new tests over two files, 93 in the baseball
+  suite.
+  **Two negative results, both reported rather than absorbed.** (1) The published
+  carry ladder — an independent test of `C_D`/`C_L` in a regime they were never
+  fitted to — misses by **+58.3 ft mean**, and no constant `C_D` repairs it
+  (0.385 fits the level but flattens the slope the wrong way and breaks the
+  plate-speed calibration by 2.2 mph). (2) No `e_T` satisfies both the published
+  launch-angle and backspin targets; the bands are disjoint by ~2.7× in
+  tangential impulse. `C_D` and `C_L` did not move and no carry factor was added.
+  A third, smaller limitation is pinned as goldens: the rigid-body collision has
+  no bat vibration, so it gains 2.66 mph 4 in toward the handle where a real bat
+  loses.
+  **Fourteen mutations were watched to fail** and reverted, each against the whole
+  93-test baseball suite: `e_T` → the textbook +0.20 (5), the tangential impulse
+  deleted (9), the axial spin mirror made polar (1 — the LHB mirror test, which is
+  exactly what it is for), the naive `ω·Δt` bat angle (2), the contact point
+  pinned to the aim point (3), `M_eff` stripped of its rotational term (10), `eA`
+  hand-set to 0.20 (4), the incoming pitch spin dropped from the contact patch (6),
+  the backspin axis flipped (7), the batted ball's spin zeroed (11), the ground
+  contact snapped to a substep (6), **a 0.87 carry fudge factor (8 — the finding
+  is pinned as firmly as the numbers)**, the barrel window widened to 3°/mph (1),
+  and the swing axis hand-set instead of derived (8).
 - **Stage 4 — game & scene.** `derbySim.ts`, `duelSim.ts` (3 innings, 3 outs, no
   steals/errors/subs/shifts), `ai.ts`, `StadiumGL.tsx` as a *composer* over
   `stadium/{bowl,turf,dirt,roof,crowd,lights,skyline}.ts`, HUDs, and the budget /
@@ -459,6 +620,25 @@ the render layer; contact resolves at the true physical state.
   appears — 0.14 in over the last 10 ft, 1.44 in over 50 ft. That is physics, not
   a leak in the projection; the leak would show up in the 10 ft figure and in
   stage 1's superposition test.
+- **A carry number without its AIR and its BACKSPIN is meaningless**, exactly as a
+  break number is without its air and its segment. 2.6–5.0 ft between ISA and
+  game-day sea level, 29.4 ft to a mile high, and ~4 ft per 100 rpm. Every carry
+  figure in this document is quoted at game-day sea level with 2200 rpm.
+- **`eA` is a FUNCTION, never the literal 0.20.** The derivation
+  `1/M_eff = 1/M + (z−z_cm)²/I_cm`, `q = m/M_eff`, `eA = (e−q)/(1+q)` closes on the
+  published 0.5816 kg / 0.2498 / 0.2002 triple, which is the whole reason the bat
+  spec, the COR and the ball's mass all reach exit velocity through one channel.
+  Hand-setting it breaks the `(1+e)/(1+q) ≡ 1+eA` identity everywhere except the
+  point it was set at (mutation-verified: 4 tests).
+- **Spin is AXIAL on the hitting side too.** A left-handed batter is not "a
+  right-handed batter with `y` negated": `mirrorPolarY` flips `v.y`,
+  `mirrorAxialY` flips `ω.x` and `ω.z` and leaves `ω.y`. Get it wrong and the
+  lefty's pulled ball slices instead of hooking while EV and LA stay perfect.
+- **The batted ball's "sweet spot" is in the wrong place, on purpose, for now.**
+  The rigid model has no bending modes, so `eA` climbs toward the balance point:
+  4 in toward the tip costs 11.25 mph (correct), 4 in toward the handle *gains*
+  2.66 mph (incorrect). Both are golden-pinned. The fix is a measured `e(z)`, not
+  a nudge.
 - **The called zone is the rule zone plus one ball RADIUS a side (19.90 in),
   not a diameter (22.81 in).** A strike is any part of the ball over any part of
   the plate and we integrate the ball's *centre*, so the centre may sit one

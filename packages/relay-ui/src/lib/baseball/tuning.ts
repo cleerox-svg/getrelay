@@ -204,6 +204,56 @@ export const BREAK_REF_ELEV_FT = 0;
 export const BREAK_SEGMENT_FT = 50;
 
 // ---------------------------------------------------------------------------
+// The barrel — PUBLISHED DATA (a classification, not a physical constant)
+// ---------------------------------------------------------------------------
+//
+// A "barrel" is the published batted-ball quality class: the exit-velocity /
+// launch-angle combination that historically produces at least a .500 average
+// and a 1.500 slugging percentage. It lives here rather than in `batSim.ts`
+// because it is a SCORING rule read by the HUD, the derby payout and the duel —
+// none of which should have to import a collision solver to colour a hit.
+//
+// The rule: 98 mph is the floor, and at exactly 98 the window is 26–30°. Every
+// mph above 98 opens the window by ~1° on each side, until it saturates.
+//
+// ⚠ ONE HONEST CONVENTION GAP. The published rule is usually quoted with the
+// endpoint "at 116 mph, any ball between 8 and 50 degrees is a barrel". The
+// symmetric 1°/mph rule reaches 8° on the low side exactly (26 − 18 = 8) but
+// only 48° on the high side, so the real upper edge widens slightly faster
+// (~1.11°/mph). We implement the symmetric rule the definition states rather
+// than a two-rate fit to one endpoint, and the difference only ever shows up
+// above 114 mph at launch angles above 48° — a ball that is a lazy fly either
+// way. Flagged, not split.
+
+/** Minimum exit velocity for a barrel, mph. PUBLISHED DATA. */
+export const BARREL_MIN_EV_MPH = 98;
+
+/** Launch-angle window at exactly `BARREL_MIN_EV_MPH`, deg. PUBLISHED DATA. */
+export const BARREL_LA_LO_DEG = 26;
+export const BARREL_LA_HI_DEG = 30;
+
+/** Window widening per mph of exit velocity above the floor, deg. PUBLISHED. */
+export const BARREL_WIDEN_DEG_PER_MPH = 1;
+
+/** Saturation clamps on the window, deg. PUBLISHED DATA (the 116 mph row). */
+export const BARREL_LA_FLOOR_DEG = 8;
+export const BARREL_LA_CEIL_DEG = 50;
+
+/**
+ * Is this batted ball a barrel? PUBLISHED classification — no free parameters,
+ * nothing here is tuned, and it must never become one: a barrel is a fixed
+ * external yardstick the game is scored against, so widening it to make the
+ * derby feel generous would silently redefine the measurement.
+ */
+export function isBarrel(evMph: number, laDeg: number): boolean {
+  if (evMph < BARREL_MIN_EV_MPH) return false;
+  const widen = (evMph - BARREL_MIN_EV_MPH) * BARREL_WIDEN_DEG_PER_MPH;
+  const lo = Math.max(BARREL_LA_FLOOR_DEG, BARREL_LA_LO_DEG - widen);
+  const hi = Math.min(BARREL_LA_CEIL_DEG, BARREL_LA_HI_DEG + widen);
+  return laDeg >= lo && laDeg <= hi;
+}
+
+// ---------------------------------------------------------------------------
 // Score clamps — MIRRORED FROM THE WORKER. Do not diverge.
 // ---------------------------------------------------------------------------
 //
