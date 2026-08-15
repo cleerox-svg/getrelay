@@ -19,6 +19,16 @@ import { fileURLToPath } from 'node:url';
 
 const SIM_DIR = dirname(fileURLToPath(import.meta.url));
 
+// ⚠ SCOPE, and why it differs from ip.test.ts. This scans `lib/baseball/*.ts`
+// ONLY — not `components/baseball`, and not `.tsx`. That asymmetry is
+// deliberate, not an oversight: the RENDER layer legitimately needs a wall
+// clock (rAF timestamps, `performance.now` for the frame loop) and seeded-random
+// scenery jitter, so banning these tokens there would be wrong. Purity is a
+// property of the SIM, which is what a replay re-runs. ip.test.ts has the
+// opposite need — a trademark must not appear anywhere, render layer included —
+// so it deliberately widens to components/baseball and .tsx.
+// Stage 4 note: when duelSim/ai.ts land they are `lib/baseball/*.ts` and are
+// covered automatically; a sim that ever moves under components/ is not.
 /** Every `.ts` source under lib/baseball, tests included — replays must be pure too. */
 function simSources(): Array<{ name: string; text: string }> {
   return readdirSync(SIM_DIR)

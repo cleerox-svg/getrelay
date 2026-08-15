@@ -106,10 +106,18 @@ of the published number" is the honest claim; "dead on it" is not.
 | | |
 | --- | --- |
 | reference trajectory | same release state, **same drag**, spin set to **zero** |
-| start point | the release point |
+| start point | the release point, released **horizontally** from z = 6 ft |
 | end point | the plate crossing |
 | flight length | **55 ft** (60.5 mound-to-plate less ~5.5 ft extension) |
+| **air** | **ISA sea level — 59 °F, dry, ρ = 0.002377, K = 0.00549317 ft⁻¹** |
 | reported quantity | `Δz = z_spun − z_spinless` at the end point, in inches |
+
+**The air row is load-bearing, not bookkeeping.** The same four-seamer measures
+22.59 in in ISA air, **22.01 in** at the game-day 70 °F / 50 % RH, and **18.11 in**
+a mile high — a 4.5 in spread on the exact number this section exists to stop
+stage 2 misreading as a calibration error. Quote the air with the break or the
+number means nothing. (Release angle is a minor term by comparison: −1.5° / −3.0°
+downhill give 22.66 / 22.78 in.)
 
 Keeping drag in the reference is what makes the number *the Magnus term alone*:
 drag and gravity are identical between the two trajectories, so the difference

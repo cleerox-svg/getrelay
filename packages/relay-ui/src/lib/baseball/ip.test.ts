@@ -40,7 +40,9 @@ const NICKNAMES = [
 // reaching a user's eyes is capitalised in the string that renders it, while a
 // raycasting local is not. This is a deliberate, documented narrowing, not an
 // oversight — both halves are asserted below.
-const CASE_SENSITIVE = [/\bRays\b/];
+// `RAYS` too: a SCREAMING_CASE constant (`const RAYS_BLUE = …`) is the one
+// spelling a case-sensitive `Rays` alone would miss, and it costs nothing.
+const CASE_SENSITIVE = [/\bRays\b/, /\bRAYS\b/];
 
 // Real park names.
 const PARKS = [

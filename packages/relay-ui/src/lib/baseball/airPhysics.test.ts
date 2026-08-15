@@ -518,6 +518,16 @@ describe('induced break — the reporting convention', () => {
 
     // The convention itself: positive (a four-seamer RISES relative to spinless)
     // and 22.59 in for the reference pitch.
+    //
+    // ⚠ 22.59 is EMERGENT, not a published target — it is what this C_L and
+    // this C_D produce in ISA air. It is pinned as a regression tripwire, so a
+    // silent change to either coefficient shows up here. That means a
+    // LEGITIMATE recalibration (a real published number demanding a new C_D,
+    // say) will fail this line and must hand-edit the anchor. That is intended:
+    // moving it should be a deliberate, reviewed act. What must NOT happen is
+    // the reverse — moving a COEFFICIENT to make this number match a quoted IVB.
+    // The quoted 15–18 in is a different measured segment, not a different
+    // physics; see § Induced break in BASEBALL.md.
     expect(breakOver(55)).toBeGreaterThan(0);
     expect(breakOver(55)).toBeCloseTo(22.59, 1);
 
