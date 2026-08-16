@@ -575,6 +575,18 @@ first. Three pieces, all in `/GRAPHICS.md` §4's terms:
   ⚠ **1,034 draw calls on the tee view of Hole 1 is the standout finding** — an
   order of magnitude above the whole baseball stadium — and the trees/reeds are
   the obvious suspects. It is baselined, not endorsed.
+- ⚠ **Worked example of the blind spot: scene IBL cost ZERO draw calls.** Turning
+  on `scene.environment` measured identical draw calls and identical triangles on
+  all six compared scenes — only `textures` moved, +2. That number is true and it
+  is misleading. Setting `scene.environment` adds a **cubeUV sample to every lit
+  fragment** at medium/high, which is pure fill rate and is invisible to
+  `renderer.info`. On a full-screen turf scene that is most of the frame, and it
+  is precisely the cost the original ball-only `envMap` decision was written to
+  avoid ("so turf/trees/water pay no per-frame env cost"). SwiftShader is software
+  GL and cannot speak to it. **Get a frame-time reading on a low-end Android
+  before trusting `medium` here** — same handset that lost its GPU process to the
+  2048² shadow map. `?quality=low` is the mitigation and is untouched by the IBL
+  change, which is the right shape if it turns out to be needed.
 - **What these numbers cannot see.** They count what the CPU SUBMITTED. Fill
   rate, VRAM and shadow-map size — the class of cost that actually killed the
   WebView GPU process — are invisible to them, and to SwiftShader. A green budget

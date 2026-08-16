@@ -7,12 +7,22 @@
 //
 //   1. the Course surface FOLLOWED the dished terrain, so it was a bowl, and
 //      water is the one surface in the world that is exactly level;
-//   2. nothing reflected — no env map, and scene.environment is deliberately
-//      unset — yet at a grazing camera angle real water is mostly mirror;
+//   2. nothing reflected — no env map — yet at a grazing camera angle real
+//      water is mostly mirror;
 //   3. one flat opacity and one colour edge-to-edge, so no Fresnel, no depth;
 //   4. the ripple repeats were BAKED into the shared texture, so the Range's
 //      150 yd plane and the Course's 20 yd disc got the same anisotropic tile,
 //      which combed the wave trains into horizontal stripes.
+//
+// ⚠ WATER DOES NOT PARTICIPATE IN scene.environment. Golf now sets one at
+// medium/high (see components/golf/scene/env.ts), but this module runs its own
+// ShaderMaterial with a hand-rolled sky-gradient reflection and no `envMap`, so
+// the prefiltered environment never reaches it. Measured: when IBL landed, every
+// other surface moved by ΔB +10 to +18 while the pond moved 0.2 — it showed up
+// as a black hole in the diff map. That is by design today, but it means THE
+// MOST REFLECTIVE SURFACE IN THE GAME is lit on a different model from
+// everything around it. If the water ever starts to look disconnected from the
+// scene, this is why, and feeding the PMREM into the Fresnel term is the fix.
 //
 // What replaces it, in four tiers (all shared — the scenes only supply
 // geometry and a water level, never look/behaviour):
