@@ -21,6 +21,7 @@ const SIM_DIR = dirname(fileURLToPath(import.meta.url));
 const UI_SRC = join(SIM_DIR, '..', '..');
 const COMPONENT_DIR = join(UI_SRC, 'components', 'baseball');
 const STADIUM_DIR = join(COMPONENT_DIR, 'stadium');
+const SHARED_DIR = join(COMPONENT_DIR, 'shared');
 
 /** Line caps, per the baseball charter. Tests are exempt — see below. */
 const LIB_CAP = 500;
@@ -122,8 +123,13 @@ describe('budget guard', () => {
     // StadiumGL.tsx was composed against a number rather than measured against
     // one after the fact. It is deliberately not a no-op waiting to be
     // forgotten: the moment a .tsx lands here it is capped.
+    // Tests are exempt here for the same reason they are in the lib scan above:
+    // a test file's length is its printed evidence, and shipping code is what
+    // has to be re-read to change anything. `DerbyGame.test.tsx` is the fixture
+    // proof and is mostly the argument for each assertion.
+    const ship = (n: string) => !/\.test\.tsx?$/.test(n);
     const rows = [
-      ...filesIn(COMPONENT_DIR, (n) => n.endsWith('.tsx') || n.endsWith('.ts')).map((n) => ({
+      ...filesIn(COMPONENT_DIR, (n) => ship(n) && (n.endsWith('.tsx') || n.endsWith('.ts'))).map((n) => ({
         n,
         lines: lineCount(join(COMPONENT_DIR, n)),
         cap: n === 'StadiumGL.tsx' ? STADIUM_GL_CAP : COMPONENT_CAP,
@@ -132,6 +138,14 @@ describe('budget guard', () => {
         n: `stadium/${n}`,
         lines: lineCount(join(STADIUM_DIR, n)),
         cap: BUILDER_CAP,
+      })),
+      // The HUD widgets. A widget is one readout; `COMPONENT_CAP` is generous
+      // for one and that is deliberate — the number that matters here is that
+      // nothing in `shared/` is allowed to quietly become a second HUD.
+      ...filesIn(SHARED_DIR, (n) => n.endsWith('.ts') || n.endsWith('.tsx')).map((n) => ({
+        n: `shared/${n}`,
+        lines: lineCount(join(SHARED_DIR, n)),
+        cap: COMPONENT_CAP,
       })),
     ].sort((a, b) => b.lines - a.lines);
 
@@ -187,10 +201,19 @@ describe('budget guard', () => {
     };
     scan(COMPONENT_DIR, '', (n) => n === 'StadiumGL.tsx');
     scan(STADIUM_DIR, 'stadium/', () => true);
+    // ⚠ THE SCAN IS NO LONGER VACUOUS. `DerbyGame.tsx`, `BaseballScreen.tsx` and
+    // every `shared/*` widget are now real files with `three` forbidden in them,
+    // and they are the ones that would put the renderer in the entry chunk: the
+    // HUD is imported eagerly by the Games hub, so ONE `import { Vector3 } from
+    // 'three'` in a timing bar undoes the whole lazy boundary and nothing but
+    // this test would say so.
+    scan(SHARED_DIR, 'shared/', () => false);
     expect(seen, 'the three-import scan found no files — the glob is broken').toContain(
       'StadiumGL.tsx',
     );
     expect(seen).toContain('stadium/fence.ts');
+    expect(seen).toContain('DerbyGame.tsx');
+    expect(seen).toContain('shared/TimingBar.tsx');
     expect(seen.length).toBeGreaterThan(5);
     expect(offenders, `three imported outside the scene:\n${offenders.join('\n')}`).toEqual([]);
 

@@ -241,6 +241,7 @@ export class DerbySim {
       barrel: false,
       fence: null,
       fenceDistFt: 0,
+      flight: null,
       pitchId: served.id,
       plateX: pr.plate.x,
       plateH: pr.plate.h,
@@ -329,6 +330,8 @@ export class DerbySim {
       barrel: isBarrel(contact.evMph, contact.laDeg),
       fence: play.outcome,
       fenceDistFt: play.fenceDistFt,
+      // The object reported IS the object drawn. See `SwingResult.flight`.
+      flight,
     };
   }
 

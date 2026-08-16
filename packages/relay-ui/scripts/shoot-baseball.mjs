@@ -77,6 +77,13 @@ const SCENES = {
   // from the upper deck.
   contact: { query: 'scene=batter&pitch=ff&bt=0.12', label: 'contact' },
   homerun: { query: 'scene=flight&pitch=ff&bt=2.6', label: 'homerun' },
+  // The DERBY's aim aid: the rule-zone frame and the reticle, drawn as geometry
+  // at the plate rather than as a DOM overlay. Placed low and to the pull side
+  // (u = −0.55, v = −0.45) rather than dead centre, because a centred reticle
+  // sits on the zone frame's own centre and a mis-sized one would look correct.
+  // Same camera and same frozen instant as `pitch-4seam`, so the pair differ by
+  // the aid and nothing else.
+  aim: { query: 'scene=batter&pitch=ff&t=0.30&aim=-0.55,-0.45', label: 'aim' },
 };
 
 // Portrait, a phone screen. Same shape as the golf harness so the two sets of

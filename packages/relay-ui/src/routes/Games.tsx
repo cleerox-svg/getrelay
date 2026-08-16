@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Suspense, lazy, useState } from 'react';
 import { Link, Navigate, useLocation, useParams } from 'react-router-dom';
 import { Navbar, Page } from 'konsta/react';
 import { Avatar } from '../components/Avatar';
@@ -20,7 +20,22 @@ import { getGolfStats } from '../lib/golf/stats';
 // lib/games/useGameFlow.ts); hub↔menu is plain state with a "‹ Games"
 // affordance handled by each screen's onExitToHub.
 
-export type GameId = 'fog' | 'tune' | 'golf';
+// ⚠ BASEBALL IS LAZY AT THE *SCREEN*, NOT JUST AT THE SCENE, AND THAT IS
+// MEASURED. `DerbyGame` already `lazy()`-imports `StadiumGL`, so `three` was
+// never the question — but the HUD imports `DerbySim`, which pulls `pitchSim`,
+// `batSim`, `battedBallSim`, `airPhysics`, `parks`, `pitches`, `pchip` and
+// `zone` behind it. Imported eagerly here, like `GolfScreen` is, that put the
+// whole baseball physics library in the entry chunk: 843.66 kB → 874.99 kB
+// (+31.33 kB raw, +12.22 kB gzip) for every user who opens Relay to read a
+// message. Behind this boundary the same build is 843.66 → 844.51 kB, i.e.
+// +0.85 kB raw / +0.21 kB gzip — the tile, the `GameId` and the lazy stub,
+// which is what the hub should actually cost. The physics goes in the baseball
+// chunk (31.06 kB) where it is used, and `three` in its own (533.04 kB).
+export type GameId = 'fog' | 'tune' | 'golf' | 'baseball';
+
+const BaseballScreen = lazy(() =>
+  import('../components/baseball/BaseballScreen').then((m) => ({ default: m.BaseballScreen })),
+);
 
 // The chiclet grid, as data so adding a game is one more entry. `id`
 // drives which screen renders; `icon` is a flat SVG under /public/games.
@@ -42,6 +57,12 @@ const GAMES: { id: GameId; title: string; subtitle: string; icon: string }[] = [
     title: 'Golf',
     subtitle: 'Putt the mini-golf course or bomb it down the driving range.',
     icon: '/games/golf.svg',
+  },
+  {
+    id: 'baseball',
+    title: 'Baseball',
+    subtitle: 'Sit on a pitch, pick your spot, and put it over the wall.',
+    icon: '/games/baseball.svg',
   },
 ];
 
@@ -197,6 +218,20 @@ export function Games() {
                   )}
                 </div>
               </button>
+
+              <button
+                type="button"
+                className="games-card games-card--baseball"
+                onClick={() => setSelected('baseball')}
+              >
+                <div className="games-card-cap">
+                  <img className="games-card-icon" src={iconOf('baseball')} alt="" />
+                </div>
+                <div className="games-card-b">
+                  <b>Baseball</b>
+                  <span>Home Run Derby</span>
+                </div>
+              </button>
             </div>
 
             <p className="games-note">
@@ -207,6 +242,10 @@ export function Games() {
           <FogScreen onExitToHub={() => setSelected(null)} />
         ) : selected === 'tune' ? (
           <TuneScreen onExitToHub={() => setSelected(null)} />
+        ) : selected === 'baseball' ? (
+          <Suspense fallback={<div className="bb-menu bb-sub">Warming up…</div>}>
+            <BaseballScreen onExitToHub={() => setSelected(null)} />
+          </Suspense>
         ) : (
           <GolfScreen onExitToHub={() => setSelected(null)} />
         )}

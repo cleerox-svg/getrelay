@@ -2122,6 +2122,7 @@ html.beta .composer-capsule {
   --games-golf-2: #34c759;
   --games-fog: #6d8bd6; /* cool blue/violet */
   --games-tune: #e0913c; /* warm amber */
+  --games-baseball: #3f7fd6; /* royal blue — a colour scheme, not a club mark */
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -2947,4 +2948,123 @@ html.beta .composer-capsule {
 }
 .golf-ledger-delta.debit {
   color: var(--golf-flag);
+}
+
+/* ============================================================
+   BASEBALL — the Home Run Derby's menu / pause / results chrome.
+   The PLAYING HUD is not here: it floats over a live 3D stadium
+   and uses the shared frosted-glass tokens in TypeScript
+   (components/golf/shared/frosted.ts) so a CSS file can never
+   drift from the panels drawn over the canvas. What IS here is
+   the flat, themed chrome either side of a run.
+   ============================================================ */
+.bb-menu {
+  --bb-accent: #3f7fd6; /* royal blue — a colour scheme, not a club mark */
+  --bb-accent-2: #d1444a;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: 18px 16px 8px;
+}
+.bb-back {
+  align-self: flex-start;
+  background: none;
+  border: 0;
+  padding: 4px 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--bb-accent);
+}
+.bb-title {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.4px;
+  margin: 0;
+}
+.bb-sub {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+.bb-score {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 48px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--bb-accent);
+}
+.bb-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.bb-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--separator);
+  border-radius: 14px;
+}
+.bb-stat span {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+}
+.bb-stat b {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 18px;
+  font-weight: 800;
+}
+.bb-btn {
+  padding: 13px 18px;
+  border-radius: 14px;
+  border: 1px solid var(--separator);
+  background: transparent;
+  font-size: 15px;
+  font-weight: 700;
+  color: inherit;
+}
+.bb-btn--go {
+  border-color: transparent;
+  background: var(--bb-accent);
+  color: #fff;
+}
+/* Pause sheet, drawn over the live scene — hence its own dim scrim. */
+.bb-pause {
+  position: absolute;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(6, 12, 20, 0.62);
+}
+.bb-pause-card {
+  --bb-accent: #3f7fd6;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 240px;
+  padding: 20px;
+  border-radius: 18px;
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+}
+.bb-pause-card b {
+  font-size: 19px;
+  text-align: center;
+}
+/* Hub tile tint — the same treatment Fog and Tune get. */
+.games-card--baseball .games-card-cap {
+  background: linear-gradient(160deg, #3f7fd6, #1d2b52);
+}
+.games-card--baseball:hover {
+  border-color: var(--games-baseball);
 }

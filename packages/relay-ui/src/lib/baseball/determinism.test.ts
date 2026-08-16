@@ -88,6 +88,11 @@ describe('determinism guard', () => {
     const dirs = [
       join(SIM_DIR, '..', '..', 'components', 'baseball'),
       join(SIM_DIR, '..', '..', 'components', 'baseball', 'stadium'),
+      // The HUD widgets. They run rAF loops that write straight to `style`, so
+      // they legitimately read the wall clock — but a `Math.random` in a
+      // timing bar's sweep would make the harness's byte-identical-PNG claim
+      // false in exactly the same way one in a scene builder would.
+      join(SIM_DIR, '..', '..', 'components', 'baseball', 'shared'),
     ];
     const files: Array<{ name: string; text: string }> = [];
     for (const dir of dirs) {
@@ -104,6 +109,8 @@ describe('determinism guard', () => {
     }
     // Guard the guard: once the scene exists this must never pass over nothing.
     expect(files.map((f) => f.name)).toContain('StadiumGL.tsx');
+    expect(files.map((f) => f.name)).toContain('DerbyGame.tsx');
+    expect(files.map((f) => f.name)).toContain('TimingBar.tsx');
 
     const violations: string[] = [];
     for (const { name, text } of files) {

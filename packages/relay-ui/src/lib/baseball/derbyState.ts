@@ -13,6 +13,7 @@
 // but not to `DerbyCore` cannot be silently half-snapshotted, because the guard
 // test compares the snapshot's keys against `Object.keys(sim)`.
 
+import type { BattedFlight } from './battedBallSim';
 import type { DerbyOutcome, DerbyPhase, ResolvedConfig } from './derbyRules';
 import type { FenceOutcome } from './parks';
 import type { PitchId } from './pitches';
@@ -41,6 +42,22 @@ export interface SwingResult {
   /** `resolveFence`'s raw five-way answer, kept so nothing is lost in mapping. */
   fence: FenceOutcome | null;
   fenceDistFt: number;
+  /**
+   * The WHOLE batted flight, sampled — null on a whiff/take.
+   *
+   * ⚠ THIS IS THE OBJECT THE RENDERER DRAWS, and it is here because M2b found
+   * the alternative and refused it: `resolveSwing` integrated a `BattedFlight`,
+   * reported six scalars off it and dropped the track, so a HUD wanting to draw
+   * the derby's own home run had to re-derive a launch from EV/LA/spray — which
+   * loses the spin the oblique-impulse solve produced, i.e. draws a curve the
+   * sim did not compute. `src/baseballpreview.tsx` says so in full and filed
+   * "adding `flight: BattedFlight` to `SwingResult` is the fix". This is it.
+   *
+   * It is a reference to an object `simulateBattedBall` built fresh and nothing
+   * mutates, so the shallow copies below are correct copies. The samples are the
+   * sim's own — there is no second, prettier trajectory to be had here.
+   */
+  flight: BattedFlight | null;
   pitchId: PitchId;
   plateX: number;
   plateH: number;
