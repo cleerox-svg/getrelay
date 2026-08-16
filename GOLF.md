@@ -736,6 +736,44 @@ out to be wrong in an instructive way.
    flat squares that blend into the green. Pre-existing and untouched by any of
    this work — but **nobody had ever seen it**, because until defect 1 was fixed
    the celebration camera pointed straight down at the ball's pole cap.
+9. **An understory drift is a phantom obstacle.** ⚠ The one real cost of
+   `BloomForm: 'understory'`, and the reason it must not spread further
+   unresolved. A drift is a visually solid mass **7.5–9.9 yd across and 4.3–5.7
+   yd tall**; the sim collides with the trunk cylinder only, at **r 1.32–1.74
+   yd**. A ball can therefore roll through eight yards of apparent flowering
+   shrub and feel nothing. `'canopy'` never had this problem because the blossom
+   sat up in the crown, where nothing was collidable anyway — **moving the mass
+   down moved it into the one height band the collision model ignores.**
+   Tolerable at holes 8 and 12, where the drifts sit inside a tree line the ball
+   has no business being in. Resolve it before a third hole gets the form: either
+   shrink the drift inside the trunk radius, or teach `courseTrees` to emit it as
+   a collidable. `foliage.ts`'s header now says so rather than claiming
+   drawn == played unqualified.
+10. **The drift is bigger than the tree it grows under.** Radius 7.5–9.9 yd
+   against a canopy radius of 5.6–7.4 yd, and 4.3–5.7 yd tall is nearly double a
+   real forsythia. That is why the near clumps read faintly boulder-like.
+   Shrinking it also shrinks defect 9.
+11. **15 Firethorn and 17 Nandina got half the fix, and now look like each
+   other.** They were corrected for SEASON (berry colour → April white flowers)
+   but remain `form: 'canopy'` — so the argument that justified the fix, that
+   pyracantha and nandina top out at 2–3 m and were never canopy trees, is not
+   implemented for either. Two consequences: they read as generic white
+   flowering trees rather than as those plants, and their blooms are
+   near-identical to each other (mean RGB [201,214,209] vs [211,213,199], sat
+   0.06 vs 0.07). Add 2's pale pink, 9 Carolina Cherry and 11 White Dogwood and
+   **four-plus holes converge on the same near-neutral** — an identity loss for a
+   system whose whole purpose is per-hole identity. 15's white also carries a
+   mint cast (hue 153°) from green ambient bounce.
+12. **Every Augusta frame is a tee view.** No harness scene shows a course tree
+   line from close up, which is where the understory drifts' shade facets are
+   still olive [134,138,32]. At tee distance that reads as shading; to a player
+   who has missed into the trees it may not. Same "authored art with no frame"
+   class as defects 5 and 6.
+13. **`augusta-16-redbud` cannot be exact-pixel regression-checked.** It produced
+   three different hashes across three runs *including two runs of identical
+   code* — 24–37 px at x 513–664 / y 623–634, which is the animated pond
+   surface caught at a different phase. Not a leak; a limit on what that frame
+   can prove.
 
 **Instanced foliage — the single largest GPU win measured on this codebase.**
 The tee view's 1,034 draw calls were **559 individual meshes of tree**. There was

@@ -113,7 +113,22 @@ export interface TreePlacement {
 
 /**
  * Adapt the course's tree DATA (`terrain.courseTrees` — the same list the sim
- * collides against, so drawn == played) to grove placements. World z = −d.
+ * collides against) to grove placements. World z = −d.
+ *
+ * ⚠ DRAWN == PLAYED HOLDS FOR THE TRUNK, AND NOT FOR AN UNDERSTORY DRIFT. The
+ * sim collides with the trunk cylinder only (r 1.32–1.74 yd). A `'canopy'` bloom
+ * is fine — it sits up in the crown, where nothing was collidable anyway. But an
+ * `'understory'` drift is a visually solid mass 7.5–9.9 yd across and 4.3–5.7 yd
+ * tall sitting at exactly ball height, so a ball can roll straight through eight
+ * yards of apparent flowering shrub and feel nothing.
+ *
+ * The visual gate found this, and it is the one real cost of the form: moving
+ * the bloom mass DOWN moved it into the one height band the collision model
+ * ignores. It is tolerable at two holes (8, 12) where the drifts sit inside a
+ * tree line the ball has no business being in — and it is exactly what has to be
+ * resolved BEFORE this form spreads further, either by shrinking the drift
+ * inside the trunk radius or by teaching `courseTrees` to emit it as a
+ * collidable. Do not read the sentence above as covering it.
  *
  * `form` is the hole's `bloom.form`, passed in rather than carried on
  * `CourseTree` on purpose: it is one constant for the whole hole and nothing in

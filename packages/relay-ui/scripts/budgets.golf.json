@@ -48,10 +48,10 @@
     },
     "augusta13": {
       "maxDrawCalls": 36,
-      "maxTriangles": 145000,
+      "maxTriangles": 150000,
       "measured": {
         "drawCalls": 24,
-        "triangles": 101887,
+        "triangles": 103807,
         "programs": 15,
         "geometries": 16,
         "textures": 13,
@@ -73,11 +73,11 @@
       }
     },
     "augusta16": {
-      "maxDrawCalls": 59,
-      "maxTriangles": 85000,
+      "maxDrawCalls": 58,
+      "maxTriangles": 90000,
       "measured": {
         "drawCalls": 39,
-        "triangles": 59836,
+        "triangles": 61156,
         "programs": 23,
         "geometries": 27,
         "textures": 23,
@@ -112,11 +112,11 @@
       }
     },
     "augusta2": {
-      "maxDrawCalls": 50,
+      "maxDrawCalls": 49,
       "maxTriangles": 170000,
       "measured": {
         "drawCalls": 33,
-        "triangles": 119083,
+        "triangles": 121243,
         "programs": 18,
         "geometries": 23,
         "textures": 21,
