@@ -885,6 +885,9 @@ the render layer; contact resolves at the true physical state.
 | `packages/relay-ui/src/lib/baseball/parks.test.ts` | The park bench: prints the fence tables (pchip vs linear, with the knot-slope jump), the roof-open weather draw, the roof ceiling ladder, the wind-bearing histogram, the wind boost against an independent ground-frame RK4, and the altitude ladder; asserts the 400/395 wall boundary, the foul pole, `wind === 0` under a shut roof, byte-identical trajectories across seeds, the uniform bearing window, a TRIPWIRE on golf's wind sampler, and the altitude result against the published 25–30 ft band |
 | `packages/relay-ui/src/lib/baseball/fielding.ts` | The deliberately tiny defence: fixed alignment, a ramped reach, one defender rating, → out / 1B / 2B / 3B / HR, and `infieldDepthFt(β)` — the 95 ft arc, read by the lookup AND by `stadium/field.ts`. 323 lines, and the cap is the design |
 | `packages/relay-ui/src/lib/baseball/fielding.test.ts` | The fielding bench: prints the reach ladder and a named batted-ball ladder; asserts the catch boundary exactly on the reach, the single/double index boundary, the foul-territory boundary, the rating's ±15 % span, and the landing-point limitation |
+| `packages/relay-ui/src/lib/baseball/derbyScoring.ts` | THE PAYOUT, and the LEAF of the derby's module graph — it imports nothing from the game, so `derbyRules` can check it against the format's derived cap with no cycle. One clamped scorer (`swingPoints`) that every outcome goes through, `validatePayoutCap` on the live config path and the full `validateDerbyPayout` sweep in the bench. Extracted at the 500-line cap in the M2 feel pass |
+| `packages/relay-ui/src/lib/baseball/contactWindow.ts` | The bat GEOMETRY — `BAT_TIP_M`, `BAT_HANDLE_LIMIT_M` and the bisection that inverts `contactGeometry`. Three unrelated consumers (`derbySim`, `TimingBar`, the benches) and no knowledge of the format. Extracted at the same cap, same pass |
+| `packages/relay-ui/src/components/baseball/shared/swingCopy.ts` | The derby's readout COPY — `describeSwing`, `coachSwing`, `parkCopyNumbers`. Pure `SwingResult → string`, so every outcome is testable in a millisecond instead of only through a 24-pitch mounted session |
 | `packages/relay-ui/src/lib/baseball/determinism.test.ts` | Source-reading guard: no `Math.random`, `Date.now`, `performance.` or `new Date` in any baseball source |
 | `packages/relay-ui/src/lib/baseball/budget.test.ts` | Anti-bloat guard: 500-line cap per shipping `lib/baseball` module (tests exempt), 700 per component, 900 for `StadiumGL.tsx`; no `three` in the sim; no barrel `index.ts` |
 | `packages/relay-ui/src/lib/baseball/ip.test.ts` | Source-reading guard: no club nickname, real park name or `mlbstatic` host in the shipped game |
@@ -1280,6 +1283,92 @@ the render layer; contact resolves at the true physical state.
   `DerbyGame` consumes `StadiumGL.onReady` without chaining it, so
   `window.__baseballReady` never fires with a HUD mounted. Neither is physics
   and neither is urgent; both are a milestone, not a follow-up.
+- **M2 feel pass — "is this fun?" failed its checkpoint, and the fix was scoring,
+  not physics.** → **Done.** The owner played the shipped derby and scored **122
+  points, 1 home run, 1 barrel, best streak 1** over 24 pitches, and said "it's
+  tough to hit, it's likely me, I can't get the timing right." It was not them.
+  Three compounding defects, all measured headlessly, **no physics constant
+  touched**:
+  **(1) Scoring was home-run-only, so half of all good swings paid nothing.**
+  Across every skill level modelled, **20–48 % of swings were `inPlay`** — real
+  contact, often 350+ ft — and every one scored 0, byte-identical to a whiff.
+  With the reticle at zone centre and the tap exactly on the crossing, **46 % of
+  swings carried a mean 406.7 ft and paid nothing**. `derbyScoring.ts` now scores
+  CONTACT continuously (`0.35 pts/ft` past a 155.5 ft datum nominated from
+  `infieldDepthFt(0)`, the grass line), a foul at `0.25×` of what the same ball
+  in play would pay, and `+25` for a Statcast barrel on top — with the home run
+  unchanged at `100 + (carry − 350)` and still strictly the best outcome at
+  every carry, asserted as a swept inequality.
+  **(2) The timing cliff was a 15 ms knife edge, in WALL ms.** 76 % home runs to
+  a hard zero between +30 and +45 ms of wall clock, with **95 % of the dead rows
+  still MAKING CONTACT**. Fixed from both ends and the two are separate levers:
+  scoring the contact turns the zero into a slope, and `PITCH_TEMPO` — an
+  explicitly-labelled feel knob — moved **0.55 → 0.45**, which widens the window
+  the player's thumb gets from ±48.0 to ±58.7 ms of wall clock (+22 %) while
+  moving no outcome rate at any TRUE offset. Measured, reticle at zone centre,
+  points per swing against the peak row: ±45 ms went **0 % → 25–42 %**, ±60 ms
+  **0 % → 4–5 %**, and the dead-centre trough at 0 ms **48.9 % → 84.5 %**.
+  **(3) The optimal strategy was undiscoverable and the intuitive one was a
+  trap** — and it still is, deliberately, because it is correct baseball. A
+  reticle-X sweep at perfect timing: dead centre 54 % home runs, ±0.2–0.3 ft
+  70–98 %. Dead centre is the BEST contact on the board (406.7 ft mean carry,
+  100 % barrel rate) and the DEEPEST wall in the park, and nothing on screen said
+  so. Taught by a contextual, **self-extinguishing** line on exactly the swings
+  that demonstrate it, plus a first-run tip quoting the park's own two fence
+  numbers that retires itself on the player's first home run.
+  ⚠ **And the sweep is ASYMMETRIC at a symmetric park, which is a MODEL DEFECT
+  and is NOT taught.** +0.2 ft beats −0.3 ft where the ±22° samples are both
+  375 ft, and it wins on CARRY (401.8 against 387.4 ft) — that is `eA` climbing
+  toward the handle in a rigid bat with no `e(z)`, i.e. § "The collision"'s "the
+  model has no jamming at all", arriving in gameplay. The copy therefore says
+  "off the middle", never "to the opposite field", and `derbySim.test.ts` asserts
+  the asymmetry so it cannot be quietly closed with a knob.
+  **Three extractions, at the cap, not a raised cap.** `derbyRules.ts` was at
+  484/500 and this work adds a scorer to it: `contactWindow.ts` (bat geometry),
+  `derbyScoring.ts` (the payout) and `shared/swingCopy.ts` (the HUD copy) came
+  out first, leaving `derbyRules.ts` at 414 and `DerbyGame.tsx` at 629/700 —
+  quoted on `budget.test.ts`'s OWN counting (`split('\n').length`), which is the
+  number the cap is actually compared against; the 409/628 this line used to say
+  were `wc -l`, one short of the guard on every file that ends in a newline.
+  **The worker's clamp is held STRUCTURALLY, for every outcome.** The old check
+  was one line — `homeRunPoints(MAX_SAFE_INTEGER) > cap` — which was sufficient
+  only while home runs were the only thing that scored. It is now a loop over the
+  outcome ENUM, run on the live config path, plus a bench test that drives a
+  maximal session and evaluates the **worker's own acceptance predicate**
+  reconstructed from `games.ts`'s source text. Shipping headroom **32.3 %**; a
+  200 mph bat saturates at exactly 100 % and is still accepted, which is the
+  structural cap doing its job.
+  ⚠ **The skill curve flattened and the number is reported rather than hidden.**
+  Median session over 40 seeds, gaussian timing + aim: novice **298 → 744**,
+  perfect **3014 → 3742**, so the perfect ÷ novice ratio fell **10.1× → 5.0×**.
+  That is the intended half (bad play stops scoring zero); the unintended half is
+  the TOP, where good → perfect compressed **1.25× → 1.06×**. The honest fix for
+  top-end separation is a streak or barrel-chain multiplier, not a steeper
+  contact curve — and it is a scope call, because it touches the submission cap.
+  **Fourteen mutations were watched to fail** — (24)–(33) in `derbySim.test.ts`'s
+  header and (7)–(10) in `DerbyGame.test.tsx`'s — **and two survived their first
+  assertion**, both recorded: the format validator's payout wiring (a substring
+  match that the divisibility clause next door already satisfied), and the
+  coaching line (which needed a harness fix — `DerbyGame.test.tsx` only ever
+  pumped `requestAnimationFrame`, so the HUD's `setInterval` readout was FROZEN
+  at its mount value in every test in the file).
+  ⚠ **Then the review of that pass killed two more, both of which the whole
+  suite had survived.** **(a) The enum was a hand-written list pretending to be
+  an enum.** `DERBY_OUTCOMES: readonly DerbyOutcome[]` accepts any SUBSET of the
+  union, so deleting `'whiff'` from it left 182/182 green AND `pnpm typecheck` at
+  exit 0 while `validatePayoutCap`, `validateDerbyPayout`'s cap leg and both
+  outcome loops in `derbySim.test.ts` silently shrank together — the file's own
+  "⚠ IT IS A LOOP OVER `DERBY_OUTCOMES`, NOT A LIST" was false. Fixed by
+  inverting the derivation: the array is `as const` and `DerbyOutcome =
+  (typeof DERBY_OUTCOMES)[number]`, so the same deletion is now **13 typecheck
+  errors across 5 files**. **(b) The scoreboard was asserted nowhere.**
+  `CountChip` has no test file, and swapping its Score cell to `String(state.outs)`
+  — the scoreboard displaying the out count — failed **0 tests**. The session
+  test now accumulates the payouts the HUD itself printed, checks them against
+  the Score cell after every pitch and closes on `onFinish`'s score; that
+  mutation is 1 fail. The `kinds.size > 1` check next to it was also satisfied by
+  {GONE!, Foul ball} and never required the in-play line, so it names the branch
+  now.
 - **Stage 5 — game & scene.** `derbySim.ts`, `duelSim.ts` (3 innings, 3 outs, no
   steals/errors/subs/shifts), `ai.ts`, the crowd/lights/skyline builders, HUDs,
   and the budget / determinism / IP guard tests.
@@ -1420,6 +1509,23 @@ the render layer; contact resolves at the true physical state.
   shadow bias, near planes, the anti-z-fighting layer offsets in `field.ts` — has
   to be re-read the day a ball-sized object enters the scene, and the symptom
   will be a floating ball, not a shadow complaint.
+- **A payout is capped for EVERY outcome or the score vanishes silently.**
+  `packages/relay-worker/src/games.ts` REJECTS (400, never truncates) a score
+  above `rounds × MAX_POINTS_PER_ROUND`, and `DerbyGame.bank()` swallows it with
+  `.catch(() => undefined)` — so an over-cap score disappears with no UI signal
+  at all. `derbyScoring.swingPoints` is the ONE entry point and the ONE place the
+  clamp lives, and `validatePayoutCap` loops over `DERBY_OUTCOMES` rather than
+  listing the outcomes that happen to score today. A hand-written list cannot see
+  "somebody added a sixth outcome and forgot the cap", which is exactly the shape
+  the `bestStreak` bug had.
+- **`PITCH_TEMPO` is the ONLY legitimate lever on how hard the timing is.** The
+  contact window is DERIVED from the bat's length (~26 ms of TRUE time) and
+  nothing may widen it — but the player lives in wall time, where his window is
+  `contactWindowS / PITCH_TEMPO`: ±48.0 ms at 0.55, ±58.7 ms at 0.45. Turning it
+  moves no outcome rate at any true offset; it rescales the axis the thumb is on.
+  One test is stated in wall ms and therefore DOES depend on it, on purpose —
+  `derbySim.test.ts`'s cliff/slope sweep — and it is the measurement that
+  justifies the value.
 - **The called zone is the rule zone plus one ball RADIUS a side (19.90 in),
   not a diameter (22.81 in).** A strike is any part of the ball over any part of
   the plate and we integrate the ball's *centre*, so the centre may sit one

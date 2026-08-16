@@ -45,6 +45,7 @@ import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-rou
 import { BaseballScreen } from './BaseballScreen';
 import { useStore } from '../../lib/store';
 import { DERBY_ROUNDS, PITCHES_PER_ROUND } from '../../lib/baseball/derbyRules';
+import { PITCH_TEMPO } from '../../lib/baseball/tuning';
 
 /** Exactly the shape `DerbyGame.bank()` posts. Typed so `mock.calls` is readable. */
 interface Submitted {
@@ -66,8 +67,17 @@ vi.mock('../../lib/audio', () => ({ play: vi.fn(), unlockAudio: vi.fn() }));
 
 /** Mirrors `DerbyGame`'s own lead-in. Not exported by it; kept in step by hand. */
 const PITCH_LEAD_MS = 380;
-/** The wall clock a ~0.41 s crossing takes at PITCH_TEMPO — see DerbyGame.test. */
-const SWING_AT_MS = PITCH_LEAD_MS + 745;
+/**
+ * The wall clock a ~0.41 s crossing takes at PITCH_TEMPO — see DerbyGame.test.
+ *
+ * ⚠ DERIVED FROM THE KNOB, NOT A LITERAL. It was `+ 745`, which was 0.41 s at
+ * PITCH_TEMPO = 0.55 and 25 ms of true time OUT at 0.45 — so the M2 feel pass's
+ * tempo change (an explicitly-labelled feel knob, free to turn) broke this file
+ * with an assertion about `bestStreak`. A test that pins a wall time cannot also
+ * be tempo-independent unless it derives it.
+ */
+const CROSSING_TRUE_S = 0.41;
+const SWING_AT_MS = PITCH_LEAD_MS + Math.round((CROSSING_TRUE_S / PITCH_TEMPO) * 1000);
 
 /**
  * The session seed.

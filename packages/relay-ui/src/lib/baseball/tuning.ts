@@ -47,9 +47,27 @@ export const FIXED_DT = FIXED_MS / 1000;
 
 /**
  * Slow-motion playback rate for a pitch, ∈ (0, 1]. FEEL KNOB — pure
- * presentation, no physical referent whatsoever. 0.55 means a pitch that really
- * takes 0.40 s takes 0.73 s of wall time on screen, which is what makes a
+ * presentation, no physical referent whatsoever. 0.45 means a pitch that really
+ * takes 0.41 s takes 0.91 s of wall time on screen, which is what makes a
  * one-tap timing game playable at all.
+ *
+ * ⚠ IT IS THE ONLY LEGITIMATE LEVER ON HOW HARD THE TIMING IS, and M2's feel
+ * pass moved it 0.55 → 0.45 for exactly that reason. The contact window is
+ * DERIVED from the bat's length (`contactWindow.contactWindowS`, ~26 ms of TRUE
+ * physical time) and nothing may widen it — but the player does not live in true
+ * time, he lives in wall time, and the window he actually gets is
+ * `contactWindowS / PITCH_TEMPO`:
+ *
+ *     0.55  →  ±48.0 ms of wall clock
+ *     0.45  →  ±58.7 ms of wall clock     (+22 %, and 0.16 s longer per pitch)
+ *
+ * The owner played the 0.55 build and said "I can't get the timing right"; a
+ * 48 ms half-window is inside the spread of touch latency alone on a phone. This
+ * is the one change in that pass that widens it, and it is separate from the
+ * scoring change: it moves NO outcome rate at any TRUE offset — the timing sweep
+ * in `derbySim.test.ts` is stated in true ms and is byte-identical either side
+ * of it — it only rescales the wall-ms axis the thumb is on. Which is precisely
+ * the property that makes a feel knob a feel knob.
  *
  * ⚠ IT MUST NEVER TOUCH dt, AND NOTHING IN THE SIM MAY READ IT. Gravity is
  * linear in dt while both aero terms go as v², so scaling dt re-weights them
@@ -64,7 +82,7 @@ export const FIXED_DT = FIXED_MS / 1000;
  * import this constant, and its test asserts the trajectory is identical
  * whatever the tempo is set to, because the tempo cannot reach it.
  */
-export const PITCH_TEMPO = 0.55;
+export const PITCH_TEMPO = 0.45;
 
 // ---------------------------------------------------------------------------
 // Air the game is played in — PUBLISHED DATA (a default; parks override)

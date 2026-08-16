@@ -1,5 +1,5 @@
-// Home Run Derby — the RULES: the format, the payout, the serve mix and the
-// swing-mapping constants. Data and pure functions only; no state, no loop.
+// Home Run Derby — the RULES: the format, the serve mix and the swing-mapping
+// constants. Data and pure functions only; no state, no loop.
 //
 // Split out of `derbySim.ts` at the 500-line cap — EXTRACTION, NOT A RAISED CAP,
 // the same way `pitches.ts` is split from `pitchSim.ts` and `bat.ts` from
@@ -7,10 +7,25 @@
 // derivations on this side, the loop that consumes them on the other. Every
 // constant here carries its category (fixed / derived / calibrated / feel knob),
 // and `validate*` turns bad data into a test failure rather than a bad game.
+//
+// ⚠ TWO MORE EXTRACTIONS, TAKEN AT THE CAP AGAIN RATHER THAN RAISING IT. The
+// M2 feel pass needed to add a second scorer here, at 484/500 lines. It went out
+// instead:
+//
+//   `contactWindow.ts`  the BAT GEOMETRY — `BAT_TIP_M`, `BAT_HANDLE_LIMIT_M`
+//                       and the bisection that inverts `contactGeometry`. Pure
+//                       geometry, three unrelated consumers, no knowledge of
+//                       the format.
+//   `derbyScoring.ts`   the PAYOUT — every points constant and the one clamped
+//                       scorer. A LEAF: it imports nothing from the game, so
+//                       `validateDerbyFormat` can check the payout against this
+//                       file's derived cap with no cycle.
+//
+// What is left here is what is genuinely about the GAME: how long it is, what
+// gets thrown, and how two player inputs become four geometric axes.
 
 import { mulberry32 } from '../golf/wind';
-import { BAT_LENGTH_IN, M_PER_FT, SWEET_SPOT_M } from './bat';
-import { contactGeometry } from './batSim';
+import { validatePayoutCap } from './derbyScoring';
 import { HARBOURFRONT } from './parks';
 import type { Park } from './parks';
 import { PITCHES } from './pitches';
@@ -19,9 +34,6 @@ import { MAX_POINTS_PER_ROUND, MAX_ROUNDS } from './tuning';
 import { IN_TO_FT } from './units';
 import { PLATE_WIDTH_FT, armSideX } from './zone';
 import type { Handedness } from './zone';
-
-/** How one swing ended. `resolveFence`'s five-way answer, folded to the format. */
-export type DerbyOutcome = 'homeRun' | 'inPlay' | 'foul' | 'whiff' | 'take';
 
 /** Where the loop is. `inFlight` is the only phase in which a swing is legal. */
 export type DerbyPhase = 'ready' | 'inFlight' | 'done';
@@ -84,36 +96,14 @@ export const PITCHES_PER_ROUND = 8;
  */
 export const MAX_POINTS_PER_PITCH = MAX_POINTS_PER_ROUND / PITCHES_PER_ROUND;
 
-/** Points for clearing the wall at all. FEEL KNOB. */
-export const HR_BASE_POINTS = 100;
-
 /**
- * Where the distance bonus starts, ft. FEEL KNOB pinned to park data: the
- * shortest home run this game can produce is down a foul line, and the shortest
- * sampled fence in `PARKS` is 328 ft, so a datum at 350 pays every home run
- * something and pays a wall-scraper almost nothing.
+ * The cap for a session whose format was overridden. DERIVED, and it is the ONE
+ * place the arithmetic is written: `derbySim` and every bench ask this rather
+ * than dividing again, so the "cap re-derives from the CONFIG" property has a
+ * single implementation to mutate and a single one to assert.
  */
-export const DISTANCE_DATUM_FT = 350;
-
-/** Points per foot of projected carry past the datum. FEEL KNOB. */
-export const POINTS_PER_FT = 1;
-
-/**
- * Points for one home run of `carryFt` PROJECTED carry (Statcast's convention —
- * where the ball would have landed, which is what `BattedFlight.carryFt` is
- * because the sim flies it to z = 0 unobstructed).
- *
- * The `Math.min` is a guard, not a gameplay ceiling: it binds above 500 ft and
- * this model's hardest reachable swing carries ~440. The test measures that
- * headroom so the day a card modulator eats it is a test failure.
- *
- * `cap` is a parameter rather than the constant so that a config which overrides
- * `pitchesPerRound` re-derives its own cap and the round invariant survives it.
- */
-export function homeRunPoints(carryFt: number, cap = MAX_POINTS_PER_PITCH): number {
-  const bonus = Math.max(0, carryFt - DISTANCE_DATUM_FT) * POINTS_PER_FT;
-  return Math.min(cap, Math.round(HR_BASE_POINTS + bonus));
-}
+export const perPitchCap = (pitchesPerRound: number): number =>
+  MAX_POINTS_PER_ROUND / pitchesPerRound;
 
 // ---------------------------------------------------------------------------
 // The serve — CONTENT AS DATA
@@ -173,74 +163,6 @@ export function validateDerbyMix(mix = DERBY_MIX): string[] {
  * drift is a test failure.
  */
 export const SWING_UNDERCUT_IN = 0.56;
-
-/**
- * Contact requires the ball's centre to be OVER THE BAT. Both bounds are in
- * metres from the knob, matching `Swing.aimZM`.
- *
- * The tip is DERIVED — a 33 in bat, and past its end there is no bat. The handle
- * bound is its MIRROR about the sweet spot and is a FEEL KNOB, because the real
- * limit near the hands is `e(z)` collapsing on the bending node and this model
- * has no `e(z)` (BASEBALL.md § "The collision"). Stated rather than hidden: the
- * handle side of this window is the one number in the contact test that physics
- * is not carrying.
- */
-export const BAT_TIP_M = BAT_LENGTH_IN * IN_TO_FT * M_PER_FT;
-export const BAT_HANDLE_LIMIT_M = 2 * SWEET_SPOT_M - BAT_TIP_M;
-
-/**
- * The CONTACT WINDOW's half-width, TRUE physical seconds: the largest |Δt| at
- * which a WELL-AIMED swing still has the ball over the bat, against a pitch
- * arriving at `pitchSpeedFps`.
- *
- * DERIVED, by INVERTING `contactGeometry` rather than by re-solving its algebra.
- * `R_c = d/cos θ_c > d` for a miss in either direction, so contact walks
- * monotonically toward the tip with |Δt| and a bisection on the ONE
- * implementation is exact — and, unlike a closed form copied out of the same
- * derivation, cannot drift from it when the bat's length or the swing radius
- * moves. Symmetric in ±Δt by construction (cos is even).
- *
- * ⚠ IT EXISTS BECAUSE THE WINDOW IS DRAWN. `shared/TimingBar.tsx` paints the
- * contact band from this and promises "nothing here may widen it; it is drawn,
- * not set" — which was a `CONTACT_MS = 26.4` hand-copied out of a `console.log`
- * in `derbySim.test.ts`, i.e. a promise with nothing holding it. Now the widget
- * asks, per pitch, and the test asserts this against its 0.1 ms sweep of the
- * live `predict()` path.
- *
- * It is the window for a swing that was AIMED right: a lateral miss moves
- * `aimZM` along the bat and moves this with it, and a big enough vertical miss
- * or pull intent fails the overlap test at every Δt. Those are `resolveSwing`'s
- * business; a drawn band is a statement about timing alone.
- */
-export function contactWindowS(pitchSpeedFps: number, batSpeedMph?: number): number {
-  const onBat = (dt: number): boolean => {
-    const z = contactGeometry(pitchSpeedFps, {
-      hand: 'R',
-      timingErrorS: dt,
-      undercutIn: 0,
-      ...(batSpeedMph === undefined ? {} : { batSpeedMph }),
-    }).contactZM;
-    // ⚠ THE HANDLE HALF NEVER FIRES HERE, AND IS KEPT ANYWAY. `z = aimZM +
-    // (d/cos θ_c − d)` with `aimZM` at the sweet spot, so while |θ_c| < π/2
-    // contact only walks OUT and the TIP bound is what closes the window
-    // (measured at every rung of the bracket, at 55/71.5/130 mph of bat). It is
-    // `resolveSwing`'s overlap test written the same way on purpose — the ONE
-    // statement of "the ball is over the bat", not a narrowed copy of it.
-    return Number.isFinite(z) && z <= BAT_TIP_M && z >= BAT_HANDLE_LIMIT_M;
-  };
-  // Bracket first, from 1 ms, doubling. The window is ~26 ms, where the bat has
-  // turned ~0.46 rad, so the bracket closes long before `cos θ_c` leaves its
-  // monotone quadrant and the bisection below stays well-posed.
-  let hi = 0.001;
-  while (hi < 0.128 && onBat(hi)) hi *= 2;
-  let lo = onBat(hi) ? hi : 0;
-  for (let i = 0; i < 44; i++) {
-    const mid = (lo + hi) / 2;
-    if (onBat(mid)) lo = mid;
-    else hi = mid;
-  }
-  return lo;
-}
 
 /**
  * How far outside the rule zone the reticle may be placed, ft. FEEL KNOB —
@@ -404,7 +326,7 @@ export function validateDerbyFormat(rounds = DERBY_ROUNDS, perRound = PITCHES_PE
   if (!Number.isInteger(rounds) || rounds < 1) bad.push(`rounds ${rounds} is not ≥ 1`);
   if (rounds > MAX_ROUNDS) bad.push(`rounds ${rounds} exceeds the worker's MAX_ROUNDS ${MAX_ROUNDS}`);
   if (!Number.isInteger(perRound) || perRound < 1) bad.push(`pitchesPerRound ${perRound} < 1`);
-  const perPitch = MAX_POINTS_PER_ROUND / perRound;
+  const perPitch = perPitchCap(perRound);
   // ⚠ `perPitch * perRound === MAX_POINTS_PER_ROUND` CANNOT FIRE, and that is
   // not a style point: (2000/3)*3 is exactly 2000 in IEEE-754, so 3, 6, 7 and 9
   // pitches all passed this check while producing a FRACTIONAL per-pitch cap —
@@ -416,9 +338,17 @@ export function validateDerbyFormat(rounds = DERBY_ROUNDS, perRound = PITCHES_PE
         `(per-pitch cap ${perPitch})`,
     );
   }
-  if (homeRunPoints(Number.MAX_SAFE_INTEGER, perPitch) > perPitch) {
-    bad.push('a swing can exceed the per-pitch cap');
-  }
+  // ⚠ AND THE PAYOUT IS CHECKED FOR **EVERY** OUTCOME, NOT JUST HOME RUNS. This
+  // used to be a single `homeRunPoints(MAX_SAFE_INTEGER) > perPitch` line, which
+  // was sufficient only while home runs were the only thing that scored. The M2
+  // feel pass added a payout for solid contact, for fouls and for barrels, and
+  // the worker's rejection is on the SUBMITTED TOTAL — so the invariant has to
+  // be a property over the whole outcome ENUM, which is what `validatePayoutCap`
+  // loops over. Its heavier sibling `validateDerbyPayout` (ordering,
+  // monotonicity, the barrel bonus) is TEST-ONLY: this function runs on the live
+  // config path, and those are statements about constants that cannot move
+  // between two constructions.
+  bad.push(...validatePayoutCap(perPitch));
   return bad;
 }
 
