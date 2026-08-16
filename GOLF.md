@@ -532,6 +532,51 @@ renders each scene headlessly (Vite + pre-installed Chromium with
 `golfpreview.html?scene=course|range` (no app shell/auth). This replaces the old
 throwaway preview and is what the **`golf-visual-qa`** agent runs.
 
+**The harness is DETERMINISTIC — keep it that way.** Two runs with no code change
+used to differ on **23 of 25** scenes (`course-celebrate` on 89% of its pixels),
+which made the visual gate worthless: it could not tell a real regression from
+the machine having run a bit faster. The cause was never RNG — the texture and
+particle generators were already seeded (`mulberry32`). It was **animation
+sampled at wall-clock time**. Two things fixed it, and both are load-bearing:
+
+- **`lib/scene3d/clock.ts` — a freezable virtual clock** (game-neutral; baseball
+  will want it too). All three render loops take `now` from `tickSceneClock(rafNow)`
+  instead of the rAF timestamp, and anything else needing a timestamp
+  (`RangeGL`'s `divotStart`, `water.ts`'s splash `ringStart`) uses `sceneNow()`.
+  **Untouched it is a pass-through**: `tickSceneClock` returns the rAF timestamp
+  verbatim, so the shipped app is bit-for-bit unaffected. `golfpreview.tsx` is the
+  ONLY caller of `engageVirtualClock()`; it freezes the clock at the instant it
+  raises `window.__golfReady`, after which `dt === 0`, no substep runs, and every
+  later frame is identical. Loops must therefore tolerate `dt === 0` — never
+  divide by it.
+- **Readiness counted in FRAMES, never milliseconds.** SwiftShader renders these
+  scenes at **~3 fps**, so the beacon's old "45 frames" condition took ~15 s and
+  its 4 s wall-clock safety net beat it to the flag on *every single scene* — the
+  frame path had never once run, and each shot froze wherever the machine happened
+  to be. The virtual step is **100 ms**, matching the dt clamp all three loops
+  already apply and the real SwiftShader frame time; at 100 ms the course camera
+  easing (`1 − 0.001^dt`) converges 50% per frame, where a 16.7 ms step converges
+  11% and would screenshot the `?at=` views mid-camera-flight.
+
+Where a sequence genuinely needs motion, `shoot-golf.mjs` asks for it in VIRTUAL
+milliseconds (`advanceScene(page, ms)` → `window.__sceneClock.advance`), never
+`waitForTimeout`, then renders a few frozen frames before capturing (Chromium can
+hand back the frame *before* the last one rendered).
+
+**Known residual: ~5 water scenes still differ by 30–180 pixels (0.00–0.01%).**
+`augusta-12`, `augusta-16-redbud`, `course-played-aim`, `listowel-heritage-3`,
+`putt-water`. This is **not** the clock and is not fixable from scene state:
+virtual time at freeze is exactly `2300 ms` on 6/6 consecutive loads, a water-free
+hole is 6/6 byte-identical, and a water hole is 6/6 different while being stable
+*within* a page load. The differing pixels are a 1-px line on the water's
+silhouette — the `if (vDepth <= 0.0) discard;` shoreline in `water.ts`, where
+`alpha *= smoothstep(0.0, 0.09, vDepth)` leaves near-zero-alpha fragments whose
+8-bit rounding flips. It is SwiftShader per-GL-context behaviour (implicit-LOD
+sampling next to discarded fragments); `?water=low` and disabling Chromium's
+program cache both reduce but do not remove it. Treat a diff of this size on a
+water scene as noise; **anything larger, or on a non-water scene, is a real
+regression.**
+
 **Visual change workflow.** Any change to a golf scene, its materials, lighting
 or geometry: `golf` implements → `code-reviewer` (diff) → `qa-verify`
 (typecheck/tests/build) → **`golf-visual-qa`** (before/after screenshots, Course
