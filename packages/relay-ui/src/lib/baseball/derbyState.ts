@@ -14,7 +14,8 @@
 // test compares the snapshot's keys against `Object.keys(sim)`.
 
 import type { BattedFlight } from './battedBallSim';
-import type { DerbyOutcome, DerbyPhase, ResolvedConfig } from './derbyRules';
+import type { DerbyPhase, ResolvedConfig } from './derbyRules';
+import type { DerbyOutcome } from './derbyScoring';
 import type { FenceOutcome } from './parks';
 import type { PitchId } from './pitches';
 import type { PitchResult } from './pitchSim';

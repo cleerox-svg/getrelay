@@ -2,7 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../lib/api';
 import { play } from '../../lib/audio';
 import { vLen } from '../../lib/baseball/airPhysics';
-import { contactWindowS } from '../../lib/baseball/derbyRules';
+import { contactWindowS } from '../../lib/baseball/contactWindow';
 import { DerbySim } from '../../lib/baseball/derbySim';
 import type { DerbyState, SwingResult } from '../../lib/baseball/derbyState';
 import type { Park } from '../../lib/baseball/parks';
@@ -11,6 +11,7 @@ import { MONO_NUM, frostedSurface } from '../golf/shared/frosted';
 import { CountChip } from './shared/CountChip';
 import { ExitVeloTag } from './shared/ExitVeloTag';
 import { TimingBar } from './shared/TimingBar';
+import { coachSwing, describeSwing, parkCopyNumbers } from './shared/swingCopy';
 import { ZoneReticle } from './shared/ZoneReticle';
 import type { CameraMode, StadiumApi } from './StadiumGL';
 import type { FlightPaths } from './stadium/flight';
@@ -30,12 +31,12 @@ import type { PitchTrack } from '../../lib/baseball/pitchSim';
 // ⚠ THE ONE CLOCK, AND THE DIRECTION OF THE TEMPO. `pitchSim` integrates at TRUE
 // physical time and cannot see `PITCH_TEMPO`; the playback here is
 //
-//     trueS = wallElapsedS × PITCH_TEMPO           (0.55 → slow motion)
+//     trueS = wallElapsedS × PITCH_TEMPO           (0.45 → slow motion)
 //
-// so a 0.41 s pitch takes 0.75 s of wall clock, and `swing()` is called with the
-// TRUE time. It is a MULTIPLY. Dividing instead (wall / 0.55) would hand the sim
-// 1.36 s at the moment the ball reached the plate — 3.3× past the crossing,
-// which is 1300 ms of "late" against a ±26.4 ms contact window, i.e. every
+// so a 0.41 s pitch takes 0.91 s of wall clock, and `swing()` is called with the
+// TRUE time. It is a MULTIPLY. Dividing instead (wall / 0.45) would hand the sim
+// 2.02 s at the moment the ball reached the plate — 4.9× past the crossing,
+// which is 1600 ms of "late" against a ±26.4 ms contact window, i.e. every
 // single swing a whiff and the bug looking like broken collision physics.
 // `StadiumGL`'s own live-playback branch multiplies for the same reason; this is
 // the same identity written once more because this file, not that one, is what
@@ -78,8 +79,8 @@ interface PlayClock {
  * ⚠ THE PLAYBACK RATE IS PIECEWISE, AND `dt` IS STILL NEVER TOUCHED. Before the
  * plate the track is played at `PITCH_TEMPO`, which is what makes a 0.41 s pitch
  * reactable at all. AFTER it the batted ball plays at REAL TIME, because a fly
- * ball hangs 5.7 s and nothing about that needs slowing down — at 0.55 the same
- * home run takes 10.4 s of wall clock and a 24-pitch session becomes four
+ * ball hangs 5.7 s and nothing about that needs slowing down — at 0.45 the same
+ * home run takes 12.7 s of wall clock and a 24-pitch session becomes five
  * minutes of watching a dot. Measured on `derbySim.test.ts`'s own numbers
  * (hang 5.66 s on the 105 mph reference fly); real time makes it 6.4 s of play
  * and the session about three minutes.
@@ -149,22 +150,6 @@ function Spinner() {
   );
 }
 
-/** One line of plain English for a swing. Reads `SwingResult`, decides nothing. */
-function describe(r: SwingResult): string {
-  switch (r.outcome) {
-    case 'homeRun':
-      return `GONE! ${r.distFt.toFixed(0)} ft · +${r.points}`;
-    case 'foul':
-      return 'Foul ball';
-    case 'take':
-      return r.strike ? 'Took a strike' : 'Ball';
-    case 'whiff':
-      return 'Swing and a miss';
-    default:
-      return r.fence === 'offWall' ? 'Off the wall' : 'In play — out';
-  }
-}
-
 export function DerbyGame({ seed, park, paused = false, onFinish, onExit }: DerbyGameProps) {
   const [sim] = useState(
     () => new DerbySim({ seed: seed ?? (Date.now() >>> 0), ...(park ? { park } : {}) }),
@@ -176,6 +161,11 @@ export function DerbyGame({ seed, park, paused = false, onFinish, onExit }: Derb
   const [last, setLast] = useState<SwingResult | null>(null);
   const [flightTimeS, setFlightTimeS] = useState(0);
   const [contactMs, setContactMs] = useState(0);
+
+  // The fence numbers the coaching copy quotes — the HUD READING park data, not
+  // computing gameplay. `sim.cfg.park` rather than the prop so the default park
+  // is the one the sim actually resolved.
+  const { deepFt, gapFt, clearFt } = parkCopyNumbers(sim.cfg.park);
 
   const apiRef = useRef<StadiumApi | null>(null);
   const pitchTrackRef = useRef<PitchTrack | null>(null);
@@ -470,6 +460,7 @@ export function DerbyGame({ seed, park, paused = false, onFinish, onExit }: Derb
   const getBallScreen = useCallback(() => apiRef.current?.ballScreen() ?? null, []);
 
   const aiming = stage === 'aim';
+  const coachLine = last ? coachSwing(last, gapFt, clearFt) : null;
   // The zone frame and the reticle stay up THROUGH the flight, not just while
   // aiming: the aid's whole value is watching the ball arrive against the spot
   // you chose. They come down for the result, when the camera has cut away.
@@ -556,7 +547,23 @@ export function DerbyGame({ seed, park, paused = false, onFinish, onExit }: Derb
               fontWeight: 800,
             }}
           >
-            {describe(last)}
+            {describeSwing(last)}
+          </div>
+        )}
+
+        {last && coachLine && (
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: '#ffd9a0',
+              textShadow: '0 1px 4px rgba(0,0,0,0.8)',
+              textAlign: 'center',
+              maxWidth: 300,
+              marginTop: -6,
+            }}
+          >
+            {coachLine}
           </div>
         )}
 
@@ -600,6 +607,19 @@ export function DerbyGame({ seed, park, paused = false, onFinish, onExit }: Derb
           >
             Drag anywhere to aim the reticle — where you put it across the plate is your pull /
             oppo intent. Then one tap, anywhere, to swing.
+            {readout.homeRuns === 0 && (
+              // ⚠ THE FIRST-RUN HALF OF THE TEACH, and it retires ITSELF. It is
+              // gone the moment the player hits one out, so an experienced
+              // player never reads it twice — the charter's "must not become a
+              // permanent nag", enforced by the condition rather than promised
+              // in a comment. The numbers come from the park's own fence data,
+              // so a second park prints its own.
+              <>
+                {' '}
+                The wall is {deepFt.toFixed(0)} ft to dead centre and {gapFt.toFixed(0)} to the
+                gaps — shading off the middle is shorter.
+              </>
+            )}
           </div>
         )}
       </div>

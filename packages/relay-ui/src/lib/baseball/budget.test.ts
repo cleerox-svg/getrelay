@@ -134,7 +134,12 @@ describe('budget guard', () => {
         lines: lineCount(join(COMPONENT_DIR, n)),
         cap: n === 'StadiumGL.tsx' ? STADIUM_GL_CAP : COMPONENT_CAP,
       })),
-      ...filesIn(STADIUM_DIR, (n) => n.endsWith('.ts') || n.endsWith('.tsx')).map((n) => ({
+      // `ship` here for the same reason as the two blocks around it. There are
+      // no test files in `stadium/` today, so this changes nothing NOW — but a
+      // builder's test would otherwise be counted against a shipping cap by the
+      // one glob in this list that forgot, which is exactly how `shared/` got it
+      // wrong below.
+      ...filesIn(STADIUM_DIR, (n) => ship(n) && (n.endsWith('.ts') || n.endsWith('.tsx'))).map((n) => ({
         n: `stadium/${n}`,
         lines: lineCount(join(STADIUM_DIR, n)),
         cap: BUILDER_CAP,
@@ -142,7 +147,15 @@ describe('budget guard', () => {
       // The HUD widgets. A widget is one readout; `COMPONENT_CAP` is generous
       // for one and that is deliberate — the number that matters here is that
       // nothing in `shared/` is allowed to quietly become a second HUD.
-      ...filesIn(SHARED_DIR, (n) => n.endsWith('.ts') || n.endsWith('.tsx')).map((n) => ({
+      //
+      // ⚠ `ship` HERE TOO, AND IT WAS MISSING. This glob took every `.ts`/`.tsx`
+      // in `shared/`, tests included, while the block above filtered them out —
+      // so `shared/swingCopy.test.ts` was counted against a SHIPPING cap. Tests
+      // are exempt everywhere for the reason stated at the top of this file:
+      // their length is printed evidence, and evidence is the deliverable. A
+      // widget test growing to 700 lines of argument would have failed a cap
+      // that has nothing to say about it.
+      ...filesIn(SHARED_DIR, (n) => ship(n) && (n.endsWith('.ts') || n.endsWith('.tsx'))).map((n) => ({
         n: `shared/${n}`,
         lines: lineCount(join(SHARED_DIR, n)),
         cap: COMPONENT_CAP,
