@@ -19,11 +19,14 @@ import {
   FIELDER_SPEED_FPS,
   FIELDER_TIME_TO_SPEED_S,
   GROUND_INTERCEPT_FT,
-  INFIELD_DEPTH_FT,
+  INFIELD_ARC_R_FT,
+  infieldDepthFt,
   nearestFielder,
   sprintFt,
+  XB_DEPTH_DATUM_FT,
   XB_DEPTH_PER_FT,
   XB_DOUBLE_FT,
+  XB_TRIPLE_FT,
 } from './fielding';
 import type { FieldingInput } from './fielding';
 import { HARBOURFRONT, resolveFence } from './parks';
@@ -87,8 +90,50 @@ describe('how far a fielder gets', () => {
     expect(nearestFielder(29, 290).pos).toBe('RF');
     expect(nearestFielder(0, 315).pos).toBe('CF');
     expect(nearestFielder(0, 315).gapFt).toBeCloseTo(0, 9);
-    // INFIELD_DEPTH is DERIVED from the published 95 ft infield arc, not chosen.
-    expect(INFIELD_DEPTH_FT).toBe(RUBBER_D_FT + 95);
+  });
+
+  it('the infield edge is the 95 ft ARC struck from the rubber, not a circle', () => {
+    // ⚠ THE TEST WITH TEETH IS THE DEFINING PROPERTY, NOT THE TABLE. Any number
+    // of wrong-shaped functions reproduce 155.5 ft at dead centre — the circle
+    // this replaced did. What only the right one satisfies: every point of the
+    // edge is EXACTLY 95 ft from the rubber. Asserted by converting the model's
+    // plate-centred answer back to Cartesian and measuring it against the
+    // rubber's own position, i.e. by the inverse of the derivation.
+    for (let b = -90; b <= 90; b += 1.5) {
+      const r = infieldDepthFt(b);
+      const x = r * Math.sin((b * Math.PI) / 180);
+      const y = r * Math.cos((b * Math.PI) / 180);
+      expect(Math.hypot(x, y - RUBBER_D_FT), `${b}°`).toBeCloseTo(INFIELD_ARC_R_FT, 9);
+    }
+    // The plate is INSIDE the arc, so the discriminant can never go negative and
+    // there is no clamp to hide a bug in — true at every bearing, behind the
+    // plate included.
+    expect(RUBBER_D_FT).toBeLessThan(INFIELD_ARC_R_FT);
+    expect(infieldDepthFt(180)).toBeCloseTo(INFIELD_ARC_R_FT - RUBBER_D_FT, 9);
+
+    let table =
+      '\n[INFIELD EDGE — plate to the dirt at a bearing, ft]\n' +
+      '  bearing    arc (this model)   old plate-centred circle   over-stated by\n';
+    for (const b of [0, 10, 20, 29, 38, 45]) {
+      const r = infieldDepthFt(b);
+      table += `  ${String(b).padStart(5)}°   ${r.toFixed(1).padStart(14)}   ${(RUBBER_D_FT + 95)
+        .toFixed(1)
+        .padStart(23)}   ${(RUBBER_D_FT + 95 - r).toFixed(1).padStart(14)}\n`;
+    }
+    log(table);
+
+    // The four figures BASEBALL.md quotes for the true arc, now the shipped ones.
+    expect(infieldDepthFt(0)).toBeCloseTo(RUBBER_D_FT + 95, 9);
+    expect(infieldDepthFt(20)).toBeCloseTo(149.6, 1);
+    expect(infieldDepthFt(38)).toBeCloseTo(135.1, 1);
+    expect(infieldDepthFt(45)).toBeCloseTo(127.6, 1);
+    expect(RUBBER_D_FT + 95 - infieldDepthFt(45)).toBeCloseTo(27.9, 1);
+    // Mirrored, and shrinking monotonically from centre out to the line — the
+    // shape a circle cannot have.
+    for (let b = 0; b < 45; b += 1) {
+      expect(infieldDepthFt(-b)).toBeCloseTo(infieldDepthFt(b), 12);
+      expect(infieldDepthFt(b + 1)).toBeLessThan(infieldDepthFt(b));
+    }
   });
 });
 
@@ -114,6 +159,13 @@ describe('the batted-ball ladder', () => {
       ['seeing-eye up the middle', 150, -3, 1.4, 'SINGLE'],
       ['screamer up the middle', 175, 0, 1.5, 'SINGLE'],
       ['texas leaguer to short LF', 205, -12, 2.4, 'SINGLE'],
+      // ⚠ THE TWO ROWS THAT MEASURE THE DATUM DECISION are this one and the
+      // 'deep LC screamer' below — the only two of the thirteen that an ARC
+      // datum would have flipped, and it would have flipped both by a whisker:
+      // this bloop indexes 67.29 against the 68 ft threshold and would have gone
+      // to 68.17, the screamer 129.42 against 130 and would have gone to 131.20.
+      // Both stay because `XB_DEPTH_DATUM_FT` is flat; see its declaration for
+      // why, and for what the alternative costs across the whole lookup.
       ['bloop into shallow RC', 225, 14, 2.7, 'SINGLE'],
       ['lazy fly to right', 300, 30, 4.4, 'OUT'],
       ['can of corn to centre', 330, 0, 4.9, 'OUT'],
@@ -125,17 +177,65 @@ describe('the batted-ball ladder', () => {
     ];
     let table =
       '\n[FIELDING LADDER — defence 0.5. ⚠ GOLDEN: every call is model output]\n' +
-      '  batted ball                   dist  bear  hang   near   gap   reach   miss   call\n';
+      '  batted ball                   dist  bear  hang   near   gap   reach   miss   edge   call\n';
+    // ⚠ EVERY ROW IS EVALUATED AND THE TABLE IS PRINTED BEFORE ANYTHING IS
+    // ASSERTED. An `expect` inside the loop aborts on the first bad row, so a
+    // change that moves two calls reports one, gets "fixed", and reports the
+    // other on the next run — which is exactly what happened while this fix was
+    // being made. A ladder is read whole or it is not read.
+    const wrong: string[] = [];
     for (const [name, d, b, h, want] of cases) {
       const p = fieldBattedBall(ball(d, b, h), 0.5);
       table += `  ${name.padEnd(28)}${String(d).padStart(5)}${String(b).padStart(6)}${h
         .toFixed(1)
         .padStart(6)}   ${p.nearest.padEnd(4)}${p.gapFt.toFixed(1).padStart(6)}${p.reachFt
         .toFixed(1)
-        .padStart(8)}${p.missFt.toFixed(1).padStart(7)}   ${p.result}\n`;
-      expect(p.result, `${name} (d ${d}, bearing ${b}, hang ${h})`).toBe(want);
+        .padStart(8)}${p.missFt.toFixed(1).padStart(7)}${infieldDepthFt(b)
+        .toFixed(1)
+        .padStart(7)}   ${p.result}${p.result === want ? '' : `   ⚠ pinned ${want}`}\n`;
+      if (p.result !== want) wrong.push(`${name} (${d} ft / ${b}° / ${h} s): ${want} → ${p.result}`);
     }
     log(table);
+    expect(wrong).toEqual([]);
+  });
+
+  it('⚠ the DATUM decision, as a counterfactual rather than as prose', () => {
+    // ⚠ WHAT AN ARC DATUM WOULD HAVE DONE, COMPUTED. `XB_DEPTH_DATUM_FT` is flat
+    // while `infieldDepthFt` is not, and that split is the one judgement call in
+    // the infield-arc fix — so the alternative is evaluated here rather than
+    // described, and the two rows it would flip are named. The shipped index is
+    // `fieldBattedBall`'s own output; the counterfactual re-runs the same
+    // arithmetic with the datum swapped, which is the only thing that differs.
+    const cases: Array<[string, number, number, number]> = [
+      ['texas leaguer to short LF', 205, -12, 2.4],
+      ['bloop into shallow RC', 225, 14, 2.7],
+      ['liner into the LC gap', 360, -22, 3.6],
+      ['down the left-field line', 320, -43, 3.6],
+      ['deep LC screamer', 390, -20, 3.4],
+      ['scorched into the LC gap', 405, -19, 3.2],
+    ];
+    const call = (xb: number) =>
+      xb < XB_DOUBLE_FT ? 'SINGLE' : xb < XB_TRIPLE_FT ? 'DOUBLE' : 'TRIPLE';
+    let table =
+      '\n[DATUM COUNTERFACTUAL — extra-base index, flat datum (shipped) vs the arc]\n' +
+      '  batted ball                   bear   flat    call     arc    call\n';
+    const flipped: string[] = [];
+    for (const [name, d, b, h] of cases) {
+      const p = fieldBattedBall(ball(d, b, h), 0.5);
+      const flat = p.missFt + XB_DEPTH_PER_FT * (d - XB_DEPTH_DATUM_FT);
+      const arc = p.missFt + XB_DEPTH_PER_FT * (d - infieldDepthFt(b));
+      table += `  ${name.padEnd(28)}${String(b).padStart(5)}${flat.toFixed(2).padStart(8)}   ${call(
+        flat,
+      ).padEnd(7)}${arc.toFixed(2).padStart(7)}   ${call(arc)}\n`;
+      expect(call(flat), name).toBe(p.result); // the counterfactual reproduces the model
+      if (call(flat) !== call(arc)) flipped.push(`${name}: ${call(flat)} → ${call(arc)}`);
+    }
+    table += `\n  Rows an arc datum would flip: ${flipped.join('; ')}\n`;
+    log(table);
+    expect(flipped).toEqual([
+      'bloop into shallow RC: SINGLE → DOUBLE',
+      'deep LC screamer: DOUBLE → TRIPLE',
+    ]);
   });
 
   it('⚠ the grounder is scored off the landing point — the limitation, pinned', () => {
@@ -190,7 +290,7 @@ describe('boundaries', () => {
   it('⚠ the infield cap and the depth term overlap — the margin, measured', () => {
     // ⚠ A MUTATION THAT CANNOT BE KILLED, MEASURED INSTEAD OF IGNORED.
     // `fieldBattedBall` caps any unfielded ball landing on the dirt at a single,
-    // and then indexes deeper balls on `miss + 0.3·(dist − INFIELD)`. Deleting
+    // and then indexes deeper balls on `miss + 0.3·(dist − DATUM)`. Deleting
     // the CAP changes no call at all, because for a shallow ball that index is
     // negative-shifted enough to stay under the single/double threshold anyway.
     // That is not a testing gap in the shipped model — it is the two clauses
@@ -200,14 +300,16 @@ describe('boundaries', () => {
     // test says so before a wrong call does.
     let worst = -Infinity;
     let at = '';
-    for (let d = 0; d < INFIELD_DEPTH_FT; d += 0.5) {
+    for (let d = 0; d < infieldDepthFt(0); d += 0.5) {
       for (let b = -45; b <= 45; b += 1) {
+        const edge = infieldDepthFt(b);
+        if (d >= edge) continue; // off the dirt at THIS bearing — not the cap's case
         for (let h = 0.2; h <= 6; h += 0.2) {
           for (const def of [0, 0.5, 1]) {
             const mul = 1 + (def - 0.5) * DEFENSE_SPAN;
             const miss = Math.max(0, nearestFielder(b, d).gapFt - (sprintFt(h) + GROUND_INTERCEPT_FT) * mul);
             if (miss === 0) continue; // an out either way — the cap never sees it
-            const xb = miss + XB_DEPTH_PER_FT * (d - INFIELD_DEPTH_FT);
+            const xb = miss + XB_DEPTH_PER_FT * (d - XB_DEPTH_DATUM_FT);
             if (xb > worst) {
               worst = xb;
               at = `${d} ft / ${b}° / ${h.toFixed(1)} s / defence ${def}`;
@@ -222,7 +324,40 @@ describe('boundaries', () => {
         ` (at ${at}),\n  i.e. ${(XB_DOUBLE_FT - worst).toFixed(2)} ft of margin. The cap is currently belt-and-braces.\n`,
     );
     expect(worst).toBeLessThan(XB_DOUBLE_FT);
-    expect(worst).toBeCloseTo(39.25, 1); // GOLDEN — the margin, so a knob move shows
+    // GOLDEN — the margin, so a knob move shows. ⚠ It survived the infield-arc
+    // fix UNMOVED at 39.25, and that is evidence rather than luck: the peak is
+    // set at d = 0, which is inside the dirt at every bearing, and the index is
+    // measured from the flat `XB_DEPTH_DATUM_FT`. Under an arc datum it would
+    // have risen to 47.62 — the margin eaten from 28.75 ft to 20.38 — which is
+    // the same decision this file's ladder rows measure, seen from the other end.
+    expect(worst).toBeCloseTo(39.25, 1);
+  });
+
+  it('⚠ 140 ft down the line is OUTFIELD GRASS — the defect the arc fixed', () => {
+    // ⚠ THIS IS THE ASSERTION THE OLD CONSTANT FAILED, AND THE ONE A CIRCLE OF
+    // ANY RADIUS CANNOT PASS. The same 140 ft at two bearings: down the line it
+    // is 12 ft PAST the dirt (edge 127.6) and to centre field it is 15 ft short
+    // of it (edge 155.5). One plate-centred radius must call both the same way;
+    // only a bearing-dependent edge can call them differently, which is why this
+    // pair is the test and the printed table is only the documentation.
+    const line = ball(140, -45, 2);
+    const centre = ball(140, 0, 2);
+    expect(infieldDepthFt(-45)).toBeLessThan(140);
+    expect(infieldDepthFt(0)).toBeGreaterThan(140);
+    // Down the line: no infield credit, so the 3B does not get there.
+    const l = fieldBattedBall(line, 0.5);
+    expect(l.reachFt).toBeCloseTo(sprintFt(2) * 1, 9);
+    expect(l.result).toBe('SINGLE');
+    // To centre: still on the dirt, still credited the roll-and-throw stand-in.
+    const c = fieldBattedBall(centre, 0.5);
+    expect(c.reachFt).toBeCloseTo(sprintFt(2) + GROUND_INTERCEPT_FT, 9);
+    log(
+      `[ARC] 140 ft / −45° (edge ${infieldDepthFt(-45).toFixed(1)}): reach ${l.reachFt.toFixed(
+        1,
+      )} → ${l.result}\n[ARC] 140 ft /   0° (edge ${infieldDepthFt(0).toFixed(
+        1,
+      )}): reach ${c.reachFt.toFixed(1)} → ${c.result}\n`,
+    );
   });
 
   it('the single/double boundary sits exactly on XB_DOUBLE_FT', () => {
@@ -237,14 +372,14 @@ describe('boundaries', () => {
     // `beyond(g)` puts the ball g ft straight out past CF, so miss = g − reach
     // and the depth credit grows with g too. Solve the threshold exactly:
     //   (g − reach) + 0.3·(cf + g − INFIELD) = XB_DOUBLE_FT
-    const g = (XB_DOUBLE_FT + reach - XB_DEPTH_PER_FT * (cf.distFt - INFIELD_DEPTH_FT)) /
+    const g = (XB_DOUBLE_FT + reach - XB_DEPTH_PER_FT * (cf.distFt - XB_DEPTH_DATUM_FT)) /
       (1 + XB_DEPTH_PER_FT);
     const under = fieldBattedBall(beyond('CF', g - 0.05, hang), 0.5);
     const over = fieldBattedBall(beyond('CF', g + 0.05, hang), 0.5);
     log(
       `[BOUNDARY] single/double at gap ${g.toFixed(3)} ft (miss ${(g - reach).toFixed(
         2,
-      )} ft + ${(XB_DEPTH_PER_FT * (cf.distFt + g - INFIELD_DEPTH_FT)).toFixed(
+      )} ft + ${(XB_DEPTH_PER_FT * (cf.distFt + g - XB_DEPTH_DATUM_FT)).toFixed(
         2,
       )} ft of depth credit): ${under.result} / ${over.result}\n`,
     );

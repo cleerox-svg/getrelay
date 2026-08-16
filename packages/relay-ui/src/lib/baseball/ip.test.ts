@@ -22,7 +22,11 @@ const SELF = 'ip.test.ts'; // necessarily contains every banned term, as pattern
 // Every directory the game ships from. The scene modules land in
 // components/baseball at stage 4; listing it now means the guard widens on its
 // own instead of needing to be remembered.
-const SCAN_DIRS = [HERE, join(HERE, '..', '..', 'components', 'baseball')];
+const SCAN_DIRS = [
+  HERE,
+  join(HERE, '..', '..', 'components', 'baseball'),
+  join(HERE, '..', '..', 'components', 'baseball', 'stadium'),
+];
 
 // Club nicknames. Word-boundary matched and case-insensitive, so "arrays" does
 // not trip "Rays" and a lower-case identifier does not slip through either.

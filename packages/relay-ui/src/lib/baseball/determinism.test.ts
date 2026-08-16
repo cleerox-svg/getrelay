@@ -77,6 +77,44 @@ describe('determinism guard', () => {
     expect(violations, `determinism violations:\n${violations.join('\n')}`).toEqual([]);
   });
 
+  it('no baseball SCENE source uses an unseeded RNG', () => {
+    // ⚠ A NARROWER BAN FOR THE RENDER LAYER, and only one of the four tokens.
+    // The scope note above says why the render layer keeps its wall clock: rAF
+    // timestamps are how a frame loop works. But `Math.random` is banned there
+    // too, for a different reason than in the sim — the screenshot harness's
+    // determinism claim is that two runs produce BYTE-IDENTICAL PNGs, and one
+    // unseeded call in a scene builder breaks that silently. The seats' section
+    // jitter is `mulberry32(BOWL_SEED)` for exactly this reason.
+    const dirs = [
+      join(SIM_DIR, '..', '..', 'components', 'baseball'),
+      join(SIM_DIR, '..', '..', 'components', 'baseball', 'stadium'),
+    ];
+    const files: Array<{ name: string; text: string }> = [];
+    for (const dir of dirs) {
+      let entries: string[];
+      try {
+        entries = readdirSync(dir);
+      } catch {
+        continue;
+      }
+      for (const name of entries) {
+        if (!name.endsWith('.ts') && !name.endsWith('.tsx')) continue;
+        files.push({ name, text: readFileSync(join(dir, name), 'utf8') });
+      }
+    }
+    // Guard the guard: once the scene exists this must never pass over nothing.
+    expect(files.map((f) => f.name)).toContain('StadiumGL.tsx');
+
+    const violations: string[] = [];
+    for (const { name, text } of files) {
+      text.split('\n').forEach((line, i) => {
+        if (isComment(line)) return;
+        if (/\bMath\.random\b/.test(line)) violations.push(`${name}:${i + 1}  ${line.trim()}`);
+      });
+    }
+    expect(violations, `unseeded RNG in the scene:\n${violations.join('\n')}`).toEqual([]);
+  });
+
   it('the guard actually catches the things it claims to', () => {
     // A guard nobody has watched fail is not a guard. Same discipline as the
     // gyro superposition test: prove the patterns bite before trusting them.

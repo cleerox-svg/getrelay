@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Baseball scene preview</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #0b1220;
+        overflow: hidden;
+      }
+      #root {
+        position: fixed;
+        inset: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      Dev/CI-only preview harness for the baseball stadium scene. Mounts
+      StadiumGL standalone (no app shell, no auth, no store) so the render can be
+      screenshotted headlessly for visual QA. NOT part of the production build —
+      Vite's build input is index.html alone, so nothing in here ships.
+      See scripts/shoot-baseball.mjs and BASEBALL.md.
+    -->
+    <div id="root"></div>
+    <script type="module" src="/src/baseballpreview.tsx"></script>
+  </body>
+</html>

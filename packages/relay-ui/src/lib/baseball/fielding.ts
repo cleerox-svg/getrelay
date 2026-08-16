@@ -12,6 +12,13 @@
 // grounders as base hits. That is the missing roll-and-throw, not a bug in the
 // reach arithmetic, and the knob that stands in for it says so on its own line.
 //
+// ⚠ IT ALSO OWNS ONE PIECE OF FIELD GEOMETRY, `infieldDepthFt`, and owns it for
+// BOTH LAYERS. `stadium/field.ts` draws the dirt by sampling this function, so
+// the boundary a human sees in a screenshot is the boundary the lookup tests
+// against. That is not tidiness — M1's visual gate inverted a render back to
+// world feet, measured the dirt edge at 155.6 ft, and caught a physics bug that
+// two prose passes had already looked straight at.
+//
 // No three, no Math.random, no wall clock, no state.
 
 import type { FenceOutcome } from './parks';
@@ -19,6 +26,8 @@ import { FOUL_LINE_DEG } from './parks';
 import { RUBBER_D_FT } from './zone';
 
 export type PlayResult = 'OUT' | 'FOUL' | 'SINGLE' | 'DOUBLE' | 'TRIPLE' | 'HR';
+
+const rad = (deg: number) => (deg * Math.PI) / 180;
 
 /** A fielder's standing position, polar from the plate. */
 export interface FielderSpot { pos: string; bearingDeg: number; distFt: number }
@@ -85,27 +94,65 @@ export const DEFENSE_SPAN = 0.3;
 export const GROUND_INTERCEPT_FT = 26;
 
 /**
- * Radius of the infield dirt as this model uses it — a PLATE-CENTRED circle, ft.
+ * Radius of the infield arc — the grass line — struck from the pitcher's plate,
+ * ft. PUBLISHED DATA (the field-layout diagram's 95 ft skinned-infield arc;
+ * exact reference unverified, flagged on the same standard the aero citations
+ * are held to).
  *
- * Its VALUE is derived: `RUBBER_D_FT + 95` is where the published 95 ft infield
- * arc, struck from the pitcher's plate, crosses the centre-field line. Not a
- * round number somebody liked.
- *
- * ⚠ BUT THE GEOMETRY IS AN APPROXIMATION AND THE LABEL USED TO HIDE IT. The real
- * arc is centred on the RUBBER and this is used as a radius from the PLATE, and
- * the two only coincide at dead centre. The true arc's distance from the plate
- * is 155.5 ft at 0°, 149.6 at 20°, 135.1 at 38° (where the corners stand) and
- * 127.6 at the foul line — so one plate-centred circle over-states the dirt by
- * up to 27.9 ft down the lines. That matters: `distFt < INFIELD_DEPTH_FT` is
- * what caps an unfielded ball at a single, so a 140 ft ball down the line is
- * treated as an infield chopper when it landed on the outfield grass.
- *
- * Left as one circle DELIBERATELY, for now: making it bearing-dependent is a
- * behaviour change to the lookup (it moves the ladder), and the smallest-model
- * rule says that lands with the rolling phase that supersedes
- * `GROUND_INTERCEPT_FT`, not before it. Flagged here rather than mislabelled.
+ * ⚠ The CENTRE is the ambiguity, not the radius. Groundskeeping references
+ * variously strike this arc from the front edge of the rubber (`RUBBER_D_FT`,
+ * 60.5 ft) and from the centre of the mound circle (59 ft). We use the rubber,
+ * because 60.5 is already published data in `zone.ts` and adding a second,
+ * separately-unverified 59 would buy nothing: measured, the two centres differ
+ * by 1.5 ft at dead centre and 0.5 ft at the foul line, against the 27.9 ft
+ * error this whole function exists to remove.
  */
-export const INFIELD_DEPTH_FT = RUBBER_D_FT + 95;
+export const INFIELD_ARC_R_FT = 95;
+
+/**
+ * Distance from the PLATE to the edge of the infield dirt at a bearing, ft.
+ * DERIVED, and a FUNCTION rather than a constant because the real thing is one:
+ * the arc is centred on the rubber, the lookup asks in plate-centred polars, and
+ * the two only coincide at dead centre.
+ *
+ * Law of cosines on the triangle plate → rubber → arc point, solved for the
+ * plate-side leg:
+ *
+ *     r(β) = d·cos β + √(R² − (d·sin β)²)     d = RUBBER_D_FT, R = 95
+ *
+ * The discriminant can never go negative — `d < R`, so `|d·sin β| ≤ 60.5 < 95`
+ * at every bearing including behind the plate — which is why there is no clamp
+ * and why a clamp appearing here later would be a bug, not a safety net.
+ *
+ * 155.5 ft at 0°, 149.6 at 20°, 135.1 at ±38° (where the corners stand), 127.6
+ * at the foul line.
+ *
+ * ⚠ THIS REPLACES A PLATE-CENTRED CIRCLE OF 155.5 ft, WHICH WAS WRONG BY UP TO
+ * 27.9 ft down the lines. Stage 4b fixed the constant's LABEL and left the
+ * geometry; a 140 ft ball down the line was still being scored as an infield
+ * chopper when it had landed on outfield grass, and the M1 visual gate then
+ * measured the renderer faithfully drawing a dirt lot that filled ~60 % of the
+ * batter's-eye frame. The renderer added no error of its own:
+ * `stadium/field.ts` calls THIS function, so the drawn dirt is the dirt the
+ * fielder model uses, which is the whole point of one shared source.
+ *
+ * ⚠ IT ANSWERS EXACTLY ONE QUESTION — "did the ball land on the skinned
+ * infield?" — and the extra-base index deliberately does NOT measure depth from
+ * it. See `XB_DEPTH_DATUM_FT`, which is where the second half of this fix is
+ * argued and where the numbers for the alternative are recorded.
+ *
+ * ⚠ THE BASELINE CUTOUTS ARE DELIBERATELY NOT MODELLED, and they need not be:
+ * every one of them is strictly INSIDE this arc (second base sits 127.3 ft out
+ * against an arc at 155.5; a 13 ft cutout around first reaches 103 ft against an
+ * arc at 127.6), so the arc is the OUTER boundary of the dirt at every bearing
+ * and "did this ball land on the dirt" needs nothing else. The infield grass
+ * diamond inside it is a texture question for the renderer, not a lookup input.
+ */
+export function infieldDepthFt(bearingDeg: number): number {
+  const b = rad(bearingDeg);
+  const s = RUBBER_D_FT * Math.sin(b);
+  return RUBBER_D_FT * Math.cos(b) + Math.sqrt(INFIELD_ARC_R_FT * INFIELD_ARC_R_FT - s * s);
+}
 
 /**
  * What a foot of DEPTH is worth against a foot of MISS. FEEL KNOB, and the
@@ -114,6 +161,44 @@ export const INFIELD_DEPTH_FT = RUBBER_D_FT + 95;
  * of a branch per case.
  */
 export const XB_DEPTH_PER_FT = 0.3;
+
+/**
+ * The depth that credit is measured FROM, ft. FEEL KNOB — the offset of a
+ * feel-knob index, and NOT a piece of geometry, however much its value looks
+ * like one.
+ *
+ * ⚠ IT IS FLAT ON PURPOSE, AND THAT IS A DECISION WITH NUMBERS BEHIND IT. The
+ * obvious move when `infieldDepthFt` became bearing-dependent was to measure
+ * depth from the arc too — one symbol, one concept, done. Measured, that is the
+ * change that moves the lookup: swept over distance × bearing × hang × rating it
+ * re-calls **2.2 %** of the space, of which the dirt-boundary fix accounts for
+ * 7,376 cases (OUT → SINGLE, balls landing on outfield grass that were being
+ * handed the infield roll-and-throw credit — the defect) and the depth datum for
+ * **19,606** (12,470 SINGLE → DOUBLE, 7,136 DOUBLE → TRIPLE). Two of the
+ * thirteen named ladder rows flip, and BOTH flip on the datum, NEITHER on the
+ * boundary.
+ *
+ * There is no mechanism behind those 19,606. `XB_DEPTH_PER_FT` prices the throw
+ * back, and the throw goes to a BASE — which does not move when the grass line
+ * curves. An arc datum hands a ball down the line 8.4 ft of extra index (12 % of
+ * `XB_DOUBLE_FT`) purely for being near the foul pole, and this model already
+ * prices that honestly and explicitly twice over: through `missFt`, which knows
+ * the LF stands at 290 ft / −29° and so is 80 ft from a 320 ft ball down the
+ * line against the CF's 15 ft from a 320 ft ball to centre, and through
+ * `CORNER_DEG`. A third, implicit bearing term is double-counting.
+ *
+ * ⚠ AND THE HONEST PART: keeping it flat is ALSO what keeps the ladder still,
+ * and a reviewer is entitled to read that as the reason rather than the
+ * consequence. So the alternative's numbers are recorded above rather than
+ * described, `XB_DOUBLE_FT`/`XB_TRIPLE_FT` were fitted against the named ladder
+ * WITH this offset in place and would need re-fitting without it, and the day
+ * someone wants the arc datum the whole edit is `infieldDepthFt(inp.bearingDeg)`
+ * on one line plus a re-fit — not an argument.
+ *
+ * Its VALUE is `infieldDepthFt(0)`, the arc's deepest point, so there is still
+ * one geometric source in this file and no 155.5 typed anywhere.
+ */
+export const XB_DEPTH_DATUM_FT = infieldDepthFt(0);
 
 /**
  * Extra-base thresholds on `missFt + depth credit`, ft. FEEL KNOBS, set against
@@ -151,8 +236,6 @@ export interface FieldingPlay {
   reachFt: number;
   missFt: number;
 }
-
-const rad = (deg: number) => (deg * Math.PI) / 180;
 
 /** Straight-line distance between two polar points on the ground plane, ft. */
 const gap = (aDeg: number, aFt: number, bDeg: number, bFt: number): number =>
@@ -196,7 +279,12 @@ export function fieldBattedBall(inp: FieldingInput, defense = 0.5): FieldingPlay
 
   const near = nearestFielder(inp.bearingDeg, inp.distFt);
   const mul = 1 + (Math.min(1, Math.max(0, defense)) - 0.5) * DEFENSE_SPAN;
-  const infield = inp.distFt < INFIELD_DEPTH_FT ? GROUND_INTERCEPT_FT : 0;
+  // ⚠ THE DIRT EDGE AT THIS BEARING, read once and used by both clauses that ask
+  // "did it land on the dirt". The extra-base index below asks a different
+  // question and answers it from `XB_DEPTH_DATUM_FT`; the two were one constant
+  // only because a wrong circle happened to be numerically equal to a datum.
+  const infieldFt = infieldDepthFt(inp.bearingDeg);
+  const infield = inp.distFt < infieldFt ? GROUND_INTERCEPT_FT : 0;
   const reachFt = (sprintFt(inp.hangS) + infield) * mul;
   const missFt = Math.max(0, near.gapFt - reachFt);
   const base = { nearest: near.pos, gapFt: near.gapFt, reachFt, missFt };
@@ -211,23 +299,31 @@ export function fieldBattedBall(inp: FieldingInput, defense = 0.5): FieldingPlay
   // of the plate is 100 ft from the nearest fielder's STANDING SPOT, so without
   // it the miss arithmetic scores it a double. The landing-point limitation
   // showing its teeth; capped honestly until there is a rolling phase.
-  if (inp.distFt < INFIELD_DEPTH_FT) return { ...base, result: 'SINGLE' };
-  // Depth beyond the infield is a CREDIT, and it can only be positive HERE
-  // because the line above has already returned for everything shallower. It
-  // used to carry a `Math.max(0, …)` as well; that clamp was PROVABLY
-  // unreachable, so it is deleted rather than kept for comfort.
+  if (inp.distFt < infieldFt) return { ...base, result: 'SINGLE' };
+  // Depth is credited from `XB_DEPTH_DATUM_FT` — a flat datum, argued on its own
+  // declaration — and NOT from the arc above. It used to carry a `Math.max(0, …)`
+  // as well; that clamp was PROVABLY unreachable, so it is deleted rather than
+  // kept for comfort.
   //
-  // ⚠ AND THE HONEST CONSEQUENCE, MEASURED RATHER THAN ASSERTED AWAY. With the
-  // clamp gone the two clauses are equivalent IN EFFECT: swept over the whole
-  // infield (every distance, bearing, hang and rating), the index this line
-  // would produce for a shallow ball peaks at 39.25 against the 68 ft
-  // single/double threshold, so deleting the cap above would not change a single
-  // call — its mutation is unobservable, not merely unobserved. The cap stays
-  // because it is the explicit statement of the rule and because that 28.75 ft
-  // of margin is an artefact of today's feel knobs, not a theorem; the day a
-  // knob narrows it, the cap becomes load-bearing. `fielding.test.ts` measures
-  // the margin so that day is a test failure rather than a surprise.
-  const xb = missFt + XB_DEPTH_PER_FT * (inp.distFt - INFIELD_DEPTH_FT);
+  // ⚠ THE CLAMP'S CASE IS NOW REACHABLE AND STILL DOES NOT WANT A CLAMP, which
+  // is a real change from stage 4b and not a slip. The datum is the arc's
+  // deepest point, so a ball past the arc down the line but nearer than 155.5 ft
+  // lands HERE with a NEGATIVE term — up to −8.37 ft at the foul line. That is
+  // the term doing its job, not overflowing it: such a ball is shallow, the
+  // throw back is short, and a debit is the correct sign. Clamping it to 0 would
+  // say a 130 ft bloop down the line and a 156 ft ball to centre are equally deep.
+  //
+  // ⚠ AND THE OVERLAP, MEASURED RATHER THAN ASSERTED AWAY. With the clamp gone
+  // the two clauses are equivalent IN EFFECT: swept over the whole dirt (every
+  // distance, bearing, hang and rating), the index this line would produce for a
+  // ball on the dirt peaks at 39.25 against the 68 ft single/double threshold,
+  // so deleting the cap above would not change a single call — its mutation is
+  // unobservable, not merely unobserved. The cap stays because it is the explicit
+  // statement of the rule and because that 28.75 ft of margin is an artefact of
+  // today's feel knobs, not a theorem; the day a knob narrows it, the cap becomes
+  // load-bearing. `fielding.test.ts` measures the margin so that day is a test
+  // failure rather than a surprise.
+  const xb = missFt + XB_DEPTH_PER_FT * (inp.distFt - XB_DEPTH_DATUM_FT);
   if (xb < XB_DOUBLE_FT) return { ...base, result: 'SINGLE' };
   if (xb < XB_TRIPLE_FT) return { ...base, result: 'DOUBLE' };
   return { ...base, result: 'TRIPLE' };
