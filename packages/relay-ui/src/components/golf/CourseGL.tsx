@@ -33,7 +33,6 @@ import {
 } from '../../lib/golf/courseData';
 import {
   addSkyDome,
-  createTreeKit,
   makeContactShadowTexture,
   makeFog,
   makeTurfColor,
@@ -74,6 +73,7 @@ import {
 import { resolveGolfQuality } from './scene/quality';
 import { attachSkyEnv, hemiFill } from './scene/env';
 import { makeSandMaps, makeSandMaterial } from './scene/sand';
+import { buildGrove, groveFromCourseTrees } from './scene/foliage';
 
 // Regulation liner (sunken cup) geometry. CUP_DEPTH ≈ 3.5×BALL_R so the ball
 // sits clearly below the rim; the aperture punched in the green (grid + cap) is a
@@ -2154,16 +2154,10 @@ export default function CourseGL({ sim, onArm, paused, cosmetics, onStats }: Pro
     };
 
 
-    // Trees — the range's two-species grove (broadleaf + pine, 5-tone palette),
-    // shared from scenery.ts. Placement is now DETERMINISTIC DATA (terrain.
-    // courseTrees) shared with the sim, so the trunk drawn here is exactly the
-    // trunk the ball ricochets off and the canopy it brushes through (see-what-
-    // you-play). We render straight FROM that list — position, species, scale,
-    // seed and terrain height all come from the data. World z = −d.
-    const trees = createTreeKit(scene, track);
-    for (const t of courseTrees(hole)) {
-      (t.kind === 'pine' ? trees.addPine : trees.addBroadleaf)(t.x, -t.d, t.scale, t.seed, t.ground);
-    }
+    // Trees — the shared two-species grove (scene/foliage.ts), INSTANCED to three
+    // draw calls for the whole hole. Placement is DETERMINISTIC DATA shared with
+    // the sim, so the trunk drawn is the one the ball caroms off.
+    buildGrove(scene, track, groveFromCourseTrees(courseTrees(hole)));
 
     // --- Camera ---------------------------------------------------------
     const camera = new THREE.PerspectiveCamera(60, w / h, 0.5, 2000);
@@ -2598,7 +2592,13 @@ export default function CourseGL({ sim, onArm, paused, cosmetics, onStats }: Pro
         // Putts + short approaches: zoom IN. Sit low just behind the ball and
         // look toward the cup so the ball AND the hole frame together, instead of
         // the wide tee view that made the ball look huge and the green tiny.
-        tmpDir.subVectors(pinV, tmpB).setY(0).normalize();
+        // GUARD, as in the two in-flight branches above. HOLED OUT, pinV − ball
+        // is the zero vector and three's normalize() returns (0,0,0), collapsing
+        // the camera onto the ball: the celebrate frame was a straight-down
+        // close-up of the sphere's pole cap. Fall back to the aimed line.
+        tmpDir.subVectors(pinV, tmpB).setY(0);
+        if (tmpDir.lengthSq() < 1e-4) aimDir(tmpDir);
+        tmpDir.normalize();
         const R = st.distToPin;
         const back = Math.max(6, Math.min(11, R * 0.5 + 5));
         desiredPos.copy(tmpB).addScaledVector(tmpDir, -back);

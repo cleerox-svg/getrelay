@@ -404,100 +404,18 @@ export function makeTurfNormalMap(): THREE.Texture {
 }
 
 // --- Trees -----------------------------------------------------------------
-
-export interface TreeKit {
-  // (x, z) world position, scale s, RNG seed, and optional ground height y (the
-  // range ground is flat at 0; the course passes heightAt so trees sit on the
-  // undulating terrain rather than floating).
-  addBroadleaf: (x: number, z: number, s: number, seed: number, y?: number) => void;
-  addPine: (x: number, z: number, s: number, seed: number, y?: number) => void;
-}
-
-/**
- * Two-species low-poly tree builders sharing one trunk material, a 5-tone leaf
- * palette and pooled geometries (all disposal-tracked). Each scene keeps its own
- * PLACEMENT; this only builds a tree at (x, z). Faceted real meshes so the sun
- * casts a proper shadow. A seeded mulberry32 RNG jitters every tree so the grove
- * varies and screenshots stay deterministic.
- */
-export function createTreeKit(scene: THREE.Scene, track: Track): TreeKit {
-  const trunkMat = track(new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 1 }));
-  const leafMats = [0x2f7d3a, 0x3c8f44, 0x59a24a, 0x276b34, 0x4f9a52].map((col) =>
-    track(new THREE.MeshStandardMaterial({ color: col, roughness: 0.95, flatShading: true })),
-  );
-  const blobGeo = track(new THREE.IcosahedronGeometry(1, 0));
-  const bTrunkGeo = track(new THREE.CylinderGeometry(0.45, 0.85, 5.5, 6));
-  const pTrunkGeo = track(new THREE.CylinderGeometry(0.32, 0.6, 5, 6));
-  const pineGeo = track(new THREE.ConeGeometry(1, 1, 7));
-
-  const treeRng = (seed: number) => {
-    let a = seed >>> 0;
-    return () => {
-      a = (a + 0x6d2b79f5) | 0;
-      let t = Math.imul(a ^ (a >>> 15), 1 | a);
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-  };
-  const pickLeaf = (r: number) => leafMats[Math.floor(r * leafMats.length)] ?? leafMats[0]!;
-
-  const addBroadleaf = (x: number, z: number, s: number, seed: number, y = 0) => {
-    const r = treeRng(seed);
-    const g = new THREE.Group();
-    const trunk = new THREE.Mesh(bTrunkGeo, trunkMat);
-    trunk.position.y = 2.5;
-    trunk.rotation.z = (r() - 0.5) * 0.12;
-    trunk.castShadow = true;
-    g.add(trunk);
-    const blobs = 5 + Math.floor(r() * 3);
-    const crownR = 3 + r() * 0.8;
-    const crownY = 6 + r() * 1.2;
-    for (let i = 0; i < blobs; i++) {
-      const b = new THREE.Mesh(blobGeo, pickLeaf(r()));
-      const ang = r() * Math.PI * 2;
-      const rad = r() * crownR * 0.8;
-      b.position.set(Math.cos(ang) * rad, crownY + (r() - 0.5) * crownR * 0.9, Math.sin(ang) * rad);
-      const bs = crownR * (0.55 + r() * 0.45);
-      b.scale.set(bs, bs * (0.8 + r() * 0.25), bs);
-      b.rotation.set(r() * 3, r() * 3, r() * 3);
-      b.castShadow = true;
-      g.add(b);
-    }
-    g.position.set(x, y, z);
-    g.rotation.y = r() * Math.PI * 2;
-    g.scale.setScalar(s);
-    scene.add(g);
-  };
-
-  const addPine = (x: number, z: number, s: number, seed: number, y = 0) => {
-    const r = treeRng(seed);
-    const g = new THREE.Group();
-    const trunk = new THREE.Mesh(pTrunkGeo, trunkMat);
-    trunk.position.y = 2.5;
-    trunk.castShadow = true;
-    g.add(trunk);
-    const tiers = 4 + Math.floor(r() * 2);
-    const mat = pickLeaf(r() * 0.5);
-    let ty = 4.2;
-    let rad = 2.6 + r() * 0.7;
-    for (let i = 0; i < tiers; i++) {
-      const t = new THREE.Mesh(pineGeo, mat);
-      const hgt = 2.6 + r() * 0.6;
-      t.scale.set(rad, hgt, rad);
-      t.position.y = ty;
-      t.rotation.y = r() * Math.PI;
-      t.castShadow = true;
-      g.add(t);
-      ty += hgt * 0.62;
-      rad *= 0.74 + r() * 0.06;
-    }
-    g.position.set(x, y, z);
-    g.scale.setScalar(s);
-    scene.add(g);
-  };
-
-  return { addBroadleaf, addPine };
-}
+// The two-species grove moved to `components/golf/scene/foliage.ts` when it was
+// INSTANCED. It is still ONE implementation shared by Course and Range — so the
+// no-drift rule this module exists for still holds — but it can no longer be a
+// pair of `add…()` calls that each drop a Group into the scene: an InstancedMesh
+// needs its instance count up front, so the grove takes the whole placement list
+// and commits it as three draw calls (trunk / leaf blob / pine tier).
+//
+// The art is unchanged (same species, same 5-tone palette, same seeded jitter in
+// the same draw order); what changed is submission. `createTreeKit` built ~550
+// meshes for Hole 1's 92 trees and, with each caster submitted again for the
+// shadow map, was the single largest source of the 1,034 draw calls measured on
+// the tee view. See foliage.ts's header for the numbers and the one trade.
 
 // --- Water -----------------------------------------------------------------
 // Water moved to its own module (lib/golf/water.ts) when it grew from a tinted
