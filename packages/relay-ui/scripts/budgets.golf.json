@@ -1,5 +1,5 @@
 {
-  "_readme": "Committed GPU ceilings, one entry per harness scene. Generated from a real SwiftShader run with `node scripts/shoot-golf.mjs --update-budgets`; caps are measured × 1.5 (draw calls, floor 8) and × 1.4 (triangles, rounded up to 5000). A run exceeding one of these exits non-zero. Raising a cap is a claim that the new cost was measured and is justified — say so in the commit.",
+  "_readme": "Committed GPU ceilings, one entry per harness scene. Generated from a real SwiftShader run with `node scripts/shoot-golf.mjs --update-budgets`; caps are measured \u00d7 1.5 (draw calls, floor 8) and \u00d7 1.4 (triangles, rounded up to 5000). A run exceeding one of these exits non-zero. Raising a cap is a claim that the new cost was measured and is justified \u2014 say so in the commit.",
   "_caveat": "These count what the CPU SUBMITTED (renderer.info). They are blind to fill rate, VRAM and shadow-map size, which is the class of cost that actually killed an Android WebView GPU process. \"Renders fine in SwiftShader\" is not evidence of on-device safety.",
   "viewport": {
     "width": 900,
@@ -268,6 +268,7 @@
       }
     },
     "putt-water": {
+      "_bug": "KNOWN DEFECT, not a sanctioned cost. 187k triangles is 17x every other putt scene, on the board that should be the cheapest thing golf ships. Cause: PuttGL.tsx builds the hazard with makeWaterPlane(..., ydPerSegment=0.12), which saturates makeWaterPlane's 160-segment clamp on BOTH axes -> 160x160 quads = 51,200 triangles for one rectangle, again per shadow and reflection pass. It buys nothing visible: the visual gate reports a flat blue rectangle with no geometric wave relief (amplitude 0.09 units under a near-overhead camera). Raising ydPerSegment to ~0.6 should cut ~40k triangles per pass with no perceptible change. This ceiling exists so the gate has a baseline to work from -- do NOT read it as approval.",
       "maxDrawCalls": 45,
       "maxTriangles": 265000,
       "measured": {

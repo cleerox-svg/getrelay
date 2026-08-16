@@ -585,6 +585,64 @@ first. Three pieces, all in `/GRAPHICS.md` §4's terms:
   probe's value is also kept OUT of the harness printout, because it is
   wall-clock and would make an unchanged run print differently twice.
 
+**The 1536² tier was visually verified, and it is free.** `golf-visual-qa` shot
+the six shadow-carrying scenes at 1536² and again at `--query=shadow=2048`, after
+first establishing a noise floor by shooting 1536² twice (`meanAbs 0.000`,
+`max 0` on five of six). Verdict: **no visible loss.** Worst scene is
+`course-approach` at `meanAbs 0.087` / 32 of 920 tiles; the frames are
+indistinguishable at 1:1 and need 3–4× zoom before the 1536² penumbra shows a
+fraction more dither.
+
+The reason is structural and worth keeping: the Course shadow camera is
+**640 × 680 world units**, i.e. 0.42 units/texel at 1536² against 0.31 at 2048².
+`BALL_R` is **0.2** — the ball's shadow is **sub-texel at both sizes**. Ball
+seating never came from the shadow map; `CourseGL` draws an explicit soft contact
+disc for exactly that. So 2048² was paying 2.25× the memory for detail the shadow
+frustum cannot resolve.
+
+⚠ Two caveats. This is SwiftShader: it removes the *visual* objection to 1536²,
+it says nothing about whether 1536² still trips the WebView GPU process, so the
+on-device smoke test stays open. And `?shadow=` is applied **globally to every
+scene**, so Putt is NOT a control in a forced run — it gets pushed 1024² → 2048²
+too and will legitimately differ.
+
+**Defects the visual gate found (open — none are regressions, all pre-date the
+tier work).** Recorded here because a subagent's report is not a tracker. Owner
+for all four: `golf`.
+
+1. **`course-celebrate`'s camera is degenerate.** The frame is a straight-down
+   extreme close-up of the cup — no sky, no horizon, no stripes, no trees — and
+   the ball reads as a flat hexagon because you are looking at the sphere's pole
+   cap, where the dimple normal map collapses into facets. It is useless as a QA
+   frame, and provably so: it was the ONE scene byte-identical between 1536² and
+   2048², because nothing in it casts a resolvable shadow. **The cause is not the
+   `back = max(6, min(11, R*0.5+5))` distance** (a plausible-looking suspect that
+   turns out to be irrelevant) — it is `CourseGL.tsx:2609`
+   `tmpDir.subVectors(pinV, tmpB).setY(0).normalize()`. With the ball in the cup
+   `pinV - tmpB` is the zero vector, three's `normalize()` returns `(0,0,0)`, and
+   `desiredPos = ball + 0*back` collapses the camera onto the ball before lifting
+   it 3.5 units and looking down. The two in-flight branches just above (~2588,
+   ~2600) both guard this with `if (tmpDir.lengthSq() < 1e-4)`; **this branch is
+   simply missing the guard.** One-line fix: fall back to the last aim direction.
+2. **`putt-water` draws 187,010 triangles**, 17× every other putt scene, on the
+   board that should be the cheapest thing golf ships. `PuttGL.tsx:555` calls
+   `makeWaterPlane(rw, rh, PUTT_WATER_DEPTH, 0.12, 1.4)`; at 0.12 board-units per
+   segment a mini-golf pond saturates `makeWaterPlane`'s 160-segment clamp on
+   BOTH axes — 160×160 quads = 51,200 triangles for one rectangle, again per
+   shadow and reflection pass. It buys nothing: the gate reports a flat blue
+   rectangle with no geometric wave relief (amplitude 0.09 units under a
+   near-overhead camera), and the 1.4-unit shoreline fade does not read either.
+   `ydPerSegment ≈ 0.6` should cut ~40k triangles per pass invisibly. The budget
+   entry carries a `_bug` note so the ceiling is not mistaken for approval.
+3. **The tee peg pokes through the top of the ball** (`course-hole1`, visible at
+   10×). `LIFT = 0.05` + `pegH = 0.42` puts the peg top at ground + 0.47, while
+   `BALL_R = 0.2` puts the ball crown at ground + 0.40 — a 0.07-unit overshoot.
+4. **The flagstick casts no readable shadow on the green — at 2048² either.** The
+   sun at `(-160, 260, 120)` is high and behind-left, so the pole's shadow is
+   short and self-occluded from the green camera. If a crisp flagstick contact
+   shadow is wanted, the lever is the sun angle or a contact disc at the pole
+   base; it was never shadow-map resolution.
+
 **Shared putting physics.** `lib/golf/greenPhysics.ts` is the pure-math
 counterpart for greens (Stimp → μ, roll-out, cup capture; no `three`, no sim
 state), used by `courseSim`'s green/fringe roll. **Consolidation status:**
