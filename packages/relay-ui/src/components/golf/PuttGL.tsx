@@ -13,7 +13,6 @@ import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTextur
 import type { GolfCosmetics } from '../../lib/golf/cosmetics';
 import {
   addSkyDome,
-  makeSkyEnvMap,
   makeTurfColor,
   makeTurfNormalMap,
   SURFACE_RGB,
@@ -42,6 +41,8 @@ import {
   type SceneStats,
 } from '../../lib/scene3d/stats';
 import { resolveGolfQuality } from './scene/quality';
+import { attachSkyEnv, hemiFill } from './scene/env';
+import { makeSandMaps, makeSandMaterial } from './scene/sand';
 import { play, unlockAudio } from '../../lib/audio';
 
 // Real-time 3D mini-golf (Three.js). Owns the WebGL renderer, scene and
@@ -107,6 +108,11 @@ interface Props {
 
 // --- Procedural canvas textures (no binary assets) ------------------------
 
+// Sand albedo base, from the shared per-lie table so the mini board's traps
+// can't drift from the Course's bunkers. The grain, normal and roughness now
+// come from scene/sand.ts — this scene no longer paints its own.
+const SAND_BASE = `rgb(${SURFACE_RGB.bunker.map((v) => Math.round(v * 255)).join(',')})`;
+
 function makeRoughTexture(): THREE.Texture {
   const c = document.createElement('canvas');
   c.width = 128;
@@ -126,27 +132,6 @@ function makeRoughTexture(): THREE.Texture {
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.repeat.set(24, 24);
-  return tex;
-}
-
-function makeSandTexture(): THREE.Texture {
-  const c = document.createElement('canvas');
-  c.width = 128;
-  c.height = 128;
-  const g = c.getContext('2d')!;
-  const [r, gg, b] = SURFACE_RGB.bunker;
-  g.fillStyle = `rgb(${Math.round(r * 255)},${Math.round(gg * 255)},${Math.round(b * 255)})`;
-  g.fillRect(0, 0, c.width, c.height);
-  const rnd = mulberry32(0x8d4e19);
-  for (let i = 0; i < 2200; i++) {
-    const light = rnd() < 0.5;
-    g.fillStyle = light ? `rgba(255,255,255,${rnd() * 0.06})` : `rgba(120,90,50,${rnd() * 0.08})`;
-    g.fillRect(rnd() * c.width, rnd() * c.height, 1.5, 1.5);
-  }
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(4, 4);
   return tex;
 }
 
@@ -276,10 +261,6 @@ export default function PuttGL({
     // Shared cloud/hill sky dome (deterministic, seeded) — parity with the other
     // golf scenes and reproducible for the screenshot harness.
     addSkyDome(scene, track);
-    // Cheap PMREM reflection env so metallic ball skins reflect the sky (not
-    // near-black). Assigned to the BALL material's envMap ONLY (below), NOT
-    // scene.environment — turf/trees/water pay no per-frame env cost.
-    const ballEnvMap = makeSkyEnvMap(renderer, track);
 
     // Angled overhead camera framing the WHOLE hole from the model: the tee (high
     // virtual y) sits toward +Z near the camera, the cup (low y) toward -Z far, so
@@ -297,7 +278,8 @@ export default function PuttGL({
     camera.lookAt(lookTarget);
 
     // --- Lights (range budget: one shadow light + a hemi fill) ----------
-    const hemi = new THREE.HemisphereLight(0xbfe3ff, 0x4a7a3a, 0.95);
+    // hemiFill(): the IBL below carries the ambient at medium/high (scene/env.ts).
+    const hemi = new THREE.HemisphereLight(0xbfe3ff, 0x4a7a3a, hemiFill(quality, 0.95));
     scene.add(hemi);
     const sun = new THREE.DirectionalLight(0xfff4e0, 2.2);
     sun.position.set(-70, 150, 60);
@@ -315,6 +297,9 @@ export default function PuttGL({
     sun.target.position.set(0, 0, 0);
     scene.add(sun);
     scene.add(sun.target);
+    // Sky IBL off the sun just placed; medium/high set scene.environment, `low`
+    // keeps the ball-only PMREM Putt has always had (scene/env.ts).
+    const { ballEnvMap, ballEnvIntensity } = attachSkyEnv(renderer, scene, quality, sun.position, track);
 
     // --- Displaced green (the mown putting surface = the physics field) --
     // One shared turf colour + blade-normal from the scene kit; each green clones
@@ -588,8 +573,14 @@ export default function PuttGL({
         }
         hazardIndex++;
       } else {
-        const sandTex = track(makeSandTexture());
-        const mat = track(new THREE.MeshStandardMaterial({ map: sandTex, roughness: 1 }));
+        // Shared sand (scene/sand.ts): the Course's grain at the board's own
+        // repeat, now with a normal + roughness map so it takes the sun. `rake`
+        // off — a mini-golf trap is too small for the arcs to read.
+        const mat = makeSandMaterial(
+          track,
+          makeSandMaps(track, { size: 128, repeat: 4, base: SAND_BASE, rake: false }),
+          { normalScale: 0.7 },
+        );
         const geo = track(new THREE.PlaneGeometry(rw, rh));
         const mesh = new THREE.Mesh(geo, mat);
         mesh.rotation.x = -Math.PI / 2;
@@ -861,7 +852,7 @@ export default function PuttGL({
     // ball barely samples it). Scoped to the ball material so nothing else pays
     // the per-frame env cost.
     ballMat.envMap = ballEnvMap;
-    ballMat.envMapIntensity = 1;
+    ballMat.envMapIntensity = ballEnvIntensity;
     const ball = new THREE.Mesh(ballGeo, ballMat);
     ball.castShadow = true;
     scene.add(ball);

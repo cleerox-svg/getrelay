@@ -43,6 +43,20 @@ describe('golf scene budgets', () => {
       expect(t.low.pixelRatioCap).toBeLessThanOrEqual(t.medium.pixelRatioCap);
       expect(t.medium.pixelRatioCap).toBeLessThanOrEqual(t.high.pixelRatioCap);
       expect(Number(t.low.shadows)).toBeLessThanOrEqual(Number(t.medium.shadows));
+      expect(Number(t.low.ibl)).toBeLessThanOrEqual(Number(t.medium.ibl));
+      expect(Number(t.medium.ibl)).toBeLessThanOrEqual(Number(t.high.ibl));
+    }
+  });
+
+  it('keeps scene-wide IBL OFF at low, in every scene', () => {
+    // `scenery.ts` attached its PMREM to the ball alone so "turf/trees/water pay
+    // no per-frame env cost". Turning that on everywhere would silently reverse
+    // a considered decision on exactly the hardware it was made for — the same
+    // class of mistake as a tier that raises a shadow map. `low` is where the
+    // old behaviour is preserved, so it is asserted rather than remembered.
+    for (const scene of SCENES) {
+      expect(GOLF_SCENE_BUDGETS[scene].low.ibl, `${scene}.low`).toBe(false);
+      expect(GOLF_SCENE_BUDGETS[scene].medium.ibl, `${scene}.medium`).toBe(true);
     }
   });
 

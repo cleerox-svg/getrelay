@@ -33,7 +33,6 @@ import {
 } from '../../lib/golf/courseData';
 import {
   addSkyDome,
-  makeSkyEnvMap,
   createTreeKit,
   makeContactShadowTexture,
   makeFog,
@@ -73,6 +72,8 @@ import {
   type SceneStats,
 } from '../../lib/scene3d/stats';
 import { resolveGolfQuality } from './scene/quality';
+import { attachSkyEnv, hemiFill } from './scene/env';
+import { makeSandMaps, makeSandMaterial } from './scene/sand';
 
 // Regulation liner (sunken cup) geometry. CUP_DEPTH ≈ 3.5×BALL_R so the ball
 // sits clearly below the rim; the aperture punched in the green (grid + cap) is a
@@ -335,33 +336,9 @@ function makeGreenGrain(): THREE.Texture {
   return t;
 }
 
-// Sand: warm base with fine grain speckle + soft rake arcs. Seeded PRNG (not
-// Math.random) so the grain is identical every load (screenshot reproducibility).
-function makeSand(): THREE.Texture {
-  const S = 256;
-  const c = document.createElement('canvas');
-  c.width = c.height = S;
-  const g = c.getContext('2d')!;
-  const rnd = mulberry32(0x5a2d1e);
-  g.fillStyle = '#e6d6a8';
-  g.fillRect(0, 0, S, S);
-  for (let i = 0; i < 9000; i++) {
-    const a = 0.06 + rnd() * 0.08;
-    g.fillStyle = rnd() < 0.5 ? `rgba(150,130,90,${a})` : `rgba(255,250,230,${a})`;
-    g.fillRect(rnd() * S, rnd() * S, 1.4, 1.4);
-  }
-  g.strokeStyle = 'rgba(160,140,100,0.18)';
-  g.lineWidth = 1.5;
-  for (let r = 20; r < S; r += 16) {
-    g.beginPath();
-    g.arc(S / 2, S * 1.1, r, Math.PI * 1.15, Math.PI * 1.85);
-    g.stroke();
-  }
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  return t;
-}
+// Sand moved to scene/sand.ts when it grew a normal + roughness map: the albedo
+// alone could not respond to the sun, so a bunker read as flat beige whatever
+// the light did. The Course and Putt now share ONE grain.
 
 // Tightly-mown TEE turf: a fine mow-band grass map (its colour is baked in so
 // the pad reads as grass, not flat paint). Deliberately a hair coarser + darker
@@ -919,11 +896,6 @@ export default function CourseGL({ sim, onArm, paused, cosmetics, onStats }: Pro
     // Cloud + distant-hill sky dome (shared with the range) — replaces the old
     // flat 3-stop background so the sky reads with depth, not a painted wall.
     addSkyDome(scene, track);
-    // Cheap PMREM reflection env (sky above, muted turf below) so metallic ball
-    // skins (gold/chrome) reflect the sky instead of near-black. Assigned to the
-    // BALL material's envMap ONLY (below) — NOT scene.environment — so turf/trees/
-    // water pay no per-frame env cost. Background/sky visuals unchanged.
-    const ballEnvMap = makeSkyEnvMap(renderer, track);
     // Water quality tier. Auto-detected from GPU/CPU headroom, overridable with
     // ?water=high|medium|low so the extra planar-reflection pass can be checked
     // on a real low-end handset (GOLF.md's open on-device GPU action) without a
@@ -935,7 +907,10 @@ export default function CourseGL({ sim, onArm, paused, cosmetics, onStats }: Pro
     // lifted into the kit so a ball finding water looks the same everywhere.
     const waterFX = makeWaterFX(scene, track);
 
-    const hemi = new THREE.HemisphereLight(0xcdeaff, 0x4f7d3f, 1.05);
+    // Hemisphere fill. Its intensity goes through hemiFill() because the sky IBL
+    // attached below carries the ambient at medium/high — adding one on top of
+    // the other double-counts and flattens the scene (see scene/env.ts).
+    const hemi = new THREE.HemisphereLight(0xcdeaff, 0x4f7d3f, hemiFill(quality, 1.05));
     scene.add(hemi);
     const sun = new THREE.DirectionalLight(0xfff1d6, 2.7);
     sun.position.set(-160, 260, 120);
@@ -953,6 +928,17 @@ export default function CourseGL({ sim, onArm, paused, cosmetics, onStats }: Pro
     sun.target.position.set(mid.x, 0, -mid.d);
     scene.add(sun);
     scene.add(sun.target);
+    // Sky IBL, built from the sun just placed so the env and the key light can
+    // never point different ways. medium/high set scene.environment (turf, trees
+    // and sand now pick up sky colour and a directional halo); `low` keeps the
+    // historical ball-only PMREM and costs nothing extra. See scene/env.ts.
+    const { ballEnvMap, ballEnvIntensity } = attachSkyEnv(
+      renderer,
+      scene,
+      quality,
+      sun.position,
+      track,
+    );
 
     // --- Terrain mesh --------------------------------------------------
     // Frame the ground/surface-map to the HOLE, not fixed HOLE_1 numbers, so any
@@ -1172,14 +1158,23 @@ export default function CourseGL({ sim, onArm, paused, cosmetics, onStats }: Pro
     };
     /** Splash size from the vertical speed the ball arrived with. */
     const splashStrength = (vh: number) => Math.min(1.5, 0.55 + Math.abs(vh) / 28);
-    const sandTex = track(makeSand());
-    sandTex.repeat.set(3, 3);
+    // Albedo + normal + roughness off ONE height field (scene/sand.ts), so the
+    // grain you see, the bumps the sun rakes and the packed/loose sheen agree.
+    // DoubleSide: the cap is a fan whose downward normals must not cull.
+    const sandMaps = makeSandMaps(track, { repeat: 3 });
+    const sandMat = makeSandMaterial(track, sandMaps, { side: THREE.DoubleSide });
     // A defined bunker LIP: a thin, darker "shaded sand wall" ring drawn right at
     // the sand outline (same organic edge) and lifted a hair proud of the sand cap,
     // so the sand→grass boundary reads as a CRISP raked lip line instead of fading
     // softly into the grass (the reported fuzzy edge). Shared across all bunkers.
+    // It carries the sand normal too, or the lip reads as painted-on trim.
     const lipMat = track(
-      new THREE.MeshStandardMaterial({ color: 0xb89a63, roughness: 1, side: THREE.DoubleSide }),
+      new THREE.MeshStandardMaterial({
+        color: 0xb89a63,
+        normalMap: sandMaps.normalMap,
+        roughness: 1,
+        side: THREE.DoubleSide,
+      }),
     );
     const radialUV: UVFn = (_wx, _wd, ang, frac) => [
       0.5 + Math.cos(ang) * frac * 0.5,
@@ -1332,11 +1327,7 @@ export default function CourseGL({ sim, onArm, paused, cosmetics, onStats }: Pro
         const sGeo = track(
           buildOrganicDisc(hzSeed, hz.d, hz.x, hz.r, bGroundY, 0.05, radialUV, 6, 72),
         );
-        // DoubleSide so a downward-facing fan normal can't cull the sand away.
-        const sMat = track(
-          new THREE.MeshStandardMaterial({ map: sandTex, roughness: 1, side: THREE.DoubleSide }),
-        );
-        const sand = new THREE.Mesh(sGeo, sMat);
+        const sand = new THREE.Mesh(sGeo, sandMat);
         sand.receiveShadow = true;
         scene.add(sand);
         // The crisp LIP: a thin organic annulus (SAME hzSeed → nests exactly on the
@@ -1826,7 +1817,7 @@ export default function CourseGL({ sim, onArm, paused, cosmetics, onStats }: Pro
     // ball barely samples it). Scoped to the ball material so nothing else pays
     // the per-frame env cost.
     ballMat.envMap = ballEnvMap;
-    ballMat.envMapIntensity = 1;
+    ballMat.envMapIntensity = ballEnvIntensity;
     const ball = new THREE.Mesh(ballGeo, ballMat);
     ball.castShadow = true;
     scene.add(ball);
