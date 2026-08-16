@@ -69,7 +69,7 @@ const SUN_TINT = 0xfff1d6;
  * on the ball and the water. The HALO is the knob that puts directional bias
  * into the diffuse term, and it is deliberately gentle for the same reason.
  */
-const GOLF_SKY: Omit<SkyEnvConfig, 'elevationDeg' | 'azimuthDeg'> = {
+export const GOLF_SKY: Omit<SkyEnvConfig, 'elevationDeg' | 'azimuthDeg'> = {
   sunAngularDiameterDeg: 0.53,
   sunColor: SUN_TINT,
   sunIntensity: 60,
