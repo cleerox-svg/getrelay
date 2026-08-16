@@ -7,6 +7,7 @@ const QUALITY: SceneQuality = {
   shadows: true,
   shadowMapSize: 1536,
   pixelRatioCap: 2,
+  ibl: true,
   reason: 'default (no measured evidence to promote on)',
 };
 

@@ -76,6 +76,22 @@ export interface SceneBudget {
    * to be noticed as "blurry", so it moves only with a visual review.
    */
   pixelRatioCap: number;
+  /**
+   * Scene-wide image-based lighting (`scene.environment`) on/off.
+   *
+   * This is a REVERSAL of a considered decision, which is why it is a tier and
+   * not a switch. `lib/golf/scenery.ts` deliberately attached its PMREM to the
+   * ball's `envMap` alone so "turf/trees/water pay no per-frame env cost", and
+   * that reasoning still holds on the hardware it was written for. `false` keeps
+   * exactly that behaviour; `true` costs a cubeUV sample per lit fragment plus
+   * the prefiltered target's VRAM (see `lib/scene3d/env.ts` `skyEnvBytes`).
+   *
+   * ⚠ A scene that turns this on MUST cut its ambient/hemisphere fill in the
+   * same change. IBL added on top of an unchanged fill double-counts the
+   * ambient term and flattens everything to grey — a failure that looks exactly
+   * like "the IBL did not work".
+   */
+  ibl: boolean;
 }
 
 /** A game's numbers for one scene, one row per tier. */

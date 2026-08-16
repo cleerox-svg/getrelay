@@ -7,7 +7,6 @@ import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTextur
 import type { GolfCosmetics } from '../../lib/golf/cosmetics';
 import {
   addSkyDome,
-  makeSkyEnvMap,
   createTreeKit,
   makeContactShadowTexture,
   makeFairwayTurf,
@@ -46,6 +45,7 @@ import {
   type SceneStats,
 } from '../../lib/scene3d/stats';
 import { resolveGolfQuality } from './scene/quality';
+import { attachSkyEnv, hemiFill } from './scene/env';
 
 // Real-time 3D driving range (Three.js). Owns the WebGL renderer, scene and
 // camera; drives the headless RangeSim on a fixed-timestep loop; renders the
@@ -254,7 +254,8 @@ export default function RangeGL({
     // Sky/ground hemisphere fill for soft ambient, plus a strong warm key sun
     // that actually casts. Intensities are raised for the ACES roll-off so the
     // turf keeps its punch while the sky highlights stay controlled.
-    const hemi = new THREE.HemisphereLight(0xcdeaff, 0x4f7d3f, 1.05);
+    // hemiFill(): the IBL below carries the ambient at medium/high (scene/env.ts).
+    const hemi = new THREE.HemisphereLight(0xcdeaff, 0x4f7d3f, hemiFill(quality, 1.05));
     scene.add(hemi);
     const sun = new THREE.DirectionalLight(0xfff1d6, 2.7);
     sun.position.set(-52, 96, 40);
@@ -278,10 +279,9 @@ export default function RangeGL({
 
     // --- Sky dome (shared kit) -----------------------------------------
     addSkyDome(scene, track);
-    // Cheap PMREM reflection env so metallic ball skins reflect the sky (not
-    // near-black). Assigned to the BALL material's envMap ONLY (below), NOT
-    // scene.environment — turf/trees/water pay no per-frame env cost.
-    const ballEnvMap = makeSkyEnvMap(renderer, track);
+    // Sky IBL off the sun placed above so the two can't drift; medium/high set
+    // scene.environment, `low` keeps the ball-only PMREM (scene/env.ts).
+    const { ballEnvMap, ballEnvIntensity } = attachSkyEnv(renderer, scene, quality, sun.position, track);
 
     // --- Ground (bold fairway mow stripes, shared kit) -----------------
     // Shared makeFairwayTurf: the SAME bold world-locked STRIPE_HI/LO stripes on
@@ -526,11 +526,11 @@ export default function RangeGL({
     const ballGeo = track(new THREE.SphereGeometry(BALL_R, 32, 24));
     const dimpleTex = track(makeDimpleNormalMap());
     const ballMat = track(makeBallMaterial(dimpleTex, cosmeticsRef.current?.ball));
-    // Only the ball reflects the sky PMREM (metallic skins shine; default white
-    // ball barely samples it). Scoped to the ball material so nothing else pays
-    // the per-frame env cost.
+    // The ball keeps its OWN envMap even when scene.environment is set — three
+    // prefers the material's, and with it the material's envMapIntensity, which
+    // is why attachSkyEnv hands back the matching value (scene/env.ts).
     ballMat.envMap = ballEnvMap;
-    ballMat.envMapIntensity = 1;
+    ballMat.envMapIntensity = ballEnvIntensity;
     const ball = new THREE.Mesh(ballGeo, ballMat);
     ball.castShadow = true;
     scene.add(ball);

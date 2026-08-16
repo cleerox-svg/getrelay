@@ -14,9 +14,9 @@ import {
 } from './quality';
 
 const TABLE: SceneBudgetTable = {
-  low: { shadows: false, shadowMapSize: 512, pixelRatioCap: 1 },
-  medium: { shadows: true, shadowMapSize: 1024, pixelRatioCap: 1.5 },
-  high: { shadows: true, shadowMapSize: 2048, pixelRatioCap: 2 },
+  low: { shadows: false, shadowMapSize: 512, pixelRatioCap: 1, ibl: false },
+  medium: { shadows: true, shadowMapSize: 1024, pixelRatioCap: 1.5, ibl: true },
+  high: { shadows: true, shadowMapSize: 2048, pixelRatioCap: 2, ibl: true },
 };
 
 const caps = (c: SceneQualityCaps) => ({ capabilities: c });

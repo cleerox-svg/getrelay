@@ -97,6 +97,7 @@ tree that is still moving. New modules are fine; moves are not.
 | Module | What it owns |
 |---|---|
 | `clock.ts` | A freezable virtual clock, so a screenshot harness controls time instead of the platform. Default is a strict no-op. |
+| `env.ts` | A procedural sky environment for IBL: paint an equirect (sun disc at a true angular size, circumsolar halo, horizon band, ground bounce), run it through `PMREMGenerator`. Half-float, so the sun is not clamped at 1.0. `skyEnvBytes` states the VRAM cost without needing a GPU. |
 | `quality.ts` | The tier POLICY — default DOWN, promote only on measured evidence. Takes a per-game `SceneBudgetTable` (rule 6) and decides which row of it applies, and why. Plus `withShadowMapSize` for the `?shadow=` bisect hatch. |
 | `stats.ts` | GPU instrumentation: a `renderer.info` snapshot (draw calls, triangles, programs, geometries, textures) tagged with the resolved tier, and a median frame-time probe. Read AFTER `render()` — three resets its counters at the start of the call. |
 

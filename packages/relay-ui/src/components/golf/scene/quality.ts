@@ -37,6 +37,20 @@
  * square so 1.5 is tempting, but it would soften every phone's render with no
  * visual review — a separate change, gated by `golf-visual-qa`, not a rider on a
  * shadow-map fix.
+ *
+ * `ibl` — SCENE-WIDE IMAGE-BASED LIGHTING
+ * --------------------------------------
+ * `scenery.ts` attached its PMREM to the ball's `envMap` alone, on the recorded
+ * grounds that "turf/trees/water pay no per-frame env cost". Reversing that is
+ * the single biggest lever on how materials respond to light (`/GRAPHICS.md` §1
+ * names it), but the reasoning behind the original decision has not stopped
+ * being true for weak hardware — so `low` keeps the ball-only path, byte for
+ * byte, and `medium`/`high` get `scene.environment`.
+ *
+ * This is the one dial in the table that does NOT reduce to a shadow map, and it
+ * is deliberately the same value for all three scenes: the cost is per lit
+ * fragment, and Putt's board is the cheapest surface golf ships.
+ * See `components/golf/scene/env.ts` for what gets built and what it costs.
  */
 
 import {
@@ -76,9 +90,9 @@ const WIDE_SCENE: SceneBudgetTable = {
   // `low` drops the shadow pass entirely. It is reached automatically only on a
   // WebGL1 context, a sub-4096 texture limit or a non-highp fragment precision —
   // i.e. hardware where a second geometry pass is the first thing to cut.
-  low: { shadows: false, shadowMapSize: 1024, pixelRatioCap: 1 },
-  medium: { shadows: true, shadowMapSize: 1536, pixelRatioCap: 2 },
-  high: { shadows: true, shadowMapSize: 1536, pixelRatioCap: 2 },
+  low: { shadows: false, shadowMapSize: 1024, pixelRatioCap: 1, ibl: false },
+  medium: { shadows: true, shadowMapSize: 1536, pixelRatioCap: 2, ibl: true },
+  high: { shadows: true, shadowMapSize: 1536, pixelRatioCap: 2, ibl: true },
 };
 
 /**
@@ -87,9 +101,9 @@ const WIDE_SCENE: SceneBudgetTable = {
  * there is nothing to buy by spending more, and 1024² is what it ships.
  */
 const PUTT_SCENE: SceneBudgetTable = {
-  low: { shadows: false, shadowMapSize: 512, pixelRatioCap: 1 },
-  medium: { shadows: true, shadowMapSize: 1024, pixelRatioCap: 2 },
-  high: { shadows: true, shadowMapSize: 1024, pixelRatioCap: 2 },
+  low: { shadows: false, shadowMapSize: 512, pixelRatioCap: 1, ibl: false },
+  medium: { shadows: true, shadowMapSize: 1024, pixelRatioCap: 2, ibl: true },
+  high: { shadows: true, shadowMapSize: 1024, pixelRatioCap: 2, ibl: true },
 };
 
 export const GOLF_SCENE_BUDGETS: Record<GolfSceneId, SceneBudgetTable> = {
