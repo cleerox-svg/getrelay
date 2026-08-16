@@ -121,6 +121,9 @@ A data-driven **Range layout** picker (persisted, default `fairway`):
 | Shared scene kit (turf/sky/trees/fog) | `packages/relay-ui/src/lib/golf/scenery.ts` |
 | Shared WATER (level geometry, Gerstner waves, Fresnel + sky/planar reflection, foam, splash, wet bank, reeds, quality tiers) | `packages/relay-ui/src/lib/golf/water.ts` |
 | Headless screenshot harness | `packages/relay-ui/scripts/shoot-golf.mjs` + `golfpreview.html` + `src/golfpreview.tsx` |
+| Quality tier POLICY (shared kit) + GPU instrumentation | `packages/relay-ui/src/lib/scene3d/quality.ts`, `stats.ts` |
+| Golf's per-scene budget table + `?quality=`/`?shadow=` | `packages/relay-ui/src/components/golf/scene/quality.ts` |
+| Committed GPU ceilings + the shared harness reporter | `packages/relay-ui/scripts/budgets.golf.json`, `scripts/lib/shoot-report.mjs` |
 | Range physics/sim (headless) | `packages/relay-ui/src/lib/golf/rangeSim.ts` |
 | Sim tests / harness | `packages/relay-ui/src/lib/golf/rangeSim.test.ts` |
 | Range 3D scene (Three.js) | `packages/relay-ui/src/components/golf/RangeGL.tsx` |
@@ -140,6 +143,9 @@ A data-driven **Range layout** picker (persisted, default `fairway`):
 
 ### Commands
 - `pnpm --filter @relay/ui test` — the golf sim harness (dynamics tables).
+- `pnpm --filter @relay/ui shoot:golf` — headless screenshots of every scene AND
+  the numeric GPU gate (draw calls / triangles vs `scripts/budgets.golf.json`;
+  non-zero exit on a regression).
 - `pnpm typecheck` · `pnpm --filter @relay/ui build` (three stays a lazy chunk).
 - `pnpm --filter @relay/worker test` — worker suite (unaffected by golf UI).
 
@@ -218,10 +224,13 @@ Gameplay clean first, then the look, then the course — each step reuses the la
    **Gotcha (learned the hard way):** a 2048² shadow map once crashed the
    WebView GPU process on real Android (black screen, needs an app restart)
    though it rendered fine in desktop/software GL, so it was reverted to 1024².
-   It has since been **re-enabled to 2048² by request** — this MUST be
-   re-verified on a low-end Android device before the release AAB ships; if it
-   regresses, 1536² is the first dial to turn down. Test GPU-cost changes on a
-   low-end device, not just the headless screenshot harness.
+   It was then **re-enabled to 2048² by request**, with a standing requirement to
+   re-verify on a low-end Android that never happened. **→ Now resolved by a
+   tier:** Course and Range run the 1536² this doc itself nominated as the first
+   dial to turn down, Putt keeps its 1024², and `?shadow=2048` reproduces the
+   crashing configuration on a handset without a rebuild. See "Quality tiers, GPU
+   numbers and the shadow map" below. Test GPU-cost changes on a low-end device,
+   not just the headless screenshot harness.
 3. **Hole engine → 9-hole par-5 course** — a hole = tee → fairway → green → cup
    with per-hole terrain, par, distance-to-pin, wind. Same sim, same aim UI,
    same shaders. Then it's mostly hole data + terrain art to build the nine.
@@ -516,6 +525,66 @@ ordinary material and still gets level water, Fresnel, moving crests and foam.
   minus the water and looks plausibly fine. `shoot-golf.mjs` now captures
   console errors for exactly this reason.
 
+**Quality tiers, GPU numbers and the shadow map.** Golf had no quality tiering,
+no frame-time probe and no GPU instrumentation at all: `shoot-baseball.mjs`
+printed draw calls / triangles / programs / geometries / textures per scene while
+`shoot-golf.mjs` printed nothing numeric — and golf is the bigger, shipped scene.
+Everything on the fidelity roadmap adds GPU cost, so the measurement had to come
+first. Three pieces, all in `/GRAPHICS.md` §4's terms:
+
+- **The policy is shared, the numbers are not.** `lib/scene3d/quality.ts`
+  (`pickSceneQuality`) implements **default DOWN, promote only on measured
+  evidence**; golf's own table lives in `components/golf/scene/quality.ts`. The
+  only automatic decisions step DOWN — a WebGL1 context, `maxTextureSize < 4096`,
+  a fragment precision below `highp`. `high` is unreachable without an explicit
+  `?quality=high`; it exists to be forced on a handset, not handed out.
+  ⚠ Do **not** copy `water.ts`'s `pickWaterQuality`, which promotes on
+  `cores > 4 && maxTextureSize >= 8192` — a typical mid-range Android satisfies
+  that, so the tier meant to be gated behind headroom is what most phones get.
+- **⚠ A tier may never RAISE a scene's cost, so the sizes are PER SCENE.** The
+  obvious version of this change was "default 1536² everywhere". That reads as a
+  step down because two of the three scenes were at 2048² — but `PuttGL` was
+  already at **1024²**, and a flat default would have made a currently-safe scene
+  2.25× more expensive in shadow-map memory. **Course and Range: 2048² → 1536².
+  Putt: stays 1024². `low` drops the shadow pass entirely.** `high` does not
+  raise the map in any scene. `quality.test.ts` asserts no tier of any scene
+  exceeds what that scene ships, and that every dial is monotonic across tiers.
+- **The knobs, for the on-device bisect that is still owed:**
+  **`?quality=low|medium|high`** and **`?shadow=1024|1536|2048`** (an allowlist —
+  a fat-fingered value falls back to the tier). `?shadow=` is deliberately
+  allowed to go UP: reproducing the exact configuration that crashed is half of
+  bisecting it. Both are read by the scenes themselves, so the app and the
+  preview take the identical code path, and `shoot-golf.mjs --query=shadow=2048`
+  shoots the whole matrix at a forced knob.
+- **Numbers, printed and enforced.** Each scene calls an `onStats` prop every
+  ~30 frames with `renderer.info` plus the resolved tier and its reason;
+  `golfpreview.tsx` publishes it as `window.__golfStats` (readable straight off a
+  handset's console). `shoot-golf.mjs` prints a GPU line per scene and checks it
+  against the committed **`scripts/budgets.golf.json`**, exiting non-zero on a
+  regression; the reporter itself is game-neutral (`scripts/lib/shoot-report.mjs`)
+  so baseball can adopt it. Regenerate a baseline explicitly with
+  `--update-budgets` — never automatically, or the gate rewrites its own
+  thresholds when they fail. Baselines from the committed run: **Course scenes
+  320–1,034 draw calls / 56k–115k triangles, Range 269–290 / 11k–18k, Mini-Golf
+  27–38 / 11k (187k on `putt-water`)**.
+  ⚠ **1,034 draw calls on the tee view of Hole 1 is the standout finding** — an
+  order of magnitude above the whole baseball stadium — and the trees/reeds are
+  the obvious suspects. It is baselined, not endorsed.
+- **What these numbers cannot see.** They count what the CPU SUBMITTED. Fill
+  rate, VRAM and shadow-map size — the class of cost that actually killed the
+  WebView GPU process — are invisible to them, and to SwiftShader. A green budget
+  is not evidence of on-device safety.
+- **The frame-time probe exists but does not feed the tier.** `stats.ts`
+  `makeFrameProbe` reports a median (never a mean — a phone's outliers are free)
+  and it rides along in the stats payload. It is deliberately NOT wired into
+  promotion: the median arrives after the scene is built, so promoting on it
+  would mean persisting a verdict across sessions, and persisted cross-run state
+  would make the screenshot harness's tier depend on a previous run. The bar a
+  future promotion must clear is written down in `quality.ts`'s header (≤20 ms
+  median over ≥300 settled frames at `medium`, twice, same device+scene). The
+  probe's value is also kept OUT of the harness printout, because it is
+  wall-clock and would make an unchanged run print differently twice.
+
 **Shared putting physics.** `lib/golf/greenPhysics.ts` is the pure-math
 counterpart for greens (Stimp → μ, roll-out, cup capture; no `three`, no sim
 state), used by `courseSim`'s green/fringe roll. **Consolidation status:**
@@ -558,14 +627,29 @@ sampled at wall-clock time**. Two things fixed it, and both are load-bearing:
   easing (`1 − 0.001^dt`) converges 50% per frame, where a 16.7 ms step converges
   11% and would screenshot the `?at=` views mid-camera-flight.
 
+- **The beacon's 30 s "NOT deterministic" fallback now cancels itself.** It used
+  to be cleared only by the effect cleanup, i.e. on unmount, so any page that
+  outlived 30 s — `secondAim` drives two real aims, a fire and a roll-out at
+  SwiftShader's ~3 fps — logged the alarm long after a perfectly deterministic
+  ready. A false alarm on the one scene that exists to catch a regression is
+  worse than no alarm; it trains the reader to skip the line.
+
 Where a sequence genuinely needs motion, `shoot-golf.mjs` asks for it in VIRTUAL
 milliseconds (`advanceScene(page, ms)` → `window.__sceneClock.advance`), never
 `waitForTimeout`, then renders a few frozen frames before capturing (Chromium can
 hand back the frame *before* the last one rendered).
 
-**Known residual: ~5 water scenes still differ by 30–180 pixels (0.00–0.01%).**
+**Known residual: ~5–6 water scenes still differ by 5–180 pixels (≤0.012%).**
 `augusta-12`, `augusta-16-redbud`, `course-played-aim`, `listowel-heritage-3`,
-`putt-water`. This is **not** the clock and is not fixable from scene state:
+`putt-water`, and sometimes `augusta-16-pond` (membership at the low end
+flickers — one pair had it at 5 px, maxΔ 1). Per-pixel magnitude reaches
+**maxΔ ≈ 44** on `listowel-heritage-3` and ~20–26 on the augusta holes, which is
+higher than the "4–10" first recorded here: that early figure came from a smaller
+sample, not from a since-introduced regression. Measured directly — two
+consecutive runs at the current 1536² and two more at `?shadow=2048` (the old
+configuration) produce the same scene set and the same magnitudes, so the shadow
+tier does not touch it. This is **not** the clock and is not fixable from scene
+state:
 virtual time at freeze is exactly `2300 ms` on 6/6 consecutive loads, a water-free
 hole is 6/6 byte-identical, and a water hole is 6/6 different while being stable
 *within* a page load. The differing pixels are a 1-px line on the water's
@@ -613,15 +697,24 @@ the roadmap markers above. Next up:
    guard, step 3).
 2. **Consolidate Mini-Golf onto a real heightfield** so `puttSim`/`PuttGL` can
    share `greenPhysics` instead of its own flat engine.
-3. **On-device GPU check** (swiftshader/headless won't catch it): the 2048²
-   shadow map — plus the shared water surface — needs verifying on a low-end
-   Android device before the release AAB ships; 1536² is the first dial to turn
-   down. Water now has its own dial: load the preview with **`?water=medium`**
-   (drops the Tier 3 planar reflection pass, keeping everything else) or
-   **`?water=low`** (also drops the detail normals). `pickWaterQuality` only
-   offers `high` where the GPU reports headroom, but that heuristic is exactly
-   what wants confirming on a real handset. (The transparent slope-read overlay that was an earlier
-   GPU concern is gone — the green is clean now.)
+3. **On-device GPU check** (swiftshader/headless won't catch it). The shadow map
+   is no longer a bare number to argue about — it is a tier, it defaults DOWN
+   (Course/Range 1536², Putt 1024²), and every knob is a URL parameter, so the
+   check is now a ten-minute job on a handset instead of a rebuild cycle:
+   - **`?shadow=2048`** reproduces the configuration that killed the WebView GPU
+     process; **`?shadow=1536`** is the shipping default; **`?shadow=1024`** is
+     the known-survivable fallback. Bisect in that order.
+   - **`?quality=low`** drops the shadow pass entirely — if that is the only tier
+     that survives, the finding is much bigger than a map size.
+   - **`?water=medium`** drops the Tier 3 planar reflection pass (a second full
+     scene render), **`?water=low`** also drops the detail normals.
+     `pickWaterQuality` still promotes on a capability sniff
+     (`cores > 4 && maxTextureSize >= 8192`) — a **known defect**, and the thing
+     most in need of confirming on a real handset.
+   - Read `window.__golfStats` in the device console for the live draw
+     call / triangle / tier numbers, including a median frame time.
+   The remaining open item is the measurement itself, on hardware. Until someone
+   holds a low-end Android, nothing here is evidence.
 
 **Regressions:** if you ever touch `CourseSim` state, remember any new mutable
 field MUST join `CourseSnapshot`/`snapshot()`/`restore()` (guard test enforces

@@ -31,6 +31,8 @@
 //   node scripts/shoot-golf.mjs augusta12       # a named real-course hole shot
 //   node scripts/shoot-golf.mjs --update-budgets   # rewrite budgets.golf.json
 //                                                  # from THIS run (all scenes)
+//   node scripts/shoot-golf.mjs --query=shadow=2048   # force a tier knob on
+//                                                     # every scene (see below)
 
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -140,6 +142,19 @@ const argv = process.argv.slice(2);
 // Rewriting the baseline is an explicit act. A gate that quietly moves its own
 // thresholds when they fail is not a gate.
 const updateBudgets = argv.includes('--update-budgets');
+/**
+ * `--query=k=v[&k=v]` — extra query appended to EVERY scene URL.
+ *
+ * The tier knobs (`?quality=`, `?shadow=`) are read by the scenes themselves, so
+ * this shoots the whole matrix at a forced tier: `--query=shadow=2048`
+ * reproduces the shadow-map configuration that killed the Android WebView GPU
+ * process, and `--query=quality=low` shoots the no-shadow path. Off by default,
+ * so a plain run is unchanged.
+ *
+ * ⚠ The shots still land on the SAME filenames. Copy `.golf-shots/` aside before
+ * a comparison run, or the second run overwrites the first.
+ */
+const extraQuery = (argv.find((a) => a.startsWith('--query=')) ?? '').slice('--query='.length);
 const requested = argv.filter((a) => !a.startsWith('--'));
 const ids = requested.length ? requested : Object.keys(SCENES);
 for (const id of ids) {
@@ -344,7 +359,7 @@ async function main() {
       page.on('console', (m) => {
         if (m.type() === 'error') errors.push(m.text().slice(0, 400));
       });
-      const url = `${base}/golfpreview.html?${query}`;
+      const url = `${base}/golfpreview.html?${query}${extraQuery ? `&${extraQuery}` : ''}`;
       try {
         await page.goto(url, { waitUntil: 'load', timeout: 20000 });
         await page.waitForFunction('window.__golfReady === true', { timeout: READY_TIMEOUT_MS });

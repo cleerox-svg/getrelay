@@ -97,6 +97,15 @@ tree that is still moving. New modules are fine; moves are not.
 | Module | What it owns |
 |---|---|
 | `clock.ts` | A freezable virtual clock, so a screenshot harness controls time instead of the platform. Default is a strict no-op. |
+| `quality.ts` | The tier POLICY — default DOWN, promote only on measured evidence. Takes a per-game `SceneBudgetTable` (rule 6) and decides which row of it applies, and why. Plus `withShadowMapSize` for the `?shadow=` bisect hatch. |
+| `stats.ts` | GPU instrumentation: a `renderer.info` snapshot (draw calls, triangles, programs, geometries, textures) tagged with the resolved tier, and a median frame-time probe. Read AFTER `render()` — three resets its counters at the start of the call. |
+
+**Where the numbers live.** `quality.ts` holds no sizes. Golf's table is
+`components/golf/scene/quality.ts`; baseball's is
+`components/baseball/stadium/quality.ts`. A shadow map that is right for a golf
+hole is wrong for a 900 ft stadium bowl, and a table is also the only place that
+can assert the rule a shared policy cannot see: **a tier may never RAISE a
+scene's current cost.**
 
 ---
 
