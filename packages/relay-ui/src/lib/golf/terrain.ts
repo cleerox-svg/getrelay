@@ -854,12 +854,12 @@ export interface CourseTree {
 }
 
 // A seeded [0,1) roll deciding whether one tree flowers: mulberry32's first
-// output for the tree's seed mixed with the hole's terrain seed. Two reasons for
-// the mix: it decorrelates the pick from the per-tree RENDER rng (which walks
-// the same generator, so choosing WHICH trees bloom cannot disturb what each
-// tree LOOKS like), and it varies the flowering trees hole to hole — the tree
-// seeds themselves are a function of `d` alone, so without it every flowering
-// hole would bloom at the same downrange stations.
+// output for the tree's seed mixed with the hole's terrain seed. The hole seed
+// is in the mix because the TREE seeds are a function of `d` alone (5000+d,
+// 9000+d) and so are the same on every hole — without it, all 13 flowering holes
+// would bloom at the identical downrange stations, which reads as a repeat over
+// a round. The extra constant keeps this stream distinct from foliage.ts's
+// per-tree render jitter, which is seeded from the same numbers.
 function bloomRoll(seed: number, holeSeed: number): number {
   const a = ((seed ^ Math.imul(holeSeed, 0x9e3779b1)) + 0x6d2b79f5) | 0;
   let t = Math.imul(a ^ (a >>> 15), 1 | a);
