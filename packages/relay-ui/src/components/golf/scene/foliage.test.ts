@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { buildGrove, groveFromCourseTrees, type TreePlacement } from './foliage';
+import { BLOOM_TUFTS, buildGrove, groveFromCourseTrees, type TreePlacement } from './foliage';
 import { courseTrees, HOLE_1 } from '../../../lib/golf/terrain';
 import type { DisposableResource } from '../../../lib/scene3d/instancing';
 
@@ -170,5 +170,131 @@ describe('the golf grove — the art is unchanged', () => {
     const [t] = courseTrees(HOLE_1);
     const [p] = groveFromCourseTrees([t!]);
     expect(p).toEqual({ kind: t!.kind, x: t!.x, z: -t!.d, scale: t!.scale, seed: t!.seed, y: t!.ground });
+  });
+});
+
+describe('the golf grove — blossom', () => {
+  const PINK = 0xf2a0bd;
+  const plain: TreePlacement[] = [
+    { kind: 'broadleaf', x: 0, z: 0, scale: 1.7, seed: 5020, y: 3 },
+    { kind: 'pine', x: 20, z: -10, scale: 1.4, seed: 9020 },
+    { kind: 'broadleaf', x: -20, z: -30, scale: 1.5, seed: 5046 },
+  ];
+  const flowering: TreePlacement[] = plain.map((p, i) =>
+    i === 0 ? { ...p, bloom: PINK } : p,
+  );
+
+  const colours = (mesh: THREE.InstancedMesh): number[] => {
+    const c = new THREE.Color();
+    const out: number[] = [];
+    if (!mesh.instanceColor) return out; // untinted batch (trunks)
+    for (let i = 0; i < mesh.count; i++) {
+      mesh.getColorAt(i, c);
+      out.push(c.getHex());
+    }
+    return out;
+  };
+
+  it('costs NO extra draw call — blossom rides the leaf batch', () => {
+    // The whole design constraint. Trunk / leaf / tier, flowering or not.
+    expect(build(plain).meshes).toHaveLength(3);
+    expect(build(flowering).meshes).toHaveLength(3);
+  });
+
+  // A grove of exactly one blooming broadleaf, so the leaf batch reads
+  // [crown …, tufts …] with nothing else interleaved.
+  const ONE = { kind: 'broadleaf', x: 0, z: 0, scale: 1.7, seed: 5020, y: 3 } as const;
+  const oneCrown = 6; // 5 + floor(r*3) for seed 5020 — see the parity test above.
+
+  it('does not move a single tree — bloom is colour only', () => {
+    // The blossom generator is seeded separately from the per-tree render RNG
+    // precisely so this holds. Every trunk, tier and original crown blob must
+    // land exactly where it lands on a hole with no bloom field.
+    const a = build([ONE]).meshes;
+    const b = build([{ ...ONE, bloom: PINK }]).meshes;
+    // Trunk: identical outright.
+    expect(Array.from(b[0]!.instanceMatrix.array)).toEqual(Array.from(a[0]!.instanceMatrix.array));
+    // Crown: the flower clusters are APPENDED, so the original blobs are the
+    // untouched prefix.
+    const pa = Array.from(a[1]!.instanceMatrix.array);
+    expect(Array.from(b[1]!.instanceMatrix.array).slice(0, pa.length)).toEqual(pa);
+
+    // …and the same holds across a MIXED grove: bloom must not perturb the trees
+    // around it, so trunks and pine tiers are identical for the whole scatter.
+    const ma = build(plain).meshes;
+    const mb = build(flowering).meshes;
+    for (const i of [0, 2]) {
+      expect(Array.from(mb[i]!.instanceMatrix.array)).toEqual(Array.from(ma[i]!.instanceMatrix.array));
+    }
+  });
+
+  it('adds exactly three flower clusters per blooming tree, and nothing else', () => {
+    expect(build(flowering).meshes[1]!.count - build(plain).meshes[1]!.count).toBe(3);
+    expect(build([{ ...ONE, bloom: PINK }]).meshes[1]!.count - build([ONE]).meshes[1]!.count).toBe(3);
+  });
+
+  it('turns the blooming crown pink and leaves every other tree green', () => {
+    const palette = new Set([0x2f7d3a, 0x3c8f44, 0x59a24a, 0x276b34, 0x4f9a52]);
+    const green = colours(build(plain).meshes[1]!);
+    const bloomed = colours(build(flowering).meshes[1]!);
+    for (const hex of green) expect(palette.has(hex)).toBe(true);
+
+    // Leaf-batch order: tree 0's crown, then tree 0's 3 clusters, then tree 2's
+    // crown (tree 1 is a pine and lands in the tier batch).
+    const changed = bloomed.slice(0, oneCrown);
+    const untouched = bloomed.slice(oneCrown + BLOOM_TUFTS);
+    expect(changed.every((h, i) => h !== green[i])).toBe(true);
+    expect(untouched).toEqual(green.slice(oneCrown));
+
+    // Every retinted blob is genuinely in the pink half of the mix, not a green
+    // with a pink hint — a crown that only hints reads as measles. Red must
+    // dominate outright, and carry at least half the blossom's own red.
+    const c = new THREE.Color();
+    const target = new THREE.Color().setHex(PINK);
+    for (const hex of changed) {
+      c.setHex(hex);
+      expect(c.r).toBeGreaterThan(c.g);
+      expect(c.r).toBeGreaterThan(c.b);
+      expect(c.r).toBeGreaterThan(target.r * 0.5);
+    }
+  });
+
+  it('makes the flower clusters lighter than the blossom colour itself', () => {
+    const bloomed = colours(build(flowering).meshes[1]!);
+    const tufts = bloomed.slice(oneCrown, oneCrown + BLOOM_TUFTS);
+    expect(tufts).toHaveLength(BLOOM_TUFTS);
+    const target = new THREE.Color().setHex(PINK);
+    const c = new THREE.Color();
+    for (const hex of tufts) {
+      c.setHex(hex);
+      // A lerp from white toward PINK: never darker than the blossom.
+      expect(c.r).toBeGreaterThanOrEqual(target.r - 1e-6);
+      expect(c.g).toBeGreaterThanOrEqual(target.g - 1e-6);
+      expect(c.b).toBeGreaterThanOrEqual(target.b - 1e-6);
+    }
+  });
+
+  it('ignores a bloom on a pine — conifers do not flower', () => {
+    const conifer: TreePlacement[] = [{ kind: 'pine', x: 0, z: 0, scale: 1, seed: 9020, bloom: PINK }];
+    const bare: TreePlacement[] = [{ kind: 'pine', x: 0, z: 0, scale: 1, seed: 9020 }];
+    const a = build(bare).meshes;
+    const b = build(conifer).meshes;
+    expect(b).toHaveLength(a.length);
+    for (let i = 0; i < a.length; i++) {
+      expect(Array.from(b[i]!.instanceMatrix.array)).toEqual(Array.from(a[i]!.instanceMatrix.array));
+      expect(colours(b[i]!)).toEqual(colours(a[i]!));
+    }
+  });
+
+  it('is deterministic — the same seeds bloom the same colours twice', () => {
+    const dump = () => build(flowering).meshes.map((m) => colours(m));
+    expect(dump()).toEqual(dump());
+  });
+
+  it('forwards the hole data’s bloom to the placement, and omits it otherwise', () => {
+    const trees = courseTrees(HOLE_1);
+    expect(groveFromCourseTrees(trees).some((p) => 'bloom' in p)).toBe(false);
+    const tinted = groveFromCourseTrees([{ ...trees[0]!, kind: 'broadleaf', bloom: PINK }]);
+    expect(tinted[0]!.bloom).toBe(PINK);
   });
 });

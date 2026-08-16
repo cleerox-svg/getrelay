@@ -120,7 +120,7 @@ A data-driven **Range layout** picker (persisted, default `fairway`):
 |---|---|
 | Shared scene kit (turf/sky/fog) | `packages/relay-ui/src/lib/golf/scenery.ts` |
 | Instanced scatter primitive (shared kit; batcher + impostor quads) | `packages/relay-ui/src/lib/scene3d/instancing.ts` |
-| The tree grove — shared by Course + Range, 3 draw calls | `packages/relay-ui/src/components/golf/scene/foliage.ts` |
+| The tree grove — shared by Course + Range, 3 draw calls; per-hole blossom rides the same batch | `packages/relay-ui/src/components/golf/scene/foliage.ts` |
 | Shared WATER (level geometry, Gerstner waves, Fresnel + sky/planar reflection, foam, splash, wet bank, reeds, quality tiers) | `packages/relay-ui/src/lib/golf/water.ts` |
 | Headless screenshot harness | `packages/relay-ui/scripts/shoot-golf.mjs` + `golfpreview.html` + `src/golfpreview.tsx` |
 | Quality tier POLICY (shared kit) + GPU instrumentation | `packages/relay-ui/src/lib/scene3d/quality.ts`, `stats.ts` |
@@ -135,7 +135,7 @@ A data-driven **Range layout** picker (persisted, default `fairway`):
 | Range HUD + controls + telemetry + layout picker | `packages/relay-ui/src/components/golf/RangeGame.tsx` |
 | Layouts, pins, `surfaceAt` | `packages/relay-ui/src/lib/golf/rangeTargets.ts` |
 | Club ladder | `packages/relay-ui/src/lib/golf/clubs.ts` |
-| Course terrain data + "HOW TO AUTHOR A HOLE" contract (`heightAt`/`gradientAt`/`surfaceAt`; `TEE_R`/`corridorHalfAt`/`greenPadRadius`; organic edges `edgeNoise`/`edgeRadius`/`featureSeed` + `EDGE_WOBBLE`/`maxGreenPadRadius`; render-only `corridorEdgeDist` first-cut helper) | `packages/relay-ui/src/lib/golf/terrain.ts`, `courseData.ts` |
+| Course terrain data + "HOW TO AUTHOR A HOLE" contract (`heightAt`/`gradientAt`/`surfaceAt`; `TEE_R`/`corridorHalfAt`/`greenPadRadius`; organic edges `edgeNoise`/`edgeRadius`/`featureSeed` + `EDGE_WOBBLE`/`maxGreenPadRadius`; render-only `corridorEdgeDist` first-cut helper; optional render-only `bloom` flowering canopy) | `packages/relay-ui/src/lib/golf/terrain.ts`, `courseData.ts` |
 | Course sim (terrain-aware; `snapshot`/`restore`/`predict`; putt power/speed; records) | `packages/relay-ui/src/lib/golf/courseSim.ts` |
 | Green + putting physics (Stimp → μ, roll-out, elliptic cup capture, BALL_R/CUP_R scale) | `packages/relay-ui/src/lib/golf/greenPhysics.ts` |
 | Course 3D scene (Three.js) — baked surface map, aim-holing pulse; `buildOrganicDisc`/`buildOrganicAnnulus` draw the green cap, fringe collar, bunkers and terrain-following water from the model's `edgeRadius`+`featureSeed`; long-grass rough, a crisp `corridorEdgeDist` first-cut band (uniform mown collar framed by dark mow lines), textured tee (`makeTeeTurf`); all textures seeded (`mulberry32`) | `packages/relay-ui/src/components/golf/CourseGL.tsx` |
@@ -702,7 +702,8 @@ out to be wrong in an instructive way.
    one thing golf's own visual gate cannot review is sand, which is why the sand
    work below had to be judged from a 2× crop of a single frame. A dedicated
    greenside-bunker view is cheap and belongs in `SCENES`.
-6. **The Augusta flowering holes render no blossom at all.** Counting pink pixels
+6. ~~**The Augusta flowering holes render no blossom at all.**~~ **FIXED — see
+   "Blossom" below.** Counting pink pixels
    across `augusta-2-pink-dogwood`, `augusta-13-azalea` and `augusta-16-redbud`:
    **zero, in every one** — and identically zero before and after the instancing
    change, so this is content that was never built, not something that broke.
@@ -711,6 +712,8 @@ out to be wrong in an instructive way.
    `/GRAPHICS.md`: the gap is **content**, not the renderer. A per-species blossom
    tint on the existing instanced canopy is now nearly free — `foliage.ts` already
    carries per-instance colour, so the whole cost is choosing which trees bloom.
+   → **Done.** The three scenes now measure **13,926 / 14,642 / 31,308** pink
+   pixels (0.97% / 1.02% / 2.17% of frame) at **exactly the same draw calls**.
 7. **The hole-out frame does not actually show the ball.** Now that
    `course-celebrate`'s camera is fixed (defect 1), the frame is legible — sky,
    horizon, rough, green, cup, flagstick, confetti — but the fallback direction
@@ -785,6 +788,45 @@ to do.
   stays its own 537.75 kB chunk and `foliage` came out as its own 3.13 kB lazy
   chunk — it is imported only by the `lazy()`-loaded `*GL.tsx`, so it never
   reaches the app entry.
+
+**Blossom — the flowering holes, at zero draw calls.** Augusta names 13 of its
+18 holes after a flowering plant and every one of them rendered a plain green
+tree line (defect 6). Fixed as **content**, which is the whole point: the
+renderer needed one colour path it already had.
+
+- **Bloom is authored in HOLE DATA, never derived from the name.** `CourseHole`
+  gains an optional `bloom { color, fraction }` (documented under "THE CANOPY"
+  in `terrain.ts`'s authoring contract); `courses/augusta.ts` carries a `BLOOM`
+  table with the colour each namesake plant actually flowers. Parsing "Pink
+  Dogwood" into a colour at render time would couple the renderer to copy text.
+  The five holes named for non-flowering plants (1 Tea Olive, 6 Juniper,
+  7 Pampas, 14 Chinese Fir, 18 Holly) have no bloom and render unchanged.
+- **It rides the EXISTING instanced leaf batch.** A blooming broadleaf's crown
+  blobs are re-tinted toward the blossom colour and three small flower clusters
+  are appended — all the same unit icosahedron and the same white material, so
+  they are extra `instanceColor` entries in the batch that was already there.
+  **Draw calls are IDENTICAL on every scene**; the cost is +1.3k to +2.2k
+  triangles on a flowering hole. A mesh per blooming tree would have undone the
+  25× win, which is why the design started from that constraint.
+- **It is a RENDER TINT and provably nothing else.** `courseTrees()` sets
+  `CourseTree.bloom` and touches no other field, so a flowering hole's tree list
+  is byte-identical to the same hole with the field stripped — same trunks, same
+  collision radii, same ground. And the tint is drawn from a SEPARATE generator
+  seeded off the tree's own seed rather than from the per-tree render RNG, so a
+  blooming tree keeps the exact silhouette, crown count and jitter it had plain.
+  Both properties are unit-tested (`terrain.test.ts`, `foliage.test.ts`,
+  `courses.test.ts`), which matters more than usual here: a bloom field that
+  moved a ball would break see-what-you-play silently.
+- **Seeded selection, and per hole.** Which broadleaves flower is
+  `bloomRoll(tree.seed, hole.terrain.seed)` — mulberry32, never `Math.random`.
+  The hole seed is in the mix because tree seeds are a function of `d` alone, so
+  without it every flowering hole would bloom at the same downrange stations.
+  `fraction` is 0.45–0.65, never 1: pines never flower and a share of the
+  broadleaves stays green, so the grove reads as accent trees in a canopy rather
+  than a repainted hedge.
+- **Measured:** pink pixels 0 → **13,926** (hole 2), 0 → **14,642** (13),
+  0 → **31,308** (16). Draw calls 33 / 24 / 39 — unchanged. Triangles
+  +2,160 / +1,920 / +1,320.
 
 **Scene-wide IBL, and real sand.** Two changes that deliberately move pixels.
 

@@ -24,7 +24,44 @@
 
 import { defineCourse } from './builder';
 import { greensideHazard, hole } from './builder';
-import type { GreenDef } from '../terrain';
+import type { GreenDef, HoleBloom } from '../terrain';
+
+// BLOSSOM — the reason 13 of these 18 holes carry a `bloom` field.
+//
+// Augusta names all but five of its holes after a flowering plant, and every one
+// of them used to render a plain green tree line: the visual gate counted ZERO
+// pink pixels on Pink Dogwood, Azalea and Redbud. That is the sharpest example
+// of /GRAPHICS.md's thesis — the gap is CONTENT, not the renderer — because no
+// engine change fixes a hole named for a flower nobody modelled.
+//
+// So the blossom is authored HERE, as data (terrain.ts "THE CANOPY"), one entry
+// per namesake plant in roughly the colour that plant actually flowers. It is a
+// render tint only: it changes no lie, no collision volume and no ball path, and
+// it rides the grove's existing instanced leaf batch, so it costs no draw calls.
+// The five holes named for non-flowering plants — 1 Tea Olive (tiny, hidden
+// white flowers), 6 Juniper, 7 Pampas, 14 Chinese Fir, 18 Holly — deliberately
+// get NO bloom and render exactly as before.
+//
+// `fraction` is the share of a hole's BROADLEAF trees that flower (pines never
+// do), and is deliberately below 1: a uniformly pink grove reads as paint. It is
+// pushed higher on the three signature flowering holes (2, 13, 16) and on the
+// short par 3s, where the corridor is short enough that only a handful of trees
+// are ever in frame.
+const BLOOM = {
+  pinkDogwood: { color: 0xf2a0bd, fraction: 0.6 }, // 2
+  floweringPeach: { color: 0xef7f9e, fraction: 0.5 }, // 3
+  crabApple: { color: 0xf6c6d4, fraction: 0.5 }, // 4
+  magnolia: { color: 0xf2dde2, fraction: 0.45 }, // 5 — creamy white, faintly pink
+  yellowJasmine: { color: 0xf2d34e, fraction: 0.5 }, // 8
+  carolinaCherry: { color: 0xf0efe0, fraction: 0.5 }, // 9 — white racemes
+  camellia: { color: 0xd8506e, fraction: 0.5 }, // 10 — deep rose
+  whiteDogwood: { color: 0xf3f2e8, fraction: 0.5 }, // 11
+  goldenBell: { color: 0xf5c531, fraction: 0.6 }, // 12 — forsythia
+  azalea: { color: 0xe0508a, fraction: 0.65 }, // 13
+  firethorn: { color: 0xe2622a, fraction: 0.5 }, // 15 — pyracantha berries
+  redbud: { color: 0xcf6ba9, fraction: 0.65 }, // 16
+  nandina: { color: 0xc8342f, fraction: 0.5 }, // 17 — heavenly bamboo berries
+} satisfies Record<string, HoleBloom>;
 
 // −x = dogleg left, +x = dogleg right. Greens are big (r 15–17). Elevation
 // (teeElev→greenElev) reflects the up/downhill notes. Each hole's green is passed
@@ -56,6 +93,7 @@ const HOLES = [
     hole({
       id: 2,
       name: 'Pink Dogwood',
+      bloom: BLOOM.pinkDogwood,
       par: 5,
       yards: 585,
       pin: { d: g.d + 2, x: g.x - 2 },
@@ -79,6 +117,7 @@ const HOLES = [
     hole({
       id: 3,
       name: 'Flowering Peach',
+      bloom: BLOOM.floweringPeach,
       par: 4,
       yards: 350,
       pin: { d: g.d + 2, x: g.x - 2 },
@@ -102,6 +141,7 @@ const HOLES = [
     hole({
       id: 4,
       name: 'Flowering Crab Apple',
+      bloom: BLOOM.crabApple,
       par: 3,
       yards: 240,
       pin: { d: g.d + 2, x: g.x - 2 },
@@ -122,6 +162,7 @@ const HOLES = [
     hole({
       id: 5,
       name: 'Magnolia',
+      bloom: BLOOM.magnolia,
       par: 4,
       yards: 495,
       pin: { d: g.d + 2, x: g.x - 2 },
@@ -192,6 +233,7 @@ const HOLES = [
     hole({
       id: 8,
       name: 'Yellow Jasmine',
+      bloom: BLOOM.yellowJasmine,
       par: 5,
       yards: 570,
       pin: { d: g.d + 2, x: g.x - 2 },
@@ -215,6 +257,7 @@ const HOLES = [
     hole({
       id: 9,
       name: 'Carolina Cherry',
+      bloom: BLOOM.carolinaCherry,
       par: 4,
       yards: 460,
       pin: { d: g.d + 2, x: g.x - 2 },
@@ -239,6 +282,7 @@ const HOLES = [
     hole({
       id: 10,
       name: 'Camellia',
+      bloom: BLOOM.camellia,
       par: 4,
       yards: 495,
       pin: { d: g.d + 2, x: g.x - 2 },
@@ -265,6 +309,7 @@ const HOLES = [
     hole({
       id: 11,
       name: 'White Dogwood',
+      bloom: BLOOM.whiteDogwood,
       par: 4,
       yards: 520,
       pin: { d: g.d + 2, x: g.x + 2 },
@@ -285,6 +330,7 @@ const HOLES = [
     hole({
       id: 12,
       name: 'Golden Bell',
+      bloom: BLOOM.goldenBell,
       par: 3,
       yards: 155,
       pin: { d: g.d + 2, x: g.x - 2 },
@@ -307,6 +353,7 @@ const HOLES = [
     hole({
       id: 13,
       name: 'Azalea',
+      bloom: BLOOM.azalea,
       par: 5,
       yards: 545,
       pin: { d: g.d + 2, x: g.x - 2 },
@@ -347,6 +394,7 @@ const HOLES = [
     hole({
       id: 15,
       name: 'Firethorn',
+      bloom: BLOOM.firethorn,
       par: 5,
       yards: 550,
       pin: { d: g.d + 2, x: g.x - 2 },
@@ -367,6 +415,7 @@ const HOLES = [
     hole({
       id: 16,
       name: 'Redbud',
+      bloom: BLOOM.redbud,
       par: 3,
       yards: 170,
       pin: { d: g.d + 2, x: g.x - 2 },
@@ -389,6 +438,7 @@ const HOLES = [
     hole({
       id: 17,
       name: 'Nandina',
+      bloom: BLOOM.nandina,
       par: 4,
       yards: 440,
       pin: { d: g.d + 2, x: g.x - 2 },
