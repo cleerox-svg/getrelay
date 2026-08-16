@@ -50,6 +50,46 @@
 //      into `contactGeometry` (the parameter accepted and
 //      ignored) — a follow-up pass; the file survived it  → 1 fail
 //
+// TEN MORE WERE WATCHED TO FAIL in the M2 FEEL pass, when the payout stopped
+// being home-run-only and `derbyRules.ts` was split three ways at the cap. Same
+// discipline, observed counts against the whole 182-test baseball suite:
+//
+//  24. `swingPoints`'s `Math.min(cap, …)` deleted           → 36 fail
+//  25. a WHIFF drops out of the no-contact guard and
+//      scores `contactCredit`                               → 36 fail
+//  26. `CONTACT_DATUM_FT` unpinned from the grass line
+//      (155.5 → 100)                                        → 1 fail
+//  27. `FOUL_CREDIT_FRACTION` not applied — a foul pays
+//      exactly what the same ball in play pays              → 1 fail
+//  28. `BARREL_BONUS_POINTS` zeroed                          → 1 fail
+//  29. `CONTACT_POINTS_PER_FT` 0.35 → 2, so a caught fly
+//      out-pays the home run it just missed                  → 2 fail
+//  30. `validatePayoutCap` dropped from `validateDerbyFormat`
+//      (the payout stops being checked on the LIVE path)     → 1 fail
+//  31. `derbySim` scores home runs only again (M2's ternary)  → 1 fail
+//  32. the per-pitch cap read from the CONSTANT rather than
+//      from `perPitchCap(cfg.pitchesPerRound)`               → 1 fail
+//  33. `PITCH_TEMPO` reverted 0.45 → 0.55                    → 1 fail
+//
+// ⚠ (24) AND (25) FAIL 36 TESTS BECAUSE `resolveDerbyConfig` THROWS. The payout
+// cap is checked on the live config path, so an uncapped payout is not a wrong
+// score — it is a `new DerbySim()` that refuses to build. That is the intended
+// blast radius: the alternative is a session that plays fine and then 400s on
+// submit with the client swallowing the error.
+//
+// ⚠ (30) SURVIVED ITS FIRST ASSERTION, and the reason is recorded in the test.
+// `expect(validateDerbyFormat(3, 7).join(' | ')).toContain('cap')` passed with
+// the payout check deleted, because the DIVISIBILITY clause next door already
+// prints "(per-pitch cap 285.71…)". Superset-against-`validatePayoutCap`'s own
+// messages is what separates "mentions a cap" from "ran the payout validator".
+//
+// ⚠ (33) IS THE ONE MUTATION THAT IS SUPPOSED TO BE SURVIVABLE AND IS NOT, and
+// the exception is deliberate. Every other assertion in this game is stated in
+// TRUE physical time, so the tempo is free; the cliff/slope test is stated in
+// the player's WALL ms, because that is the axis his thumb is on. Reverting the
+// knob puts the ±60 ms row back to a hard zero, which is the measured
+// justification for moving it.
+//
 // ⚠ (22) IS A GAP THIS FILE HAD, not one it caught. The independence assertions
 // in the snapshot test mutated only SCALARS, so `getState().last.flight` — and
 // its four sample arrays — could alias sim state through every one of them. It
@@ -68,17 +108,17 @@
 //     plays a 20-pitch round at 130 mph of bat speed.
 
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { mulberry32 } from '../golf/wind';
 import { vLen } from './airPhysics';
 import { BAT_SPEED_MPH, LOC_DISTANCE_IN, SWEET_SPOT_M } from './bat';
 import { contactGeometry, swingContact } from './batSim';
+import { BAT_HANDLE_LIMIT_M, BAT_TIP_M, contactWindowS } from './contactWindow';
 import {
-  BAT_HANDLE_LIMIT_M,
-  BAT_TIP_M,
   DERBY_MIX,
   DERBY_ROUNDS,
-  DISTANCE_DATUM_FT,
-  HR_BASE_POINTS,
   MAX_POINTS_PER_PITCH,
   PITCHES_PER_ROUND,
   PULL_INTENT_MAX_IN,
@@ -86,20 +126,32 @@ import {
   RETICLE_FULL_MISS_IN,
   SERVE_SPREAD,
   SWING_UNDERCUT_IN,
-  contactWindowS,
   derbyDraw,
-  homeRunPoints,
+  perPitchCap,
   pullIntentOffsetIn,
   reticleResidual,
   validateDerbyFormat,
   validateDerbyMix,
 } from './derbyRules';
+import {
+  BARREL_BONUS_POINTS,
+  CONTACT_DATUM_FT,
+  CONTACT_POINTS_PER_FT,
+  DERBY_OUTCOMES,
+  DISTANCE_DATUM_FT,
+  FOUL_CREDIT_FRACTION,
+  HR_BASE_POINTS,
+  swingPoints,
+  validateDerbyPayout,
+  validatePayoutCap,
+} from './derbyScoring';
+import { infieldDepthFt } from './fielding';
 import { DerbySim } from './derbySim';
 import type { DerbySim as DerbySimType } from './derbySim';
 import type { SwingResult } from './derbyState';
 import { PITCHES } from './pitches';
 import type { PitchId } from './pitches';
-import { MAX_POINTS_PER_ROUND, MAX_ROUNDS, isBarrel } from './tuning';
+import { MAX_POINTS_PER_ROUND, MAX_ROUNDS, PITCH_TEMPO, isBarrel } from './tuning';
 
 import { ZONE_CENTER, reticleToPlate } from './zone';
 
@@ -142,6 +194,18 @@ const ownDataProps = (o: object) =>
 
 const f = (v: number, w = 7, d = 2) => v.toFixed(d).padStart(w);
 
+/** The worker's own source — read as TEXT, never imported. See `tuning.test.ts`. */
+const WORKER_GAMES = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  '..',
+  '..',
+  'relay-worker',
+  'src',
+  'games.ts',
+);
+
 /**
  * `batSim.test.ts`'s reference pitch, reproduced exactly: 90 mph descending 8°
  * with 2200 rpm of backspin. Copied rather than exported so that this file
@@ -172,8 +236,81 @@ describe('derby — format and the server clamp', () => {
         `        per-pitch cap ${MAX_POINTS_PER_PITCH} (= ${MAX_POINTS_PER_ROUND}/${PITCHES_PER_ROUND}, DERIVED)\n` +
         `        round ceiling ${MAX_POINTS_PER_ROUND}, session ceiling ` +
         `${DERBY_ROUNDS * MAX_POINTS_PER_ROUND} against the worker's rounds×2000\n` +
-        `        payout = ${HR_BASE_POINTS} + max(0, carry − ${DISTANCE_DATUM_FT}) × 1, HR only`,
+        `        homeRun = ${HR_BASE_POINTS} + max(0, carry − ${DISTANCE_DATUM_FT}) × 1\n` +
+        `        inPlay  = max(0, carry − ${CONTACT_DATUM_FT}) × ${CONTACT_POINTS_PER_FT}\n` +
+        `        foul    = ${FOUL_CREDIT_FRACTION} × the same ball in play\n` +
+        `        barrel  = +${BARREL_BONUS_POINTS} on any of the three, before the foul scale`,
     );
+  });
+
+  it('⚠ SCORING IS NOT HOME-RUN-ONLY, and the payout ladder is printed', () => {
+    // ⚠ THE DEFECT THIS CLOSES, MEASURED BEFORE THE FIX. Across every skill
+    // level modelled, 20–48 % of swings were `inPlay` — real contact, often
+    // 350+ ft — and every one scored 0, byte-identical to a whiff. The owner
+    // played the shipped derby and scored 122 points with 1 home run over 24
+    // pitches, and said "it's tough to hit". It was not them.
+    expect(validateDerbyPayout(MAX_POINTS_PER_PITCH)).toEqual([]);
+
+    // Exactly two outcomes pay nothing, and they are the two with no contact.
+    for (const o of DERBY_OUTCOMES) {
+      const paid = swingPoints(o, 400, false, MAX_POINTS_PER_PITCH);
+      expect(paid > 0, `${o} @ 400 ft`).toBe(o !== 'whiff' && o !== 'take');
+    }
+
+    // ⚠ THE CONTACT DATUM IS NOMINATED FROM THE FIELD, and the nomination is
+    // asserted rather than left in a comment: it is the grass line at dead
+    // centre, the 95 ft skinned-infield arc struck from the rubber. Move the
+    // arc and this fails, which is the point — a ball that never reaches the
+    // outfield grass is not solid contact.
+    expect(CONTACT_DATUM_FT).toBeCloseTo(infieldDepthFt(0), 9);
+
+    // ⚠ A BARREL IS WORTH SOMETHING, on every outcome that made contact. Without
+    // this `BARREL_BONUS_POINTS = 0` passes the whole suite — `validateDerbyPayout`
+    // only bounds the bonus from ABOVE, because its job is the worker's clamp.
+    expect(BARREL_BONUS_POINTS).toBeGreaterThan(0);
+    for (const o of ['homeRun', 'inPlay', 'foul'] as const) {
+      const cap = MAX_POINTS_PER_PITCH;
+      expect(swingPoints(o, 400, true, cap), o).toBeGreaterThan(swingPoints(o, 400, false, cap));
+    }
+
+    // ⚠ AND `validateDerbyFormat` ACTUALLY SURFACES THE PAYOUT'S COMPLAINTS. The
+    // format validator is what `resolveDerbyConfig` runs on the LIVE path, so
+    // the wiring is load-bearing and is otherwise invisible: every payout
+    // property here is also asserted by calling `validateDerbyPayout` directly,
+    // which keeps passing with the call deleted from the format validator.
+    //
+    // ⚠ THE FIRST VERSION OF THIS ASSERTION WAS `…join(' | ')).toContain('cap')`
+    // AND IT SURVIVED THAT MUTATION — the divisibility clause next door already
+    // prints "(per-pitch cap 285.71…)", so the substring was there either way.
+    // Asserting SUPERSET against the payout validator's own messages is what
+    // separates "the format validator mentions a cap" from "the format
+    // validator ran the payout validator".
+    const payoutBad = validatePayoutCap(perPitchCap(7));
+    expect(payoutBad.length, 'guard the guard: 7 must produce payout complaints').toBeGreaterThan(0);
+    for (const msg of payoutBad) expect(validateDerbyFormat(DERBY_ROUNDS, 7)).toContain(msg);
+
+    // A foul is the SAME ball, scaled. Asserted as the identity the constant's
+    // comment claims, at every carry — not spot-checked.
+    for (let c = 0; c <= 500; c += 25) {
+      const fairRaw = Math.max(0, c - CONTACT_DATUM_FT) * CONTACT_POINTS_PER_FT;
+      expect(swingPoints('foul', c, false, MAX_POINTS_PER_PITCH)).toBe(
+        Math.round(fairRaw * FOUL_CREDIT_FRACTION),
+      );
+    }
+
+    const rows: string[] = [];
+    for (const c of [120, 155.5, 200, 250, 300, 340, 380, 400, 420, 440]) {
+      const cap = MAX_POINTS_PER_PITCH;
+      rows.push(
+        `  ${f(c, 6, 1)} ft | HR ${String(swingPoints('homeRun', c, false, cap)).padStart(3)}` +
+          ` (barrel ${String(swingPoints('homeRun', c, true, cap)).padStart(3)})` +
+          ` | inPlay ${String(swingPoints('inPlay', c, false, cap)).padStart(3)}` +
+          ` (barrel ${String(swingPoints('inPlay', c, true, cap)).padStart(3)})` +
+          ` | foul ${String(swingPoints('foul', c, false, cap)).padStart(3)}` +
+          ` | whiff ${swingPoints('whiff', c, true, cap)}`,
+      );
+    }
+    console.log('\nPAYOUT LADDER — every outcome, by projected carry\n' + rows.join('\n'));
   });
 
   it('⚠ the format validator BITES, and the config path actually calls it', () => {
@@ -219,18 +356,28 @@ describe('derby — format and the server clamp', () => {
     // Three legs, and all three are needed because the first two are arithmetic
     // and the third is the only one that sees the wiring.
     //
-    // (1) One swing can never pay more than the per-pitch cap — including at
-    //     inputs no physics can reach.
-    for (const carry of [0, 350, 400, 500, 1000, 1e9, Number.MAX_SAFE_INTEGER, Infinity]) {
-      expect(homeRunPoints(carry)).toBeLessThanOrEqual(MAX_POINTS_PER_PITCH);
-      expect(Number.isInteger(homeRunPoints(carry))).toBe(true);
+    // (1) NO swing can pay more than the per-pitch cap — for EVERY outcome, not
+    //     just for a home run, and at inputs no physics can reach. This is the
+    //     leg that had to change when the payout stopped being home-run-only:
+    //     the worker rejects on the SUBMITTED TOTAL, so the property has to be
+    //     universally quantified over the outcome enum.
+    for (const o of DERBY_OUTCOMES) {
+      for (const carry of [0, 350, 400, 500, 1000, 1e9, Number.MAX_SAFE_INTEGER, Infinity]) {
+        for (const b of [false, true]) {
+          const p = swingPoints(o, carry, b, MAX_POINTS_PER_PITCH);
+          expect(p, `${o} @ ${carry} barrel=${b}`).toBeLessThanOrEqual(MAX_POINTS_PER_PITCH);
+          expect(Number.isInteger(p), `${o} @ ${carry} barrel=${b}`).toBe(true);
+        }
+      }
     }
     // (2) The cap re-derives from the CONFIG, so an overridden pitch count
-    //     cannot break the round ceiling either.
+    //     cannot break the round ceiling either — again over every outcome.
     for (const per of [1, 2, 4, 5, 8, 10, 20]) {
-      expect(homeRunPoints(1e9, MAX_POINTS_PER_ROUND / per) * per).toBeLessThanOrEqual(
-        MAX_POINTS_PER_ROUND,
-      );
+      for (const o of DERBY_OUTCOMES) {
+        expect(swingPoints(o, 1e9, true, perPitchCap(per)) * per).toBeLessThanOrEqual(
+          MAX_POINTS_PER_ROUND,
+        );
+      }
     }
     // (2b) …and through the SIM, not just the function. Without this leg the
     //      config-derived cap is unobservable: nothing else overrides the pitch
@@ -278,6 +425,106 @@ describe('derby — format and the server clamp', () => {
     console.log(
       '\nCLAMP HEADROOM — a maximum-effort session at each bat speed\n' + rows.join('\n'),
     );
+  });
+
+  it('⚠ a MAXIMAL session survives the worker’s OWN acceptance predicate', () => {
+    // ⚠ THIS IS THE LEG THE M2c BUG GOT THROUGH. The three legs above check the
+    // sim's own counters against its own mirrored constants — which is exactly
+    // what was green when `bestStreak` shipped over the worker's bound and every
+    // over-cap submission vanished with no UI signal, because
+    // `DerbyGame.bank()` swallows the 400 with `.catch(() => undefined)`.
+    //
+    // So this one evaluates the worker's predicate on the body `bank()` actually
+    // posts. It is the only assertion in the file that can see a payout change
+    // breaking submission.
+    //
+    // ⚠ EXACTLY HOW MUCH OF IT COMES FROM THE WORKER, stated precisely — an
+    // earlier draft of this comment said the predicate was "reconstructed from
+    // the worker's source text", which is generous. THREE INTEGERS are read out
+    // of `games.ts` (the same read `tuning.test.ts` uses, for the same reason:
+    // the two packages deploy independently and must not share a module); the
+    // SHAPE of `workerAccepts` below is a HAND TRANSCRIPTION of
+    // `roundsAndStreakValid` plus the score clamp, faithful as of this pass and
+    // able to drift silently if the worker's logic changes.
+    //
+    // The source read is not decoration and was mutation-checked: reformatting
+    // the worker to `export const MAX_ROUNDS: number = 8;` fails 2 tests loudly
+    // (the `readConst` guard), and changing the worker's 2000 to 200 fails 1.
+    // What it CANNOT see is the worker TIGHTENING its logic — `rounds *
+    // (MAX_POINTS_PER_ROUND / 2)` fails 0 tests here. That half is covered on the
+    // worker side by `games.test.ts`, which is where a transcription belongs to
+    // be checked; this is the client half of a pincer, not the whole of it.
+    const workerSrc = readFileSync(WORKER_GAMES, 'utf8');
+    const readConst = (name: string): number => {
+      const m = new RegExp(`export\\s+const\\s+${name}\\s*=\\s*(-?\\d+)\\s*;`).exec(workerSrc);
+      // Guard the guard: a rename on the worker side must fail HERE, loudly.
+      expect(m, `${name} not found in the worker source — regex stale?`).not.toBeNull();
+      return Number(m![1]);
+    };
+    const wMaxRounds = readConst('MAX_ROUNDS');
+    const wPerRound = readConst('MAX_POINTS_PER_ROUND');
+    const wPitches = readConst('DERBY_PITCHES_PER_ROUND');
+    // The client's format must be the one the worker's streak bound assumes.
+    expect(wPitches).toBe(PITCHES_PER_ROUND);
+
+    /**
+     * `games.ts`'s `roundsAndStreakValid` + its score clamp, HAND-TRANSCRIBED —
+     * only `wMaxRounds`, `wPerRound` and `wPitches` come from the worker source.
+     */
+    const workerAccepts = (b: { score: number; rounds: number; bestStreak: number }): boolean =>
+      Number.isInteger(b.rounds) &&
+      Number.isInteger(b.bestStreak) &&
+      b.rounds >= 1 &&
+      b.rounds <= wMaxRounds &&
+      b.bestStreak >= 0 &&
+      b.bestStreak <= b.rounds * wPitches &&
+      Number.isInteger(b.score) &&
+      b.score >= 0 &&
+      b.score <= b.rounds * wPerRound;
+    // Prove the predicate can REFUSE, or "it accepted" means nothing.
+    expect(workerAccepts({ score: 1, rounds: 1, bestStreak: 0 })).toBe(true);
+    expect(workerAccepts({ score: wPerRound + 1, rounds: 1, bestStreak: 0 })).toBe(false);
+    expect(workerAccepts({ score: 1, rounds: 1, bestStreak: wPitches + 1 })).toBe(false);
+    expect(workerAccepts({ score: 1.5, rounds: 1, bestStreak: 0 })).toBe(false);
+
+    // Drive the score as high as this game can go: absurd bat speed, reticle
+    // shaded to the pull side, tapped a shade early — the corner the sweeps
+    // below say is the maximum — and submit after EVERY swing, partial rounds
+    // included, because that is what the abandon net does.
+    const rows: string[] = [];
+    let shipPeak = 0;
+    for (const bat of [undefined, 105, 130, 200]) {
+      let peak = 0;
+      for (const seed of [1, 2, 3, 4, 5]) {
+        const sim = new DerbySim({ seed, ...(bat === undefined ? {} : { batSpeedMph: bat }) });
+        while (sim.getState().phase !== 'done') {
+          const pr = sim.servePitch();
+          sim.setReticle(pr.plate.x + 0.3, pr.plate.h);
+          sim.swing(pr.plate.t - 0.002);
+          const st = sim.getState();
+          const body = { score: st.score, rounds: st.roundsPlayed, bestStreak: st.bestStreak };
+          expect(workerAccepts(body), `bat ${bat} seed ${seed}: ${JSON.stringify(body)}`).toBe(true);
+          peak = Math.max(peak, st.score / (st.roundsPlayed * wPerRound));
+        }
+      }
+      if (bat === undefined) shipPeak = peak;
+      rows.push(
+        `  bat ${(bat === undefined ? `${BAT_SPEED_MPH} (shipping)` : String(bat)).padStart(16)} mph` +
+          ` | peak ${f(100 * peak, 6, 1)} % of rounds × ${wPerRound}` +
+          ` | headroom ${f(100 * (1 - peak), 5, 1)} %`,
+      );
+    }
+    console.log(
+      `\nWORKER CLAMP — a maximal session against the worker's OWN predicate\n` +
+        rows.join('\n') +
+        `\n  Every submission above was ACCEPTED. Note the 200 mph row saturating at\n` +
+        `  exactly 100 %: that is the STRUCTURAL cap (pitchesPerRound × perPitchCap ≡\n` +
+        `  MAX_POINTS_PER_ROUND) doing its job — the worker's bound is ≤, so exactly\n` +
+        `  full is fine and one point more is a silent 400.`,
+    );
+    // The shipping config keeps real headroom — the absurd-bat rows are proof
+    // the cap holds at saturation, this is proof the game is nowhere near it.
+    expect(shipPeak).toBeLessThan(1);
   });
 });
 
@@ -1073,6 +1320,172 @@ describe('derby — outcomes', () => {
     );
   });
 
+  it('⚠ the timing CLIFF is a SLOPE — measured in WALL ms, in POINTS', () => {
+    // ⚠ THE SWEEP ABOVE COULD NOT SEE THIS DEFECT AND THIS ONE IS ITS COMPLEMENT.
+    // It measures HOME-RUN RATE at TRUE physical offsets with the reticle ON the
+    // ball. The owner does not live in either of those: he lives in WALL ms
+    // (the tempo divides the window his thumb has) and he is scored in POINTS,
+    // and M2's payout paid nothing for anything but a home run. Measured on the
+    // shipped build — reticle at zone centre, tap biased by a constant WALL
+    // offset, 40 sessions per row:
+    //
+    //     bias  -45 ms | HR  0 % foul 92 % | score      0
+    //     bias  -30 ms | HR 69 % inPlay 29 | score  84440
+    //     bias    0 ms | HR 30 % inPlay 70 | score  45775   ← the trough
+    //     bias  +30 ms | HR 75 % inPlay 18 | score  93698
+    //     bias  +45 ms | HR  0 % foul 95 % | score      0
+    //
+    // 75 % home runs to a hard zero in 15 ms of wall clock, with 95 % of the
+    // dead rows STILL MAKING CONTACT. That is a payout problem, not a physics
+    // one, and it is fixed in the payout.
+    const rows: string[] = [];
+    const byBias = new Map<number, number>();
+    const SEEDS = 12;
+    for (let wallMs = -75; wallMs <= 75; wallMs += 15) {
+      let pts = 0;
+      let contact = 0;
+      let n = 0;
+      for (let seed = 300; seed < 300 + SEEDS; seed++) {
+        const sim = new DerbySim({ seed });
+        while (sim.getState().phase !== 'done') {
+          const pr = sim.servePitch();
+          sim.setReticle(ZONE_CENTER.x, ZONE_CENTER.h);
+          // ⚠ THE TEST IS THE ONE PLACE THE TEMPO MAY BE READ, because the thing
+          // being measured is the PLAYER's window and the player taps a wall
+          // clock. `trueS = wallS × PITCH_TEMPO` — the same MULTIPLY
+          // `DerbyGame.trueTimeOf` performs, written once more here rather than
+          // hidden inside a helper, because getting it backwards is the bug the
+          // whole architecture exists to prevent.
+          const r = sim.swing(pr.plate.t + (wallMs / 1000) * PITCH_TEMPO);
+          pts += r.points;
+          if (r.outcome !== 'whiff' && r.outcome !== 'take') contact++;
+          n++;
+        }
+      }
+      byBias.set(wallMs, pts / n);
+      rows.push(
+        `  ${String(wallMs).padStart(4)} ms wall (${f((wallMs * PITCH_TEMPO) / 1000, 7, 4)} s true)` +
+          ` | contact ${f((100 * contact) / n, 5, 1)} % | ${f(pts / n, 6, 1)} pts/swing`,
+      );
+    }
+    const peak = Math.max(...byBias.values());
+    console.log(
+      `\nTIMING CLIFF → SLOPE — constant WALL bias, reticle at ZONE CENTRE, ` +
+        `${SEEDS} seeds × 24 swings/row, PITCH_TEMPO ${PITCH_TEMPO}\n` +
+        rows.join('\n') +
+        `\n  peak ${peak.toFixed(1)} pts/swing. The worst of ±45 ms pays ` +
+        `${((100 * Math.min(byBias.get(-45)!, byBias.get(45)!)) / peak).toFixed(1)} % of it ` +
+        `(was 0 %), ±60 pays ` +
+        `${((100 * Math.min(byBias.get(-60)!, byBias.get(60)!)) / peak).toFixed(1)} %, ` +
+        `and the dead-centre trough at 0 ms pays ` +
+        `${((100 * byBias.get(0)!) / peak).toFixed(1)} % (was 48.9 %).`,
+    );
+
+    // ⚠ THIS TEST IS TEMPO-DEPENDENT, ON PURPOSE, AND IT IS THE ONLY ONE THAT
+    // IS. Every other assertion in the game is stated in TRUE physical time, so
+    // `PITCH_TEMPO` is free to turn and a source guard proves the sim cannot
+    // read it. This one is stated in the player's WALL ms, because the claim is
+    // about the window his thumb actually gets — and that window is
+    // `contactWindowS / PITCH_TEMPO`. Reverting the knob to M2's 0.55 fails leg
+    // (1) below at ±60 ms with "expected 0 to be greater than 0", which is the
+    // measured justification for the 0.45 the feel pass shipped: 22 % more wall
+    // clock, and the ±60 row goes from a hard zero to 4–5 % of peak.
+    //
+    // (1) THE SLOPE. A swing 60 wall-ms off still makes contact on most pitches,
+    //     so it must still pay — this is the assertion the shipped build failed
+    //     at exactly 0 from ±45 outward.
+    for (const ms of [-60, -45, -30, -15, 0, 15, 30, 45, 60]) {
+      expect(byBias.get(ms)!, `${ms} ms wall pays nothing`).toBeGreaterThan(0);
+    }
+    // (2) THE SLOPE HAS AN END, AND IT IS THE BAT, NOT THE PAYOUT. ±75 wall ms
+    //     is ±33.8 ms of TRUE time against a ~26 ms contact window, so there is
+    //     no contact at all and nothing to pay for. If this ever pays, something
+    //     is scoring a whiff — which is the one thing `swingPoints` must never
+    //     do, and the reason `validateDerbyPayout` sweeps whiff/take separately.
+    for (const ms of [-75, 75]) expect(byBias.get(ms)!).toBe(0);
+    // (3) IT IS STILL A SLOPE, NOT A PLATEAU. Being 60 ms out must cost most of
+    //     the payout, or timing has stopped being the game.
+    expect(Math.max(byBias.get(-60)!, byBias.get(60)!)).toBeLessThan(0.35 * peak);
+    // (4) AND THE TROUGH AT DEAD CENTRE IS SOFTENED, NOT INVERTED. Perfect
+    //     timing with a dead-centre reticle is still beaten (that is FINDING 3,
+    //     the park's deepest wall, and it is real baseball) — but no longer by
+    //     the 2.2× the home-run-only payout gave it.
+    expect(byBias.get(0)!).toBeLessThan(peak);
+    expect(byBias.get(0)!).toBeGreaterThan(0.75 * peak);
+  });
+
+  it('⚠ FINDING 3: dead centre is the WORST viable aim, and the sweep is ASYMMETRIC', () => {
+    // The reticle-X sweep at perfect timing, aiming at the pitch's own height.
+    // This is the measurement `shared/swingCopy.coachSwing` quotes and the reason
+    // the HUD teaches at all: the natural instinct — "aim at the middle, swing
+    // on time" — is the worst placement that still makes contact, because dead
+    // centre is the deepest wall in the park and nothing on screen said so.
+    const rows: string[] = [];
+    const hrByX = new Map<number, number>();
+    const carryByX = new Map<number, number>();
+    const SEEDS = 12;
+    for (const rx of [-0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4]) {
+      let hr = 0;
+      let n = 0;
+      let carry = 0;
+      let carryN = 0;
+      let spray = 0;
+      for (let seed = 300; seed < 300 + SEEDS; seed++) {
+        const sim = new DerbySim({ seed });
+        while (sim.getState().phase !== 'done') {
+          const pr = sim.servePitch();
+          sim.setReticle(rx, pr.plate.h);
+          const r = sim.swing(pr.plate.t);
+          n++;
+          if (r.outcome === 'homeRun') hr++;
+          if (r.outcome === 'homeRun' || r.outcome === 'inPlay') {
+            carry += r.distFt;
+            spray += r.sprayDeg;
+            carryN++;
+          }
+        }
+      }
+      hrByX.set(rx, hr / n);
+      carryByX.set(rx, carryN ? carry / carryN : 0);
+      rows.push(
+        `  reticleX ${f(rx, 5, 2)} ft | HR ${f((100 * hr) / n, 5, 1)} % | ` +
+          `carry ${carryN ? f(carry / carryN, 6, 1) : '   —  '} ft | ` +
+          `spray ${carryN ? f(spray / carryN, 6, 1) : '   —  '}°`,
+      );
+    }
+    console.log(
+      `\nFINDING 3 — reticle X at PERFECT timing, aimed at the pitch's height ` +
+        `(${SEEDS} seeds × 24)\n` +
+        rows.join('\n'),
+    );
+
+    // (1) THE TRAP IS REAL. Dead centre is beaten by a shade in EITHER
+    //     direction, which is park geometry (400 ft to centre, 375 to the gaps)
+    //     and not a modelling accident — so the HUD's coaching line has
+    //     something true to say.
+    expect(hrByX.get(0)!).toBeLessThan(hrByX.get(0.2)!);
+    expect(hrByX.get(0)!).toBeLessThan(hrByX.get(-0.3)!);
+
+    // (2) ⚠ AND THE SWEEP IS ASYMMETRIC AT A SYMMETRIC PARK, which is a MODEL
+    //     DEFECT and not a lesson. Harbourfront's ±22° samples are both 375 ft,
+    //     so a symmetric mechanic would give symmetric rows; the + side wins,
+    //     and it wins on CARRY. That is `eA` climbing toward the handle in a
+    //     rigid bat with no `e(z)` — BASEBALL.md § "The collision", "the model
+    //     has no jamming at all". Asserted so it cannot be quietly closed with a
+    //     knob, and so the coaching copy keeps saying "off the middle" rather
+    //     than "to the opposite field".
+    expect(carryByX.get(0.2)!).toBeGreaterThan(carryByX.get(-0.2)!);
+    console.log(
+      `\n  ⚠ ASYMMETRY, and it is the missing e(z): ±0.2 ft at a park whose ±22° ` +
+        `samples\n    are both 375 ft gives HR ${(100 * hrByX.get(-0.2)!).toFixed(1)} % / ` +
+        `${(100 * hrByX.get(0.2)!).toFixed(1)} % and carry ` +
+        `${carryByX.get(-0.2)!.toFixed(1)} / ${carryByX.get(0.2)!.toFixed(1)} ft.\n` +
+        `    The + side aims AWAY from a RHB, which walks contact toward the HANDLE,\n` +
+        `    where this model's eA rises instead of collapsing. The HUD teaches the\n` +
+        `    symmetric half of this only.`,
+    );
+  });
+
   it('the session bookkeeping closes', () => {
     const sim = new DerbySim({ seed: 8888 });
     const swings = playSession(sim, perfect(-0.004));
@@ -1084,7 +1497,13 @@ describe('derby — outcomes', () => {
     expect(st.roundScores.reduce((a, b) => a + b, 0)).toBe(st.score);
     expect(st.score).toBe(swings.reduce((a, r) => a + r.points, 0));
     expect(st.homeRuns).toBe(swings.filter((r) => r.outcome === 'homeRun').length);
-    expect(st.bestFt).toBe(Math.max(...swings.filter((r) => r.points > 0).map((r) => r.distFt)));
+    // ⚠ `bestFt` IS THE LONGEST HOME RUN, not the longest carry, and this filter
+    // used to read `r.points > 0` — which was the same set only while home runs
+    // were the only thing that scored. It is `outcome === 'homeRun'` now, which
+    // is what `commit()` actually books and what the leaderboard column means.
+    expect(st.bestFt).toBe(
+      Math.max(...swings.filter((r) => r.outcome === 'homeRun').map((r) => r.distFt)),
+    );
     expect(st.roundsPlayed).toBe(DERBY_ROUNDS);
     expect(() => sim.servePitch()).toThrow();
 

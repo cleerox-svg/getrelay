@@ -13,11 +13,12 @@
 // inputs — a reticle placed between pitches and a single tap during the flight —
 // onto the geometric axes `batSim` already takes, and the bookkeeping.
 // That mapping is the only new reasoning in the file and it is argued at
-// `resolveSwing` below. The FORMAT, the payout and every constant live next
-// door in `derbyRules.ts`, and everything this class is READ through —
-// `getState`, `snapshot`, `restore` and the record types — in `derbyState.ts`.
-// Both were extracted at the 500-line cap, along real seams: data, loop,
-// readouts.
+// `resolveSwing` below. The FORMAT and the serve mix live next door in
+// `derbyRules.ts`, the PAYOUT in `derbyScoring.ts`, the bat geometry in
+// `contactWindow.ts`, and everything this class is READ through — `getState`,
+// `snapshot`, `restore` and the record types — in `derbyState.ts`. All four were
+// extracted at the 500-line cap, along real seams: data, payout, geometry, loop,
+// readouts. Never a raised cap.
 //
 // ⚠ FIELDING IS NOT CALLED, ON PURPOSE. A home run derby has no fielders: the
 // format is "clear the wall or it's an out", which is exactly `resolveFence`'s
@@ -28,11 +29,11 @@
 // flight at TRUE physical time; the render layer plays that track back slowly.
 // `swing(tapTimeS)` therefore takes TRUE physical seconds since release, and it
 // is the RENDERER's job to MULTIPLY its wall clock by `PITCH_TEMPO` before
-// calling in — `trueS = wallS × PITCH_TEMPO`, so 0.55 makes a 0.41 s pitch take
-// 0.75 s of wall clock. `DerbyGame.trueTimeOf` is that map and `pitchSim.ts`'s
+// calling in — `trueS = wallS × PITCH_TEMPO`, so 0.45 makes a 0.41 s pitch take
+// 0.91 s of wall clock. `DerbyGame.trueTimeOf` is that map and `pitchSim.ts`'s
 // `sampleTrack` states the same identity. DIVIDING is the direction that looks
-// plausible and is wrong: it would hand this file 1.36 s at the moment the ball
-// reached the plate, 3.3× past the crossing, i.e. every single swing a whiff
+// plausible and is wrong: it would hand this file 2.02 s at the moment the ball
+// reached the plate, 4.9× past the crossing, i.e. every single swing a whiff
 // against a ±26 ms contact window. Contact resolves at the true physical state
 // or the break numbers are a lie. `determinism.test.ts` reads this source to
 // keep the tempo out of it.
@@ -42,20 +43,21 @@ import { LOC_DISTANCE_IN, M_PER_FT, SWEET_SPOT_M } from './bat';
 import { contactGeometry, swingContact } from './batSim';
 import type { Swing } from './batSim';
 import { simulateBattedBall } from './battedBallSim';
+import { BAT_HANDLE_LIMIT_M, BAT_TIP_M } from './contactWindow';
 import {
-  BAT_HANDLE_LIMIT_M,
-  BAT_TIP_M,
   DERBY_MIX,
   RETICLE_REACH_FT,
   SERVE_SPREAD,
   SWING_UNDERCUT_IN,
   derbyDraw,
-  homeRunPoints,
+  perPitchCap,
   pullIntentOffsetIn,
   reticleResidual,
   resolveDerbyConfig,
 } from './derbyRules';
-import type { DerbyConfig, DerbyOutcome, DerbyPhase, ResolvedConfig } from './derbyRules';
+import type { DerbyConfig, DerbyPhase, ResolvedConfig } from './derbyRules';
+import { swingPoints } from './derbyScoring';
+import type { DerbyOutcome } from './derbyScoring';
 import { derbyRestore, derbySnapshot, derbyState } from './derbyState';
 import type { DerbySnapshot, DerbyState, ServedPitch, SwingResult } from './derbyState';
 import { parkConditions, resolveFence } from './parks';
@@ -64,7 +66,7 @@ import { PITCHES } from './pitches';
 import type { PitchId } from './pitches';
 import { simulatePitch } from './pitchSim';
 import type { PitchResult } from './pitchSim';
-import { MAX_POINTS_PER_ROUND, isBarrel } from './tuning';
+import { isBarrel } from './tuning';
 import { FT_TO_IN, IN_TO_FT } from './units';
 import { RULE_ZONE, armSideX, reticleToPlate } from './zone';
 import type { Handedness } from './zone';
@@ -330,6 +332,7 @@ export class DerbySim {
     const play = resolveFence(flight, this.cfg.park, cond.roofClosed);
     const outcome: DerbyOutcome =
       play.outcome === 'homeRun' ? 'homeRun' : play.outcome === 'foul' ? 'foul' : 'inPlay';
+    const barrel = isBarrel(contact.evMph, contact.laDeg);
     return {
       ...base,
       outcome,
@@ -337,17 +340,19 @@ export class DerbySim {
       undercutIn,
       lateralIn,
       contactZM: geom.contactZM,
-      points:
-        outcome === 'homeRun'
-          ? homeRunPoints(flight.carryFt, MAX_POINTS_PER_ROUND / this.cfg.pitchesPerRound)
-          : 0,
+      // ⚠ EVERY OUTCOME GOES THROUGH THE ONE SCORER, and the cap it is handed is
+      // the CONFIG's, never the constant — an overridden `pitchesPerRound` must
+      // re-derive its own or the round ceiling the worker enforces is wrong.
+      // This used to be a ternary that paid a home run and paid everything else
+      // zero; `derbyScoring.ts`'s header has the measurement that changed it.
+      points: swingPoints(outcome, flight.carryFt, barrel, perPitchCap(this.cfg.pitchesPerRound)),
       evMph: contact.evMph,
       laDeg: contact.laDeg,
       sprayDeg: contact.sprayDeg,
       distFt: flight.carryFt,
       hangS: flight.hangS,
       apexFt: flight.apexFt,
-      barrel: isBarrel(contact.evMph, contact.laDeg),
+      barrel,
       fence: play.outcome,
       fenceDistFt: play.fenceDistFt,
       // The object reported IS the object drawn. See `SwingResult.flight`.

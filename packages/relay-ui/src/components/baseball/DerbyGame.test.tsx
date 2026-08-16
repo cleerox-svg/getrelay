@@ -48,6 +48,51 @@
 // in vitest, so it passed the mutation it existed for. The arguments array's
 // LENGTH is what separates `f(v)` from `f(v, undefined)`, and that is what the
 // test asserts now — written down because the first version looked right.
+//
+// FOUR MORE WERE WATCHED TO FAIL in the M2 FEEL pass, when the payout stopped
+// being home-run-only and the HUD gained a payout readout and two coaching
+// surfaces. Observed against the whole 182-test baseball suite:
+//
+//   7. the HUD prints a payout on HOME RUNS only (M2's behaviour,
+//      i.e. a 405 ft fly reads with no number on it)        → 2 fail
+//   8. the contextual coaching line is never rendered        → 1 fail
+//   9. the first-run tip never retires (a permanent nag)     → 1 fail
+//  10. the first-run tip never shows at all                  → 1 fail
+//
+// ⚠ (8)–(10) NEEDED A HARNESS FIX BEFORE THEY COULD BE KILLED, and the harness
+// gap was worth more than the mutations. `DerbyGame`'s readout comes from a
+// `window.setInterval` poll at POLL_MS, and `advance()` only ever pumped
+// `requestAnimationFrame` — so `readout` was FROZEN at its mount value in every
+// test in this file and nothing depending on the poll could be asserted at all.
+// The interval pump below is the fix; it was found by (9) reporting "the tip is
+// still nagging" when the tip was correct and the harness could not see the poll
+// that retires it.
+//
+// ⚠ (8) ALSO NEEDED A DIFFERENT SEED, and the reason is stated at the test. The
+// coaching line only fires on an in-play ball with the carry to clear the gaps,
+// and the pinned fixture seed produces ZERO of those in a session (measured over
+// 30 consecutive seeds: 0–7 per session). An assertion left on a seed that
+// cannot reach the branch is a test that passes for the wrong reason.
+//
+// TWO MORE IN THE REVIEW OF THAT PASS — both found by mutating the code rather
+// than by reading it, and both had previously survived this file entirely:
+//
+//  11. `CountChip`'s Score cell: `state.score.toLocaleString()`
+//      → `String(state.outs)`, i.e. the scoreboard showing the
+//      out count. Was 0 fail; `CountChip` had no test file and
+//      the only thing here that touched it was the LABEL
+//      `getByText('Round')`                                  → 1 fail
+//  12. `describeSwing`'s `inPlay` branch back to M2's numberless
+//      `'In play — out'` / `'Off the wall'`. Was 0 fail HERE
+//      (only `swingCopy.test.ts` fell), because
+//      `kinds.size > 1` is satisfied by {GONE!, Foul ball} —
+//      so the assertion whose stated purpose was "the HUD said
+//      so for a 405 ft fly" never required the in-play line    → 2 fail
+//
+// (12) now fails twice over — the running scoreboard check stops matching at
+// pitch 10 before the kinds check is reached — so it was re-run with the
+// scoreboard assertions temporarily removed to confirm the kinds check bites on
+// its own: "no IN-PLAY payout line all session; saw GONE!,Foul ball".
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
@@ -56,10 +101,25 @@ import type { DerbyGameResult } from './DerbyGame';
 import { PITCH_TEMPO } from '../../lib/baseball/tuning';
 import { vLen } from '../../lib/baseball/airPhysics';
 import { DerbySim } from '../../lib/baseball/derbySim';
-import { DERBY_ROUNDS, PITCHES_PER_ROUND, contactWindowS } from '../../lib/baseball/derbyRules';
+import { DERBY_ROUNDS, PITCHES_PER_ROUND } from '../../lib/baseball/derbyRules';
+import { contactWindowS } from '../../lib/baseball/contactWindow';
 
 /** Mirrors `DerbyGame`'s own lead-in. Not exported by it; kept in step by hand. */
 const PITCH_LEAD_MS = 380;
+
+/**
+ * The wall interval that lands a tap on a ~0.41 s plate crossing AT THE CURRENT
+ * TEMPO — i.e. "swing on the ball", expressed the only way that survives a knob
+ * turn.
+ *
+ * ⚠ EVERY CALL SITE, NOT JUST THE ONES THAT SCORE. Three tests in this file
+ * still carried the literal `745` — which is this expression evaluated at the
+ * 0.55-era `PITCH_TEMPO` and is 166 ms early at 0.45. They passed anyway,
+ * because a bank/abandon/replay test does not care WHICH outcome the swing
+ * produced; that is precisely the trap the derived sites next to them were
+ * written to warn about, so it is the same constant everywhere now.
+ */
+const SWING_WALL_MS = Math.round((0.41 / PITCH_TEMPO) * 1000);
 
 const { submitSpy } = vi.hoisted(() => ({
   submitSpy: vi.fn(
@@ -84,8 +144,8 @@ vi.mock('../../lib/audio', () => ({ play: vi.fn(), unlockAudio: vi.fn() }));
 // The real function is kept — this wraps it, it does not replace it — so every
 // other assertion in the file still runs against the sim's own arithmetic.
 const windowSpy = vi.hoisted(() => vi.fn());
-vi.mock('../../lib/baseball/derbyRules', async (importOriginal) => {
-  const mod = await importOriginal<typeof import('../../lib/baseball/derbyRules')>();
+vi.mock('../../lib/baseball/contactWindow', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../../lib/baseball/contactWindow')>();
   return {
     ...mod,
     contactWindowS: (...args: Parameters<typeof mod.contactWindowS>) => {
@@ -97,12 +157,26 @@ vi.mock('../../lib/baseball/derbyRules', async (importOriginal) => {
 
 // A hand-cranked clock + rAF pump. `performance.now` IS the play clock, so
 // driving it directly is how a whole 24-pitch session runs in milliseconds.
+//
+// ⚠ AND AN INTERVAL PUMP, WHICH THIS FILE DID NOT HAVE. `DerbyGame`'s readout —
+// the counters `CountChip` shows and the condition that retires the first-run
+// coaching tip — comes from a `window.setInterval` poll at POLL_MS, and the
+// harness only ever drove `requestAnimationFrame`. So `readout` was frozen at
+// its mount value in every test in this file, and NOTHING that depends on the
+// poll could be asserted at all: a HUD counter wired to the wrong field would
+// have read correctly here forever. Discovered by the coaching test below
+// failing with "the tip is still nagging" — the tip was correct and the harness
+// could not see the poll that retires it.
 let now = 0;
 let frames: FrameRequestCallback[] = [];
+let intervals: { id: number; cb: () => void; period: number; due: number }[] = [];
+let nextIntervalId = 1;
 
 beforeEach(() => {
   now = 0;
   frames = [];
+  intervals = [];
+  nextIntervalId = 1;
   submitSpy.mockClear();
   windowSpy.mockClear();
   vi.spyOn(performance, 'now').mockImplementation(() => now);
@@ -111,6 +185,14 @@ beforeEach(() => {
     return frames.length;
   });
   vi.stubGlobal('cancelAnimationFrame', () => undefined);
+  vi.stubGlobal('setInterval', (cb: () => void, ms: number) => {
+    const id = nextIntervalId++;
+    intervals.push({ id, cb, period: Math.max(1, ms), due: now + Math.max(1, ms) });
+    return id;
+  });
+  vi.stubGlobal('clearInterval', (id: number) => {
+    intervals = intervals.filter((t) => t.id !== id);
+  });
 });
 
 afterEach(() => {
@@ -123,10 +205,13 @@ afterEach(() => {
 function advance(ms: number, stepMs = 8) {
   for (let done = 0; done < ms; done += stepMs) {
     now += stepMs;
-    const due = frames;
+    const dueFrames = frames;
     frames = [];
+    const dueTimers = intervals.filter((t) => t.due <= now);
+    for (const t of dueTimers) t.due = now + t.period;
     act(() => {
-      for (const cb of due) cb(now);
+      for (const cb of dueFrames) cb(now);
+      for (const t of dueTimers) t.cb();
     });
   }
 }
@@ -137,6 +222,26 @@ function tap(el: HTMLElement) {
   act(() => {
     el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1 }));
   });
+}
+
+/**
+ * One cell of the `CountChip` scoreboard, read out of the DOM: find the label
+ * span, return the value span beside it. `CountChip.Cell` renders exactly
+ * `<div><span>{k}</span><span>{v}</span></div>`.
+ *
+ * ⚠ THIS EXISTS BECAUSE THE SCOREBOARD WAS ASSERTED NOWHERE. `CountChip` has no
+ * test file of its own, and the only thing in this file that touched it was
+ * `getByText('Round')` — the static LABEL. Measured by the reviewer:
+ * `v={state.score.toLocaleString()}` → `v={String(state.outs)}`, i.e. the Score
+ * cell displaying the out count, failed **0 tests**. Every number the player
+ * reads off the top of the screen was live surface with nothing on it.
+ */
+function chipCell(k: string): string {
+  const label = [...document.querySelectorAll('span')].find((s) => s.textContent === k);
+  expect(label, `no "${k}" cell on the CountChip`).toBeTruthy();
+  const v = label!.nextElementSibling;
+  expect(v, `the "${k}" cell has a label and no value`).toBeTruthy();
+  return v!.textContent ?? '';
 }
 
 describe('DerbyGame — the fixture seam', () => {
@@ -169,7 +274,13 @@ describe('DerbyGame — the fixture seam', () => {
     render(<DerbyGame seed={20260816} />);
     act(() => screen.getByText('Pitch it in').click());
 
-    const WALL_AFTER_RELEASE_MS = 560;
+    // ⚠ DERIVED FROM THE KNOB. This was a literal 560 ms, which is 308 ms of
+    // true flight at PITCH_TEMPO = 0.55 and 252 ms at 0.45 — so turning an
+    // explicitly-labelled feel knob broke an assertion that was really about the
+    // MULTIPLY. The true instant is what the test means; the wall interval that
+    // reaches it is tempo's business.
+    const TRUE_AFTER_RELEASE_S = 0.308;
+    const WALL_AFTER_RELEASE_MS = Math.round((TRUE_AFTER_RELEASE_S / PITCH_TEMPO) * 1000);
     advance(PITCH_LEAD_MS + WALL_AFTER_RELEASE_MS, 4);
     tap(surface());
     advance(16, 8);
@@ -181,11 +292,11 @@ describe('DerbyGame — the fixture seam', () => {
     expect(m, `no signed timing error on screen; body was:\n${text}`).toBeTruthy();
     const shownMs = Number(m![1]);
 
-    // 560 ms of wall at tempo 0.55 is 308 ms of true flight — which is BEFORE a
-    // ~410 ms crossing, so the error must be NEGATIVE (early) and of order
-    // −100 ms. Divide instead of multiply and this would be 560/0.55 = 1018 ms,
-    // i.e. +600 ms late; there is no tolerance that confuses the two.
-    expect(trueS).toBeCloseTo(0.308, 3);
+    // 308 ms of true flight is BEFORE a ~410 ms crossing, so the error must be
+    // NEGATIVE (early) and of order −100 ms. Divide instead of multiply and the
+    // sim would be handed `wall / tempo` — 1.52 s at 0.45, i.e. +1100 ms late;
+    // there is no tolerance that confuses the two.
+    expect(trueS).toBeCloseTo(TRUE_AFTER_RELEASE_S, 2);
     expect(shownMs).toBeLessThan(0);
     expect(shownMs).toBeGreaterThan(-200);
     // And the frame granularity is the only slack: 4 ms of wall is 2.2 ms true.
@@ -194,22 +305,71 @@ describe('DerbyGame — the fixture seam', () => {
 
   it('plays a whole session and reports a result, all from props', () => {
     let result: DerbyGameResult | null = null;
+    const paidLines = new Set<string>();
     render(<DerbyGame seed={20260816} onFinish={(r) => (result = r)} />);
+
+    // ⚠ THE SCOREBOARD IS CHECKED AGAINST THE PAYOUTS IT PRINTED. `readout` feeds
+    // exactly two things — `<CountChip state={readout} />` and the first-run tip
+    // — and the chip's five cells had NO DOM assertion anywhere in the suite. So
+    // the running total below is accumulated from the HUD's own `+n` strings and
+    // compared to the Score cell after every pitch, which ties two independent
+    // surfaces together: a cell wired to the wrong field, a payout printed that
+    // was never banked, or a bank that paid something the player was not shown
+    // are all one failure now. It closes with `result.score`, i.e. the number the
+    // leaderboard receives.
+    let expectedScore = 0;
+    let expectedHr = 0;
 
     const total = DERBY_ROUNDS * PITCHES_PER_ROUND;
     for (let i = 0; i < total; i++) {
       const btn = screen.queryByText('Pitch it in');
       expect(btn, `no Pitch button on pitch ${i + 1}`).toBeTruthy();
+      // The AIM stage, before the pitch: round and pitch are the loop's own
+      // arithmetic, so a chip cell reading the wrong counter is visible here.
+      expect(chipCell('Round'), `Round cell on pitch ${i + 1}`).toBe(
+        `${Math.floor(i / PITCHES_PER_ROUND) + 1}/${DERBY_ROUNDS}`,
+      );
+      expect(chipCell('Pitch'), `Pitch cell on pitch ${i + 1}`).toBe(
+        `${(i % PITCHES_PER_ROUND) + 1}/${PITCHES_PER_ROUND}`,
+      );
       act(() => btn!.click());
-      // Tap at PITCH_LEAD_MS + the wall time a ~0.41 s crossing takes at tempo
-      // 0.55 (745 ms), so most pitches in the mix land inside the ±26.4 ms
+      // Tap at PITCH_LEAD_MS + the wall time a ~0.41 s crossing takes at the
+      // CURRENT tempo, so most pitches in the mix land inside the ±26.4 ms
       // contact window and the HOME RUN path — contact, the camera cut, the
       // batted flight, the ExitVelo tag — is actually exercised. Tapping at a
       // fixed 700 ms was 25 ms early on every pitch and scored zero all
-      // session, which passed while testing none of it.
-      advance(PITCH_LEAD_MS + 745, 4);
+      // session, which passed while testing none of it; a fixed 745 was the
+      // same trap one tempo change later, so it is DERIVED now.
+      advance(PITCH_LEAD_MS + SWING_WALL_MS, 4);
       tap(surface());
-      advance(14000, 48);
+      // ⚠ SAMPLE THE RESULT LINE WHILE IT IS UP. `RESULT_HOLD_MS` is 1500 and
+      // the loop below runs 14 s, so by the time the session ends every string
+      // this HUD printed is gone — which is how `describeSwing` could be
+      // reverted to M2's numberless `'In play — out'` with the whole suite
+      // green. The payout the player SEES is the deliverable of the feel pass,
+      // so it is sampled rather than inferred from `result.score`.
+      // The one result line this pitch printed — sampled, not counted, because
+      // it is on screen for RESULT_HOLD_MS and the loop below sees it many times.
+      let paid: number | null = null;
+      let kind: string | null = null;
+      for (let k = 0; k < 14000 / 48; k++) {
+        advance(48, 48);
+        const line = document.body.textContent ?? '';
+        const m = /(GONE!|Off the wall|Caught|Foul ball)[^]{0,24}?\+(\d+)/.exec(line);
+        if (m) {
+          paidLines.add(`${m[1]}|${m[2]}`);
+          kind = m[1]!;
+          paid = Number(m[2]);
+        }
+      }
+      if (kind === 'GONE!') expectedHr += 1;
+      // Whiffs and takes print no `+n` and bank nothing, which is the same claim
+      // from both ends: the chip must not move on them either.
+      expectedScore += paid ?? 0;
+      expect(chipCell('Score'), `Score cell after pitch ${i + 1}`).toBe(
+        expectedScore.toLocaleString(),
+      );
+      expect(chipCell('HR'), `HR cell after pitch ${i + 1}`).toBe(String(expectedHr));
     }
 
     expect(result).not.toBeNull();
@@ -223,12 +383,95 @@ describe('DerbyGame — the fixture seam', () => {
     expect(r.homeRuns).toBeGreaterThan(0);
     expect(r.score).toBeGreaterThan(0);
     expect(r.bestFt).toBeGreaterThan(300);
+    // ⚠ AND THE HUD SAID SO ON SCREEN, for more than one KIND of swing. M2
+    // printed a distance and a payout on a home run only; a 405 ft fly ball read
+    // `'In play — out'`, which carries exactly as much information as
+    // `'Swing and a miss'` for a ball the payout now pays 87 points for.
+    const kinds = new Set([...paidLines].map((l) => l.split('|')[0]));
+    expect([...paidLines].length, 'the HUD never printed a payout').toBeGreaterThan(0);
+    expect(kinds.has('GONE!'), `home-run line missing; saw ${[...kinds]}`).toBe(true);
+    // ⚠ AND SPECIFICALLY THE IN-PLAY LINE, not merely "more than one kind".
+    // `kinds.size > 1` is satisfied by {GONE!, Foul ball} — so the assertion
+    // whose whole stated purpose is "a 405 ft fly ball now reads with a number
+    // on it" did not actually require the in-play line to render at all:
+    // reverting `describeSwing`'s `inPlay` branch to M2's numberless text failed
+    // `swingCopy.test.ts` and NOT this test. `Caught` and `Off the wall` are the
+    // two spellings of that branch.
+    expect(
+      kinds.has('Caught') || kinds.has('Off the wall'),
+      `no IN-PLAY payout line all session; saw ${[...kinds]}`,
+    ).toBe(true);
+    // ⚠ AND THE SCOREBOARD AGREES WITH THE LEADERBOARD. `expectedScore` was
+    // accumulated from the `+n` strings the HUD printed and checked against the
+    // Score cell after every pitch; this is the third corner of the same
+    // triangle — what `onFinish` reports, i.e. what `bank()` submits.
+    expect(r.score).toBe(expectedScore);
+    expect(r.homeRuns).toBe(expectedHr);
     // eslint-disable-next-line no-console
     console.log(
       `\n[FIXTURE] a full ${DERBY_ROUNDS}×${PITCHES_PER_ROUND} derby, headless, no WebGL:\n` +
         `  score ${r.score}  HR ${r.homeRuns}  barrels ${r.barrels}  ` +
         `longest ${r.bestFt.toFixed(1)} ft  best streak ${r.bestStreak}\n`,
     );
+  });
+
+  it('⚠ the two COACHING surfaces reach the screen', () => {
+    // ⚠ BOTH OF THESE WERE DELETABLE WITH THE WHOLE SUITE GREEN, which is the
+    // classic shape of a HUD affordance nobody watched fail. They are the entire
+    // "teach the shade" half of the M2 feel pass — the measured finding is that
+    // dead centre is the WORST viable aim (54 % home runs against 96 % at
+    // +0.2 ft) because it is the deepest wall in the park, and that nothing on
+    // screen ever said so.
+    //
+    // ⚠ A DIFFERENT SEED FROM THE REST OF THE FILE, and the reason is stated
+    // rather than hidden: the coaching line fires only on an in-play ball with
+    // the carry to clear the gaps, and the pinned fixture seed 20260816 happens
+    // to produce ZERO of those in a session (measured, over 30 consecutive
+    // seeds: 0–7 per session). Picking a seed that reaches the branch is the
+    // honest fix; leaving the assertion on a seed that cannot reach it is a
+    // test that passes for the wrong reason.
+    render(<DerbyGame seed={20260814} />);
+
+    // (a) THE FIRST-RUN TIP is up before a pitch is thrown, and it quotes the
+    //     PARK's own two numbers rather than a hard-coded pair.
+    expect(screen.getByText(/400 ft to dead centre and 375 to the gaps/)).toBeTruthy();
+
+    // (b) THE CONTEXTUAL LINE fires on a deep out during the session, and
+    // (c) THE FIRST-RUN TIP RETIRES ITSELF once the player has hit one out —
+    //     the charter's "must not become a permanent nag", enforced by a
+    //     condition rather than promised in a comment. Both are sampled in one
+    //     pass because both are transient: the result line holds for
+    //     RESULT_HOLD_MS and the tip only exists in the AIM stage.
+    let coached = 0;
+    let homeRuns = 0;
+    let tipBeforeFirstHr = 0;
+    let tipAfterFirstHr = 0;
+    for (let i = 0; i < DERBY_ROUNDS * PITCHES_PER_ROUND; i++) {
+      const btn = screen.queryByText('Pitch it in');
+      if (!btn) break;
+      // The aim stage: is the first-run tip up? That is the question (c) asks,
+      // and it has to be asked HERE because the tip is not rendered anywhere
+      // else in the loop.
+      if (screen.queryByText(/400 ft to dead centre/)) {
+        if (homeRuns === 0) tipBeforeFirstHr++;
+        else tipAfterFirstHr++;
+      }
+      act(() => btn.click());
+      advance(PITCH_LEAD_MS + SWING_WALL_MS, 4);
+      tap(surface());
+      let sawHr = false;
+      for (let k = 0; k < 14000 / 48; k++) {
+        advance(48, 48);
+        const line = document.body.textContent ?? '';
+        if (line.includes('dead centre is the deep part')) coached++;
+        if (line.includes('GONE!')) sawHr = true;
+      }
+      if (sawHr) homeRuns++;
+    }
+    expect(coached, 'the coaching line never rendered in a whole session').toBeGreaterThan(0);
+    expect(homeRuns, 'no home run in this session — (c) would pass vacuously').toBeGreaterThan(0);
+    expect(tipBeforeFirstHr, 'the tip was never up before the first home run').toBeGreaterThan(0);
+    expect(tipAfterFirstHr, 'the tip is still nagging after a home run').toBe(0);
   });
 
   it('⚠ a tap during the WIND-UP is not a swing', () => {
@@ -258,7 +501,7 @@ describe('DerbyGame — the fixture seam', () => {
     expect(/[+-]?\d+ ms (LATE|EARLY)/.test(document.body.textContent ?? '')).toBe(false);
 
     // …and the pitch is NOT burned — the same tap after release still swings.
-    advance(PITCH_LEAD_MS + 745 - 108, 4);
+    advance(PITCH_LEAD_MS + SWING_WALL_MS - 108, 4);
     tap(surface());
     advance(16, 8);
     expect(/[+-]?\d+ ms/.test(document.body.textContent ?? '')).toBe(true);
@@ -328,7 +571,7 @@ describe('DerbyGame — the fixture seam', () => {
     let finished = 0;
     const { unmount } = render(<DerbyGame seed={20260816} onFinish={() => (finished += 1)} />);
     act(() => screen.getByText('Pitch it in').click());
-    advance(PITCH_LEAD_MS + 745, 4);
+    advance(PITCH_LEAD_MS + SWING_WALL_MS, 4);
     tap(surface());
     advance(14000, 48);
 
@@ -355,7 +598,7 @@ describe('DerbyGame — the fixture seam', () => {
       render(<DerbyGame seed={4242} onFinish={(r) => (result = r)} />);
       for (let i = 0; i < DERBY_ROUNDS * PITCHES_PER_ROUND; i++) {
         act(() => screen.getByText('Pitch it in').click());
-        advance(PITCH_LEAD_MS + 745, 4);
+        advance(PITCH_LEAD_MS + SWING_WALL_MS, 4);
         tap(surface());
         advance(14000, 48);
       }
