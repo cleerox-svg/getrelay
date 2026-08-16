@@ -208,10 +208,32 @@ export default function StadiumGL({
     sun.castShadow = quality.shadows;
     sun.shadow.mapSize.set(quality.shadowMapSize, quality.shadowMapSize);
     // ⚠ THE NORMAL BIAS IS IN WORLD FEET AND IT HAS TO BE BIG. A 1024² map over
-    // a ~1200 ft shadow volume is ~1.2 ft per texel, so a sub-foot bias leaves
-    // the grass striped with self-shadow acne — measured, on the first render.
-    // The honest fix at this budget is a bias of order one texel; raising the
-    // map instead is the on-device bet stadium/quality.ts refuses to take.
+    // a ~1260 ft shadow volume is 1.23 ft per texel (measured by the M1 visual
+    // gate), so a sub-foot bias leaves the grass striped with self-shadow acne —
+    // measured, on the first render. The honest fix at this budget is a bias of
+    // order one texel; raising the map instead is the on-device bet
+    // stadium/quality.ts refuses to take.
+    //
+    // ⚠⚠ READ THIS THE DAY THE BALL LANDS — IT WILL BREAK ITS CONTACT SHADOW,
+    // AND IT WILL NOT LOOK LIKE A SHADOW BUG. 6 ft is correct only because every
+    // object in this scene is enormous. A baseball's radius is 0.1210237 ft
+    // (`airPhysics.ts`), so this bias is ~50× the whole ball: its shadow will be
+    // pushed clear of it and detach or vanish outright, and the symptom a human
+    // reports is "the ball floats" — a sentence that points at the physics, the
+    // camera or the material, i.e. at three subsystems that are all innocent. M1
+    // already lost time to one of these: a near/far depth bug that presented as
+    // a translucent seating bowl and read as a material problem.
+    //
+    // The fix is NOT a bigger map (see `stadium/quality.ts`: 1024² is a hard
+    // ceiling until somebody runs a real Android handset) and NOT a smaller
+    // global bias (the acne comes straight back on 1260 ft of turf). It is a
+    // TIGHTER SHADOW CASCADE: the ball is only ever near the infield and the
+    // flight path, so a second shadow-casting light with a small ortho volume —
+    // ~200 ft around the plate rather than ~1260 — buys ~6× the texel density
+    // for the ball at the same 1024², and its normal bias can then be of order
+    // 0.2 ft. That is one extra light against this file's stated budget of one
+    // sun plus one hemisphere fill, so it is a budget decision to take
+    // deliberately, with the crowd instance count in the same conversation.
     sun.shadow.bias = -0.001;
     sun.shadow.normalBias = 6;
     scene.add(sun, sun.target);

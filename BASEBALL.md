@@ -108,7 +108,9 @@ test**, or an **explicitly-labelled feel knob**. There is no fifth category.
 | fielder sprint speed | 27 ft/s | **published data** | league-average sprint speed |
 | fielder reaction | 0.5 s | **published data** | the reaction leg of published route work (reference unverified) |
 | time to sprint speed | 1.8 s | **published data** | ⇒ `a = v/t = 15 ft/s²`, **derived**. Worth 24.3 ft of reach |
-| infield dirt radius | 155.5 ft | **derived value, approximate geometry** | `RUBBER_D_FT + 95` — where the published 95 ft arc, struck from the RUBBER, crosses the CF line. Used as a PLATE-centred circle, which over-states the dirt by up to 27.9 ft down the lines; flagged on the constant, not fixed (it would move the ladder) |
+| infield arc radius | 95 ft | **published data** | the skinned-infield grass line, struck from the rubber (reference unverified; the *centre* is the ambiguity — see below) |
+| infield dirt edge | `r(β) = d·cos β + √(95² − (d·sin β)²)` | **derived** | plate-centred distance to that arc, `d = RUBBER_D_FT`. 155.5 ft at 0°, 127.6 at the foul line. A FUNCTION: the arc is struck from the rubber and the lookup asks in plate polars |
+| `XB_DEPTH_DATUM_FT` | 155.5 ft | **feel knob** | where extra-base depth credit is measured from. Deliberately FLAT, `= r(0)`, and argued on the constant — the throw back goes to a base, which does not move when the grass line curves |
 | `GROUND_INTERCEPT_FT`, `XB_*`, `DEFENSE_SPAN` | 26 ft, 68/130 ft, ±15 % | **feel knobs** | the fielding lookup's bands — see the fielding section |
 
 **Air density.** `airDensity(elevFt, tempF, rh)` = standard-atmosphere
@@ -706,10 +708,13 @@ corrected, and the fixed-ν choice is better supported than before.
 
 Landing point + hang time + **one** defender rating → out / 1B / 2B / 3B / HR.
 No stolen bases, errors, substitutions, shifts, positioning, throws, cutoffs or
-baserunner state. `fielding.ts` is 225 lines and the charter's cap is the design.
+baserunner state. `fielding.ts` is 323 lines against a 500-line cap, and the cap
+is the design — a third of it is the argument for the infield arc below.
 
 - **The alignment is a constant** — seven standing positions, polar from the
   plate. That constant *is* the "no shifts" rule expressed as data.
+- **The dirt edge is an ARC, not a circle**, and it is a function of bearing.
+  See below: this is the one thing M1's visual gate found, and it is physics.
 - **Reach ramps.** `react (0.5 s) → accelerate (1.8 s to 27 ft/s) → sprint`. The
   ramp is not cosmetic: an instantly-sprinting fielder is over-credited
   `v·t/2 = 24.3 ft` on every play. On a 4 s hang the ramped model covers
@@ -736,6 +741,69 @@ bearing, not tidy: a chopper landing 7 ft in front of the plate is 100 ft from
 the nearest fielder's *standing spot*, and without it the miss arithmetic scores
 it a double. When the duel wants real infield play the fix is a rolling phase,
 and both are deleted rather than tuned.
+
+⚠ **The infield edge is an arc struck from the RUBBER — fixed in the geometry,
+after two goes at fixing the label.** Stage 4 shipped `INFIELD_DEPTH_FT =
+RUBBER_D_FT + 95 = 155.5 ft` and used it as a **plate-centred** radius; stage 4b
+noticed and corrected the *comment*. M1 then drew it, and the visual gate
+measured the rendered dirt/grass boundary at **155.6 ft** — the renderer adding
+no error of its own, because `stadium/field.ts` imports the constant rather than
+copying it. The real thing is a 95 ft arc struck from the rubber, so the
+plate-centred distance is
+
+```
+r(β) = d·cos β + √(R² − (d·sin β)²)      d = RUBBER_D_FT = 60.5, R = 95
+```
+
+155.5 ft at 0°, 149.6 at 20°, 135.1 at ±38° and **127.6 at the foul line** — the
+old circle over-stated the dirt by up to **27.9 ft** down the lines, i.e. a
+140 ft ball down the line was scored as an infield chopper (and handed 26 ft of
+`GROUND_INTERCEPT_FT` roll-and-throw credit) when it had landed on outfield
+grass. `infieldDepthFt(β)` is exported and `stadium/field.ts` samples it bearing
+by bearing exactly as it samples `fenceAt`, so the drawn dirt is the dirt the
+fielder model uses. The discriminant can never go negative (`d < R` at every
+bearing, behind the plate included), so a clamp appearing there later is a bug
+rather than a safety net.
+
+- **The centre is the ambiguity, not the radius.** Groundskeeping references
+  strike this arc variously from the front of the rubber (60.5 ft) and from the
+  centre of the mound circle (59). We use the rubber, because 60.5 is already
+  published in `zone.ts`: measured, the two centres differ by **1.5 ft** at dead
+  centre and 0.5 at the foul line, against the 27.9 ft being removed.
+- **The baseline cutouts are not modelled and need not be.** Every one is
+  strictly inside the arc — second base is 127.3 ft out against an arc at 155.5,
+  a 13 ft cutout around first reaches 103 against an arc at 127.6 — so the arc is
+  the outer boundary of the dirt at every bearing, and "did this land on the
+  dirt" needs nothing else.
+- ⚠ **And the ladder moved — one class of call, 0.60 % of the lookup.** Swept
+  over distance × bearing × hang × rating (1,228,500 cases), **7,376** change and
+  every one is **OUT → SINGLE**, all at **130–155 ft** and **|β| 6–45°**: exactly
+  the balls that were landing on outfield grass and being credited as infield.
+  None of the thirteen named ladder rows moves. That is the whole behaviour
+  change.
+
+⚠ **The extra-base DEPTH DATUM was split off, and that is the judgement call in
+the fix.** The obvious move once `infieldDepthFt` became bearing-dependent was to
+measure the extra-base depth credit from the arc too — one symbol, one concept.
+Measured, *that* is what moves the lookup: it re-calls **2.2 %** of the same
+sweep, of which the dirt-boundary fix is 7,376 cases and the datum a further
+**19,606** (12,470 SINGLE→DOUBLE, 7,136 DOUBLE→TRIPLE), and it flips two of the
+thirteen named rows — the 'bloop into shallow RC' from 67.29 to 68.17 against a
+68 ft threshold, and the 'deep LC screamer' from 129.42 to 131.20 against 130.
+**Both flips are the datum; neither is the boundary.** There is no mechanism
+behind them: `XB_DEPTH_PER_FT` prices the throw back, the throw goes to a base,
+and a base does not move when the grass line curves — while the bearing effect
+that *is* real is already priced twice, through `missFt` (the LF stands at
+290 ft/−29°, so he is 80 ft from a 320 ft ball down the line against the CF's
+15 ft from a 320 ft ball to centre) and through `CORNER_DEG`. So
+`XB_DEPTH_DATUM_FT` is a flat **feel knob** at `infieldDepthFt(0)`, and the
+counterfactual is *computed and printed* by `fielding.test.ts` rather than
+argued, because keeping it flat is also what keeps the ladder still and a
+reviewer is entitled to suspect that is the reason.
+⚠ One consequence, and it is a real change from stage 4b: the depth term can now
+go **negative** (to −8.37 ft at the foul line) for a ball past the arc but nearer
+than 155.5 ft. It is still not clamped — such a ball is shallow, the throw back
+is short, and a debit is the correct sign.
 
 ⚠ **Two audit corrections, stage 4b.** (1) The extra-base index carried a
 `Math.max(0, …)` on the depth credit that was **provably unreachable** — the
@@ -798,7 +866,7 @@ the render layer; contact resolves at the true physical state.
 | `packages/relay-ui/src/lib/baseball/pchip.test.ts` | The interpolator bench, added by stage 4's audit — `pchip.ts` shipped with no test and a mutation that zeroed every interior knot slope moved the fence 4.97 ft with the suite still green. Asserts interpolation, exact reproduction of a straight line, no-overshoot against an unlimited Hermite, locality, zero slope at an extremum, the degenerate cases, and GOLDEN off-knot fence distances |
 | `packages/relay-ui/src/lib/baseball/parks.ts` | The park as DATA + `fenceAt` (pchip through the sampled wall), the roof mechanic (`roofClosed`, `parkConditions` — exactly-zero wind and pinned air when shut), `resolveFence` (analytic fence crossing → homeRun/offWall/foul/roof/inPlay) and `validatePark()`. Read by the physics AND by stage 4's geometry |
 | `packages/relay-ui/src/lib/baseball/parks.test.ts` | The park bench: prints the fence tables (pchip vs linear, with the knot-slope jump), the roof-open weather draw, the roof ceiling ladder, the wind-bearing histogram, the wind boost against an independent ground-frame RK4, and the altitude ladder; asserts the 400/395 wall boundary, the foul pole, `wind === 0` under a shut roof, byte-identical trajectories across seeds, the uniform bearing window, a TRIPWIRE on golf's wind sampler, and the altitude result against the published 25–30 ft band |
-| `packages/relay-ui/src/lib/baseball/fielding.ts` | The deliberately tiny defence: fixed alignment, a ramped reach, one defender rating, → out / 1B / 2B / 3B / HR. 225 lines, and the cap is the design |
+| `packages/relay-ui/src/lib/baseball/fielding.ts` | The deliberately tiny defence: fixed alignment, a ramped reach, one defender rating, → out / 1B / 2B / 3B / HR, and `infieldDepthFt(β)` — the 95 ft arc, read by the lookup AND by `stadium/field.ts`. 323 lines, and the cap is the design |
 | `packages/relay-ui/src/lib/baseball/fielding.test.ts` | The fielding bench: prints the reach ladder and a named batted-ball ladder; asserts the catch boundary exactly on the reach, the single/double index boundary, the foul-territory boundary, the rating's ±15 % span, and the landing-point limitation |
 | `packages/relay-ui/src/lib/baseball/determinism.test.ts` | Source-reading guard: no `Math.random`, `Date.now`, `performance.` or `new Date` in any baseball source |
 | `packages/relay-ui/src/lib/baseball/budget.test.ts` | Anti-bloat guard: 500-line cap per shipping `lib/baseball` module (tests exempt), 700 per component, 900 for `StadiumGL.tsx`; no `three` in the sim; no barrel `index.ts` |
@@ -1016,10 +1084,66 @@ the render layer; contact resolves at the true physical state.
   against 24.5 / 20.2 at spins where the clamp never binds. 3.4e-7 ft at 120 Hz
   is far below anything gameplay can see, and softening the clamp would move
   carry.
+- **M1 — the visual gate and the grey-box stadium.** → **Done** (see the M1
+  commit): `scripts/shoot-baseball.mjs` + `baseballpreview.*`, `StadiumGL.tsx` as
+  a composer over `stadium/{geom,field,fence,mound,stands,roof,scale,quality}.ts`,
+  every dimension read from `parks.ts` and verified by reading distances back out
+  of the built vertex buffers (worst |Δ| 0.002 ft at Harbourfront, 0.006 at
+  Alpine). Five scenes, byte-identical across runs.
+- **M1 follow-ups — the gate's findings, closed.** → **Done.** The gate passed M1
+  and found exactly one substantive defect, and it was **physics, not render**.
+  **(1) `INFIELD_DEPTH_FT` is now `infieldDepthFt(β)`** — the 95 ft arc struck
+  from the rubber, replacing a plate-centred circle that over-stated the dirt by
+  27.9 ft down the lines. See the fielding section for the derivation, the
+  0.60 %-of-the-lookup ladder move (7,376 cases, all OUT → SINGLE, all at
+  130–155 ft off centre), and the separate **depth-datum** decision with its
+  computed counterfactual. `stadium/field.ts` samples the same function, so the
+  drawn dirt is the dirt the fielder model uses.
+  ⚠ **And the gate's diagnosis of the SYMPTOM was wrong, which is worth more than
+  the fix.** The dirt lot in the batter's-eye frame is *not* the radius: at
+  900×1600 portrait the `batter` camera's 40° vertical fov is only **23.2°
+  horizontally**, so it sees |β| ≤ 11.6°, where the arc moves by ≤2.2 ft. Counted
+  in pixels, dirt is **36.6 % of that frame before the fix and 36.8 % after**
+  (the 0.2 is the scale marker moving, not the dirt), against the ~60 % the gate
+  reported. In `wide`, where the whole arc is visible, dirt falls 2.6 % → 2.4 %
+  of frame and the outline visibly curves in at the corners. The real cause of
+  the batter's-eye dirt lot is that the infield is drawn as a **solid fan with no
+  grass** — see the M2 list.
+  **(2) `sun.shadow.normalBias = 6` is recorded, not changed** — 6 world feet is
+  ~50× a baseball's radius, so it will detach or delete the ball's contact shadow
+  the day there is a ball, and it will present as "the ball floats", i.e. as
+  three innocent subsystems. The note at the constant names the failure and the
+  likely fix (a tight ~200 ft shadow cascade around the infield, not a bigger
+  map — 1024² is a hard ceiling until an on-device Android test, and the gate
+  measured 1.23 ft/texel across a ~1260 ft volume already).
+  **(3) The scale reference's comment now says what is true.** It claimed to be
+  drawn in every mode so that nobody forgets to check it; it is *built* in four
+  and *legible* in two (`pitcher`, `batter`). `wide` is 1000 ft up, where a 6 ft
+  object is 1 px and no placement fixes that. The marker moved from the middle of
+  the batter's box to its front so that its BASE stays in the `batter` frame — it
+  was 0.9° from being cropped, and a height reference whose contact with the
+  ground is off-frame is not a height reference.
+- **M2 — art, and four things the gate photographed.** Recorded here so they are
+  not lost, and deliberately **not** fixed in the M1 follow-up pass:
+  - **The bowl is not a building.** It is an open lofted ribbon with no back and
+    no seat deck, and the apron disc runs to 570 ft past the bowl's 459–531 ft
+    outer edge, so bare ground shows beyond the stands.
+  - **The roof ring degenerates.** 120 ft of band over the outfield down to a 5 ft
+    sliver behind home and along the sides (clamped by `MIN_BAND_FT`), which from
+    above projects as a 2 px dark wire across the field and reads as an artifact.
+    Proven to be the roof: the roofless Alpine shot has no such lines.
+  - **A ~1.5 in green fringe outside the foul lines**, from parallax on
+    `field.ts`'s anti-z-fighting layer stack (0.18 ft of height offset displaces
+    the edge ~0.1 ft laterally at batter-eye height). Cosmetic now, worse once
+    textures land.
+  - **The infield has no grass.** It is one solid dirt fan from the plate to the
+    arc, where a real infield is grass inside the base paths with dirt cutouts —
+    roughly 7,000 ft² of the arc's ~15,800 ft² of fair area. This, not the arc
+    radius, is why the batter's-eye frame reads as a dirt lot, and it is the one
+    M2 item with a measurement behind it.
 - **Stage 5 — game & scene.** `derbySim.ts`, `duelSim.ts` (3 innings, 3 outs, no
-  steals/errors/subs/shifts), `ai.ts`, `StadiumGL.tsx` as a *composer* over
-  `stadium/{bowl,turf,dirt,roof,crowd,lights,skyline}.ts`, HUDs, and the budget /
-  determinism / IP guard tests.
+  steals/errors/subs/shifts), `ai.ts`, the crowd/lights/skyline builders, HUDs,
+  and the budget / determinism / IP guard tests.
 
 ## Gotchas
 
@@ -1145,6 +1269,18 @@ the render layer; contact resolves at the true physical state.
   labelled knobs stand in for them (`GROUND_INTERCEPT_FT`, and the cap that makes
   any unfielded ball on the dirt a single). Do not tune them to fix an infield
   outcome; the fix is a rolling phase, and then both are deleted.
+- **"On the dirt" is a FUNCTION of bearing; "how deep" is a flat datum.** They
+  were one constant only because a wrong plate-centred circle happened to equal
+  the arc's centre-field crossing. `infieldDepthFt(β)` answers the first and
+  `XB_DEPTH_DATUM_FT` the second, and collapsing them back into one symbol
+  re-calls 1.6 % of the lookup and flips two named ladder rows — measured, and
+  printed by `fielding.test.ts` as a counterfactual so the choice stays visible.
+- **A scene number in world FEET is not scale-free, and the ball is 0.12 ft.**
+  `StadiumGL`'s `sun.shadow.normalBias = 6` is right for a 1260 ft shadow volume
+  and ~50× wrong for a baseball. Anything tuned against stadium-sized geometry —
+  shadow bias, near planes, the anti-z-fighting layer offsets in `field.ts` — has
+  to be re-read the day a ball-sized object enters the scene, and the symptom
+  will be a floating ball, not a shadow complaint.
 - **The called zone is the rule zone plus one ball RADIUS a side (19.90 in),
   not a diameter (22.81 in).** A strike is any part of the ball over any part of
   the plate and we integrate the ball's *centre*, so the centre may sit one

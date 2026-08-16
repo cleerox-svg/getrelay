@@ -4,23 +4,24 @@
 // ⚠ EVERY RADIUS IN HERE COMES FROM DATA. The grass and the warning track are
 // cut to `fenceAt(park, β)` sampled degree by degree, so the turf ends exactly
 // where the wall the sim resolves against stands. The infield dirt is
-// `INFIELD_DEPTH_FT` — `fielding.ts`'s constant, not a second copy of it. Home
-// plate is `PLATE_WIDTH_FT` / `PLATE_DEPTH_FT` from `zone.ts`. The foul lines
-// are `FOUL_LINE_DEG`.
+// `infieldDepthFt(β)` — `fielding.ts`'s own function, not a second copy of it.
+// Home plate is `PLATE_WIDTH_FT` / `PLATE_DEPTH_FT` from `zone.ts`. The foul
+// lines are `FOUL_LINE_DEG`.
 //
-// ⚠ AND ONE OF THEM IS DELIBERATELY DRAWN WRONG-LOOKING. `INFIELD_DEPTH_FT` is
-// `RUBBER_D_FT + 95` used as a PLATE-centred circle, which BASEBALL.md flags as
-// over-stating the dirt by up to 27.9 ft down the lines — the published 95 ft
-// arc is struck from the RUBBER. The renderer draws the circle the FIELDING CODE
-// ACTUALLY USES rather than a prettier one, because the whole point of one
-// `parks.ts`/`fielding.ts` read by physics and geometry is that a wrong shared
-// number becomes visible instead of staying an internal detail. When that
-// constant is fixed, this drawing changes with it and no edit here is needed.
+// ⚠ THE DIRT USED TO BE DRAWN WRONG-LOOKING BECAUSE IT WAS COMPUTED WRONG, AND
+// THAT LOOP HAS NOW CLOSED. `fielding.ts` shipped a plate-centred 155.5 ft
+// circle where the real 95 ft arc is struck from the RUBBER; this file drew that
+// circle rather than a prettier one, on the principle that a wrong shared number
+// should become visible instead of staying an internal detail. It did: the M1
+// visual gate inverted the render back to world feet, measured the dirt/grass
+// boundary at 155.6 ft, and the geometry — not the renderer — was fixed. The
+// boundary drawn here is now the arc, still sampled from the same function the
+// fielder model calls, so the dirt you see stays the dirt he stands on.
 
 import { DoubleSide, FrontSide, Group, Mesh, MeshLambertMaterial } from 'three';
 import type { BufferGeometry, Side } from 'three';
 import { fenceAt, FOUL_LINE_DEG } from '../../../lib/baseball/parks';
-import { INFIELD_DEPTH_FT } from '../../../lib/baseball/fielding';
+import { infieldDepthFt } from '../../../lib/baseball/fielding';
 import { PLATE_DEPTH_FT, PLATE_WIDTH_FT } from '../../../lib/baseball/zone';
 import { at, fan, loft, polygon, quad, ring } from './geom';
 import type { StadiumCtx, StadiumPart } from './geom';
@@ -124,13 +125,16 @@ export function buildField({ scene, track, park, quality }: StadiumCtx): FieldPa
     'warningTrack',
   );
 
-  // --- infield dirt. See the header: this is `fielding.ts`'s plate-centred
-  // circle, flagged approximate there and drawn approximate here.
+  // --- infield dirt: the 95 ft arc struck from the rubber, sampled bearing by
+  // bearing exactly as the wall is. Sampled at `fenceStepDeg` and not the
+  // coarser `bowlStepDeg` it used when it was a circle — a circle is a circle at
+  // any step, but this arc carries real curvature (155.5 ft at centre to 127.6
+  // at the line) and the batter's-eye camera reads its near edge from 20 ft.
   add(
     fan(
       [0, Y.dirt, 0],
-      ring(-FOUL_LINE_DEG, FOUL_LINE_DEG, quality.bowlStepDeg, () => ({
-        r: INFIELD_DEPTH_FT,
+      ring(-FOUL_LINE_DEG, FOUL_LINE_DEG, step, (b) => ({
+        r: infieldDepthFt(b),
         y: Y.dirt,
       })),
     ),
