@@ -38,9 +38,9 @@ const CAP = 500;
  * is the thing the cap exists to prevent.
  */
 const GRANDFATHERED: Record<string, number> = {
-  'CourseGL.tsx': 2673,
+  'CourseGL.tsx': 2664,
   'RangeGL.tsx': 1461,
-  'PuttGL.tsx': 1235,
+  'PuttGL.tsx': 1226,
   'CourseGame.tsx': 1002,
   'RangeGame.tsx': 894,
   'GolfScreen.tsx': 796,

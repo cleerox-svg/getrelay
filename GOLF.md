@@ -122,6 +122,9 @@ A data-driven **Range layout** picker (persisted, default `fairway`):
 | Shared WATER (level geometry, Gerstner waves, Fresnel + sky/planar reflection, foam, splash, wet bank, reeds, quality tiers) | `packages/relay-ui/src/lib/golf/water.ts` |
 | Headless screenshot harness | `packages/relay-ui/scripts/shoot-golf.mjs` + `golfpreview.html` + `src/golfpreview.tsx` |
 | Quality tier POLICY (shared kit) + GPU instrumentation | `packages/relay-ui/src/lib/scene3d/quality.ts`, `stats.ts` |
+| Procedural sky IBL (shared kit): equirect painter + PMREM | `packages/relay-ui/src/lib/scene3d/env.ts` |
+| Golf's sky palette + `scene.environment` wiring + the hemi cut | `packages/relay-ui/src/components/golf/scene/env.ts` |
+| Bunker sand: albedo + normal + roughness off one height field | `packages/relay-ui/src/components/golf/scene/sand.ts` |
 | Golf's per-scene budget table + `?quality=`/`?shadow=` | `packages/relay-ui/src/components/golf/scene/quality.ts` |
 | Committed GPU ceilings + the shared harness reporter | `packages/relay-ui/scripts/budgets.golf.json`, `scripts/lib/shoot-report.mjs` |
 | Range physics/sim (headless) | `packages/relay-ui/src/lib/golf/rangeSim.ts` |
@@ -218,9 +221,11 @@ Gameplay clean first, then the look, then the course — each step reuses the la
    with a subtler mow delta and stronger blade normals; the odd flat tee-mat
    disc removed (tee peg + soft ball shadow ground the ball). All in `RangeGL`,
    verified by headless Chromium screenshots of every layout. No new dep; `three`
-   stays a lazy chunk. **Not yet:** post-process bloom (needs EffectComposer —
-   deferred for GPU cost on low-end mobile), billboard tree sprites, real sand/
-   bunkers. Tune light intensity/exposure against device screenshots next.
+   stays a lazy chunk. **Not yet:** post-process bloom (rejected outright in
+   `/GRAPHICS.md` §3 — an `EffectComposer` render target is 46 MB at phone size),
+   billboard tree sprites. **→ Also done (second pass):** scene-wide IBL and real
+   sand — see "Scene-wide IBL, and real sand" below.
+   Tune light intensity/exposure against device screenshots next.
    **Gotcha (learned the hard way):** a 2048² shadow map once crashed the
    WebView GPU process on real Android (black screen, needs an app restart)
    though it rendered fine in desktop/software GL, so it was reverted to 1024².
@@ -642,6 +647,69 @@ for all four: `golf`.
    short and self-occluded from the green camera. If a crisp flagstick contact
    shadow is wanted, the lever is the sun angle or a contact disc at the pole
    base; it was never shadow-map resolution.
+5. **No harness frame shows a Course bunker properly.** Counting warm-beige
+   pixels across all 25 scenes: `putt-sand` has 10,962, `putt-bank-rail` 6,847
+   and `course-aim-iron` 3,929 — every other scene has effectively none. So the
+   one thing golf's own visual gate cannot review is sand, which is why the sand
+   work below had to be judged from a 2× crop of a single frame. A dedicated
+   greenside-bunker view is cheap and belongs in `SCENES`.
+
+**Scene-wide IBL, and real sand.** Two changes that deliberately move pixels.
+
+- **`scene.environment` is on at `medium`/`high`.** This REVERSES a considered
+  decision. `scenery.ts` `makeSkyEnvMap` attached its PMREM to the ball's
+  `envMap` alone, on the recorded grounds that "turf/trees/water pay no
+  per-frame env cost", and visual QA at the time found scene-wide IBL bought
+  nothing. That finding was true of *that texture* and not of IBL:
+  **`PMREMGenerator` sizes its cube as `image.width / 4`**, so an 8×128 gradient
+  is a **2×2 cube** — a flat wash with no direction in it at all. Three's own
+  documented minimum equirect is 64×32.
+  `lib/scene3d/env.ts` paints a real one — a sun disc at a true 0.53° angular
+  size (energy-conserved when it falls below a texel), a circumsolar halo, a
+  three-stop sky and a turf-green ground bounce — in **half-float**, because an
+  8-bit canvas clamps at 1.0 and would cap the sun at sky brightness.
+  `components/golf/scene/env.ts` holds golf's palette (every colour lifted from
+  the sky dome, so dome / water reflection / env can't drift).
+- **⚠ THE TRAP, and it is the whole change.** IBL added on top of the existing
+  hemisphere fill double-counts the ambient and flattens everything to grey —
+  which looks exactly like "the IBL didn't work" and sends you tuning the wrong
+  knob. The fill comes down IN THE SAME CALL: `hemiFill()` is now the only way a
+  golf scene sets its hemisphere intensity and it reads the same `quality.ibl`
+  flag. Numbers, derived rather than guessed: the painted sky's cosine-weighted
+  irradiance on an up-facing normal is `(0.44, 1.09, 2.18)` at intensity 1 and
+  the hemisphere light it replaces gave `(0.64, 0.86, 1.05)`, so
+  `ENV_INTENSITY = 0.5` with `HEMI_IBL_FACTOR = 0.28` holds total ambient
+  luminance within ~10% while moving the colour. Measured on the shots: mean
+  signed delta per channel is **R −1.0, G +0.9, B +10.8** — less red, much more
+  blue, luminance ~flat. Warm key, cool sky-lit shade.
+- **`low` keeps the old behaviour exactly** — ball-only `envMap`, full
+  hemisphere fill, `scene.environment` untouched, and the 21 KB 2×2 PMREM rather
+  than 1.5 MiB. The original reasoning still governs the hardware it was written
+  for. `quality.test.ts` asserts it.
+- **Memory.** 512×256 equirect → a 128 cube → `3 × max(128,112) × 4 × 128`
+  half-float RGBA, no mips (cubeUV packs every roughness level into the one
+  target) = **1,572,864 B / 1.5 MiB** per scene. `skyEnvBytes()` computes it
+  without a GPU and a unit test pins it. Three calls 1024×512 "ideal" (a 256
+  cube, 6 MiB); that is 4.5 MiB more for a gradient, on the fleet that lost a
+  WebView GPU process to a 16 MB shadow map.
+- **Cost, measured.** Draw calls and triangles are **unchanged on all 25 scenes**
+  — an env map is a sample, not a submission. Textures +2 on the scenes with
+  sand in frame (the new normal + roughness maps); the env texture replaces the
+  old one 1:1. What `renderer.info` cannot see is the per-fragment cubeUV sample
+  every lit material now pays, and that is exactly the cost the original
+  ball-only decision was protecting. It is tier-gated for that reason and the
+  on-device check is still owed.
+- **Real sand (`components/golf/scene/sand.ts`).** Bunkers were albedo-only at a
+  flat `roughness: 1` — a surface with no normal and no roughness variance
+  cannot respond to a moving light, so sand rendered as flat beige whatever the
+  sun did. Now albedo, normal and roughness all come off ONE tileable seeded
+  value-noise height field plus cosine rake ridges, so the grain you see, the
+  bumps the sun rakes and the packed/loose sheen agree. Roughness tracks height
+  *inversely* — a rake compresses what it pushes down, so furrow floors are
+  glossier than the crust that stands proud. The Course and Putt each painted
+  their own near-identical grain (256² and 128², 0.137 vs 0.134 dots/px); that
+  is now one generator with a `repeat`/`base`/`rake` per scene. Seeded
+  `mulberry32`, no `Math.random`, no `onBeforeCompile`.
 
 **Shared putting physics.** `lib/golf/greenPhysics.ts` is the pure-math
 counterpart for greens (Stimp → μ, roll-out, cup capture; no `three`, no sim

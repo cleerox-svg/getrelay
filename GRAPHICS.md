@@ -118,8 +118,17 @@ and measurement**, not the engine:
   GLTF, texture file or HDRI in the repo. This is the largest single lever, and
   it is the one thing the agent fleet cannot manufacture.
 - **Scene-wide image-based lighting** — golf already has ACES tone mapping, a
-  warm key sun with soft shadows and distance haze. What it lacks is
-  `scene.environment`.
+  warm key sun with soft shadows and distance haze. It now also has
+  `scene.environment`, tier-gated: `lib/scene3d/env.ts` paints a real
+  equirectangular sky (sun disc at a true angular size, circumsolar halo,
+  horizon band, ground bounce) in **half-float** and prefilters it with
+  `PMREMGenerator`; `components/golf/scene/env.ts` holds golf's colours and cuts
+  the hemisphere fill in the same call. Two things are worth carrying forward:
+  the fill MUST come down as the env goes on (otherwise the ambient is
+  double-counted and everything flattens to grey), and the sun disc contributes
+  essentially nothing to diffuse — a 0.53° disc is 6.7e-5 sr — so the **halo** is
+  the knob that puts direction into the ambient, while the key light stays a real
+  `DirectionalLight`.
 - **Instancing** — for crowds, galleries and foliage.
 - **Skeletal animation** — authored in Blender and exported as GLTF. Using an
   engine as a *content tool* is fine; shipping its runtime is not.
@@ -245,7 +254,16 @@ crash, not from caution.
   faster decode than Draco.
 - **No shipped HDRI.** A 2k `.hdr` is 3–8 MB in a repo that justifies a 300 KB
   mp3. Environment lighting is procedural: paint a gradient, run it through
-  `PMREMGenerator`. `lib/golf/scenery.ts:189-237` already proves the pattern.
+  `PMREMGenerator`. `lib/scene3d/env.ts` is the implementation; the pattern was
+  first proved by `lib/golf/scenery.ts` `makeSkyEnvMap`, which is still what the
+  `low` tier uses. ⚠ **`PMREMGenerator` derives its cube size from
+  `image.width / 4`** — `makeSkyEnvMap`'s 8×128 gradient is therefore a **2×2
+  cube**, a flat wash with no direction in it, which is why it was only ever
+  worth attaching to a mirror ball. Three's documented minimum equirect is 64×32
+  and its "ideal" is 1024×512 (a 256 cube, ~6 MiB). `env.ts` ships 512×256 → a
+  128 cube → **1.5 MiB**, on the grounds that a smooth procedural sky does not
+  earn 4.5 MiB more on a fleet that lost a WebView GPU process to a 16 MB shadow
+  map. `skyEnvBytes()` computes this without a GPU, and a unit test pins it.
 - **KTX2 is worth its wasm, eventually.** The reason is **VRAM, not download
   size**: WebP decompresses to full RGBA in VRAM, while KTX2/ASTC/ETC2 stays
   compressed at a 4–8× saving. VRAM is what kills this fleet. When it lands, the
