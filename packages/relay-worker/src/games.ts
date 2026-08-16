@@ -26,7 +26,7 @@ export const MAX_ROUND_REWARDS_PER_DAY = 20;
 // Games that share the game_scores table (and its leaderboard). The
 // column defaults to 'fog', so an omitted/unknown value maps back to fog
 // and every existing client keeps working.
-export const GAME_IDS = ['fog', 'tune', 'golf', 'golfrange', 'golfcourse'] as const;
+export const GAME_IDS = ['fog', 'tune', 'golf', 'golfrange', 'golfcourse', 'bbderby'] as const;
 export type GameId = (typeof GAME_IDS)[number];
 
 // The full 3D Course mode plays up to 18 holes, so its runs need a higher
@@ -141,7 +141,7 @@ async function readGolfRecords(
 // sides have submitted; equal to-par is a tie (winner_id null).
 
 // Only golf modes can be challenged — the metric is to-par.
-const CHALLENGE_GAME_IDS = ['golf', 'golfrange', 'golfcourse'] as const;
+const CHALLENGE_GAME_IDS = ['golf', 'golfrange', 'golfcourse', 'bbderby'] as const;
 
 // A challenge score (to-par) is clamped to this magnitude both ways.
 const MAX_CHALLENGE_TO_PAR = 200;
