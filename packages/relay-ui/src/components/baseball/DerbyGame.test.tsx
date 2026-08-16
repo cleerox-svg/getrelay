@@ -33,6 +33,21 @@
 // its one-shot on the refusal — so `onSwing` now reports whether the game took
 // the tap. "The guard is in the HUD" and "the pitch survives" turned out to be
 // two claims, and only the second is the bug.
+//
+// TWO MORE WERE WATCHED IN THE FOLLOW-UP REVIEW PASS, both of which the file
+// PREVIOUSLY SURVIVED — each was a live surface with no assertion on it:
+//
+//   5. `TimingBar`'s contact band: `left: plateP − msToPct(contactMs)`
+//      → `plateP + …`, i.e. the band drawn entirely on
+//      the LATE side of the crossing                       → 1 fail
+//   6. `DerbyGame`'s `contactWindowS(speed, sim.cfg.batSpeedMph)`
+//      → `contactWindowS(speed)`                           → 1 fail
+//
+// ⚠ (6) ALSO FALSIFIED THE FIRST ASSERTION WRITTEN FOR IT.
+// `expect(spy).toHaveBeenCalledWith(v, undefined)` MATCHES a one-argument call
+// in vitest, so it passed the mutation it existed for. The arguments array's
+// LENGTH is what separates `f(v)` from `f(v, undefined)`, and that is what the
+// test asserts now — written down because the first version looked right.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
@@ -56,6 +71,30 @@ const { submitSpy } = vi.hoisted(() => ({
 vi.mock('../../lib/api', () => ({ api: { submitGameScore: submitSpy } }));
 vi.mock('../../lib/audio', () => ({ play: vi.fn(), unlockAudio: vi.fn() }));
 
+// ⚠ THE ONE WHITE-BOX SEAM IN THIS FILE, and it is here because the ARGUMENT is
+// the thing that cannot be seen from outside. `DerbyGame` calls
+// `contactWindowS(speed, sim.cfg.batSpeedMph)`, and `batSpeedMph` is `undefined`
+// for every shipping config — so dropping the second argument changes NO pixel,
+// no number and no test that reads the DOM. It would still be a real bug: the
+// field is `DerbySim`'s bat-speed hook (the one every card/fatigue modulator
+// reaches for, and `derbySim.test.ts` drives it at 130 mph), so the first config
+// that sets it would draw a band from the published swing and be wrong by 6.5 ms
+// with the widget's own header promising it never widens the window.
+//
+// The real function is kept — this wraps it, it does not replace it — so every
+// other assertion in the file still runs against the sim's own arithmetic.
+const windowSpy = vi.hoisted(() => vi.fn());
+vi.mock('../../lib/baseball/derbyRules', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../../lib/baseball/derbyRules')>();
+  return {
+    ...mod,
+    contactWindowS: (...args: Parameters<typeof mod.contactWindowS>) => {
+      windowSpy(...args);
+      return mod.contactWindowS(...args);
+    },
+  };
+});
+
 // A hand-cranked clock + rAF pump. `performance.now` IS the play clock, so
 // driving it directly is how a whole 24-pitch session runs in milliseconds.
 let now = 0;
@@ -65,6 +104,7 @@ beforeEach(() => {
   now = 0;
   frames = [];
   submitSpy.mockClear();
+  windowSpy.mockClear();
   vi.spyOn(performance, 'now').mockImplementation(() => now);
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
     frames.push(cb);
@@ -234,12 +274,31 @@ describe('DerbyGame — the fixture seam', () => {
     render(<DerbyGame seed={20260816} />);
     act(() => screen.getByText('Pitch it in').click());
 
+    // Grabbed BEFORE this test makes any call of its own, so the entry read
+    // below is unambiguously the HUD's.
+    const hudCall = windowSpy.mock.calls[0];
+
     const mirror = new DerbySim({ seed: 20260816 });
     const pr = mirror.servePitch();
-    const halfMs = contactWindowS(vLen(pr.plate.v)) * 1000;
+    // ⚠ BOTH ARGUMENTS, because `DerbyGame` passes both — see the spy above for
+    // why the second one cannot be checked through the DOM. `derbySim.test.ts`
+    // drives that parameter at 55 / 71.5 / 130 mph of bat; this states that the
+    // HUD asks the CONFIG rather than assuming the published swing.
+    const halfMs = contactWindowS(vLen(pr.plate.v), mirror.cfg.batSpeedMph) * 1000;
+    // ⚠ THE ARITY IS THE ASSERTION, and `toHaveBeenCalledWith(v, undefined)` is
+    // NOT — measured: it matches a one-argument call, so it passed the very
+    // mutation it was written to catch. The arguments array is what distinguishes
+    // `f(v)` from `f(v, undefined)`.
+    expect(hudCall, 'DerbyGame never asked for a contact window').toBeTruthy();
+    expect(hudCall).toHaveLength(2);
+    expect(hudCall![0]).toBeCloseTo(vLen(pr.plate.v), 12);
+    expect(hudCall![1]).toBe(mirror.cfg.batSpeedMph);
     // TimingBar's own span: the crossing plus a 14 % tail.
     const spanS = pr.flightTimeS * 1.14;
     const expectedPct = ((2 * halfMs) / 1000 / spanS) * 100;
+    // Where the plate crossing itself falls on that span — the band is CENTRED
+    // on it, which is the half of the geometry a width alone cannot see.
+    const platePct = (pr.flightTimeS / spanS) * 100;
 
     // The contact band is the translucent-white one; the barrel band is the
     // green gradient and the marker is 4 px wide.
@@ -248,6 +307,13 @@ describe('DerbyGame — the fixture seam', () => {
     );
     expect(band, 'no contact band drawn').toBeTruthy();
     expect(Number.parseFloat(band!.style.width)).toBeCloseTo(expectedPct, 6);
+    // ⚠ AND WHERE IT SITS, NOT JUST HOW WIDE IT IS. A width-only assertion let
+    // `left: plateP − msToPct(contactMs)` be mutated to `plateP + …` with all 12
+    // baseball tests still green — a correctly-sized band drawn ENTIRELY on the
+    // late side of the crossing, i.e. the HUD telling the player to swing ~26 ms
+    // late on every pitch. Since `left` now depends on `contactMs`, the sign of
+    // that half-width is live surface.
+    expect(Number.parseFloat(band!.style.left)).toBeCloseTo(platePct - expectedPct / 2, 6);
     // …and it is not the old constant. 26.4 ms was seed 7's fastball; this pitch
     // is a different row of the mix, so a hard-coded band would be visibly wrong.
     expect(Math.abs(halfMs - 26.4)).toBeGreaterThan(0.05);

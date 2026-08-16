@@ -46,6 +46,9 @@
 //      `shared/TimingBar.tsx` used to carry as a const    → 1 fail
 //  22. `copySwing` flattened back to `{ ...r }` — the
 //      shallow spread that left `flight` aliased          → 1 fail
+//  23. `contactWindowS` stops FORWARDING `batSpeedMph`
+//      into `contactGeometry` (the parameter accepted and
+//      ignored) — a follow-up pass; the file survived it  → 1 fail
 //
 // ⚠ (22) IS A GAP THIS FILE HAD, not one it caught. The independence assertions
 // in the snapshot test mutated only SCALARS, so `getState().last.flight` — and
@@ -67,7 +70,7 @@
 import { describe, expect, it } from 'vitest';
 import { mulberry32 } from '../golf/wind';
 import { vLen } from './airPhysics';
-import { LOC_DISTANCE_IN, SWEET_SPOT_M } from './bat';
+import { BAT_SPEED_MPH, LOC_DISTANCE_IN, SWEET_SPOT_M } from './bat';
 import { contactGeometry, swingContact } from './batSim';
 import {
   BAT_HANDLE_LIMIT_M,
@@ -571,6 +574,34 @@ describe('derby — the swing mapping', () => {
       `  and it is a function of the pitch — FASTER is NARROWER: ` +
         `${slow.toFixed(2)} ms at 72 mph (a curveball at the plate), ` +
         `${fast.toFixed(2)} ms at 96 mph`,
+    );
+
+    // ⚠ AND OF THE BAT, which is the argument `DerbyGame` threads from
+    // `DerbySim.cfg.batSpeedMph` — the hook every card/fatigue modulator will
+    // reach for. It was a parameter nothing exercised: no shipping config sets
+    // the field, so both the HUD and its test took the default and agreed by
+    // accident. Drive it here instead, where the default is not in the way.
+    //
+    // Same mechanism as the pitch-speed leg, same direction, and the same
+    // counter-intuitive answer: θ_c = ω·Δt·v_p/(ω·d + v_p) is INCREASING in ω
+    // (∂/∂ω = v_p/(ω·d + v_p)² > 0), so a faster bat is further off square when
+    // it meets the ball and contact sits further out the barrel. Swinging harder
+    // narrows the window it can be swung in. The band the HUD draws must shrink
+    // with it; drawing the published swing's band for a 130 mph bat would be the
+    // widget lying by 6.5 ms.
+    const v = vLen(pr.plate.v);
+    const light = contactWindowS(v, 55) * 1000;
+    const heavy = contactWindowS(v, 130) * 1000;
+    expect(heavy).toBeLessThan(derivedMs);
+    expect(derivedMs).toBeLessThan(light);
+    // …and `undefined` means THE PUBLISHED SWING, not "some default" — the two
+    // are the same call, so a config that leaves the field unset is not a
+    // different physics from one that sets it to 71.5.
+    expect(contactWindowS(v, BAT_SPEED_MPH)).toBe(contactWindowS(v));
+    console.log(
+      `  and of the BAT — HARDER is NARROWER too: ` +
+        `${light.toFixed(2)} ms at 55 mph, ${derivedMs.toFixed(2)} at the published ` +
+        `${BAT_SPEED_MPH}, ${heavy.toFixed(2)} at 130`,
     );
 
     expect(lo).toBeGreaterThan(20);

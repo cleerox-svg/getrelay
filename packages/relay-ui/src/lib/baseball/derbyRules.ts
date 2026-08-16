@@ -220,6 +220,12 @@ export function contactWindowS(pitchSpeedFps: number, batSpeedMph?: number): num
       undercutIn: 0,
       ...(batSpeedMph === undefined ? {} : { batSpeedMph }),
     }).contactZM;
+    // ⚠ THE HANDLE HALF NEVER FIRES HERE, AND IS KEPT ANYWAY. `z = aimZM +
+    // (d/cos θ_c − d)` with `aimZM` at the sweet spot, so while |θ_c| < π/2
+    // contact only walks OUT and the TIP bound is what closes the window
+    // (measured at every rung of the bracket, at 55/71.5/130 mph of bat). It is
+    // `resolveSwing`'s overlap test written the same way on purpose — the ONE
+    // statement of "the ball is over the bat", not a narrowed copy of it.
     return Number.isFinite(z) && z <= BAT_TIP_M && z >= BAT_HANDLE_LIMIT_M;
   };
   // Bracket first, from 1 ms, doubling. The window is ~26 ms, where the bat has

@@ -27,11 +27,23 @@
 // The sentinel `/chats` entry underneath `/games` is `useGameFlow.test.tsx`'s
 // device: a second pop is not an abstraction to reason about, it is `/chats`
 // appearing on screen.
+//
+// It also holds the OTHER thing this screen does, which arrived unasserted and
+// was deletable: raising the store's `immersive` flag for the duration of a
+// derby. Two mutations were watched to fail in the follow-up review pass:
+//
+//   1. the whole `setImmersive` effect deleted   → 2 fail
+//   2. only its cleanup deleted
+//      (`return () => setImmersive(false)`)      → 1 fail
+//
+// Both were survivable before — the flag is invisible on screen while the
+// canvas covers the chrome anyway, so no pixel and no other assertion moves.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { BaseballScreen } from './BaseballScreen';
+import { useStore } from '../../lib/store';
 import { DERBY_ROUNDS, PITCHES_PER_ROUND } from '../../lib/baseball/derbyRules';
 
 /** Exactly the shape `DerbyGame.bank()` posts. Typed so `mock.calls` is readable. */
@@ -81,6 +93,9 @@ beforeEach(() => {
   frames = [];
   path = '';
   submitSpy.mockClear();
+  // The store is a module singleton, so the immersive flag survives between
+  // tests. Reset it so "it was raised" is this test's doing and not the last's.
+  useStore.getState().setImmersive(false);
   vi.spyOn(Date, 'now').mockReturnValue(SEED_CLOCK_MS);
   vi.spyOn(performance, 'now').mockImplementation(() => now);
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
@@ -224,5 +239,59 @@ describe('BaseballScreen — leaving is not finishing', () => {
     expect(shown, `no best-streak stat on screen; body was:\n${body()}`).toBeTruthy();
     expect(Number(shown![1])).toBe(sent.bestStreak);
     expect(sent.bestStreak).toBeGreaterThan(0);
+  });
+});
+
+describe('BaseballScreen — the app chrome yields to the canvas, and gets it back', () => {
+  // ⚠ THIS EXISTS BECAUSE THE EFFECT WAS DELETABLE. `BaseballScreen`'s
+  // `setImmersive` effect landed as a one-line footnote in a commit about four
+  // other things, and the reviewer deleted the whole effect with all 12 baseball
+  // tests still green. It is a real behaviour change — `MainLayout` renders the
+  // bottom tab bar and the top navbar only when `immersive` is false — so
+  // without it both stay MOUNTED and painting a second layout, with their
+  // blur/backdrop surfaces composited every frame, underneath a full-screen
+  // WebGL canvas that already covers them at `zIndex: 60`. Invisible on screen,
+  // which is exactly why the visual gate cannot hold it and this must.
+  //
+  // The RESTORE half is the half that would actually be seen: leave a derby by
+  // any path with the flag still raised and the player is in a chromeless app
+  // with no way back to the tab bar.
+
+  const immersive = () => useStore.getState().immersive;
+
+  it('⚠ the derby raises `immersive`, and every exit lowers it again', () => {
+    mount();
+    // The menu is ordinary chrome — the tab bar belongs to the player here.
+    expect(immersive()).toBe(false);
+
+    act(() => screen.getByText('Play Derby').click());
+    expect(immersive()).toBe(true);
+
+    // Leaving to the menu is the common path, and it goes through the SCREEN
+    // changing rather than through an unmount — so a cleanup-only implementation
+    // would not be enough.
+    playOnePitch();
+    act(() => screen.getByText('‹ Exit').click());
+    expect(screen.getByText('Play Derby')).toBeTruthy();
+    expect(immersive()).toBe(false);
+  });
+
+  it('the results screen is chrome again, and unmounting restores it too', () => {
+    const { unmount } = mount();
+    act(() => screen.getByText('Play Derby').click());
+    expect(immersive()).toBe(true);
+
+    // A COMPLETED session: the results card is ordinary chrome, so the flag has
+    // to fall on the screen change and not only on the way out of the tab.
+    for (let i = 0; i < DERBY_ROUNDS * PITCHES_PER_ROUND; i++) playOnePitch();
+    expect(screen.getByText('Derby complete')).toBeTruthy();
+    expect(immersive()).toBe(false);
+
+    // …and the unmount net: play again, then tear the whole route down mid-derby
+    // the way a route change or an Android back out of the tab does.
+    act(() => screen.getByText('Play again').click());
+    expect(immersive()).toBe(true);
+    unmount();
+    expect(immersive()).toBe(false);
   });
 });

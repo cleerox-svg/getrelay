@@ -412,7 +412,19 @@ export function DerbyGame({ seed, park, paused = false, onFinish, onExit }: Derb
   const bankRef = useRef(bank);
   bankRef.current = bank;
 
-  /** The NATURAL finish — the last pitch of the last round. Banks, then reports. */
+  /**
+   * The NATURAL finish — the last pitch of the last round. Banks, then reports.
+   *
+   * ⚠ `if (result)` IS UNREACHABLE TODAY, and it is written down rather than
+   * left for the next reader to go hunting for the case. `bank()` returns null
+   * on exactly two conditions: `reportedRef` already set, or no pitch thrown.
+   * The only caller is `nextPitch()`, and only after `sim.phase === 'done'` —
+   * which needs a full session of pitches — with `stageRef` moved to 'over' on
+   * the same line, so the unmount net cannot have run first and nothing can
+   * re-enter. It is kept because the alternative is `onFinish` firing with a
+   * result the bank refused, and because the day a second caller appears the
+   * guard is the difference between a no-op and a double report.
+   */
   function finish() {
     const result = bank();
     if (result) onFinishRef.current?.(result);
@@ -421,12 +433,17 @@ export function DerbyGame({ seed, park, paused = false, onFinish, onExit }: Derb
   // Abandon safety net — the same shape golf's `GolfGame` / `RangeGame` use:
   // unmounted with at least one pitch thrown and nothing reported yet, bank it.
   // `bank()`, never `finish()`; see above.
+  //
+  // ⚠ AND BANKING IS ALL IT DOES. This used to also null `apiRef`, on the stated
+  // ground that "`StadiumGL` may outlive this" — which cannot happen: it is a
+  // CHILD of this component and unmounts with it, and the ref object dies with
+  // the fibre either way, so the write released nothing. Both readers of the
+  // handle — the play loop above and `ExitVeloTag`'s rAF through
+  // `getBallScreen` — cancel their own frame in their own cleanup, so there is
+  // no post-unmount call to guard against. Recorded so it is not re-added.
   useEffect(() => {
     return () => {
       bankRef.current();
-      // The scene is gone with us. Holding the handle past unmount is a live
-      // reference to a disposed renderer if `StadiumGL` ever outlives this.
-      apiRef.current = null;
     };
   }, []);
 

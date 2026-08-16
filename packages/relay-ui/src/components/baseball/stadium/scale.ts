@@ -55,6 +55,15 @@
 // no geometry, and a scale claim about `wide`, `flight` or `batter` is made by
 // measuring drawn geometry (`StadiumApi.measureFence`) rather than by eye.
 //
+// ⚠ AND WHAT THAT PAIR ACTUALLY SHOWS IS THE ROOF AND THE FOUL DISTANCE, NOT
+// THE FENCE. This camera stands on the mound looking IN at the plate, so the
+// outfield wall is 290–360 ft BEHIND it and cannot appear in either frame. The
+// park difference the two PNGs carry is `roof` (282 ft retractable vs none) and
+// `foulTerritoryFt` (28 vs 22, which moves the backstop and the stand foot).
+// Measured: 9.63 % of pixels differ, in the roof/sky rows plus two thin bands.
+// It is a park-scoped STRUCTURE check against a fixed 6 ft reference; calling it
+// a wall check would be a claim no pixel in it supports.
+//
 // The box stays in all four modes because building it per-mode would be a
 // branch in a builder for no gain, not because it can be read in all four.
 //

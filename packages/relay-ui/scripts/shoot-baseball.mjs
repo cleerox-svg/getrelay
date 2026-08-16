@@ -72,10 +72,21 @@ const SCENES = {
   // `batter` to hold the strike zone, which put the marker at 121 % of frame
   // width — outside — so `stadium/scale.ts` is now readable in ONE shot, and one
   // photographic check of a whole game's scale is not a check. This restores the
-  // pair along a different axis: the same camera at the OTHER park. It exercises
-  // what the old pair never did (park geometry against a fixed 6 ft reference:
-  // Alpine's 347/390/415 wall and no roof behind the same box) for one line and
-  // no new geometry.
+  // pair along a different axis: the same camera at the OTHER park, for one line
+  // and no new geometry.
+  //
+  // ⚠ AND IT IS THE ROOF AND THE FOUL DISTANCE, NOT THE WALL. An earlier version
+  // of this note claimed the shot exercises "Alpine's 347/390/415 wall"; it
+  // cannot. `CAMERAS.pitcher` stands on the mound at [0, 6, −55] looking IN at
+  // [0, 2.6, 0], so the outfield fence is 290–360 ft BEHIND the camera and is
+  // never in frame. What DOES differ inside this box is `roof` (Harbourfront's
+  // 282 ft retractable vs Alpine's none) and `foulTerritoryFt` (28 vs 22), which
+  // moves the backstop and the foot of the stand behind the plate. Measured
+  // against `pitcher.png`: 9.63 % of pixels differ, all of it the roof/sky rows
+  // plus two thin bands; ~90 % of the frame is identical. That is the honest
+  // claim — a park-scoped STRUCTURE check against a fixed 6 ft reference — and it
+  // is still worth a shot. A wall check is `StadiumApi.measureFence`'s job, and
+  // `wide` / `park-alpine-wide` are the pair that photograph one.
   'park-alpine-pitcher': {
     query: 'scene=pitcher&park=alpine&t=0.30',
     label: 'park-alpine-pitcher',
@@ -487,7 +498,12 @@ function atTime(times, comps, t) {
  * `pitchSim.ts`) and its own frame conversion.
  *
  * ⚠ AND `visible` IS ASSERTED, because a scene that never turns the ball on
- * reports a perfectly correct position and photographs an empty sky.
+ * reports a perfectly correct position and photographs an empty sky. But it is
+ * `Object3D.visible`, NOT "in this picture", and the two come apart: `flight.png`
+ * at t = 0.30 s passes this check with no ball anywhere in the frame — that
+ * camera is 120 ft up at z = +90 looking out, and the pitch is still below its
+ * bottom crop. Read it as "the scene did not switch the ball off", never as a
+ * photographic guarantee; in-frame is what the PNG diff is for.
  *
  * ⚠ AND `scale`, because it was unmeasured and it is a DESIGN CLAIM:
  * `MIN_BALL_PX`'s note argues at length that there is no constant inflation
