@@ -47,20 +47,52 @@ import type { GreenDef, HoleBloom } from '../terrain';
 // pushed higher on the three signature flowering holes (2, 13, 16) and on the
 // short par 3s, where the corridor is short enough that only a handful of trees
 // are ever in frame.
+//
+// ⚠ APRIL, AND THE RIGHT PLANT. The visual gate passed 2, 13 and 16 and rejected
+// 12, 15 and 17 — every warm-hued hole and no other — for reading as autumn. Two
+// distinct mistakes were behind it, and both are easy to repeat:
+//
+//   1. THE WRONG SEASON'S FEATURE. 15 Firethorn and 17 Nandina were authored
+//      from the colour those plants are famous for: pyracantha's orange berries
+//      and nandina's red ones. Both are AUTUMN/WINTER features. The Masters is
+//      played in April, when pyracantha carries white flower corymbs and nandina
+//      white panicles with yellow anthers. An orange canopy over lush green turf
+//      was not a stylisation of spring, it was a correct rendering of October.
+//   2. THE WRONG FORM FOR THE HUE. Pink survives a crown tint because nothing in
+//      nature is a pink tree in autumn. Yellow, orange and red ARE the autumn
+//      palette, so no saturation rescues a tree-sized warm crown. 12 Golden Bell
+//      is forsythia — a 2–3 m shrub that flowers on bare wands and is never a
+//      canopy tree — so it now uses form: 'understory' (terrain.ts BloomForm):
+//      the crowns stay green and the yellow is a low drift beneath them. Green
+//      leaves above a warm mass below is a silhouette autumn cannot produce.
 const BLOOM = {
   pinkDogwood: { color: 0xf2a0bd, fraction: 0.6 }, // 2
   floweringPeach: { color: 0xef7f9e, fraction: 0.5 }, // 3
   crabApple: { color: 0xf6c6d4, fraction: 0.5 }, // 4
   magnolia: { color: 0xf2dde2, fraction: 0.45 }, // 5 — creamy white, faintly pink
-  yellowJasmine: { color: 0xf2d34e, fraction: 0.5 }, // 8
+  // 8 — Carolina jessamine, a twining VINE that scrambles over fences and low
+  // shrubs and is never a canopy tree either. Same warm-hue problem as 12, found
+  // by the data guard in courses.test.ts rather than by eye (0xf2d34e lit as a
+  // pale mustard cream), so it takes the same treatment.
+  yellowJasmine: { color: 0xfbc70e, fraction: 0.6, form: 'understory' }, // 8
   carolinaCherry: { color: 0xf0efe0, fraction: 0.5 }, // 9 — white racemes
   camellia: { color: 0xd8506e, fraction: 0.5 }, // 10 — deep rose
   whiteDogwood: { color: 0xf3f2e8, fraction: 0.5 }, // 11
-  goldenBell: { color: 0xf5c531, fraction: 0.6 }, // 12 — forsythia
+  // 12 — forsythia, on bare arching wands in early spring. Chrome lemon
+  // (sat 0.93) rather than the old 0xf5c531 (sat 0.80, which lit as gold and
+  // shaded to olive khaki), and 'understory' because forsythia is a shrub: the
+  // yellow drifts along the foot of the tree line and the canopy stays green.
+  // `fraction` goes UP, not down — a drift is a fraction of a crown's area, so
+  // more of them are needed to read as a planting rather than as dots.
+  goldenBell: { color: 0xfbdc12, fraction: 0.8, form: 'understory' }, // 12
   azalea: { color: 0xe0508a, fraction: 0.65 }, // 13
-  firethorn: { color: 0xe2622a, fraction: 0.5 }, // 15 — pyracantha berries
+  // 15 — pyracantha in APRIL: dense corymbs of clean white flowers. Its orange
+  // is the autumn BERRY and does not belong in a Masters-week frame.
+  firethorn: { color: 0xf7f8f2, fraction: 0.5 }, // 15
   redbud: { color: 0xcf6ba9, fraction: 0.65 }, // 16
-  nandina: { color: 0xc8342f, fraction: 0.5 }, // 17 — heavenly bamboo berries
+  // 17 — nandina in spring: white panicles, warmed by prominent yellow anthers.
+  // Its red is the winter BERRY, likewise out of season.
+  nandina: { color: 0xf6efd6, fraction: 0.5 }, // 17
 } satisfies Record<string, HoleBloom>;
 
 // −x = dogleg left, +x = dogleg right. Greens are big (r 15–17). Elevation

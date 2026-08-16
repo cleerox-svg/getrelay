@@ -2157,7 +2157,7 @@ export default function CourseGL({ sim, onArm, paused, cosmetics, onStats }: Pro
     // Trees — the shared two-species grove (scene/foliage.ts), INSTANCED to three
     // draw calls for the whole hole. Placement is DETERMINISTIC DATA shared with
     // the sim, so the trunk drawn is the one the ball caroms off.
-    buildGrove(scene, track, groveFromCourseTrees(courseTrees(hole)));
+    buildGrove(scene, track, groveFromCourseTrees(courseTrees(hole), hole.bloom?.form));
 
     // --- Camera ---------------------------------------------------------
     const camera = new THREE.PerspectiveCamera(60, w / h, 0.5, 2000);

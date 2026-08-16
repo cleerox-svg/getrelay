@@ -92,13 +92,38 @@
 //   wind { along, cross } — steady wind (yd/s), along = downrange, cross = +x.
 //
 //   THE CANOPY (optional, RENDER-ONLY):
-//   bloom? { color, fraction } — a FLOWERING grove. Augusta names 13 of its 18
-//                       holes after a flowering plant and every one of them used
-//                       to render a plain green tree line, so bloom is authored
-//                       HERE, as data, per hole:
+//   bloom? { color, fraction, form? } — a FLOWERING grove. Augusta names 13 of
+//                       its 18 holes after a flowering plant and every one of
+//                       them used to render a plain green tree line, so bloom is
+//                       authored HERE, as data, per hole:
 //                         color    = the blossom hex the canopy is tinted toward;
 //                         fraction = share (0..1) of this hole's BROADLEAF trees
 //                                    that flower. Pines never do.
+//                         form?    = 'canopy' (default) or 'understory' — see
+//                                    "SEASON AND FORM" below.
+//
+//                       ⚠ SEASON AND FORM — the two ways a bloom goes wrong, both
+//                       found by the visual gate AFTER the first blossom pass had
+//                       already merged:
+//                         • SEASON. Author the colour the plant carries in APRIL,
+//                           which is Augusta's frame of reference — not the colour
+//                           it is best known for. 15 Firethorn (pyracantha) and 17
+//                           Nandina were authored from their BERRIES, which are an
+//                           autumn/winter feature; both actually flower WHITE in
+//                           spring. Orange and red canopies over green turf read
+//                           as October, because that is what they are.
+//                         • FORM. Pink survives a canopy tint because nothing in
+//                           nature is a pink tree in autumn. Yellow, orange and red
+//                           ARE the autumn palette, so a full tree-sized crown in
+//                           one of them has no signal left that says spring, at any
+//                           saturation. A warm-hued bloom therefore belongs on a
+//                           plant that is not a canopy tree: 12 Golden Bell is
+//                           forsythia, a 2–3 m arching SHRUB that flowers on bare
+//                           wands, so its form is 'understory' — a low drift at the
+//                           foot of the tree line, UNDER a crown that stays green.
+//                           Green canopy above a warm mass below is a silhouette
+//                           autumn cannot produce.
+//
 //                       Which trees flower is a SEEDED roll off each tree's own
 //                       seed mixed with terrain.seed (bloomRoll below) — never
 //                       Math.random, so the same trees flower on every load and
@@ -172,15 +197,37 @@ export interface GreenDef {
   undulation: number;
 }
 
+/**
+ * WHERE a hole's blossom sits in the tree line. See "SEASON AND FORM" in the
+ * contract header — this is the lever that keeps a warm-hued bloom out of the
+ * autumn palette.
+ *
+ * - `canopy` (default) — the historical behaviour: the crowns of the flowering
+ *   broadleaves are tinted toward the blossom colour and gain flower clusters.
+ *   Correct for a flowering TREE (dogwood, redbud, azalea planted as understory
+ *   but read at crown height here, crab apple, peach, magnolia…).
+ * - `understory` — the crowns stay GREEN and the blossom is a low drift of
+ *   flowering shrub at the foot of the tree. Correct for a plant that is a shrub
+ *   (forsythia, pyracantha, nandina all top out at 2–3 m), and the only form in
+ *   which yellow/orange/red can read as spring: a green canopy standing over a
+ *   warm mass is a silhouette autumn cannot make, because in autumn the canopy
+ *   turns first.
+ */
+export type BloomForm = 'canopy' | 'understory';
+
 // A flowering canopy for a hole — RENDER-ONLY (see the contract header). The
 // hole is named after a plant; this is where that plant's colour is AUTHORED, so
 // the renderer never has to parse the display name to know a hole flowers.
 export interface HoleBloom {
-  // Blossom colour (hex). The crown of a flowering tree is tinted toward it.
+  // Blossom colour (hex) — the colour this plant carries in APRIL. Not its
+  // berry, not its autumn leaf: see "SEASON AND FORM" in the contract header.
   color: number;
   // Share (0..1) of this hole's BROADLEAF trees that flower. Not 1: a uniformly
   // pink grove reads as paint, where a fraction reads as accent trees.
   fraction: number;
+  // Optional; defaults to 'canopy'. Omitted rather than set, so the holes that
+  // shipped before this existed are unchanged down to the JSON.
+  form?: BloomForm;
 }
 
 // A hole as data. The fairway is a CENTERLINE polyline with a half-width, so a

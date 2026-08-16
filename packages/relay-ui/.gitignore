@@ -15,6 +15,15 @@ assets
 # added ahead of the harness so the first run cannot accidentally commit PNGs.
 .baseball-shots/
 
+# ...and any SIDECAR set. A visual comparison needs at least two directories —
+# a before and an after — so reviewing a change reliably produces siblings like
+# `.golf-shots-before/`, `-afterA/`, `-2048/`. The exact-name rules above do not
+# catch those, and one such directory turned up as 29 MB of untracked PNGs that
+# a commit-everything would happily have swallowed. Screenshots are evidence for
+# a review, never repository content.
+.golf-shots-*/
+.baseball-shots-*/
+
 # Agent scratch benches. Physics work needs throwaway harnesses (coefficient
 # sweeps, mutation drivers, parameterised integrator clones) and they must live
 # OUTSIDE src/: a review once left one under src/lib/baseball/ that broke
