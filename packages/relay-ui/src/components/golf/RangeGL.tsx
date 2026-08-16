@@ -526,9 +526,9 @@ export default function RangeGL({
     const ballGeo = track(new THREE.SphereGeometry(BALL_R, 32, 24));
     const dimpleTex = track(makeDimpleNormalMap());
     const ballMat = track(makeBallMaterial(dimpleTex, cosmeticsRef.current?.ball));
-    // Only the ball reflects the sky PMREM (metallic skins shine; default white
-    // ball barely samples it). Scoped to the ball material so nothing else pays
-    // the per-frame env cost.
+    // The ball keeps its OWN envMap even when scene.environment is set — three
+    // prefers the material's, and with it the material's envMapIntensity, which
+    // is why attachSkyEnv hands back the matching value (scene/env.ts).
     ballMat.envMap = ballEnvMap;
     ballMat.envMapIntensity = ballEnvIntensity;
     const ball = new THREE.Mesh(ballGeo, ballMat);

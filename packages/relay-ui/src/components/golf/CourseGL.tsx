@@ -1813,9 +1813,9 @@ export default function CourseGL({ sim, onArm, paused, cosmetics, onStats }: Pro
     // Dimpled ball material shared with the range (ballTexture.ts) — a dimple
     // normal map so the sun catches the surface, instead of a plain smooth sphere.
     const ballMat = track(makeBallMaterial(track(makeDimpleNormalMap()), cosmeticsRef.current?.ball));
-    // Only the ball reflects the sky PMREM (metallic skins shine; default white
-    // ball barely samples it). Scoped to the ball material so nothing else pays
-    // the per-frame env cost.
+    // The ball keeps its OWN envMap even when scene.environment is set — three
+    // prefers the material's, and with it the material's envMapIntensity, which
+    // is why attachSkyEnv hands back the matching value (scene/env.ts).
     ballMat.envMap = ballEnvMap;
     ballMat.envMapIntensity = ballEnvIntensity;
     const ball = new THREE.Mesh(ballGeo, ballMat);
