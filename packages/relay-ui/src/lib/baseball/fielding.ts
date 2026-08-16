@@ -178,14 +178,30 @@ export const XB_DEPTH_PER_FT = 0.3;
  * thirteen named ladder rows flip, and BOTH flip on the datum, NEITHER on the
  * boundary.
  *
- * There is no mechanism behind those 19,606. `XB_DEPTH_PER_FT` prices the throw
- * back, and the throw goes to a BASE — which does not move when the grass line
- * curves. An arc datum hands a ball down the line 8.4 ft of extra index (12 % of
- * `XB_DOUBLE_FT`) purely for being near the foul pole, and this model already
- * prices that honestly and explicitly twice over: through `missFt`, which knows
- * the LF stands at 290 ft / −29° and so is 80 ft from a 320 ft ball down the
- * line against the CF's 15 ft from a 320 ft ball to centre, and through
- * `CORNER_DEG`. A third, implicit bearing term is double-counting.
+ * There is no mechanism behind those 19,606 — and the reason is NOT that the
+ * bearing effect is imaginary. It is that the infield arc is the WRONG
+ * FUNCTIONAL FORM for it. This comment used to argue "a base does not move when
+ * the grass line curves", which understates the case: the throw back genuinely
+ * IS longer down the line. Second base sits 127.28 ft out at 0°, so a 320 ft ball
+ * at 45° is **247.0 ft** from it against **192.7 ft** for a 320 ft ball to
+ * centre. That is 54.3 ft of extra throw, ~16.3 ft of index at
+ * `XB_DEPTH_PER_FT`. The arc datum hands the same ball **8.4 ft** — half the
+ * magnitude, arrived at from the curvature of a grass line that has nothing to do
+ * with where anybody throws. Right sign, wrong size, wrong cause: a coincidental
+ * proxy, not a mechanism. Wiring one in would mean re-fitting `XB_DOUBLE_FT` /
+ * `XB_TRIPLE_FT` against a law of cosines to the BASES, which is a different
+ * change from the one-line `infieldDepthFt(inp.bearingDeg)` that started this.
+ *
+ * ⚠ AND ONE CORRECTION TO WHAT THIS COMMENT USED TO CLAIM. It said the bearing
+ * effect was "already priced honestly and explicitly twice over: through `missFt`
+ * … and through `CORNER_DEG`". Half of that is false. `CORNER_DEG` appears in
+ * exactly one non-test place — the `outcome === 'offWall'` branch of
+ * `fieldBattedBall` — which RETURNS before `xb` is ever computed, so it never
+ * executes on this path and prices nothing here. The `missFt` half is real and
+ * stands: the LF is 80.1 ft from the ladder's 320 ft / −43° ball down the line
+ * while the CF is 15.0 ft from its 330 ft ball to centre, both printed by
+ * `fielding.test.ts`. So ONE honest bearing term, not two — which is still the
+ * reason a third, implicit one is unwelcome, and now the count is right.
  *
  * ⚠ AND THE HONEST PART: keeping it flat is ALSO what keeps the ladder still,
  * and a reviewer is entitled to read that as the reason rather than the

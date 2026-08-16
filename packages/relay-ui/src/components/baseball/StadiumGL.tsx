@@ -148,6 +148,17 @@ export interface StadiumGLProps {
   exposure?: number;
   /** `?quality=` override, plumbed from the URL — see `stadium/quality.ts`. */
   qualityOverride?: string | null;
+  /**
+   * Build the magenta 6 ft scale reference (`stadium/scale.ts`).
+   *
+   * ⚠ DEFAULT OFF, AND THE DEFAULT IS THE POINT. It is a measuring stick for the
+   * visual gate, not set dressing, and it was previously built unconditionally
+   * with a comment promising to delete it "the milestone a real batter model
+   * lands". Nothing imports this component yet, so that promise costs nothing
+   * today and becomes a magenta slab in a shipped HUD the moment one does. The
+   * preview harness — the only caller that wants it — asks for it explicitly.
+   */
+  scaleReference?: boolean;
   /** Fired once, after a real frame has been rendered. */
   onReady?: (api: StadiumApi) => void;
 }
@@ -157,6 +168,7 @@ export default function StadiumGL({
   mode = 'wide',
   exposure = 1,
   qualityOverride = null,
+  scaleReference = false,
   onReady,
 }: StadiumGLProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -170,10 +182,20 @@ export default function StadiumGL({
     const host = hostRef.current;
     if (!host) return;
 
-    // --- disposal ledger. EVERY geometry, material and texture goes through
-    // `track`; the unmount path below walks it. A leaked BufferGeometry is
-    // invisible until the fifth remount, which is exactly why this is a ledger
-    // and not a hand-written list of dispose calls at the bottom.
+    // --- disposal ledger. EVERY geometry, material and texture BUILT BY A
+    // `stadium/*` BUILDER goes through `track`; the unmount path below walks it.
+    // A leaked BufferGeometry is invisible until the fifth remount, which is
+    // exactly why this is a ledger and not a hand-written list of dispose calls
+    // at the bottom.
+    //
+    // ⚠ THE SCOPE CLAUSE ABOVE IS NOT PEDANTRY. This comment used to claim
+    // "EVERY geometry, material and texture", full stop, and it was not true: the
+    // sun's shadow map is a render target this file allocates directly, three's
+    // `WebGLRenderer.dispose()` does not walk lights, and it is not in `owned`.
+    // `forceContextLoss()` below makes that harmless for GPU memory, so it was a
+    // COMMENT bug rather than a leak — but a ledger whose stated invariant is
+    // false is a ledger the next remount bug hides behind. The unmount path now
+    // disposes it explicitly and the claim is true as scoped.
     const owned: Disposable[] = [];
     const track: Track = (r) => {
       owned.push(r);
@@ -249,7 +271,7 @@ export default function StadiumGL({
     buildMound(ctx);
     const stands = buildStands(ctx);
     buildRoof(ctx, stands);
-    buildScaleReference(ctx);
+    if (scaleReference) buildScaleReference(ctx);
 
     // Shadow volume sized from the geometry that was actually built.
     const half = Math.max(field.apronRadiusFt, stands.outerRadiusFt(0)) + SHADOW_MARGIN_FT;
@@ -329,13 +351,16 @@ export default function StadiumGL({
       scene.clear();
       for (const r of owned) r.dispose();
       owned.length = 0;
+      // The one GPU resource this file allocates itself rather than through a
+      // builder, and so the one that is not in the ledger. See the note above it.
+      sun.shadow.dispose();
       renderer.dispose();
       // ⚠ WebGL contexts are a scarce browser resource (~16 live). Golf learned
       // this remounting a scene per hole; drop it explicitly, do not wait for GC.
       renderer.forceContextLoss();
       if (renderer.domElement.parentNode === host) host.removeChild(renderer.domElement);
     };
-  }, [park, qualityOverride]);
+  }, [park, qualityOverride, scaleReference]);
 
   useEffect(() => {
     apiRef.current?.setMode(mode);

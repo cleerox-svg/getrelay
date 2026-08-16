@@ -83,6 +83,10 @@ function Preview() {
       mode={mode}
       exposure={exposure}
       qualityOverride={params.get('quality')}
+      // The magenta 6 ft measuring stick. OFF by default in the component so it
+      // can never reach a HUD; ON here, because this preview IS the visual gate
+      // and the scale check is one of the things it exists to photograph.
+      scaleReference
       onReady={onReady}
     />
   );

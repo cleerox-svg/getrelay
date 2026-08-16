@@ -10,7 +10,16 @@
 // the other place in this game that crosses the SI boundary, and there is one
 // international foot in this repo, not two.
 //
-// ⚠ IT IS BUILT IN EVERY CAMERA MODE, AND IT IS ONLY LEGIBLE IN TWO. This file
+// ⚠ IT IS OPT-IN, AND ONLY THE PREVIEW OPTS IN. `StadiumGL`'s `scaleReference`
+// prop defaults to FALSE and `baseballpreview.tsx` passes it true. This file used
+// to be called unconditionally, on the strength of a comment promising to delete
+// it "the milestone a real batter model lands" — which costs nothing while
+// nothing imports `StadiumGL`, and ships a magenta slab in the batter's box the
+// first day a HUD mounts the scene. A prop now is cheaper than a bug report at
+// M2, and the delete-on-supersede note below still stands.
+//
+// ⚠ IT IS BUILT IN EVERY CAMERA MODE IT IS ENABLED FOR, AND IT IS ONLY LEGIBLE
+// IN TWO OF THEM. This file
 // used to claim the first half and imply the second, on the reasoning that "a
 // reference present in some shots and not others is a reference somebody will
 // forget to check". The M1 visual gate measured it and the reasoning does not
