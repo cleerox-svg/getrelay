@@ -136,8 +136,14 @@ export interface FlightHandle extends StadiumPart {
   sizeFor(camera: PerspectiveCamera, viewportHeightPx: number): void;
   /** The drawn ball's scene position, or null when it is not in flight. */
   ballScene(): [number, number, number] | null;
+  /** Is the ball mesh actually being rendered? */
+  ballVisible(): boolean;
+  /** The ball's DRAWN radius, scene ft. `BALL_RADIUS_FT` unless the floor bit. */
+  ballScale(): number;
   /** The tracer vertices AS DRAWN — the visual gate reads this. */
   tracer(which: 'pitch' | 'batted'): number[];
+  /** Is that tracer actually being rendered? */
+  tracerVisible(which: 'pitch' | 'batted'): boolean;
   /** Total length of the play, true physical seconds. */
   durationS(): number;
 }
@@ -320,8 +326,18 @@ export function buildFlight(ctx: StadiumCtx, opts: FlightOptions): FlightHandle 
     setPaths,
     setTime,
     sizeFor,
-    ballScene: () => (ballPos ? [ballPos[0], ballPos[1], ballPos[2]] : null),
+    // ⚠ READ THE MESH, NOT THE CLOSURE. This used to return `ballPos` — the
+    // variable `setTime` had just computed — which made it a TAUTOLOGY: delete
+    // the `ball.position.set(...)` above and it still answered correctly, so the
+    // gate could not tell a drawn ball from an undrawn one. `tracer.ts` is
+    // explicit that a read-back must come out of the object the GPU consumes,
+    // and this is the same rule applied to the ball. `null` still means "not in
+    // flight", which is a state of the SETTER, so that part stays with `ballPos`.
+    ballScene: () => (ballPos ? (ball.position.toArray() as [number, number, number]) : null),
+    ballVisible: () => ball.visible && group.visible,
+    ballScale: () => ball.scale.x,
     tracer: (which) => tracers[which].read(),
+    tracerVisible: (which) => tracers[which].visible(),
     durationS: () => {
       const pitchEnd = paths.pitch?.t[paths.pitch.t.length - 1] ?? 0;
       const battedEnd = paths.batted?.t[paths.batted.t.length - 1] ?? 0;

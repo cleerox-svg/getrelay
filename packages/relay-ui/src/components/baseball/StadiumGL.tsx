@@ -167,8 +167,14 @@ export interface StadiumApi {
   setBallTime(tS: number | null): void;
   /** The DRAWN tracer's vertices, scene ft — the visual gate's read-back seam. */
   tracer(which: 'pitch' | 'batted'): number[];
+  /** Is that tracer being rendered? Vertices nobody draws prove nothing. */
+  tracerVisible(which: 'pitch' | 'batted'): boolean;
   /** The drawn ball's scene position, or null when it is not in flight. */
   ballScene(): [number, number, number] | null;
+  /** Is the ball mesh being rendered? */
+  ballVisible(): boolean;
+  /** The ball's DRAWN radius, scene ft — `MIN_BALL_PX`'s claim, measurable. */
+  ballScale(): number;
 }
 
 export interface StadiumGLProps {
@@ -439,14 +445,28 @@ export default function StadiumGL({
       setExposure: (e) => {
         renderer.toneMappingExposure = e;
       },
-      setFlight: (paths) =>
-        ballFlight.setPaths(paths ?? { pitch: null, batted: null, contactTS: 0 }),
+      // ⚠ A NEW FLIGHT RESTARTS THE PLAYBACK CLOCK, and that is a bug fix, not
+      // symmetry for its own sake. `playStartMs` is latched on the first live
+      // frame after it is zeroed; `setBallTime` zeroed it and this did not, and
+      // the two are INDEPENDENT effects below. So a HUD serving pitch 2 in live
+      // playback (no `?t=`) kept pitch 1's clock and pitch 2 opened at
+      // `played % (dur + REPLAY_GAP_S)` — mid-flight, at whatever fraction the
+      // previous play happened to be at. The screenshot harness cannot see this
+      // because it always freezes, which is precisely why it had to be found by
+      // reading rather than by a red run.
+      setFlight: (paths) => {
+        ballFlight.setPaths(paths ?? { pitch: null, batted: null, contactTS: 0 });
+        playStartMs = 0;
+      },
       setBallTime: (t) => {
         ballTime = t;
         playStartMs = 0;
       },
       tracer: (which) => ballFlight.tracer(which),
+      tracerVisible: (which) => ballFlight.tracerVisible(which),
       ballScene: () => ballFlight.ballScene(),
+      ballVisible: () => ballFlight.ballVisible(),
+      ballScale: () => ballFlight.ballScale(),
     };
     apiRef.current = api;
     raf = requestAnimationFrame(tick);

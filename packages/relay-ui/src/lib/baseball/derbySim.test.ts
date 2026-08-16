@@ -23,6 +23,19 @@
 //      than from `cfg.pitchesPerRound`                   → 1 fail
 //  11. `roundScores` by reference in `getState()`        → 1 fail
 //
+// SEVEN MORE WERE WATCHED TO FAIL when the reticle shoulder and the pull/oppo
+// intent landed. Same discipline, observed counts, not predicted ones:
+//
+//  12. `reticleResidual` reverted to the hard 4 in disc  → 1 fail
+//  13. the pull/oppo intent forced to zero               → 2 fail
+//  14. the overlap test back to `|undercut|` alone,
+//      not the resultant with the intent offset          → 1 fail
+//  15. `last` by reference from `getState()`             → 1 fail
+//  16. divisibility back to `perPitch * perRound`        → 1 fail
+//  17. `resolveDerbyConfig` stops validating             → 1 fail
+//  18. `tuning.MAX_ROUNDS` drifts from the worker's      → 1 fail, in
+//      `tuning.test.ts`, which reads the WORKER's source text
+//
 // ⚠ THREE OF THOSE SURVIVED THE FIRST PASS, and all three were real gaps:
 //   • (7) the dry run in the snapshot test never crossed a ROUND BOUNDARY, so
 //     `roundScores` — the only array the snapshot copies — was never written
@@ -47,16 +60,21 @@ import {
   HR_BASE_POINTS,
   MAX_POINTS_PER_PITCH,
   PITCHES_PER_ROUND,
-  RETICLE_RADIUS_FT,
+  PULL_INTENT_MAX_IN,
+  RETICLE_FADE_POWER,
+  RETICLE_FULL_MISS_IN,
   SERVE_SPREAD,
   SWING_UNDERCUT_IN,
   derbyDraw,
   homeRunPoints,
+  pullIntentOffsetIn,
+  reticleResidual,
   validateDerbyFormat,
   validateDerbyMix,
 } from './derbyRules';
 import { DerbySim } from './derbySim';
-import type { DerbySim as DerbySimType, SwingResult } from './derbySim';
+import type { DerbySim as DerbySimType } from './derbySim';
+import type { SwingResult } from './derbyState';
 import { PITCHES } from './pitches';
 import type { PitchId } from './pitches';
 import { MAX_POINTS_PER_ROUND, MAX_ROUNDS, isBarrel } from './tuning';
@@ -134,6 +152,45 @@ describe('derby — format and the server clamp', () => {
         `${DERBY_ROUNDS * MAX_POINTS_PER_ROUND} against the worker's rounds×2000\n` +
         `        payout = ${HR_BASE_POINTS} + max(0, carry − ${DISTANCE_DATUM_FT}) × 1, HR only`,
     );
+  });
+
+  it('⚠ the format validator BITES, and the config path actually calls it', () => {
+    // ⚠ THE DIVISIBILITY CHECK COULD NOT FIRE. It was written as
+    // `perPitch * perRound !== MAX_POINTS_PER_ROUND`, and (2000/3)*3 is exactly
+    // 2000 in IEEE-754 — so 3, 6, 7 and 9 pitches all PASSED while producing a
+    // fractional per-pitch cap, which the worker (`Number.isInteger`) would then
+    // reject on the wire. Every one of these is now caught.
+    for (const per of [3, 6, 7, 9, 11, 12, 13]) {
+      expect(Number.isInteger(MAX_POINTS_PER_ROUND / per)).toBe(false);
+      expect(validateDerbyFormat(DERBY_ROUNDS, per).length).toBeGreaterThan(0);
+      // …and the arithmetic the old check used really does say they are fine:
+      expect((MAX_POINTS_PER_ROUND / per) * per).toBe(MAX_POINTS_PER_ROUND);
+    }
+    for (const per of [1, 2, 4, 5, 8, 10, 16, 20]) {
+      expect(validateDerbyFormat(DERBY_ROUNDS, per)).toEqual([]);
+    }
+    expect(validateDerbyFormat(0)).not.toEqual([]);
+    expect(validateDerbyFormat(MAX_ROUNDS + 1)).not.toEqual([]);
+    expect(validateDerbyFormat(2.5)).not.toEqual([]);
+
+    // ⚠ AND `resolveDerbyConfig` NOW CALLS IT. It validated nothing, so
+    // `new DerbySim({ rounds: -5 })` was accepted and `getState()` reported
+    // `maxScore = -10000` — because `clamp(started, 1, -5)` returns the HIGH
+    // bound when `lo > hi`. A config is player-adjacent input; it throws.
+    for (const cfg of [
+      { seed: 1, rounds: -5 },
+      { seed: 1, rounds: 0 },
+      { seed: 1, rounds: MAX_ROUNDS + 1 },
+      { seed: 1, pitchesPerRound: 0 },
+      { seed: 1, pitchesPerRound: 3 },
+      { seed: 1, batSpeedMph: 0 },
+      { seed: Number.NaN },
+    ]) {
+      expect(() => new DerbySim(cfg), JSON.stringify(cfg)).toThrow();
+    }
+    // The default and the legitimate overrides still build.
+    expect(() => new DerbySim({ seed: 1 })).not.toThrow();
+    expect(() => new DerbySim({ seed: 1, rounds: 1, pitchesPerRound: 20 })).not.toThrow();
   });
 
   it('⚠ no achievable input can put a round over MAX_POINTS_PER_ROUND', () => {
@@ -252,6 +309,24 @@ describe('derby — determinism', () => {
     // editing sim state.
     sim.getState().roundScores.push(1234);
     expect(sim.getState().roundScores).toEqual([]);
+
+    // ⚠ AND `last` IS A COPY TOO. It was a live reference: `resolveSwing` builds
+    // a fresh literal each call and never mutates it, so it was benign — but it
+    // is a MUTABLE-TYPED field on a public readout handed to a HUD, and
+    // `roundScores` above is the proof that "benign today" is not an argument
+    // (that mutation survived all 19 tests until this line existed). Now nothing
+    // `getState` returns aliases sim state, with no exception to remember.
+    const leaked = sim.getState().last as SwingResult;
+    expect(leaked).not.toBeNull();
+    leaked.evMph = -999;
+    leaked.outcome = 'take';
+    expect(sim.getState().last?.evMph).not.toBe(-999);
+    expect(sim.getState().last).not.toBe(sim.getState().last);
+    expect(sim.getState().last).toEqual(sim.snapshot().last);
+    // …and the snapshot's copy is independent of the live one as well.
+    const snapLeak = sim.snapshot();
+    (snapLeak.last as SwingResult).distFt = -1;
+    expect(sim.getState().last?.distFt).not.toBe(-1);
 
     // ⚠ THE DRY RUN MUST CROSS A ROUND BOUNDARY. It did not at first, and the
     // mutation that copies `roundScores` BY REFERENCE survived all 19 tests: the
@@ -427,7 +502,13 @@ describe('derby — the swing mapping', () => {
     // from.
     const sim = new DerbySim({ seed: 7 });
     const pr = sim.servePitch();
-    sim.setReticle(pr.plate.x, pr.plate.h);
+    // ⚠ THE RETICLE IS CENTRED LATERALLY, NOT PUT ON THE BALL, AND THAT IS THE
+    // POINT OF THE CHANGE. Spray now carries a second term — the declared
+    // pull/oppo intent — which is deliberately NOT a function of Δt, so the
+    // early/late spray mirror is a statement about the TIMING component alone
+    // and has to be asked with intent held at zero. Asking it with an intent
+    // bias would be asserting that the new channel does not exist.
+    sim.setReticle(ZONE_CENTER.x, pr.plate.h);
     const rows: string[] = [];
     for (const ms of [5, 10, 15, 20, 25]) {
       const dt = ms / 1000;
@@ -469,13 +550,26 @@ describe('derby — the swing mapping', () => {
     }
   });
 
-  it('the reticle disc measures its residual from the RIM, and both signs bite', () => {
+  it('⚠ the reticle SHOULDER is continuous — dead centre is STRICTLY best', () => {
+    // ⚠ WHAT THIS REPLACED, AND WHY IT IS THE SAME TEST WITH TEETH. The reticle
+    // was a hard DISC of radius 4 in with `k = 0` identically inside it, so the
+    // three rows at 0.0 / 2.4 / 4.0 in below were BYTE-IDENTICAL — 411.0 ft of
+    // carry each — and barrel rate then fell 100 % → 8.3 % between 4.0 and
+    // 5.4 in. A two-state mechanic dressed as a continuous one. The shoulder
+    // fades instead, and the assertions here are the ones that could not be
+    // written before: STRICT monotonicity in the residual and in the carry.
     const sim = new DerbySim({ seed: 7 });
     const pr = sim.servePitch();
     const rows: string[] = [];
+    const carries: number[] = [];
+    const undercuts: number[] = [];
     for (const dh of [-0.6, -0.5, -0.4, -0.33, -0.2, 0, 0.2, 0.33, 0.4, 0.5, 0.6]) {
       sim.setReticle(pr.plate.x, pr.plate.h - dh); // + dh = aiming BELOW the ball
       const r = sim.predict(pr.plate.t);
+      if (dh >= 0) {
+        carries.push(r.distFt);
+        undercuts.push(r.undercutIn);
+      }
       rows.push(
         `  aim ${f(dh * 12, 6, 1)} in ${dh < 0 ? 'high' : 'low '}  undercut ${f(r.undercutIn, 6)} in  ` +
           `${r.outcome.padEnd(8)} EV ${f(r.evMph)}  LA ${f(r.laDeg)}°  carry ${f(r.distFt, 6, 1)} ft  ` +
@@ -483,23 +577,38 @@ describe('derby — the swing mapping', () => {
       );
     }
     console.log(
-      `\nRETICLE — VERTICAL sweep (disc radius ${(RETICLE_RADIUS_FT * 12).toFixed(1)} in)\n` +
+      `\nRETICLE — VERTICAL sweep (fade: (r/${RETICLE_FULL_MISS_IN} in)^${RETICLE_FADE_POWER})\n` +
         rows.join('\n'),
     );
 
-    // Inside the rim the swing is untouched: same result as a perfect aim.
+    // Dead centre is EXACTLY the reference swing, and it is the only placement
+    // that is: the residual is zero only at zero.
     sim.setReticle(pr.plate.x, pr.plate.h);
     const bull = sim.predict(pr.plate.t);
-    sim.setReticle(pr.plate.x, pr.plate.h - RETICLE_RADIUS_FT * 0.9);
-    expect(sim.predict(pr.plate.t).undercutIn).toBe(bull.undercutIn);
     expect(bull.undercutIn).toBe(SWING_UNDERCUT_IN);
-    // Just outside it, it bites — and it bites CONTINUOUSLY (no cliff).
-    sim.setReticle(pr.plate.x, pr.plate.h - RETICLE_RADIUS_FT * 1.02);
-    const nick = sim.predict(pr.plate.t);
-    expect(nick.undercutIn).toBeGreaterThan(SWING_UNDERCUT_IN);
-    expect(nick.undercutIn - SWING_UNDERCUT_IN).toBeLessThan(0.2);
-    // Far outside, contact fails on the ball/bat overlap — and the two sides are
-    // NOT symmetric, because the swing carries a positive reference undercut.
+    expect(reticleResidual(0)).toBe(0);
+    // Monotone, strictly, from the first inch outward — the property the disc
+    // could not have. `toBeGreaterThan`, not `toBeGreaterThanOrEqual`.
+    for (let i = 1; i < undercuts.length; i++) {
+      expect(undercuts[i]!).toBeGreaterThan(undercuts[i - 1]!);
+      expect(carries[i]!).toBeLessThan(carries[i - 1]!);
+    }
+    // ⚠ STRICTLY POSITIVE AND STRICTLY INCREASING FROM ZERO — right down to a
+    // hundredth of an inch. This is the assertion the old disc could not pass
+    // and no flat-centred law can: `k(r) > 0` for every `r > 0`.
+    let prev = 0;
+    for (let rIn = 0.01; rIn < 8; rIn += 0.01) {
+      const k = reticleResidual(rIn / 12);
+      expect(k).toBeGreaterThan(prev);
+      prev = k;
+    }
+    expect(reticleResidual(0.01 / 12)).toBeGreaterThan(0);
+    // Beyond the fade radius the assist is GONE, not scaled: the WHOLE miss
+    // reaches the swing.
+    for (const rIn of [8, 9, 12, 40]) expect(reticleResidual(rIn / 12)).toBe(1);
+
+    // Contact fails on the ball/bat overlap, and the two sides are NOT
+    // symmetric, because the swing carries a positive reference undercut.
     // Aiming LOW spends that margin, aiming HIGH has to cross it first.
     const boundary = (sign: number) => {
       let last = 0;
@@ -509,18 +618,32 @@ describe('derby — the swing mapping', () => {
       }
       return last;
     };
+    // The prediction, solved from the DERIVED overlap test through the shoulder
+    // rather than through a closed form: the miss that reaches the swing is
+    // `d·reticleResidual(d)`, and the intent this reticle placement declares
+    // spends part of the same 2.70 in budget, so it is in the hypotenuse.
+    const offIn = pullIntentOffsetIn(pr.plate.x, 'R');
+    const vertLimit = Math.sqrt(LOC_DISTANCE_IN ** 2 - offIn ** 2);
+    const solve = (sign: number) => {
+      let last = 0;
+      for (let d = 0; d < 1; d += 0.0005) {
+        const undercut = SWING_UNDERCUT_IN - sign * d * reticleResidual(d) * 12;
+        if (Math.abs(undercut) <= vertLimit) last = d;
+      }
+      return last;
+    };
     const lowSide = boundary(-1); // reticle below the ball ⇒ MORE undercut
     const highSide = boundary(+1);
-    const solve = (limit: number) => RETICLE_RADIUS_FT + limit / 12;
     console.log(
-      `  contact fails beyond ${lowSide.toFixed(4)} ft of aim BELOW the ball ` +
-        `(predicted ${solve(LOC_DISTANCE_IN - SWING_UNDERCUT_IN).toFixed(4)})\n` +
+      `  intent at this placement ${offIn.toFixed(4)} in ⇒ vertical budget ` +
+        `${vertLimit.toFixed(4)} in of ${LOC_DISTANCE_IN.toFixed(4)}\n` +
+        `  contact fails beyond ${lowSide.toFixed(4)} ft of aim BELOW the ball ` +
+        `(predicted ${solve(-1).toFixed(4)})\n` +
         `  contact fails beyond ${highSide.toFixed(4)} ft of aim ABOVE the ball ` +
-        `(predicted ${solve(LOC_DISTANCE_IN + SWING_UNDERCUT_IN).toFixed(4)})`,
+        `(predicted ${solve(+1).toFixed(4)})`,
     );
-    // Both boundaries are the DERIVED overlap test, solved back through the disc.
-    expect(lowSide).toBeCloseTo(solve(LOC_DISTANCE_IN - SWING_UNDERCUT_IN), 3);
-    expect(highSide).toBeCloseTo(solve(LOC_DISTANCE_IN + SWING_UNDERCUT_IN), 3);
+    expect(lowSide).toBeCloseTo(solve(-1), 3);
+    expect(highSide).toBeCloseTo(solve(+1), 3);
     expect(highSide).toBeGreaterThan(lowSide);
   });
 
@@ -532,31 +655,48 @@ describe('derby — the swing mapping', () => {
     expect(good.barrel).toBe(true);
     expect(isBarrel(good.evMph, good.laDeg)).toBe(true);
 
-    // Two inches of aim error past the rim, each way, kills the barrel.
-    for (const dh of [-(RETICLE_RADIUS_FT + 1 / 6), RETICLE_RADIUS_FT + 1 / 6]) {
+    // Six inches of aim error, each way, kills the barrel.
+    for (const dh of [-0.5, 0.5]) {
       sim.setReticle(pr.plate.x, pr.plate.h + dh);
       expect(sim.predict(pr.plate.t - 0.004).barrel).toBe(false);
     }
 
     // Barrel RATE across a grid of aim errors — the skill gradient, printed.
+    //
+    // ⚠ CARRY IS PRINTED BESIDE IT AND IS THE HONEST COLUMN. A barrel is a
+    // PUBLISHED classification with a razor-thin launch-angle window (±5.7° at
+    // this exit velocity), and launch angle moves ~33° per inch of undercut, so
+    // barrel survives only ~0.17 in of residual miss WHEREVER the law puts that
+    // threshold. Barrel rate is therefore always going to look step-ish; it is a
+    // property of the yardstick, not of the reticle. Mean carry is the
+    // continuous quantity, and it is the one that was BYTE-IDENTICAL across the
+    // first three rows under the old disc.
     const rows: string[] = [];
     for (const rad of [0, 0.2, 0.33, 0.45, 0.6]) {
       let barrels = 0;
       let contact = 0;
       let n = 0;
+      let carry = 0;
+      let hit = 0;
       for (let a = 0; a < 12; a++) {
         const th = (a * Math.PI) / 6;
         sim.setReticle(pr.plate.x + rad * Math.cos(th), pr.plate.h + rad * Math.sin(th));
         for (const ms of [-6, -3, 0, 3, 6]) {
           const r = sim.predict(pr.plate.t + ms / 1000);
           n++;
-          if (r.outcome !== 'whiff') contact++;
+          if (r.outcome !== 'whiff') {
+            contact++;
+            carry += r.distFt;
+            hit++;
+          }
           if (r.barrel) barrels++;
         }
       }
       rows.push(
         `  aim error ${f(rad * 12, 5, 1)} in   contact ${f((100 * contact) / n, 5, 1)} %   ` +
-          `barrel ${f((100 * barrels) / n, 5, 1)} %`,
+          `barrel ${f((100 * barrels) / n, 5, 1)} %   mean carry ${
+            hit ? f(carry / hit, 6, 1) : '   —  '
+          } ft`,
       );
     }
     console.log('\nRETICLE — barrel rate against radial aim error (±6 ms of timing)');
@@ -564,24 +704,34 @@ describe('derby — the swing mapping', () => {
   });
 
   it('⚠ a CENTRED reticle can always reach the worst serve the mix produces', () => {
-    // The joint property of SERVE_SPREAD and RETICLE_RADIUS_IN, measured rather
+    // The joint property of SERVE_SPREAD and RETICLE_FULL_MISS_IN, measured rather
     // than asserted — move either knob and this is what tells you.
     const corner = reticleToPlate(SERVE_SPREAD, SERVE_SPREAD);
     const dx = corner.x - ZONE_CENTER.x;
     const dh = corner.h - ZONE_CENTER.h;
     const rad = Math.hypot(dx, dh);
-    const k = (rad - RETICLE_RADIUS_FT) / rad;
+    const k = reticleResidual(rad);
     const worstUndercut = SWING_UNDERCUT_IN + dh * k * 12;
     const margin = LOC_DISTANCE_IN - worstUndercut;
     console.log(
-      `\nCENTRED-RETICLE REACH\n` +
-        `  worst serve  Δx ${dx.toFixed(4)} ft  Δh ${dh.toFixed(4)} ft  |Δ| ${rad.toFixed(4)} ft\n` +
-        `  rim residual k = ${k.toFixed(4)}  ⇒  undercut ${worstUndercut.toFixed(4)} in ` +
+      `\nCENTRED-RETICLE REACH — the property RETICLE_FULL_MISS_IN is CALIBRATED to\n` +
+        `  worst serve  Δx ${dx.toFixed(4)} ft  Δh ${dh.toFixed(4)} ft  |Δ| ${rad.toFixed(4)} ft ` +
+        `(${(rad * 12).toFixed(3)} in)\n` +
+        `  shoulder residual k = ${k.toFixed(4)}  ⇒  undercut ${worstUndercut.toFixed(4)} in ` +
         `vs LOC_DISTANCE_IN ${LOC_DISTANCE_IN.toFixed(4)}\n` +
         `  MARGIN ${margin.toFixed(4)} in   (lateral ${(dx * k * 12).toFixed(4)} in, ` +
-        `bat span ±${((BAT_TIP_M - SWEET_SPOT_M) / 0.3048) * 12} in)`,
+        `bat span ±${((BAT_TIP_M - SWEET_SPOT_M) / 0.3048) * 12} in)\n` +
+        `  ⚠ the superseded 4 in disc gave k = ${((rad - 1 / 3) / rad).toFixed(4)} here, i.e. the ` +
+        `fade is calibrated to preserve this margin, not to tighten it.`,
     );
     expect(margin).toBeGreaterThan(0.2);
+    // …and that is what RETICLE_FULL_MISS_IN is calibrated ON: within 0.01 of
+    // what the superseded disc produced at this exact corner.
+    expect(k).toBeCloseTo((rad - 1 / 3) / rad, 2);
+    // A CENTRED reticle declares no intent, so its whole budget is vertical —
+    // and it is a POSITIVE zero, which `-1 × 0` is not (see pullIntentOffsetIn).
+    expect(pullIntentOffsetIn(ZONE_CENTER.x, 'R')).toBe(0);
+    expect(Object.is(pullIntentOffsetIn(ZONE_CENTER.x, 'R'), -0)).toBe(false);
 
     // And empirically: over 60 seeds, a centred reticle on time never whiffs.
     let whiffs = 0;
@@ -625,10 +775,24 @@ describe('derby — the swing mapping', () => {
     expect(outR.contactZM ?? 0).toBeGreaterThan(SWEET_SPOT_M);
     expect(inR.lateralIn).toBeLessThan(0);
     expect(inR.contactZM ?? 0).toBeLessThan(SWEET_SPOT_M);
-    // The mirror: the same physical situation for a lefty gives the same numbers.
+    // The mirror: the same aim error for a lefty lands in the same place on the
+    // bat, by the same amount. `away = −armSideX` is the only mirror involved.
     expect(outL.lateralIn).toBeCloseTo(outR.lateralIn, 9);
     expect(outL.contactZM ?? 0).toBeCloseTo(outR.contactZM ?? 0, 9);
-    expect(outL.evMph).toBeCloseTo(outR.evMph, 6);
+    // ⚠ EXIT VELOCITY NO LONGER MIRRORS IN THIS PAIR, AND THE REASON IS THE
+    // FINDING. These two sims mirror the BATTER and the aim error but leave the
+    // pitch on the same side of the plate, which stopped being a mirrored
+    // situation the moment the reticle's ABSOLUTE placement became a pull/oppo
+    // intent: an inside pitch to a RHB is an outside pitch to a LHB. Measured
+    // gap 0.75 mph, all of it intent. The mapping's own mirror is exact, and it
+    // is asserted where it lives — on the function that carries it, against a
+    // properly mirrored PITCH LOCATION.
+    for (const x of [-0.8, -0.45, -0.1, 0, 0.1, 0.45, 0.8, 1.4]) {
+      expect(pullIntentOffsetIn(x, 'R')).toBeCloseTo(pullIntentOffsetIn(-x, 'L'), 12);
+    }
+    // …and it is a real channel, not a constant: full intent is the plate edge.
+    expect(pullIntentOffsetIn(-10, 'R')).toBeCloseTo(PULL_INTENT_MAX_IN, 12);
+    expect(pullIntentOffsetIn(10, 'R')).toBeCloseTo(-PULL_INTENT_MAX_IN, 12);
     // Out toward the tip really does cost exit velocity.
     expect(outR.evMph).toBeLessThan(inR.evMph);
   });
@@ -711,42 +875,86 @@ describe('derby — outcomes', () => {
     console.log(rows.join('\n'));
   });
 
-  it('the timing sweep moves the outcome distribution sensibly', () => {
-    const rows: string[] = [];
-    for (let ms = -35; ms <= 35; ms += 5) {
-      const tally = new Map<string, number>();
-      let ev = 0;
-      let dist = 0;
-      let n = 0;
-      let barrels = 0;
-      for (let seed = 300; seed < 340; seed++) {
-        const sim = new DerbySim({ seed });
-        for (const r of playSession(sim, perfect(ms / 1000))) {
-          tally.set(r.outcome, (tally.get(r.outcome) ?? 0) + 1);
-          if (r.outcome !== 'whiff' && r.outcome !== 'take') {
-            ev += r.evMph;
-            dist += r.distFt;
-            n++;
+  it('⚠ the timing sweep has NO home-run trough at perfect timing', () => {
+    // ⚠ THE DEFECT THIS TEST NOW PINS. Before the pull/oppo channel existed,
+    // spray was a function of TIMING ALONE — and timing also set exit velocity,
+    // so the two could not be traded. Perfect timing sprayed at dead centre,
+    // which at Harbourfront is 400 ft plus a 10 ft wall, while a 10–15 ms miss
+    // sprayed into a 375 ft alley. Measured, on exactly this sweep:
+    //
+    //     BEFORE       -15 ms  -10 ms   -5 ms    0 ms   +5 ms  +10 ms  +15 ms
+    //     HR %          100.0   100.0    75.4    54.2    83.9   100.0   100.0
+    //     carry ft      387.0   400.7   406.1   406.7   404.1   398.0   387.5
+    //     barrel %       57.2   100.0   100.0   100.0   100.0    95.2    54.2
+    //
+    // i.e. the row with the best contact by every physical measure had the WORST
+    // outcome, and a HUD would have printed "PERFECT" over it. Now the reticle
+    // carries an intent, so tracking the pitch sprays an inside serve toward the
+    // 375 ft alley and an outside one the other way, and 0 ms is no longer
+    // punished for being centred. The assertion is the SHAPE, not a number: the
+    // perfect row must not be beaten by any mistimed row.
+    const sweep = (label: string, control: typeof perfect) => {
+      const rows: string[] = [];
+      const hrByMs = new Map<number, number>();
+      for (let ms = -35; ms <= 35; ms += 5) {
+        const tally = new Map<string, number>();
+        let ev = 0;
+        let dist = 0;
+        let n = 0;
+        let barrels = 0;
+        for (let seed = 300; seed < 340; seed++) {
+          const sim = new DerbySim({ seed });
+          for (const r of playSession(sim, control(ms / 1000))) {
+            tally.set(r.outcome, (tally.get(r.outcome) ?? 0) + 1);
+            if (r.outcome !== 'whiff' && r.outcome !== 'take') {
+              ev += r.evMph;
+              dist += r.distFt;
+              n++;
+            }
+            if (r.barrel) barrels++;
           }
-          if (r.barrel) barrels++;
         }
+        const tot = [...tally.values()].reduce((a, b) => a + b, 0);
+        const pct = (k: string) => f((100 * (tally.get(k) ?? 0)) / tot, 5, 1);
+        hrByMs.set(ms, (tally.get('homeRun') ?? 0) / tot);
+        rows.push(
+          `  ${String(ms).padStart(4)} ms   HR ${pct('homeRun')} %  out ${pct('inPlay')} %  ` +
+            `foul ${pct('foul')} %  whiff ${pct('whiff')} %   ` +
+            `EV ${n ? f(ev / n) : '   —  '}  carry ${n ? f(dist / n, 6, 1) : '  —  '} ft  ` +
+            `barrel ${f((100 * barrels) / tot, 5, 1)} %`,
+        );
+        if (ms === 0) expect(tally.get('whiff') ?? 0).toBe(0);
+        if (Math.abs(ms) >= 35) expect((tally.get('whiff') ?? 0) / tot).toBe(1);
       }
-      const tot = [...tally.values()].reduce((a, b) => a + b, 0);
-      const pct = (k: string) => f((100 * (tally.get(k) ?? 0)) / tot, 5, 1);
-      rows.push(
-        `  ${String(ms).padStart(4)} ms   HR ${pct('homeRun')} %  out ${pct('inPlay')} %  ` +
-          `foul ${pct('foul')} %  whiff ${pct('whiff')} %   ` +
-          `EV ${n ? f(ev / n) : '   —  '}  carry ${n ? f(dist / n, 6, 1) : '  —  '} ft  ` +
-          `barrel ${f((100 * barrels) / tot, 5, 1)} %`,
-      );
-      if (ms === 0) {
-        expect(tally.get('whiff') ?? 0).toBe(0);
-        expect((tally.get('homeRun') ?? 0) / tot).toBeGreaterThan(0.35);
-      }
-      if (Math.abs(ms) >= 35) expect((tally.get('whiff') ?? 0) / tot).toBe(1);
+      console.log(`\nTIMING SWEEP — ${label}; 40 seeds × 24 swings per row`);
+      console.log(rows.join('\n'));
+      return hrByMs;
+    };
+
+    const tracked = sweep('reticle ON the ball (intent tracks the serve)', perfect);
+    // NO ROW BEATS PERFECT TIMING. This is the whole content of the fix, and it
+    // is asserted as an inequality over the sweep rather than as a threshold on
+    // one cell, so a change that flattens 0 ms by breaking ±10 ms fails too.
+    const best = Math.max(...tracked.values());
+    expect(tracked.get(0)!).toBe(best);
+    for (const [ms, hr] of tracked) {
+      if (ms !== 0) expect(hr).toBeLessThanOrEqual(tracked.get(0)!);
     }
-    console.log('\nTIMING SWEEP — 40 seeds × 24 swings per row, reticle on the ball');
-    console.log(rows.join('\n'));
+
+    // The CONTROL: the same sweep with the intent channel held at zero (reticle
+    // centred laterally, on the ball vertically). Without it the assertion above
+    // could pass for some unrelated reason; with it the trough is visible in the
+    // same run as its absence, which is what makes this evidence.
+    const flat = sweep('intent NEUTRALISED (reticle laterally centred)', (offsetS = 0) => (s, _x, h, t) => {
+      s.setReticle(ZONE_CENTER.x, h);
+      s.swing(t + offsetS);
+    });
+    expect(flat.get(0)!).toBeLessThan(Math.max(...flat.values()));
+    console.log(
+      `\n  perfect-timing HR rate: ${(100 * tracked.get(0)!).toFixed(1)} % with intent, ` +
+        `${(100 * flat.get(0)!).toFixed(1)} % without — and without it, ` +
+        `${(100 * Math.max(...flat.values())).toFixed(1)} % is available to a MISTIMED swing.`,
+    );
   });
 
   it('the session bookkeeping closes', () => {

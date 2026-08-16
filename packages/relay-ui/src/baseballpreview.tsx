@@ -32,6 +32,7 @@ import { createRoot } from 'react-dom/client';
 import StadiumGL, { isCameraMode } from './components/baseball/StadiumGL';
 import type { CameraMode, StadiumApi } from './components/baseball/StadiumGL';
 import type { FlightPaths } from './components/baseball/stadium/flight';
+import { vec3 } from './lib/baseball/airPhysics';
 import { fenceAt, HARBOURFRONT, parkById, parkConditions } from './lib/baseball/parks';
 import { PITCHES } from './lib/baseball/pitches';
 import type { PitchId } from './lib/baseball/pitches';
@@ -86,6 +87,10 @@ interface BaseballHandle {
       hangS: number;
       track: { t: number[]; x: number[]; y: number[]; z: number[] };
     } | null;
+    /** The FROZEN instant, true physical s since release, or null if live. */
+    ballTimeS: number | null;
+    /** True physical s from release to contact — the batted clock's origin. */
+    contactTS: number;
   };
   stadium: {
     mode: CameraMode;
@@ -94,8 +99,11 @@ interface BaseballHandle {
     measureFence(bearingDeg: number): { distFt: number; heightFt: number } | null;
     /** The DRAWN tracer's vertices, flat scene `[x, y, z, …]` ft. */
     tracer(which: 'pitch' | 'batted'): number[];
+    tracerVisible(which: 'pitch' | 'batted'): boolean;
     /** Where the ball is actually drawn, scene ft. */
     ballScene(): [number, number, number] | null;
+    ballVisible(): boolean;
+    ballScale(): number;
   };
 }
 
@@ -142,6 +150,17 @@ const pitch = PITCHES.find((p) => p.id === pitchId) ?? PITCHES[0]!;
  * § "The carry experiment"); −12° of spray puts it in the left-centre gap so it
  * clears a 375 ft alley rather than the 400 ft centre, and so that a mirrored
  * lateral axis would be visible in the shot.
+ *
+ * ⚠ AND IT LAUNCHES FROM THE PLATE-CROSSING POINT, NOT `CONTACT_HEIGHT_FT`.
+ * Measured: the pitch tracer ended at `ZONE_CENTER.h` = 2.50 ft and the batted
+ * tracer began at `launchFromAngles`'s default 3.00 ft, so the two drawn curves
+ * were 0.5000 ft apart at the instant they both describe as the same event.
+ * Neither tracer check could see it — each is internally consistent against its
+ * own sim track — so `checkContactSeam` in the harness now asserts it, and the
+ * gap is 1.28e-16 ft. Nothing in `lib/baseball` was wrong: `launchFromAngles`
+ * has taken the contact point as its 6th argument all along and
+ * `derbySim.resolveSwing` already passes `pr.plate.h`. Only this preview was out
+ * of step.
  */
 const battedEvMph = num('ev', 105);
 const battedLaDeg = num('la', 26.5);
@@ -154,7 +173,14 @@ const result = simulatePitch({ pitch, hand: 'R', target: ZONE_CENTER });
 const conditions = parkConditions(park, true, seed);
 const batted = wantHit
   ? simulateBattedBall(
-      launchFromAngles(battedEvMph, battedLaDeg, battedSprayDeg, battedBackspinRpm),
+      launchFromAngles(
+        battedEvMph,
+        battedLaDeg,
+        battedSprayDeg,
+        battedBackspinRpm,
+        0,
+        vec3(0, 0, result.plate.h),
+      ),
       conditions.air,
       conditions.windFps,
     )
@@ -210,6 +236,8 @@ w.__baseball = {
           track: batted.track,
         }
       : null,
+    ballTimeS: frozenTS,
+    contactTS,
   },
   // Filled in by `onReady`; the beacon below is what says it is safe to read.
   stadium: null as unknown as BaseballHandle['stadium'],
@@ -231,7 +259,10 @@ function Preview() {
       stats: () => api.stats(),
       measureFence: (deg) => api.measureFence(deg),
       tracer: (which) => api.tracer(which),
+      tracerVisible: (which) => api.tracerVisible(which),
       ballScene: () => api.ballScene(),
+      ballVisible: () => api.ballVisible(),
+      ballScale: () => api.ballScale(),
     };
     w.__baseballReady = true;
   }, []);

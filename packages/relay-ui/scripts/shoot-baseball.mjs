@@ -124,18 +124,43 @@ const FENCE_TOL_FT = 0.05;
  * exact bug class the gate exists for, and it went unchecked through M1 because
  * there was no ball to draw.
  *
- * Two independent comparisons, because they fail on different mistakes:
+ * Three independent comparisons, because they fail on different mistakes:
  *
- *   (1) POSITION — for every DRAWN vertex, the sim's own track is interpolated
- *       to that vertex's distance-from-the-plate and the two are differenced.
- *       Catches an offset, a scale error, a mirrored axis, a wrong frame
- *       conversion, a truncated buffer.
+ *   (1) POSITION, DRAWN → SIM — for every DRAWN vertex, the sim's own track is
+ *       interpolated to that vertex's distance-from-the-plate and the two are
+ *       differenced. Catches an offset, a scale error, a mirrored axis, a wrong
+ *       frame conversion.
+ *   (1r) POSITION, SIM → DRAWN — the REVERSE direction, and it is not optional.
+ *       (1) alone is a ONE-DIRECTIONAL Hausdorff distance: it asks only "is
+ *       every drawn vertex on the sim path", never "is every sim sample near
+ *       the drawn line". A tracer that keeps a handful of the sim's own
+ *       vertices and drops the rest passes (1) EXACTLY — every vertex it kept
+ *       is on the path — while drawing a chord straight through the break.
+ *       Measured, on a deliberately adversarial tracer that kept the samples at
+ *       d ≥ 49 ft plus the plate point (ff: 51 verts → 6):
+ *
+ *           check                       worst |Δx|   deflection drawn vs sim
+ *           (1) drawn → sim             0.00e+0      identical to 6 decimals
+ *           (1r) sim → drawn            2.45e-1 ft   —
+ *
+ *       i.e. the forward direction reported EXACTLY ZERO error on a tracer
+ *       hiding 1.58 in of horizontal and 2.94 in of vertical break (14.23 in on
+ *       `cu`), and the reverse direction catches it at 122× tolerance on `ff`,
+ *       593× on `cu`. The reverse direction is also what actually catches a
+ *       TRUNCATED buffer, which the header above claimed for (1) and which (1)
+ *       does not catch: dropping the tail leaves every surviving vertex correct.
  *   (2) DEFLECTION — the departure of the path from the straight line tangent to
  *       it at `segmentFt`, evaluated at the plate, computed by the SAME function
  *       on the drawn polyline and on the sim's dense track. Catches the case
  *       position cannot: a curve that agrees at its ends and bends differently
  *       in between. A constant offset cancels out of a deflection, which is
  *       precisely why (1) is not redundant.
+ *
+ *       ⚠ AND DEFLECTION CANNOT SUBSTITUTE FOR (1r). It reads only the pair of
+ *       vertices straddling `segFt` and the final vertex, so a chord that keeps
+ *       dense samples astride 50 ft (exact tangent) and the true plate point
+ *       (exact endpoint) reproduces it to 1e-5 in while drawing nothing in
+ *       between. That is measured above, not argued.
  *
  * ⚠ THE HARNESS CONVERTS FRAMES ITSELF, from `zone.ts`'s REPORT definition and
  * `stadium/geom.ts`'s scene frame, and deliberately does NOT call the
@@ -203,6 +228,14 @@ const BATTED_TOL_FT = 0.01;
  */
 const MAX_DRAW_CALLS = 40;
 const MAX_TRIANGLES = 120000;
+
+/**
+ * The ball's radius, ft. DERIVED HERE from the published 9.125 in circumference
+ * — `r = C/2π` — and deliberately NOT imported from `airPhysics.ts`, for the
+ * same reason the frame conversions above are written out: a gate that reuses
+ * the value under test cannot fail on it.
+ */
+const BALL_RADIUS_FT = 9.125 / (2 * Math.PI) / 12;
 
 const requested = process.argv.slice(2);
 const ids = requested.length ? requested : Object.keys(SCENES);
@@ -399,7 +432,137 @@ function checkReport(report) {
 
   violations.push(...checkPitchTracer(report));
   violations.push(...checkBattedTracer(report));
+  violations.push(...checkBall(report));
+  violations.push(...checkContactSeam(report));
   return violations;
+}
+
+/** Linear interpolation of a t-ordered sample list. Clamped, like `sampleTrack`. */
+function atTime(times, comps, t) {
+  const n = times.length;
+  if (n === 0) return null;
+  const at = (i) => comps.map((c) => c[i]);
+  if (t <= times[0]) return at(0);
+  if (t >= times[n - 1]) return at(n - 1);
+  let i = 1;
+  while (i < n - 1 && times[i] < t) i++;
+  const t0 = times[i - 1];
+  const t1 = times[i];
+  const f = t1 > t0 ? (t - t0) / (t1 - t0) : 0;
+  const a = at(i - 1);
+  const b = at(i);
+  return a.map((v, k) => v + (b[k] - v) * f);
+}
+
+/**
+ * THE BALL ITSELF — position, visibility and scale.
+ *
+ * ⚠ THIS CHECK EXISTS BECAUSE `ballScene()` USED TO BE A TAUTOLOGY. It returned
+ * the closure variable the setter had just computed, not `ball.position`, so
+ * deleting `ball.position.set(...)` altogether left it returning the right
+ * answer — the exact opposite of what `tracer.ts` deliberately does. It now
+ * reads back out of the Object3D, and this is the check that makes that worth
+ * anything: the harness re-derives the expected point from the sim's own track
+ * by its own linear interpolation (which is what `sampleTrack` does — see
+ * `pitchSim.ts`) and its own frame conversion.
+ *
+ * ⚠ AND `visible` IS ASSERTED, because a scene that never turns the ball on
+ * reports a perfectly correct position and photographs an empty sky.
+ *
+ * ⚠ AND `scale`, because it was unmeasured and it is a DESIGN CLAIM:
+ * `MIN_BALL_PX`'s note argues at length that there is no constant inflation
+ * factor and that in `batter` / `pitcher` — where the true-size ball is already
+ * 13 px and 7 px, and where the magenta scale reference exists to police it —
+ * the drawn ball is the REAL SIZE. Unmeasured, a flat 3× would pass every other
+ * number in this run. In those two modes the scale must therefore be EXACTLY
+ * `BALL_RADIUS_FT`; elsewhere the screen-space floor may legitimately engage, so
+ * only the floor's direction is asserted.
+ */
+function checkBall(report) {
+  const violations = [];
+  const t = report.ballTimeS;
+  if (t === null || t === undefined) {
+    // Every scene in SCENES carries `t=` or `bt=`; see the determinism note.
+    console.error('    ✗ scene has no frozen ball time — the shot is not deterministic');
+    return ['ball time not frozen'];
+  }
+  const b = report.batted;
+  const expected =
+    b && t >= report.contactTS
+      ? (() => {
+          const w = atTime(b.track.t, [b.track.x, b.track.y, b.track.z], t - report.contactTS);
+          return w && [w[1], w[2], w[0]]; // world (x,y,z) → scene (y, z, x)
+        })()
+      : (() => {
+          const r = atTime(report.pitch.track.t, [report.pitch.track.d, report.pitch.track.x, report.pitch.track.h], t);
+          return r && [r[1], r[2], -r[0]]; // report (d,x,h) → scene (x, h, −d)
+        })();
+  const got = report.ballScene;
+  if (!expected) return ['ball reference unmeasurable'];
+  if (!got) {
+    console.error('    ✗ the ball is not drawn at all');
+    return ['ball not drawn'];
+  }
+  const worst = Math.max(...got.map((v, i) => Math.abs(v - expected[i])));
+  console.log(
+    `  BALL  t ${t.toFixed(3)} s  drawn (${got.map((v) => v.toFixed(4)).join(', ')})` +
+      `  expected (${expected.map((v) => v.toFixed(4)).join(', ')})  worst |Δ| ${worst.toExponential(2)} ft` +
+      `  (tol ${TRACER_TOL_FT} ft)`,
+  );
+  console.log(
+    `        visible ${report.ballVisible}  scale ${report.ballScale.toFixed(6)} ft` +
+      ` (true radius ${BALL_RADIUS_FT.toFixed(6)} ft, ×${(report.ballScale / BALL_RADIUS_FT).toFixed(2)})`,
+  );
+  if (worst > TRACER_TOL_FT) {
+    violations.push(`the DRAWN ball is ${worst.toFixed(4)} ft off the sim's own sample`);
+  }
+  if (!report.ballVisible) violations.push('the ball is positioned but not visible');
+  if (report.mode === 'batter' || report.mode === 'pitcher') {
+    if (report.ballScale !== BALL_RADIUS_FT) {
+      violations.push(
+        `${report.mode} draws the ball at ${report.ballScale.toFixed(6)} ft, not the true ` +
+          `${BALL_RADIUS_FT.toFixed(6)} ft — MIN_BALL_PX must not engage here`,
+      );
+    }
+  } else if (report.ballScale < BALL_RADIUS_FT) {
+    violations.push(`the ball is drawn SMALLER than life (${report.ballScale.toFixed(6)} ft)`);
+  }
+  for (const which of ['pitch', 'batted']) {
+    const drawnLen = (which === 'pitch' ? report.pitchTracer : report.battedTracer).length;
+    if (drawnLen > 0 && !report.tracerVisible[which]) {
+      violations.push(`the ${which} tracer has ${drawnLen / 3} vertices and is not visible`);
+    }
+  }
+  return violations;
+}
+
+/**
+ * THE CONTACT SEAM — the one thing neither tracer check can see.
+ *
+ * Each tracer is checked against its own sim track, so each can be internally
+ * perfect while the two do not meet: the pitch ends at the plate-crossing height
+ * and the batted ball starts wherever its launch put it. That gap was MEASURED
+ * at 0.5000 ft — the preview launched from `CONTACT_HEIGHT_FT` (3.0) while the
+ * pitch arrived at `ZONE_CENTER.h` (2.50) — and it is invisible to every other
+ * number in this file. `derbySim.resolveSwing` already contacts at `pr.plate.h`,
+ * so the sim was never wrong; only the preview was.
+ */
+function checkContactSeam(report) {
+  const p = report.pitchTracer;
+  const b = report.battedTracer;
+  if (p.length < 3 || b.length < 3) return [];
+  const gap = Math.max(
+    Math.abs(p[p.length - 3] - b[0]),
+    Math.abs(p[p.length - 2] - b[1]),
+    Math.abs(p[p.length - 1] - b[2]),
+  );
+  console.log(
+    `  SEAM  last pitch vertex → first batted vertex: worst |Δ| ${gap.toExponential(2)} ft` +
+      `  (tol ${TRACER_TOL_FT} ft)`,
+  );
+  return gap > TRACER_TOL_FT
+    ? [`the batted ball starts ${gap.toFixed(4)} ft from where the pitch ended`]
+    : [];
 }
 
 function checkPitchTracer(report) {
@@ -427,16 +590,37 @@ function checkPitchTracer(report) {
     worstX = Math.max(worstX, Math.abs(v.x - ref.x));
     worstH = Math.max(worstH, Math.abs(v.h - ref.h));
   }
+  // (1r) THE REVERSE DIRECTION — every SIM sample against the drawn POLYLINE,
+  // interpolated. Six lines, and without them the whole gate is defeated by a
+  // chord. See the note above TRACER_TOL_FT.
+  let backX = 0;
+  let backH = 0;
+  for (const s of sim) {
+    const ref = atDistance(drawn, s.d);
+    if (!ref) continue;
+    backX = Math.max(backX, Math.abs(s.x - ref.x));
+    backH = Math.max(backH, Math.abs(s.h - ref.h));
+  }
   console.log(
     `    tracer ${String(drawn.length).padStart(4)} verts vs sim ${String(sim.length).padStart(4)}` +
       ` samples — worst |Δx| ${worstX.toExponential(2)} ft, |Δh| ${worstH.toExponential(2)} ft` +
       `  (tol ${TRACER_TOL_FT} ft)`,
+  );
+  console.log(
+    `    REVERSE (every sim sample to the drawn line) — worst |Δx| ${backX.toExponential(2)} ft,` +
+      ` |Δh| ${backH.toExponential(2)} ft  (tol ${TRACER_TOL_FT} ft)`,
   );
   if (worstX > TRACER_TOL_FT) {
     violations.push(`drawn pitch tracer off laterally by ${worstX.toFixed(4)} ft`);
   }
   if (worstH > TRACER_TOL_FT) {
     violations.push(`drawn pitch tracer off vertically by ${worstH.toFixed(4)} ft`);
+  }
+  if (backX > TRACER_TOL_FT) {
+    violations.push(`pitch tracer SKIPS the sim laterally by ${backX.toFixed(4)} ft (chord?)`);
+  }
+  if (backH > TRACER_TOL_FT) {
+    violations.push(`pitch tracer SKIPS the sim vertically by ${backH.toFixed(4)} ft (chord?)`);
   }
 
   // (2) DEFLECTION — the same functional on the drawn polyline and on the sim's.
@@ -468,8 +652,23 @@ function checkPitchTracer(report) {
   }
   // The SIGN check against the physics. A mirrored lateral axis — the exact bug
   // BASEBALL.md's frame note records having shipped once as a mislabel — leaves
-  // every magnitude above intact and flips this. Convention-free, so no tolerance.
-  if (Math.sign(dDrawn.xIn) !== Math.sign(p.breakGameIn.hbIn)) {
+  // every magnitude above intact and flips this. Convention-free.
+  //
+  // ⚠ IT NEEDS AN EPSILON, AND `Math.sign` IS WHY. `Math.sign(0) === 0`, so a row
+  // whose horizontal break is exactly zero — a true 12:00/6:00 spin axis — makes
+  // `0 !== ±1` fire UNCONDITIONALLY, reporting a mirrored axis on the one pitch
+  // that has no axis to mirror. No published row reaches it today (the nearest is
+  // a synthetic 6:00 curve at +0.847 in) but the margin is under an inch, and a
+  // gate that fails on correct data is worth exactly as little as one that passes
+  // on wrong data. Below DEFLECT_TOL_IN the drawn deflection's own sign is not
+  // resolvable anyway — that is the tolerance this file already derived for it —
+  // so that is the threshold, and skipping is stated rather than silent.
+  if (Math.abs(p.breakGameIn.hbIn) < DEFLECT_TOL_IN || Math.abs(dDrawn.xIn) < DEFLECT_TOL_IN) {
+    console.log(
+      `    sign check SKIPPED — |HB| ${Math.abs(p.breakGameIn.hbIn).toFixed(4)} in or |drawn|` +
+        ` ${Math.abs(dDrawn.xIn).toFixed(4)} in is under DEFLECT_TOL_IN ${DEFLECT_TOL_IN}`,
+    );
+  } else if (Math.sign(dDrawn.xIn) !== Math.sign(p.breakGameIn.hbIn)) {
     violations.push(
       `drawn horizontal bend (${dDrawn.xIn.toFixed(2)} in) opposes measureBreak's HB ` +
         `(${p.breakGameIn.hbIn.toFixed(2)} in) — mirrored lateral axis?`,
@@ -498,12 +697,21 @@ function checkBattedTracer(report) {
     if (!ref) continue;
     worst = Math.max(worst, Math.abs(v.x - ref.x), Math.abs(v.y - ref.y), Math.abs(v.z - ref.z));
   }
+  // The REVERSE direction, for exactly the reason the pitch tracer needs it: a
+  // chord through the apex passes the forward check with zero error.
+  let back = 0;
+  for (const s of sim) {
+    const ref = atRadius(drawn, radiusOf(s));
+    if (!ref) continue;
+    back = Math.max(back, Math.abs(s.x - ref.x), Math.abs(s.y - ref.y), Math.abs(s.z - ref.z));
+  }
   const drawnApex = drawn.reduce((m, v) => Math.max(m, v.z), 0);
   const end = drawn[drawn.length - 1];
   const drawnCarry = Math.hypot(end.x, end.y);
   console.log(
     `    tracer ${String(drawn.length).padStart(4)} verts vs sim ${String(sim.length).padStart(4)}` +
-      ` samples — worst |Δ| ${worst.toExponential(2)} ft  (tol ${TRACER_TOL_FT} ft)`,
+      ` samples — worst |Δ| ${worst.toExponential(2)} ft  (tol ${TRACER_TOL_FT} ft)` +
+      `   REVERSE ${back.toExponential(2)} ft`,
   );
   console.log(
     `    drawn carry ${drawnCarry.toFixed(2)} ft vs sim ${b.carryFt.toFixed(2)} ft` +
@@ -512,6 +720,9 @@ function checkBattedTracer(report) {
   );
   if (worst > TRACER_TOL_FT) {
     violations.push(`drawn batted tracer off by ${worst.toFixed(4)} ft`);
+  }
+  if (back > TRACER_TOL_FT) {
+    violations.push(`batted tracer SKIPS the sim by ${back.toFixed(4)} ft (chord?)`);
   }
   if (Math.abs(drawnCarry - b.carryFt) > BATTED_TOL_FT) {
     violations.push(`drawn carry off by ${Math.abs(drawnCarry - b.carryFt).toFixed(4)} ft`);
@@ -587,9 +798,18 @@ async function main() {
             })),
             pitch: sim.pitch,
             batted: sim.batted,
+            ballTimeS: sim.ballTimeS,
+            contactTS: sim.contactTS,
+            mode: stadium.mode,
             pitchTracer: stadium.tracer('pitch'),
             battedTracer: stadium.tracer('batted'),
+            tracerVisible: {
+              pitch: stadium.tracerVisible('pitch'),
+              batted: stadium.tracerVisible('batted'),
+            },
             ballScene: stadium.ballScene(),
+            ballVisible: stadium.ballVisible(),
+            ballScale: stadium.ballScale(),
           };
         }, FENCE_BEARINGS);
 

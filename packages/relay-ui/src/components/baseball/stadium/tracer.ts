@@ -35,6 +35,8 @@ export interface TracerHandle extends StadiumPart {
   clear(): void;
   /** The vertices AS DRAWN, read out of the attribute. The gate's seam. */
   read(): number[];
+  /** Is the line actually being rendered? Position without this proves nothing. */
+  visible(): boolean;
 }
 
 export interface TracerOptions {
@@ -66,22 +68,30 @@ export function buildTracer({ scene, track }: StadiumCtx, opts: TracerOptions): 
   group.add(line);
   scene.add(group);
 
-  let count = 0;
-
   return {
     group,
     set(points) {
-      count = Math.min(Math.floor(points.length / 3), opts.maxPoints);
+      const count = Math.min(Math.floor(points.length / 3), opts.maxPoints);
       for (let i = 0; i < count * 3; i++) positions[i] = points[i] ?? 0;
       attr.needsUpdate = true;
       geom.setDrawRange(0, count);
     },
     clear() {
-      count = 0;
       geom.setDrawRange(0, 0);
     },
+    // ⚠ READ THE DRAW RANGE, NOT A PRIVATE COUNTER. This used to close over its
+    // own `count`, which agreed with `drawRange.count` only because `set()` wrote
+    // both. The gate's whole claim is that it reads WHAT THE GPU DRAWS, and the
+    // first progressive draw range — the obvious next step, since these tracers
+    // double as the ball's trail — would have made that claim false silently:
+    // `read()` would keep returning geometry that is no longer being rasterised
+    // and every delta the harness prints would stay zero. One source of truth,
+    // and it is the one three hands to `drawArrays`.
     read() {
-      return Array.from(positions.subarray(0, count * 3));
+      return Array.from(positions.subarray(0, geom.drawRange.count * 3));
+    },
+    visible() {
+      return line.visible && group.visible && geom.drawRange.count > 0;
     },
   };
 }

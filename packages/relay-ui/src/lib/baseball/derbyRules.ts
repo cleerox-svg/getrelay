@@ -16,6 +16,7 @@ import { PITCHES } from './pitches';
 import type { PitchId } from './pitches';
 import { MAX_POINTS_PER_ROUND, MAX_ROUNDS } from './tuning';
 import { IN_TO_FT } from './units';
+import { PLATE_WIDTH_FT, armSideX } from './zone';
 import type { Handedness } from './zone';
 
 /** How one swing ended. `resolveFence`'s five-way answer, folded to the format. */
@@ -137,7 +138,7 @@ export const DERBY_MIX: readonly { id: PitchId; weight: number }[] = [
 /**
  * How far off dead centre a served pitch may be located, in reticle units
  * (1.0 = the rule-zone edge). FEEL KNOB: 0.45 keeps every serve a strike while
- * making no two the same. It is sized AGAINST `RETICLE_RADIUS_IN` below — the
+ * making no two the same. It is sized AGAINST `RETICLE_FULL_MISS_IN` below — the
  * pair has a joint property the test measures, so neither moves alone.
  */
 export const SERVE_SPREAD = 0.45;
@@ -194,8 +195,8 @@ export const BAT_HANDLE_LIMIT_M = 2 * SWEET_SPOT_M - BAT_TIP_M;
 export const RETICLE_REACH_FT = 0.5;
 
 /**
- * The reticle's RADIUS, in — the charter's named feel knob, and the one place
- * this game is an arcade game rather than a simulation.
+ * The reticle's ASSIST SHOULDER — two radii, in. The charter's named feel knob,
+ * and the one place this game is an arcade game rather than a simulation.
  *
  * ⚠ IT IS LOAD-BEARING AND HERE IS THE MEASUREMENT THAT MAKES IT SO. The
  * collision's line-of-centres distance is only 2.70 in, so launch angle sweeps
@@ -203,19 +204,144 @@ export const RETICLE_REACH_FT = 0.5;
  * high launches at −8.7°, 1.2 in low at +69.5°. Meanwhile the reticle is placed
  * BEFORE the pitch — it is a guess at a location that varies by ±4.9 in of
  * height. Asking a player to guess to the inch is not a difficulty setting, it
- * is a lottery, so inside this radius the batter is taken to adjust his hands
- * and contact is made at the reference undercut; outside it the miss is measured
- * from the RIM, not the centre. Skill still pays continuously — the residual is
- * a real geometric miss the moment the rim is cleared.
+ * is a lottery, so near the centre the batter is taken to adjust his hands and
+ * contact is made at the reference undercut, and the residual only grows into a
+ * real geometric miss as the aim gets worse.
  *
- * 4 in against `SERVE_SPREAD = 0.45` leaves a CENTRED reticle able to make
- * contact with every serve the mix can produce, by a margin the test measures
- * and prints (0.425 in of undercut on the worst corner). Move either knob and
- * that assertion is what fails.
+ * ⚠ SUPERSEDES A HARD DISC OF RADIUS 4 in, AND THE REASON IS MEASURED. That disc
+ * set `k = 0` IDENTICALLY inside itself, so five aim rows at 0.0 / 2.4 / 4.0 in
+ * returned BYTE-IDENTICAL results (411.0 ft of carry, every one) — placement did
+ * not matter at all — and then barrel rate fell 100 % → 8.3 % between 4.0 and
+ * 5.4 in. That is a two-state mechanic dressed as a continuous one: the intent
+ * above is fully served without it, by an assist that FADES.
+ *
+ *   • `RETICLE_FULL_MISS_IN` — CALIBRATED, against the property this pair has
+ *     always had to hold: a CENTRED reticle must still make contact with the
+ *     worst serve `SERVE_SPREAD` can produce. That corner sits 6.185 in away
+ *     with 4.86 in of it vertical, and the overlap test allows 2.14 in of extra
+ *     undercut, so the residual there must stay under k = 0.440. 8 in puts it at
+ *     0.357 — within 0.005 of the 0.353 the old 4 in disc gave, so the reach
+ *     margin is preserved to the third decimal and the change is genuinely a
+ *     REDISTRIBUTION rather than a difficulty increase. `derbySim.test.ts`
+ *     measures and prints that margin; move `SERVE_SPREAD` or this and it is the
+ *     assertion that fails.
+ *   • `RETICLE_FADE_POWER` — FEEL KNOB, and the one number here that is taste.
+ *     It sets how fast the assist fades. Measured at 4, on a pure vertical miss:
+ *     2.4 in of aim error costs 0.019 in of undercut (0.6° of launch angle,
+ *     under a foot of carry — forgiving, as intended), 4.0 in costs 0.25 in
+ *     (8°, and the barrel survives at about half the approach angles), and past
+ *     8 in there is no assist at all.
+ *
+ * ⚠ NOT A FLAT INNER DISC, AND THAT IS THE WHOLE POINT. The obvious two-radius
+ * form — `smoothstep(R_inner, R_outer, r) · (1 − R_inner/r)` — is EXACTLY ZERO
+ * for r ≤ R_inner, so it keeps a dead zone and dead centre stays merely
+ * tied-best rather than best. Any law with a flat middle has that defect by
+ * construction, however small the flat is, so this one has no flat: `k > 0` for
+ * every `r > 0`, strictly monotone, and `derbySim.test.ts` asserts both with
+ * strict inequalities.
+ *
+ * ⚠ AND THE FAR FIELD IS UNTOUCHED PHYSICS, more literally than the disc ever
+ * managed: beyond `RETICLE_FULL_MISS_IN` the residual is 1, i.e. the WHOLE miss
+ * reaches the swing. The assist is gone, not scaled and not measured from a rim.
  */
-export const RETICLE_RADIUS_IN = 4;
-export const RETICLE_RADIUS_FT = RETICLE_RADIUS_IN * IN_TO_FT;
+export const RETICLE_FULL_MISS_IN = 8;
+export const RETICLE_FULL_MISS_FT = RETICLE_FULL_MISS_IN * IN_TO_FT;
+export const RETICLE_FADE_POWER = 4;
 
+/**
+ * The fraction of an aim miss that reaches the swing. `rMissFt` is the reticle's
+ * distance from where the pitch actually crossed; the return value multiplies
+ * BOTH components of that miss, so the geometry beyond the knob is untouched.
+ */
+export function reticleResidual(rMissFt: number): number {
+  if (!(rMissFt > 0)) return 0;
+  return Math.min(1, (rMissFt / RETICLE_FULL_MISS_FT) ** RETICLE_FADE_POWER);
+}
+
+// ---------------------------------------------------------------------------
+// PULL / OPPO INTENT — the second half of the reticle, and the fix for the
+// home-run trough at perfect timing
+// ---------------------------------------------------------------------------
+//
+// ⚠ THE DEFECT THIS EXISTS FOR, MEASURED. With spray a function of TIMING ALONE,
+// timing set both the exit velocity and the direction, so the player could not
+// trade one against the other — and the two wanted opposite things. Perfect
+// timing sprayed near dead centre, which is the DEEPEST part of the park
+// (400 ft + a 10 ft wall), while a 10–15 ms miss sprayed into a 375 ft alley.
+// The timing sweep therefore read: 100 % home runs at ∓10–15 ms and 54.2 % at
+// 0 ms, with 0 ms simultaneously holding the highest exit velocity, the highest
+// carry and a 100 % barrel rate. A HUD would have printed "PERFECT" over the
+// worst outcome on the board.
+//
+// ⚠ AND IT IS NOT FIXED BY SCORING CARRY WITH A HOME-RUN BONUS. That was the
+// other candidate and the arithmetic rules it out: the measured carry gap
+// between 0 ms and ∓10 ms is 6.0 ft while the home-run-rate gap is 0.458, so
+// E[points] at 0 ms only overtakes ∓10 ms once the home-run bonus falls below
+// 6.0 / 0.458 = 13 points. A 13-point home run in a home run derby is not a
+// payout curve, it is an admission. The trough is a CONTROL problem, so the fix
+// is a control.
+//
+// ⚠ NO NEW PHYSICS, AND NO FOURTH CHANNEL. `batSim.swingContact` has always
+// taken `horizontalOffsetIn` — the line-of-centres tilt ACROSS the swing plane,
+// governed by the same `asin(offset / LOC_DISTANCE_IN)` law as the undercut —
+// and `derbySim` simply never set it. It is what "hitting the inside of the
+// ball" is, it is orthogonal to `contactGeometry` (so it moves spray without
+// moving where on the bat contact lands), and every consequence falls out of the
+// one collision solve, sidespin included. Measured on the reference swing:
+//
+//     offset   spray     EV      carry    fence at that bearing
+//      0.00     0.0°   101.60   416.3 ft   400 ft   ← dead centre, deepest
+//      0.20    -6.2°   101.39   411.2 ft   388 ft
+//      0.30    -9.3°   101.12   404.9 ft   379 ft
+//      0.50   -15.5°   100.25   386.3 ft   361 ft
+//      0.70   -21.9°    98.93   364.2 ft   342 ft
+//      0.90   -28.5°    97.14   342.0 ft   hooks foul (4411 rpm of sidespin)
+//
+// So pulling costs real carry and buys a shorter fence: a TRADE, made with a
+// different input from the one that sets exit velocity. That is the whole fix.
+
+/**
+ * Line-of-centres tilt at FULL intent, in. FEEL KNOB, sized off the sweep above
+ * and against `SERVE_SPREAD`, the way `RETICLE_OUTER_IN` is.
+ *
+ * Full intent is the painted edge of the plate, and a serve only reaches
+ * `u = ±0.45`, so simply TRACKING the pitch — placing the reticle where the ball
+ * is, which is the naive correct play — spends at most ±0.405 of it: an inside
+ * pitch is pulled toward the 375 ft alley and an outside one goes the other way,
+ * which is the published inside/outside spray relationship arriving for free
+ * rather than as a rule. Committing further than the pitch is where it starts to
+ * cost, and at 0.9 in the sidespin hooks the ball foul — so over-pulling is a
+ * foul ball, which is what over-pulling is.
+ */
+export const PULL_INTENT_MAX_IN = 0.9;
+
+/**
+ * The batter's declared pull/oppo intent from the reticle's ABSOLUTE lateral
+ * placement, as a line-of-centres offset in inches for `Swing`.
+ *
+ * The reticle is placed BEFORE the pitch and under no time pressure, so where it
+ * sits in the zone is a PLAN, not a reaction: a batter looking on the inner half
+ * is looking to get the barrel out front and pull, one looking away is looking
+ * to let it travel. Normalised on the RULE zone's half-width, so full intent is
+ * the painted edge of the plate, and mirrored through `armSideX` exactly once —
+ * a RHB's inner half is the third-base side, so the same placement gives a
+ * left-handed batter the mirrored spray with no second code path.
+ *
+ * ⚠ INTENT IS ONLY FREE WHEN THE PITCH IS ACTUALLY THERE, and that is the
+ * mechanic rather than a limitation: declaring a big pull on a pitch that comes
+ * back over the middle leaves a large aim miss, which `reticleResidual` charges
+ * for. You can only pull an inside pitch.
+ */
+export function pullIntentOffsetIn(reticleX: number, hand: Handedness): number {
+  const u = Math.max(-1, Math.min(1, reticleX / (PLATE_WIDTH_FT / 2)));
+  const off = armSideX(hand) * u * PULL_INTENT_MAX_IN;
+  // ⚠ NORMALISE THE SIGNED ZERO. A centred reticle for a RHB is `−1 × 0`, which
+  // is −0: it compares equal under `===` but NOT under `Object.is`, and it
+  // JSON-round-trips to `0`. Both of those matter here — the snapshot guard
+  // compares stringified sims, and `-0` in a swing record would make a restored
+  // session differ from the one it restored.
+  return off === 0 ? 0 : off;
+}
 
 /** The format's own invariants. Asserted as a test, never at runtime. */
 export function validateDerbyFormat(rounds = DERBY_ROUNDS, perRound = PITCHES_PER_ROUND): string[] {
@@ -224,8 +350,16 @@ export function validateDerbyFormat(rounds = DERBY_ROUNDS, perRound = PITCHES_PE
   if (rounds > MAX_ROUNDS) bad.push(`rounds ${rounds} exceeds the worker's MAX_ROUNDS ${MAX_ROUNDS}`);
   if (!Number.isInteger(perRound) || perRound < 1) bad.push(`pitchesPerRound ${perRound} < 1`);
   const perPitch = MAX_POINTS_PER_ROUND / perRound;
-  if (perPitch * perRound !== MAX_POINTS_PER_ROUND) {
-    bad.push(`${perRound} pitches do not divide MAX_POINTS_PER_ROUND ${MAX_POINTS_PER_ROUND}`);
+  // ⚠ `perPitch * perRound === MAX_POINTS_PER_ROUND` CANNOT FIRE, and that is
+  // not a style point: (2000/3)*3 is exactly 2000 in IEEE-754, so 3, 6, 7 and 9
+  // pitches all passed this check while producing a FRACTIONAL per-pitch cap —
+  // and `packages/relay-worker/src/games.ts` requires `Number.isInteger` on what
+  // it is handed. Test the thing the worker tests.
+  if (!Number.isInteger(perPitch)) {
+    bad.push(
+      `${perRound} pitches do not divide MAX_POINTS_PER_ROUND ${MAX_POINTS_PER_ROUND} ` +
+        `(per-pitch cap ${perPitch})`,
+    );
   }
   if (homeRunPoints(Number.MAX_SAFE_INTEGER, perPitch) > perPitch) {
     bad.push('a swing can exceed the per-pitch cap');
@@ -262,15 +396,33 @@ export interface ResolvedConfig {
   batSpeedMph: number | undefined;
 }
 
+/**
+ * ⚠ IT VALIDATES, AND IT USED NOT TO. `validateDerbyFormat` existed and was
+ * never called on this path, so `new DerbySim({ rounds: -5 })` was accepted and
+ * `getState()` then reported `maxScore = −10000` — because `clamp(v, 1, -5)`
+ * returns the HIGH bound when `lo > hi`, so `roundsPlayed` came back as −5. A
+ * config is player-adjacent input (a card, a URL, a saved session), so it is
+ * checked at the one place it enters the sim, and it THROWS rather than
+ * silently repairing: a derby that quietly played a different format than the
+ * one it was asked for is worse than one that refused.
+ */
 export function resolveDerbyConfig(c: DerbyConfig): ResolvedConfig {
+  const rounds = c.rounds ?? DERBY_ROUNDS;
+  const pitchesPerRound = c.pitchesPerRound ?? PITCHES_PER_ROUND;
+  const bad = validateDerbyFormat(rounds, pitchesPerRound);
+  if (!Number.isFinite(c.seed)) bad.push(`seed ${c.seed} is not finite`);
+  if (c.batSpeedMph !== undefined && !(c.batSpeedMph > 0)) {
+    bad.push(`batSpeedMph ${c.batSpeedMph} is not positive`);
+  }
+  if (bad.length) throw new Error(`invalid derby config: ${bad.join('; ')}`);
   return {
     seed: c.seed >>> 0,
     park: c.park ?? HARBOURFRONT,
     roofClosed: c.roofClosed ?? true,
     batterHand: c.batterHand ?? 'R',
     pitcherHand: c.pitcherHand ?? 'R',
-    rounds: c.rounds ?? DERBY_ROUNDS,
-    pitchesPerRound: c.pitchesPerRound ?? PITCHES_PER_ROUND,
+    rounds,
+    pitchesPerRound,
     batSpeedMph: c.batSpeedMph,
   };
 }

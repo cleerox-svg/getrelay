@@ -11,10 +11,13 @@
 //
 // What IS here is the loop: the seeded serve, the mapping from the two player
 // inputs — a reticle placed between pitches and a single tap during the flight —
-// onto the three geometric axes `batSim` already takes, and the bookkeeping.
+// onto the geometric axes `batSim` already takes, and the bookkeeping.
 // That mapping is the only new reasoning in the file and it is argued at
 // `resolveSwing` below. The FORMAT, the payout and every constant live next
-// door in `derbyRules.ts`, extracted at the 500-line cap.
+// door in `derbyRules.ts`, and everything this class is READ through —
+// `getState`, `snapshot`, `restore` and the record types — in `derbyState.ts`.
+// Both were extracted at the 500-line cap, along real seams: data, loop,
+// readouts.
 //
 // ⚠ FIELDING IS NOT CALLED, ON PURPOSE. A home run derby has no fielders: the
 // format is "clear the wall or it's an out", which is exactly `resolveFence`'s
@@ -37,15 +40,18 @@ import {
   BAT_HANDLE_LIMIT_M,
   BAT_TIP_M,
   DERBY_MIX,
-  RETICLE_RADIUS_FT,
   RETICLE_REACH_FT,
   SERVE_SPREAD,
   SWING_UNDERCUT_IN,
   derbyDraw,
   homeRunPoints,
+  pullIntentOffsetIn,
+  reticleResidual,
   resolveDerbyConfig,
 } from './derbyRules';
 import type { DerbyConfig, DerbyOutcome, DerbyPhase, ResolvedConfig } from './derbyRules';
+import { derbyRestore, derbySnapshot, derbyState } from './derbyState';
+import type { DerbySnapshot, DerbyState, ServedPitch, SwingResult } from './derbyState';
 import { parkConditions, resolveFence } from './parks';
 import type { FenceOutcome } from './parks';
 import { PITCHES } from './pitches';
@@ -56,90 +62,6 @@ import { MAX_POINTS_PER_ROUND, isBarrel } from './tuning';
 import { FT_TO_IN, IN_TO_FT } from './units';
 import { RULE_ZONE, armSideX, reticleToPlate } from './zone';
 import type { Handedness } from './zone';
-
-/** Everything one swing produced. `last` in `getState()`; the ExitVelo tag's row. */
-export interface SwingResult {
-  outcome: DerbyOutcome;
-  points: number;
-  /** + = LATE, s, true physical time against the plate crossing. */
-  timingErrorS: number;
-  undercutIn: number;
-  /** + = the pitch was further from the batter than the reticle, in. */
-  lateralIn: number;
-  /** Where on the bat it landed, m from the knob. null on a whiff/take. */
-  contactZM: number | null;
-  evMph: number;
-  laDeg: number;
-  sprayDeg: number;
-  /** PROJECTED carry, ft — the number a broadcast calls "distance". */
-  distFt: number;
-  hangS: number;
-  apexFt: number;
-  barrel: boolean;
-  /** `resolveFence`'s raw five-way answer, kept so nothing is lost in mapping. */
-  fence: FenceOutcome | null;
-  fenceDistFt: number;
-  pitchId: PitchId;
-  plateX: number;
-  plateH: number;
-  plateSpeedMph: number;
-  strike: boolean;
-}
-
-interface ServedPitch {
-  id: PitchId;
-  targetX: number;
-  targetH: number;
-  result: PitchResult;
-}
-
-/** What a HUD polls at ~120 ms. Built fresh; nothing here is shared state. */
-export interface DerbyState {
-  phase: DerbyPhase;
-  round: number;
-  rounds: number;
-  pitch: number;
-  pitchesPerRound: number;
-  pitchesThrown: number;
-  totalPitches: number;
-  outs: number;
-  strikes: number;
-  homeRuns: number;
-  barrels: number;
-  roundScore: number;
-  score: number;
-  roundScores: number[];
-  bestFt: number;
-  reticle: { x: number; h: number };
-  pitchId: PitchId | null;
-  flightTimeS: number;
-  plate: { x: number; h: number; speedMph: number; strike: boolean } | null;
-  last: SwingResult | null;
-  /** What gets submitted: `rounds` is DERBY ROUNDS, never swings. */
-  roundsPlayed: number;
-  maxScore: number;
-}
-
-export interface DerbySnapshot {
-  cfg: ResolvedConfig;
-  conditionsSeed: number;
-  rngState: number;
-  roundIdx: number;
-  pitchIdx: number;
-  outs: number;
-  strikes: number;
-  homeRuns: number;
-  barrels: number;
-  score: number;
-  roundScore: number;
-  roundScores: number[];
-  bestFt: number;
-  reticleX: number;
-  reticleH: number;
-  phase: DerbyPhase;
-  served: ServedPitch | null;
-  last: SwingResult | null;
-}
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
@@ -252,8 +174,9 @@ export class DerbySim {
   // -------------------------------------------------------------------------
 
   /**
-   * The reticle/tap → `Swing` mapping. Three player inputs, three GEOMETRIC axes,
-   * and the geometry decides which is which — there is no fourth channel:
+   * The reticle/tap → `Swing` mapping. Two player inputs, FOUR geometric axes,
+   * and the geometry decides which is which — nothing here is a channel invented
+   * for the game; every one of them is a field `batSim.Swing` already had:
    *
    *  • VERTICAL (reticle h). The bat's centre line passes `undercutIn` below the
    *    ball's. A well-aimed swing carries `SWING_UNDERCUT_IN`; aiming above the
@@ -272,6 +195,22 @@ export class DerbySim {
    *    window too, at roughly ±26 ms. The timing window is DERIVED from the bat's
    *    length; it is not a knob, and it is symmetric early/late exactly as
    *    stage 3 asserted the collision is.
+   *  • ACROSS THE BALL (reticle x, ABSOLUTE). The reticle's placement in the zone
+   *    is a declared PULL/OPPO INTENT, and it becomes `horizontalOffsetIn` — the
+   *    line-of-centres tilt across the swing plane, which `swingContact` has
+   *    always taken and which `derbySim` never set. It is the ONLY input that
+   *    moves spray without moving where on the bat contact lands, which is what
+   *    lets a player trade direction against exit velocity instead of having
+   *    both handed to him by the tap. `derbyRules.pullIntentOffsetIn` carries
+   *    the argument, the measured sweep and the trough it exists to close.
+   *
+   * ⚠ RETICLE x IS READ TWICE, AND THE TWO READINGS ARE DIFFERENT QUANTITIES.
+   * Its RESIDUAL against where the pitch actually crossed is a miss, and is paid
+   * for along the bat; its ABSOLUTE position is a plan, made before the pitch,
+   * and buys spray. That is the before and after of one placement, not one input
+   * doing two jobs — and it is what makes intent free only when the guess was
+   * right, since a big declared pull on a pitch over the middle is also a big
+   * aim miss.
    *
    * ⚠ THE MODEL HAS NO JAMMING, and this mapping inherits that. Contact inside
    * the sweet spot RAISES exit velocity (BASEBALL.md § "The collision"), so an
@@ -314,32 +253,47 @@ export class DerbySim {
     }
 
     const timingErrorS = tapTimeS - pr.plate.t;
-    // The reticle is a DISC. Inside it the batter adjusts and the swing carries
-    // its reference undercut; outside it the residual is measured radially from
-    // the rim, so the geometry beyond the knob is untouched physics.
+    // The reticle's aim MISS, faded through the two-radius shoulder: near the
+    // centre the batter adjusts and the swing carries its reference undercut,
+    // and the residual grows smoothly into the real geometric miss, so the
+    // geometry beyond the knob is untouched physics. See `reticleResidual`.
     const dx = pr.plate.x - this.reticleX;
     const dh = pr.plate.h - this.reticleH;
-    const rMiss = Math.hypot(dx, dh);
-    const k = rMiss > RETICLE_RADIUS_FT ? (rMiss - RETICLE_RADIUS_FT) / rMiss : 0;
+    const k = reticleResidual(Math.hypot(dx, dh));
     const undercutIn = SWING_UNDERCUT_IN + dh * k * FT_TO_IN;
     // The batter stands on his own arm side of the plate, so "away from the
     // batter" is the opposite sign. One mirror, read from zone.ts.
     const away = -armSideX(this.cfg.batterHand);
     const lateralIn = away * dx * k * FT_TO_IN;
+    // …and the reticle's ABSOLUTE placement is the pull/oppo intent, which is
+    // the one input that moves spray without moving timing. `derbyRules` argues
+    // it; here it is just the fourth field of the same `Swing`.
+    const horizontalOffsetIn = pullIntentOffsetIn(this.reticleX, this.cfg.batterHand);
     const swing: Swing = {
       hand: this.cfg.batterHand,
       timingErrorS,
       undercutIn,
+      horizontalOffsetIn,
       aimZM: SWEET_SPOT_M + lateralIn * IN_TO_FT * M_PER_FT,
       batSpeedMph: this.cfg.batSpeedMph,
     };
 
     const geom = contactGeometry(vLen(pr.plate.v), swing);
+    // ⚠ THE OVERLAP TEST IS THE RESULTANT, NOT THE VERTICAL ALONE. `undercutIn`
+    // and `horizontalOffsetIn` are the two components of ONE line-of-centres
+    // offset in the plane across the bat — `swingContact` tilts n̂ by
+    // `asin(component / LOC_DISTANCE_IN)` on each — so what has to stay inside
+    // R_ball + R_bat is their hypotenuse. Testing only the vertical would let a
+    // full-intent swing on a badly missed pitch make contact through the corner
+    // of a square it has no business being in. Still DERIVED, no knob added:
+    // declaring intent spends part of the same 2.70 in budget, which is the
+    // honest price of asking to pull.
+    const missIn = Math.hypot(undercutIn, horizontalOffsetIn);
     const onBat =
       Number.isFinite(geom.contactZM) &&
       geom.contactZM <= BAT_TIP_M &&
       geom.contactZM >= BAT_HANDLE_LIMIT_M &&
-      Math.abs(undercutIn) <= LOC_DISTANCE_IN;
+      missIn <= LOC_DISTANCE_IN;
     if (!onBat) {
       return { ...base, outcome: 'whiff', timingErrorS, undercutIn, lateralIn };
     }
@@ -399,78 +353,21 @@ export class DerbySim {
   }
 
   // -------------------------------------------------------------------------
-  // Readouts
+  // Readouts — the three of them live in `derbyState.ts`, which is where the
+  // ⚠ RULE about snapshot totality is written down. They are thin delegates
+  // here so that the class stays the LOOP and nothing else; the extraction is
+  // the 500-line cap being met by extraction, exactly as `derbyRules.ts` was.
   // -------------------------------------------------------------------------
 
   getState(): DerbyState {
-    const pr = this.served?.result ?? null;
-    const started = this.roundIdx + (this.pitchIdx > 0 || this.phase === 'inFlight' ? 1 : 0);
-    const roundsPlayed = clamp(started, 1, this.cfg.rounds);
-    return {
-      phase: this.phase,
-      round: Math.min(this.roundIdx + 1, this.cfg.rounds),
-      rounds: this.cfg.rounds,
-      pitch: this.pitchIdx + 1,
-      pitchesPerRound: this.cfg.pitchesPerRound,
-      pitchesThrown: this.roundIdx * this.cfg.pitchesPerRound + this.pitchIdx,
-      totalPitches: this.cfg.rounds * this.cfg.pitchesPerRound,
-      outs: this.outs,
-      strikes: this.strikes,
-      homeRuns: this.homeRuns,
-      barrels: this.barrels,
-      roundScore: this.roundScore,
-      score: this.score,
-      roundScores: [...this.roundScores],
-      bestFt: this.bestFt,
-      reticle: { x: this.reticleX, h: this.reticleH },
-      pitchId: this.served?.id ?? null,
-      flightTimeS: pr?.flightTimeS ?? 0,
-      plate: pr
-        ? { x: pr.plate.x, h: pr.plate.h, speedMph: pr.plate.speedMph, strike: pr.plate.strike }
-        : null,
-      last: this.last,
-      roundsPlayed,
-      maxScore: roundsPlayed * MAX_POINTS_PER_ROUND,
-    };
+    return derbyState(this);
   }
 
-  /**
-   * ⚠ RULE: EVERY own data property of this class must appear here. The guard
-   * test enumerates `Object.keys(this)` and fails if one is missing, because a
-   * field left out of the pair is a preview that silently leaks into the live
-   * session. `served` and `last` are never mutated in place, so a reference is a
-   * correct copy; `roundScores` is pushed to, so it is copied.
-   */
   snapshot(): DerbySnapshot {
-    return {
-      cfg: this.cfg,
-      conditionsSeed: this.conditionsSeed,
-      rngState: this.rngState,
-      roundIdx: this.roundIdx,
-      pitchIdx: this.pitchIdx,
-      outs: this.outs,
-      strikes: this.strikes,
-      homeRuns: this.homeRuns,
-      barrels: this.barrels,
-      score: this.score,
-      roundScore: this.roundScore,
-      roundScores: [...this.roundScores],
-      bestFt: this.bestFt,
-      reticleX: this.reticleX,
-      reticleH: this.reticleH,
-      phase: this.phase,
-      served: this.served,
-      last: this.last,
-    };
+    return derbySnapshot(this);
   }
 
-  /**
-   * The inverse, written so that it CANNOT fall behind `snapshot()`: it copies
-   * whatever keys the snapshot has rather than naming them again. Combined with
-   * the guard test (snapshot keys ≡ own data props), a field added to the class
-   * and forgotten in `snapshot()` fails the guard instead of half-restoring here.
-   */
   restore(s: DerbySnapshot): void {
-    Object.assign(this, s, { roundScores: [...s.roundScores] });
+    derbyRestore(this, s);
   }
 }
