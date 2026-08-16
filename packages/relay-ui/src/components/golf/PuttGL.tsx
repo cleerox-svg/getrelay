@@ -35,6 +35,13 @@ import {
 import { mulberry32 } from '../../lib/golf/wind';
 import { FIXED_MS, MAX_LAUNCH_SPEED } from '../../lib/golf/tuning';
 import { sceneNow, tickSceneClock } from '../../lib/scene3d/clock';
+import {
+  makeFrameProbe,
+  sampleSceneStats,
+  shouldSampleStats,
+  type SceneStats,
+} from '../../lib/scene3d/stats';
+import { resolveGolfQuality } from './scene/quality';
 import { play, unlockAudio } from '../../lib/audio';
 
 // Real-time 3D mini-golf (Three.js). Owns the WebGL renderer, scene and
@@ -90,6 +97,12 @@ interface Props {
   // Equipped ball skin (golf economy). Mini-golf has no flight tracer, so only
   // the ball colour applies; default equip → stock white ball, unchanged.
   cosmetics?: GolfCosmetics;
+  /**
+   * GPU instrumentation — `renderer.info` plus the resolved tier, roughly every
+   * 30 frames (see lib/scene3d/stats.ts). Undefined in the app; the preview
+   * harness passes it and publishes the sample as `window.__golfStats`.
+   */
+  onStats?: (s: SceneStats) => void;
 }
 
 // --- Procedural canvas textures (no binary assets) ------------------------
@@ -162,7 +175,14 @@ function inRoundRect(g: Green, x: number, y: number): boolean {
   return (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r;
 }
 
-export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }: Props) {
+export default function PuttGL({
+  sim,
+  hole,
+  paused = false,
+  onEvent,
+  cosmetics,
+  onStats,
+}: Props) {
   const cosmeticsRef = useRef(cosmetics);
   cosmeticsRef.current = cosmetics;
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -170,6 +190,8 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
   onEventRef.current = onEvent;
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
+  const onStatsRef = useRef(onStats);
+  onStatsRef.current = onStats;
   const ctlRef = useRef<{ start: () => void; stop: () => void } | null>(null);
 
   useEffect(() => {
@@ -228,11 +250,17 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
 
     // --- Renderer / scene / camera --------------------------------------
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    // Quality tier (components/golf/scene/quality.ts). ⚠ Mini-golf's row is
+    // 1024², which is what this scene already shipped — the Course/Range step
+    // DOWN to 1536² but Putt must NOT be stepped UP to meet them. A whole hole
+    // fits in ~140 units under a fixed overhead camera, so 1024² already resolves
+    // the rails and the ball; more would be 2.25× the memory for nothing.
+    const quality = resolveGolfQuality(renderer, 'putt');
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, quality.pixelRatioCap));
     let w = host.clientWidth || window.innerWidth;
     let h = host.clientHeight || window.innerHeight;
     renderer.setSize(w, h, false);
-    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.enabled = quality.shadows;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -273,8 +301,8 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
     scene.add(hemi);
     const sun = new THREE.DirectionalLight(0xfff4e0, 2.2);
     sun.position.set(-70, 150, 60);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(1024, 1024);
+    sun.castShadow = quality.shadows;
+    sun.shadow.mapSize.set(quality.shadowMapSize, quality.shadowMapSize);
     sun.shadow.camera.near = 40;
     sun.shadow.camera.far = 380;
     const shadowHalf = Math.max(70, Math.max(spanX, spanY) * 0.62);
@@ -994,6 +1022,11 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
     // discrete sim event — read from the snapshot state we already render.
     let lastRollAt = 0;
 
+    // GPU instrumentation (lib/scene3d/stats.ts) — wall-clock probe, nothing it
+    // produces is rendered, so it cannot affect a screenshot.
+    const frameProbe = makeFrameProbe();
+    let statFrames = 0;
+
     const frame = (rafNow: number) => {
       const now = tickSceneClock(rafNow);
       const dtMs = Math.min(now - last, 100);
@@ -1120,6 +1153,15 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
       waterKit?.renderReflection(renderer, scene, camera);
 
       renderer.render(scene, camera);
+
+      // AFTER the render — three resets info.render at the start of render().
+      frameProbe.sample();
+      statFrames++;
+      if (onStatsRef.current && shouldSampleStats(statFrames)) {
+        onStatsRef.current(
+          sampleSceneStats(renderer, quality, statFrames, frameProbe.medianMs()),
+        );
+      }
       raf = requestAnimationFrame(frame);
     };
 

@@ -24,6 +24,7 @@ import {
   sceneClockPending,
   sceneNow,
 } from './lib/scene3d/clock';
+import type { SceneStats } from './lib/scene3d/stats';
 import CourseGL from './components/golf/CourseGL';
 import RangeGL from './components/golf/RangeGL';
 import PuttGL from './components/golf/PuttGL';
@@ -40,6 +41,14 @@ declare global {
   interface Window {
     __golfReady?: boolean;
     __sim?: CourseSim | PuttSim;
+    /**
+     * Latest GPU instrumentation sample from whichever scene is mounted — draw
+     * calls, triangles, programs, geometries, textures, the resolved quality
+     * tier and why it was chosen. `scripts/shoot-golf.mjs` reads this after the
+     * screenshot and checks it against `scripts/budgets.golf.json`; on a real
+     * handset you can read it straight out of the console.
+     */
+    __golfStats?: SceneStats;
     /** Harness handle on the virtual clock — see the block comment below. */
     __sceneClock?: {
       advance: (ms: number) => void;
@@ -103,6 +112,17 @@ window.__sceneClock = {
   now: () => sceneNow(),
 };
 
+/**
+ * Publish a scene's instrumentation sample. Push-only and side-effect free: it
+ * writes a plain object to `window` and touches nothing the renderer reads, so
+ * it cannot move a pixel. `?quality=` and `?shadow=` are read by the scenes
+ * themselves (components/golf/scene/quality.ts), exactly as they are in the app,
+ * so a tier forced here is the same code path a handset takes.
+ */
+const publishStats = (s: SceneStats) => {
+  window.__golfStats = s;
+};
+
 const params = new URLSearchParams(location.search);
 const scene = params.get('scene') ?? 'course';
 const layout = (params.get('layout') as RangeLayout | null) ?? DEFAULT_LAYOUT;
@@ -131,7 +151,16 @@ function ReadyBeacon({ until }: { until?: () => boolean }) {
   useEffect(() => {
     let raf = 0;
     let frames = 0;
+    let fallback = 0;
     const ready = () => {
+      // ⚠ CANCEL THE FALLBACK. It used to be cleared only by the effect cleanup,
+      // i.e. on unmount — so on a page that outlives 30 s (the `secondAim`
+      // sequence drives two real aims, a fire and a roll-out at SwiftShader's
+      // ~3 fps) the timer fired long AFTER a perfectly deterministic ready and
+      // logged "this shot is NOT deterministic" at the one scene that exists to
+      // catch a regression. A false alarm on a gate is worse than no alarm: it
+      // trains the reader to skip the line.
+      window.clearTimeout(fallback);
       // Stop the world HERE. Everything the shooter does afterwards (its settle
       // delay, pointer drags, extra rAF ticks) then renders the same frame.
       freezeSceneClock();
@@ -155,7 +184,7 @@ function ReadyBeacon({ until }: { until?: () => boolean }) {
     // than the settle itself, so it fired on EVERY scene and the "45 frames"
     // path never once ran. It is now far above the worst observed settle so it
     // only trips on a genuinely stuck scene.
-    const t = window.setTimeout(() => {
+    fallback = window.setTimeout(() => {
       // console.error (not warn) — shoot-golf.mjs captures errors, and a shot
       // frozen at an arbitrary frame is a result worth failing loudly over.
       console.error('[golfpreview] ready fallback fired — this shot is NOT deterministic');
@@ -163,7 +192,7 @@ function ReadyBeacon({ until }: { until?: () => boolean }) {
     }, 30000);
     return () => {
       cancelAnimationFrame(raf);
-      window.clearTimeout(t);
+      window.clearTimeout(fallback);
     };
   }, []);
   return null;
@@ -175,7 +204,13 @@ function Preview() {
     const sim = new RangeSim({ pins, layout, isChallenge: false });
     return (
       <>
-        <RangeGL sim={sim} pins={pins} layout={layout} isChallenge={false} />
+        <RangeGL
+          sim={sim}
+          pins={pins}
+          layout={layout}
+          isChallenge={false}
+          onStats={publishStats}
+        />
         <ReadyBeacon />
       </>
     );
@@ -213,7 +248,7 @@ function PuttPreview() {
   window.__sim = sim; // dev-only: lets the shooter inspect aim state
   return (
     <>
-      <PuttGL sim={sim} hole={hole} />
+      <PuttGL sim={sim} hole={hole} onStats={publishStats} />
       <ReadyBeacon />
     </>
   );
@@ -303,7 +338,7 @@ function CoursePreview({ at }: { at: string | null }) {
 
   return (
     <>
-      <CourseGL sim={sim} />
+      <CourseGL sim={sim} onStats={publishStats} />
       <ReadyBeacon until={waitRest} />
     </>
   );

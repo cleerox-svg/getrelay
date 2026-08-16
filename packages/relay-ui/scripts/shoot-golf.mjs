@@ -15,19 +15,38 @@
 // UI contributor). SwiftShader validates composition/materials but NOT real-GPU
 // behaviour — see the on-device shadow-map caveat in GOLF.md.
 //
+// ⚠ IT ALSO ASSERTS NUMBERS. Every scene publishes `window.__golfStats` from
+// inside its render loop (draw calls, triangles, programs, geometries, textures,
+// plus the resolved quality tier and why it was chosen — see
+// `src/lib/scene3d/stats.ts`). Those are printed per scene and CHECKED against
+// the committed `scripts/budgets.golf.json`; a regression exits non-zero. Golf
+// is the bigger, shipped scene and it used to print nothing numeric at all while
+// baseball printed a full GPU line — which meant every cost the fidelity roadmap
+// adds would have landed unmeasured.
+//
 // Usage:
 //   node scripts/shoot-golf.mjs                 # all scenes
 //   node scripts/shoot-golf.mjs course          # one or more scene ids
 //   node scripts/shoot-golf.mjs course range
 //   node scripts/shoot-golf.mjs augusta12       # a named real-course hole shot
+//   node scripts/shoot-golf.mjs --update-budgets   # rewrite budgets.golf.json
+//                                                  # from THIS run (all scenes)
 
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
+import {
+  checkSceneStats,
+  formatStatsLine,
+  loadBudgets,
+  reportViolations,
+  writeBudgets,
+} from './lib/shoot-report.mjs';
 
 const pkgDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.join(pkgDir, '.golf-shots');
+const budgetFile = path.join(pkgDir, 'scripts', 'budgets.golf.json');
 
 // Scene matrix: id → preview query. Portrait viewport ~ a phone screen.
 // `drag` scenes perform a pointer pull-back (down near the ball, move up) and
@@ -117,7 +136,11 @@ const READY_TIMEOUT_MS = 40000;
 // to true rest deterministically, since headless rAF is throttled.
 const FIXED_MS = 1000 / 120;
 
-const requested = process.argv.slice(2);
+const argv = process.argv.slice(2);
+// Rewriting the baseline is an explicit act. A gate that quietly moves its own
+// thresholds when they fail is not a gate.
+const updateBudgets = argv.includes('--update-budgets');
+const requested = argv.filter((a) => !a.startsWith('--'));
 const ids = requested.length ? requested : Object.keys(SCENES);
 for (const id of ids) {
   if (!SCENES[id]) {
@@ -270,6 +293,17 @@ async function runSecondAim(page, label) {
   return file;
 }
 
+// The scene's own GPU sample, published from inside its render loop (see
+// src/golfpreview.tsx). Absent means no frame path ever ran — checkSceneStats
+// treats that as a failure, not a warning.
+async function readSceneStats(page) {
+  try {
+    return await page.evaluate(() => window.__golfStats ?? null);
+  } catch {
+    return null;
+  }
+}
+
 async function main() {
   mkdirSync(outDir, { recursive: true });
 
@@ -285,6 +319,10 @@ async function main() {
 
   let failed = 0;
   const saved = [];
+  /** id → the scene's GPU sample, for the budget check and `--update-budgets`. */
+  const samples = {};
+  const budgets = loadBudgets(budgetFile);
+  const violations = [];
   // Everything after the server is listening goes through this finally so the
   // Vite server is always closed — even if chromium.launch throws.
   let browser;
@@ -317,6 +355,10 @@ async function main() {
           const file = await runSecondAim(page, label);
           saved.push(file);
           console.log(`✓ ${id.padEnd(7)} → ${path.relative(pkgDir, file)}`);
+          const stats = await readSceneStats(page);
+          samples[id] = stats;
+          console.log(formatStatsLine(stats));
+          if (!updateBudgets) violations.push(...checkSceneStats(id, stats, budgets));
           if (errors.length) console.log(`  (page errors: ${errors.slice(0, 3).join(' | ')})`);
           continue;
         }
@@ -367,6 +409,13 @@ async function main() {
         if (drag) await page.mouse.up();
         saved.push(file);
         console.log(`✓ ${id.padEnd(7)} → ${path.relative(pkgDir, file)}`);
+        // Read AFTER the screenshot: the sample must describe the frame that was
+        // captured, and reading first would cost an extra evaluate round-trip
+        // before the capture for no benefit.
+        const stats = await readSceneStats(page);
+        samples[id] = stats;
+        console.log(formatStatsLine(stats));
+        if (!updateBudgets) violations.push(...checkSceneStats(id, stats, budgets));
         if (errors.length) {
           console.log(`  (page errors: ${errors.slice(0, 3).join(' | ')})`);
         }
@@ -384,7 +433,22 @@ async function main() {
   }
 
   console.log(`\n${saved.length}/${ids.length} scene(s) captured in ${path.relative(process.cwd(), outDir)}`);
-  process.exit(failed ? 1 : 0);
+
+  if (updateBudgets) {
+    // A partial run would write a file that silently drops every scene it did
+    // not shoot, and the next full run would then fail on "no entry" for all of
+    // them. Refuse rather than half-write.
+    if (ids.length !== Object.keys(SCENES).length) {
+      console.error('--update-budgets needs a FULL run (no scene ids).');
+      process.exit(2);
+    }
+    writeBudgets(budgetFile, samples, { viewport: VIEWPORT, renderer: 'swiftshader (headless)' });
+    console.log(`Wrote ${path.relative(process.cwd(), budgetFile)} from this run.`);
+    process.exit(failed ? 1 : 0);
+  }
+
+  const overBudget = reportViolations(violations);
+  process.exit(failed || overBudget ? 1 : 0);
 }
 
 main().catch((e) => {

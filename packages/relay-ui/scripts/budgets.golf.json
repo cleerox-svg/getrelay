@@ -1,0 +1,336 @@
+{
+  "_readme": "Committed GPU ceilings, one entry per harness scene. Generated from a real SwiftShader run with `node scripts/shoot-golf.mjs --update-budgets`; caps are measured × 1.5 (draw calls, floor 8) and × 1.4 (triangles, rounded up to 5000). A run exceeding one of these exits non-zero. Raising a cap is a claim that the new cost was measured and is justified — say so in the commit.",
+  "_caveat": "These count what the CPU SUBMITTED (renderer.info). They are blind to fill rate, VRAM and shadow-map size, which is the class of cost that actually killed an Android WebView GPU process. \"Renders fine in SwiftShader\" is not evidence of on-device safety.",
+  "viewport": {
+    "width": 900,
+    "height": 1600
+  },
+  "renderer": "swiftshader (headless)",
+  "scenes": {
+    "aim": {
+      "maxDrawCalls": 1185,
+      "maxTriangles": 110000,
+      "measured": {
+        "drawCalls": 790,
+        "triangles": 77970,
+        "programs": 22,
+        "geometries": 35,
+        "textures": 19,
+        "tier": "medium",
+        "shadowMapSize": 1536
+      }
+    },
+    "approach": {
+      "maxDrawCalls": 890,
+      "maxTriangles": 105000,
+      "measured": {
+        "drawCalls": 593,
+        "triangles": 72406,
+        "programs": 15,
+        "geometries": 24,
+        "textures": 18,
+        "tier": "medium",
+        "shadowMapSize": 1536
+      }
+    },
+    "augusta12": {
+      "maxDrawCalls": 548,
+      "maxTriangles": 80000,
+      "measured": {
+        "drawCalls": 365,
+        "triangles": 57034,
+        "programs": 17,
+        "geometries": 28,
+        "textures": 21,
+        "tier": "medium",
+        "shadowMapSize": 1536
+      }
+    },
+    "augusta13": {
+      "maxDrawCalls": 1028,
+      "maxTriangles": 140000,
+      "measured": {
+        "drawCalls": 685,
+        "triangles": 96595,
+        "programs": 10,
+        "geometries": 17,
+        "textures": 13,
+        "tier": "medium",
+        "shadowMapSize": 1536
+      }
+    },
+    "augusta16": {
+      "maxDrawCalls": 636,
+      "maxTriangles": 85000,
+      "measured": {
+        "drawCalls": 424,
+        "triangles": 58200,
+        "programs": 17,
+        "geometries": 28,
+        "textures": 21,
+        "tier": "medium",
+        "shadowMapSize": 1536
+      }
+    },
+    "augusta16pond": {
+      "maxDrawCalls": 480,
+      "maxTriangles": 80000,
+      "measured": {
+        "drawCalls": 320,
+        "triangles": 56166,
+        "programs": 16,
+        "geometries": 26,
+        "textures": 19,
+        "tier": "medium",
+        "shadowMapSize": 1536
+      }
+    },
+    "augusta2": {
+      "maxDrawCalls": 1446,
+      "maxTriangles": 165000,
+      "measured": {
+        "drawCalls": 964,
+        "triangles": 115103,
+        "programs": 12,
+        "geometries": 24,
+        "textures": 19,
+        "tier": "medium",
+        "shadowMapSize": 1536
+      }
+    },
+    "celebrate": {
+      "maxDrawCalls": 875,
+      "maxTriangles": 90000,
+      "measured": {
+        "drawCalls": 583,
+        "triangles": 63131,
+        "programs": 12,
+        "geometries": 23,
+        "textures": 15,
+        "tier": "medium",
+        "shadowMapSize": 1536
+      }
+    },
+    "course": {
+      "maxDrawCalls": 1551,
+      "maxTriangles": 120000,
+      "measured": {
+        "drawCalls": 1034,
+        "triangles": 82502,
+        "programs": 17,
+        "geometries": 30,
+        "textures": 21,
+        "tier": "medium",
+        "shadowMapSize": 1536
+      }
+    },
+    "green": {
+      "maxDrawCalls": 872,
+      "maxTriangles": 90000,
+      "measured": {
+        "drawCalls": 581,
+        "triangles": 62973,
+        "programs": 10,
+        "geometries": 22,
+        "textures": 16,
+        "tier": "medium",
+        "shadowMapSize": 1536
+      }
+    },
+    "listowelHeritage3": {
+      "maxDrawCalls": 629,
+      "maxTriangles": 80000,
+      "measured": {
+        "drawCalls": 419,
+        "triangles": 56913,
+        "programs": 16,
+        "geometries": 26,
+        "textures": 20,
+        "tier": "medium",
+        "shadowMapSize": 1536
+      }
+    },
+    "played": {
+      "maxDrawCalls": 980,
+      "maxTriangles": 105000,
+      "measured": {
+        "drawCalls": 653,
+        "triangles": 74494,
+        "programs": 22,
+        "geometries": 33,
+        "textures": 19,
+        "tier": "medium",
+        "shadowMapSize": 1536
+      }
+    },
+    "putt": {
+      "maxDrawCalls": 41,
+      "maxTriangles": 15000,
+      "measured": {
+        "drawCalls": 27,
+        "triangles": 10690,
+        "programs": 10,
+        "geometries": 18,
+        "textures": 9,
+        "tier": "medium",
+        "shadowMapSize": 1024
+      }
+    },
+    "putt-bank": {
+      "maxDrawCalls": 50,
+      "maxTriangles": 20000,
+      "measured": {
+        "drawCalls": 33,
+        "triangles": 10736,
+        "programs": 10,
+        "geometries": 22,
+        "textures": 9,
+        "tier": "medium",
+        "shadowMapSize": 1024
+      }
+    },
+    "putt-drag": {
+      "maxDrawCalls": 44,
+      "maxTriangles": 20000,
+      "measured": {
+        "drawCalls": 29,
+        "triangles": 10906,
+        "programs": 12,
+        "geometries": 20,
+        "textures": 9,
+        "tier": "medium",
+        "shadowMapSize": 1024
+      }
+    },
+    "putt-pendulum": {
+      "maxDrawCalls": 47,
+      "maxTriangles": 20000,
+      "measured": {
+        "drawCalls": 31,
+        "triangles": 10758,
+        "programs": 8,
+        "geometries": 19,
+        "textures": 9,
+        "tier": "medium",
+        "shadowMapSize": 1024
+      }
+    },
+    "putt-ramp": {
+      "maxDrawCalls": 41,
+      "maxTriangles": 15000,
+      "measured": {
+        "drawCalls": 27,
+        "triangles": 10636,
+        "programs": 10,
+        "geometries": 18,
+        "textures": 9,
+        "tier": "medium",
+        "shadowMapSize": 1024
+      }
+    },
+    "putt-sand": {
+      "maxDrawCalls": 42,
+      "maxTriangles": 15000,
+      "measured": {
+        "drawCalls": 28,
+        "triangles": 10690,
+        "programs": 10,
+        "geometries": 19,
+        "textures": 10,
+        "tier": "medium",
+        "shadowMapSize": 1024
+      }
+    },
+    "putt-slope": {
+      "maxDrawCalls": 45,
+      "maxTriangles": 20000,
+      "measured": {
+        "drawCalls": 30,
+        "triangles": 10724,
+        "programs": 10,
+        "geometries": 20,
+        "textures": 9,
+        "tier": "medium",
+        "shadowMapSize": 1024
+      }
+    },
+    "putt-tunnel": {
+      "maxDrawCalls": 57,
+      "maxTriangles": 20000,
+      "measured": {
+        "drawCalls": 38,
+        "triangles": 12824,
+        "programs": 8,
+        "geometries": 25,
+        "textures": 9,
+        "tier": "medium",
+        "shadowMapSize": 1024
+      }
+    },
+    "putt-water": {
+      "maxDrawCalls": 45,
+      "maxTriangles": 265000,
+      "measured": {
+        "drawCalls": 30,
+        "triangles": 187010,
+        "programs": 12,
+        "geometries": 20,
+        "textures": 11,
+        "tier": "medium",
+        "shadowMapSize": 1024
+      }
+    },
+    "putt-windmill": {
+      "maxDrawCalls": 57,
+      "maxTriangles": 20000,
+      "measured": {
+        "drawCalls": 38,
+        "triangles": 10942,
+        "programs": 8,
+        "geometries": 21,
+        "textures": 9,
+        "tier": "medium",
+        "shadowMapSize": 1024
+      }
+    },
+    "range": {
+      "maxDrawCalls": 404,
+      "maxTriangles": 20000,
+      "measured": {
+        "drawCalls": 269,
+        "triangles": 10726,
+        "programs": 17,
+        "geometries": 49,
+        "textures": 21,
+        "tier": "medium",
+        "shadowMapSize": 1536
+      }
+    },
+    "range-water": {
+      "maxDrawCalls": 435,
+      "maxTriangles": 30000,
+      "measured": {
+        "drawCalls": 290,
+        "triangles": 18172,
+        "programs": 17,
+        "geometries": 63,
+        "textures": 24,
+        "tier": "medium",
+        "shadowMapSize": 1536
+      }
+    },
+    "secondAim": {
+      "maxDrawCalls": 1343,
+      "maxTriangles": 115000,
+      "measured": {
+        "drawCalls": 895,
+        "triangles": 79792,
+        "programs": 22,
+        "geometries": 37,
+        "textures": 21,
+        "tier": "medium",
+        "shadowMapSize": 1536
+      }
+    }
+  }
+}

@@ -39,6 +39,13 @@ import type { Pin, RangeLayout } from '../../lib/golf/rangeTargets';
 import { MAX_CLUB_SPEED } from '../../lib/golf/clubs';
 import { FIXED_MS } from '../../lib/golf/tuning';
 import { sceneNow, tickSceneClock } from '../../lib/scene3d/clock';
+import {
+  makeFrameProbe,
+  sampleSceneStats,
+  shouldSampleStats,
+  type SceneStats,
+} from '../../lib/scene3d/stats';
+import { resolveGolfQuality } from './scene/quality';
 
 // Real-time 3D driving range (Three.js). Owns the WebGL renderer, scene and
 // camera; drives the headless RangeSim on a fixed-timestep loop; renders the
@@ -80,6 +87,12 @@ interface Props {
   // Equipped ball skin + tracer colour (golf economy). Read once at scene
   // build; default equip → stock white ball + red Toptracer, unchanged.
   cosmetics?: GolfCosmetics;
+  /**
+   * GPU instrumentation — `renderer.info` plus the resolved tier, roughly every
+   * 30 frames (see lib/scene3d/stats.ts). Undefined in the app; the preview
+   * harness passes it and publishes the sample as `window.__golfStats`.
+   */
+  onStats?: (s: SceneStats) => void;
 }
 
 // --- Procedural canvas textures (no binary assets) ------------------------
@@ -160,6 +173,7 @@ export default function RangeGL({
   paused = false,
   onEvent,
   cosmetics,
+  onStats,
 }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const onEventRef = useRef(onEvent);
@@ -169,6 +183,8 @@ export default function RangeGL({
   cosmeticsRef.current = cosmetics;
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
+  const onStatsRef = useRef(onStats);
+  onStatsRef.current = onStats;
   // Live target id for the flag-highlight effect below.
   const targetIdRef = useRef(targetId ?? null);
   // rAF start/stop handles, filled by the mount effect for the paused effect.
@@ -192,11 +208,15 @@ export default function RangeGL({
 
     // --- Renderer / scene / camera --------------------------------------
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    // Quality tier — shared policy over golf's budget table (see
+    // components/golf/scene/quality.ts). The Range and the Course share a row,
+    // so their shadow maps can no longer drift apart the way they had.
+    const quality = resolveGolfQuality(renderer, 'range');
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, quality.pixelRatioCap));
     let w = host.clientWidth || window.innerWidth;
     let h = host.clientHeight || window.innerHeight;
     renderer.setSize(w, h, false);
-    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.enabled = quality.shadows;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     // ACES filmic tone mapping + a touch of exposure: compresses the sky/sun
@@ -238,15 +258,12 @@ export default function RangeGL({
     scene.add(hemi);
     const sun = new THREE.DirectionalLight(0xfff1d6, 2.7);
     sun.position.set(-52, 96, 40);
-    sun.castShadow = true;
-    // Higher-res 2048² shadow map (re-enabled by request) so the trees, flags
-    // and ball drop a crisper, cleaner-edged contact shadow. NOTE: a 2048² map
-    // was previously reverted because it crashed the WebView GPU process on some
-    // real Android devices (black screen needing an app restart) though it
-    // rendered fine in desktop/software GL — VERIFY this build on a low-end
-    // Android device before shipping the release AAB. If low-end GPUs strain,
-    // 1536² is the first dial to turn down.
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.castShadow = quality.shadows;
+    // Shadow map size is the TIER's call now, not this scene's — 1536² at the
+    // default tier, down from the 2048² that crashed the Android WebView GPU
+    // process (GOLF.md), and overridable per-load with ?shadow= so that crash can
+    // finally be bisected on a handset. The Course carries the same row.
+    sun.shadow.mapSize.set(quality.shadowMapSize, quality.shadowMapSize);
     sun.shadow.camera.near = 1;
     sun.shadow.camera.far = 280;
     sun.shadow.camera.left = -80;
@@ -1025,6 +1042,11 @@ export default function RangeGL({
     let lastRollAt = 0;
     let suppressBounceSfx = false;
 
+    // GPU instrumentation (lib/scene3d/stats.ts) — wall-clock probe, nothing it
+    // produces is rendered, so it cannot affect a screenshot.
+    const frameProbe = makeFrameProbe();
+    let statFrames = 0;
+
     const frame = (rafNow: number) => {
       const now = tickSceneClock(rafNow);
       const dtMs = Math.min(now - last, 100);
@@ -1341,6 +1363,15 @@ export default function RangeGL({
       waterKit.renderReflection(renderer, scene, camera);
 
       renderer.render(scene, camera);
+
+      // AFTER the render — three resets info.render at the start of render().
+      frameProbe.sample();
+      statFrames++;
+      if (onStatsRef.current && shouldSampleStats(statFrames)) {
+        onStatsRef.current(
+          sampleSceneStats(renderer, quality, statFrames, frameProbe.medianMs()),
+        );
+      }
       raf = requestAnimationFrame(frame);
     };
 
