@@ -87,9 +87,14 @@ It was not chosen, for four reasons beyond the lifecycle problem above:
    Baseball Clash) are *stylized*, not photoreal, and a well-executed stylized
    look is reachable on WebGL2.
 4. **The current budget is not spent.** The measured 1,034 draw calls on the
-   course tee view are not a web limitation — they are ~400 un-instanced tree
-   meshes. Instancing returns roughly 30× the draw-call headroom without
-   changing platform.
+   course tee view were not a web limitation — they were **559 un-instanced tree
+   meshes** (92 trees × one trunk + five-to-seven leaf blobs), each caster
+   submitted again for the shadow map. **This has since been done**
+   (`lib/scene3d/instancing.ts` + `components/golf/scene/foliage.ts`): three
+   `InstancedMesh`es took the tee view to **41 draw calls**, and the worst scene
+   in the game is now 110. That was a **25× draw-call reduction with no platform
+   change and no change to the art**, which is the concrete form the argument
+   above was making.
 
 > **Revisit native when BOTH hold:** (a) the web path has actually been pushed —
 > scene IBL, instanced foliage, and at least one commissioned asset set landed
@@ -97,6 +102,10 @@ It was not chosen, for four reasons beyond the lifecycle problem above:
 > look; and (b) the target is confirmed as photoreal/broadcast rather than
 > polished-stylized. Deciding before (a) means changing platform to solve a
 > content problem.
+>
+> Progress against (a): **scene IBL is in, instanced foliage is in** (25× on golf's
+> worst scene). The commissioned asset set is the one remaining item, which is
+> exactly the point the section above makes — the gate is content, not platform.
 
 **If native is ever chosen, prefer a separate game app over UaaL.** Its own
 process sidesteps the runtime-lifecycle trap entirely and decouples release
@@ -129,7 +138,13 @@ and measurement**, not the engine:
   essentially nothing to diffuse — a 0.53° disc is 6.7e-5 sr — so the **halo** is
   the knob that puts direction into the ambient, while the key light stays a real
   `DirectionalLight`.
-- **Instancing** — for crowds, galleries and foliage.
+- **Instancing** — for crowds, galleries and foliage. `lib/scene3d/instancing.ts`
+  is the shared primitive: collect a transform (and an optional per-instance tint)
+  per prop, commit one `InstancedMesh` per distinct geometry. Golf's grove is its
+  first consumer; a stadium crowd is the same problem. Two things learned doing it:
+  per-instance colour needs a **white** material (three multiplies `instanceColor`
+  into `diffuseColor`), and an `InstancedMesh` is culled **all-or-nothing**, so a
+  world-spanning scatter trades a few thousand extra triangles for the draw calls.
 - **Skeletal animation** — authored in Blender and exported as GLTF. Using an
   engine as a *content tool* is fine; shipping its runtime is not.
 

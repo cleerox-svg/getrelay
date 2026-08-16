@@ -8,157 +8,157 @@
   "renderer": "swiftshader (headless)",
   "scenes": {
     "aim": {
-      "maxDrawCalls": 1185,
-      "maxTriangles": 110000,
+      "maxDrawCalls": 75,
+      "maxTriangles": 120000,
       "measured": {
-        "drawCalls": 790,
-        "triangles": 77970,
-        "programs": 22,
-        "geometries": 35,
-        "textures": 19,
+        "drawCalls": 50,
+        "triangles": 84540,
+        "programs": 28,
+        "geometries": 34,
+        "textures": 21,
         "tier": "medium",
         "shadowMapSize": 1536
       }
     },
     "approach": {
-      "maxDrawCalls": 890,
-      "maxTriangles": 105000,
+      "maxDrawCalls": 48,
+      "maxTriangles": 120000,
       "measured": {
-        "drawCalls": 593,
-        "triangles": 72406,
-        "programs": 15,
-        "geometries": 24,
+        "drawCalls": 32,
+        "triangles": 82146,
+        "programs": 20,
+        "geometries": 23,
         "textures": 18,
         "tier": "medium",
         "shadowMapSize": 1536
       }
     },
     "augusta12": {
-      "maxDrawCalls": 548,
-      "maxTriangles": 80000,
+      "maxDrawCalls": 59,
+      "maxTriangles": 85000,
       "measured": {
-        "drawCalls": 365,
-        "triangles": 57034,
-        "programs": 17,
-        "geometries": 28,
-        "textures": 21,
+        "drawCalls": 39,
+        "triangles": 58796,
+        "programs": 23,
+        "geometries": 27,
+        "textures": 23,
         "tier": "medium",
         "shadowMapSize": 1536
       }
     },
     "augusta13": {
-      "maxDrawCalls": 1028,
-      "maxTriangles": 140000,
+      "maxDrawCalls": 36,
+      "maxTriangles": 145000,
       "measured": {
-        "drawCalls": 685,
-        "triangles": 96595,
-        "programs": 10,
-        "geometries": 17,
+        "drawCalls": 24,
+        "triangles": 101887,
+        "programs": 15,
+        "geometries": 16,
         "textures": 13,
         "tier": "medium",
         "shadowMapSize": 1536
       }
     },
     "augusta16": {
-      "maxDrawCalls": 636,
+      "maxDrawCalls": 59,
       "maxTriangles": 85000,
       "measured": {
-        "drawCalls": 424,
-        "triangles": 58200,
-        "programs": 17,
-        "geometries": 28,
-        "textures": 21,
+        "drawCalls": 39,
+        "triangles": 59836,
+        "programs": 23,
+        "geometries": 27,
+        "textures": 23,
         "tier": "medium",
         "shadowMapSize": 1536
       }
     },
     "augusta16pond": {
-      "maxDrawCalls": 480,
-      "maxTriangles": 80000,
+      "maxDrawCalls": 51,
+      "maxTriangles": 85000,
       "measured": {
-        "drawCalls": 320,
-        "triangles": 56166,
-        "programs": 16,
-        "geometries": 26,
-        "textures": 19,
+        "drawCalls": 34,
+        "triangles": 59540,
+        "programs": 22,
+        "geometries": 25,
+        "textures": 21,
         "tier": "medium",
         "shadowMapSize": 1536
       }
     },
     "augusta2": {
-      "maxDrawCalls": 1446,
-      "maxTriangles": 165000,
+      "maxDrawCalls": 50,
+      "maxTriangles": 170000,
       "measured": {
-        "drawCalls": 964,
-        "triangles": 115103,
-        "programs": 12,
-        "geometries": 24,
-        "textures": 19,
+        "drawCalls": 33,
+        "triangles": 119083,
+        "programs": 18,
+        "geometries": 23,
+        "textures": 21,
         "tier": "medium",
         "shadowMapSize": 1536
       }
     },
     "celebrate": {
-      "maxDrawCalls": 875,
-      "maxTriangles": 90000,
+      "maxDrawCalls": 45,
+      "maxTriangles": 105000,
       "measured": {
-        "drawCalls": 583,
-        "triangles": 63131,
-        "programs": 12,
-        "geometries": 23,
+        "drawCalls": 30,
+        "triangles": 73035,
+        "programs": 18,
+        "geometries": 22,
         "textures": 15,
         "tier": "medium",
         "shadowMapSize": 1536
       }
     },
     "course": {
-      "maxDrawCalls": 1551,
+      "maxDrawCalls": 62,
       "maxTriangles": 120000,
       "measured": {
-        "drawCalls": 1034,
-        "triangles": 82502,
-        "programs": 17,
-        "geometries": 30,
-        "textures": 21,
+        "drawCalls": 41,
+        "triangles": 84602,
+        "programs": 23,
+        "geometries": 29,
+        "textures": 23,
         "tier": "medium",
         "shadowMapSize": 1536
       }
     },
     "green": {
-      "maxDrawCalls": 872,
-      "maxTriangles": 90000,
+      "maxDrawCalls": 42,
+      "maxTriangles": 105000,
       "measured": {
-        "drawCalls": 581,
-        "triangles": 62973,
-        "programs": 10,
-        "geometries": 22,
+        "drawCalls": 28,
+        "triangles": 72877,
+        "programs": 16,
+        "geometries": 21,
         "textures": 16,
         "tier": "medium",
         "shadowMapSize": 1536
       }
     },
     "listowelHeritage3": {
-      "maxDrawCalls": 629,
-      "maxTriangles": 80000,
+      "maxDrawCalls": 56,
+      "maxTriangles": 85000,
       "measured": {
-        "drawCalls": 419,
-        "triangles": 56913,
-        "programs": 16,
-        "geometries": 26,
+        "drawCalls": 37,
+        "triangles": 58615,
+        "programs": 21,
+        "geometries": 25,
         "textures": 20,
         "tier": "medium",
         "shadowMapSize": 1536
       }
     },
     "played": {
-      "maxDrawCalls": 980,
-      "maxTriangles": 105000,
+      "maxDrawCalls": 72,
+      "maxTriangles": 120000,
       "measured": {
-        "drawCalls": 653,
-        "triangles": 74494,
-        "programs": 22,
-        "geometries": 33,
-        "textures": 19,
+        "drawCalls": 48,
+        "triangles": 83428,
+        "programs": 28,
+        "geometries": 32,
+        "textures": 21,
         "tier": "medium",
         "shadowMapSize": 1536
       }
@@ -234,9 +234,9 @@
       "measured": {
         "drawCalls": 28,
         "triangles": 10690,
-        "programs": 10,
+        "programs": 11,
         "geometries": 19,
-        "textures": 10,
+        "textures": 12,
         "tier": "medium",
         "shadowMapSize": 1024
       }
@@ -268,12 +268,12 @@
       }
     },
     "putt-water": {
-      "_bug": "KNOWN DEFECT, not a sanctioned cost. 187k triangles is 17x every other putt scene, on the board that should be the cheapest thing golf ships. Cause: PuttGL.tsx builds the hazard with makeWaterPlane(..., ydPerSegment=0.12), which saturates makeWaterPlane's 160-segment clamp on BOTH axes -> 160x160 quads = 51,200 triangles for one rectangle, again per shadow and reflection pass. It buys nothing visible: the visual gate reports a flat blue rectangle with no geometric wave relief (amplitude 0.09 units under a near-overhead camera). Raising ydPerSegment to ~0.6 should cut ~40k triangles per pass with no perceptible change. This ceiling exists so the gate has a baseline to work from -- do NOT read it as approval.",
+      "_bug": "PARTIALLY FIXED, and the original diagnosis was wrong. 187,010 -> 94,110. The note here used to blame makeWaterPlane's ydPerSegment (0.12, which saturated its 160-segment clamp on both axes). That was real but MINOR: raising it to 0.6 saved 41,900. Ablating the scene in the harness found the bulk elsewhere -- water.ts makeWetBankRect computed seg = max(w, d) / 0.35 and applied it to BOTH axes, so the 30x56 tide pool got the long side's 170 segments across its 32-unit short side: 170x170 quads = 57,800 triangles, submitted twice = 115,600, four fifths of this scene. Fixed per-axis (same intended 0.35 density, now actually applied), saving another 51,000. WHAT REMAINS, ~64,600, is a SHAPE problem, not a density one: the overlay is a full plane that tessellates a 30x56 interior at uniform alpha in order to draw a 1.1-unit band around its border. The fix is a border RING, which changes shared water geometry and needs its own visual gate. Until then this ceiling is a baseline, NOT approval -- 94k is still 9x every other putt scene, on the board that should be the cheapest thing golf ships.",
       "maxDrawCalls": 45,
-      "maxTriangles": 265000,
+      "maxTriangles": 135000,
       "measured": {
         "drawCalls": 30,
-        "triangles": 187010,
+        "triangles": 94110,
         "programs": 12,
         "geometries": 20,
         "textures": 11,
@@ -295,40 +295,40 @@
       }
     },
     "range": {
-      "maxDrawCalls": 404,
-      "maxTriangles": 20000,
+      "maxDrawCalls": 134,
+      "maxTriangles": 25000,
       "measured": {
-        "drawCalls": 269,
-        "triangles": 10726,
-        "programs": 17,
-        "geometries": 49,
+        "drawCalls": 89,
+        "triangles": 15440,
+        "programs": 23,
+        "geometries": 48,
         "textures": 21,
         "tier": "medium",
         "shadowMapSize": 1536
       }
     },
     "range-water": {
-      "maxDrawCalls": 435,
-      "maxTriangles": 30000,
+      "maxDrawCalls": 165,
+      "maxTriangles": 35000,
       "measured": {
-        "drawCalls": 290,
-        "triangles": 18172,
-        "programs": 17,
-        "geometries": 63,
+        "drawCalls": 110,
+        "triangles": 22886,
+        "programs": 23,
+        "geometries": 62,
         "textures": 24,
         "tier": "medium",
         "shadowMapSize": 1536
       }
     },
     "secondAim": {
-      "maxDrawCalls": 1343,
-      "maxTriangles": 115000,
+      "maxDrawCalls": 74,
+      "maxTriangles": 120000,
       "measured": {
-        "drawCalls": 895,
-        "triangles": 79792,
-        "programs": 22,
-        "geometries": 37,
-        "textures": 21,
+        "drawCalls": 49,
+        "triangles": 84508,
+        "programs": 28,
+        "geometries": 36,
+        "textures": 23,
         "tier": "medium",
         "shadowMapSize": 1536
       }

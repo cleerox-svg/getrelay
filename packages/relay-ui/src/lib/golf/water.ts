@@ -1372,8 +1372,15 @@ export function makeWetBankRect(
   const outer = band * 1.2;
   const w = width + outer * 2;
   const d = depth + outer * 2;
-  const seg = 2 + Math.round(Math.max(w, d) / 0.35);
-  const geo = new THREE.PlaneGeometry(w, d, seg, seg);
+  // PER AXIS. This used to be `Math.max(w, d) / 0.35` on BOTH axes, which gave a
+  // long thin pond the LONG side's segment count across its SHORT side: the
+  // 30×56 tide pool got 170×170 quads = 57,800 triangles, submitted twice, i.e.
+  // 115,600 — four fifths of `putt-water`'s whole budget, and 0.19 units per
+  // segment across an axis this function itself asks for 0.35 on. Same intended
+  // density, now actually applied.
+  const segW = 2 + Math.round(w / 0.35);
+  const segD = 2 + Math.round(d / 0.35);
+  const geo = new THREE.PlaneGeometry(w, d, segW, segD);
   geo.rotateX(-Math.PI / 2);
   const hw = width / 2;
   const hd = depth / 2;

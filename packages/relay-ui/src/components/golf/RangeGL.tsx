@@ -7,7 +7,6 @@ import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTextur
 import type { GolfCosmetics } from '../../lib/golf/cosmetics';
 import {
   addSkyDome,
-  createTreeKit,
   makeContactShadowTexture,
   makeFairwayTurf,
   makeFog,
@@ -46,6 +45,7 @@ import {
 } from '../../lib/scene3d/stats';
 import { resolveGolfQuality } from './scene/quality';
 import { attachSkyEnv, hemiFill } from './scene/env';
+import { buildGrove, type TreePlacement } from './scene/foliage';
 
 // Real-time 3D driving range (Three.js). Owns the WebGL renderer, scene and
 // camera; drives the headless RangeSim on a fixed-timestep loop; renders the
@@ -467,30 +467,30 @@ export default function RangeGL({
       scene.add(label);
     }
 
-    // --- Framing trees (shared kit) ------------------------------------
-    // Two-species low-poly grove from scenery.ts (broadleaf + pine, 5-tone
-    // palette, faceted so the sun catches every plane and casts a real shadow).
-    // Placement below stays range-specific; the range ground is flat so no y.
-    const { addBroadleaf, addPine } = createTreeKit(scene, track);
-
-    // Receding tree lines down both banks of the hazard (just outside the
-    // ±60yd water). The narrow portrait FOV can't frame trees at the tee, so
-    // these flank the fairway/water toward the horizon for depth. Broadleaves
-    // up front, pines woven in behind for a layered, natural tree line.
+    // --- Framing trees (shared, INSTANCED grove) ------------------------
+    // Two-species low-poly grove from scene/foliage.ts (broadleaf + pine, 5-tone
+    // palette, faceted so the sun catches every plane and casts a real shadow),
+    // committed as three InstancedMeshes instead of ~200 loose ones. Placement
+    // stays range-specific; the range ground is flat so no y. Receding lines down
+    // both banks of the hazard (just outside the ±60yd water) — the narrow
+    // portrait FOV can't frame trees at the tee, so these flank the fairway/water
+    // toward the horizon, broadleaves up front and pines woven in behind.
+    const grove: TreePlacement[] = [];
     for (let i = 0; i < 11; i++) {
       const z = -56 - i * 32;
-      const jitter = ((i * 37) % 11) - 5;
+      const j = ((i * 37) % 11) - 5;
       const fade = 1.15 - i * 0.045;
-      const pineL = i % 3 === 1;
-      const pineR = i % 3 === 2;
-      (pineL ? addPine : addBroadleaf)(-62 - (i % 2) * 5, z + jitter, fade, 1000 + i);
-      (pineR ? addPine : addBroadleaf)(62 + (i % 2) * 5, z - jitter, fade * 0.97, 2000 + i);
+      const kL = i % 3 === 1 ? 'pine' : 'broadleaf';
+      const kR = i % 3 === 2 ? 'pine' : 'broadleaf';
+      grove.push({ kind: kL, x: -62 - (i % 2) * 5, z: z + j, scale: fade, seed: 1000 + i });
+      grove.push({ kind: kR, x: 62 + (i % 2) * 5, z: z - j, scale: fade * 0.97, seed: 2000 + i });
       // A second, staggered row further out for depth (smaller, mostly pines).
       if (i % 2 === 0) {
-        addPine(-74 - (i % 3) * 4, z - 10 + jitter, fade * 0.82, 3000 + i);
-        addBroadleaf(75 + (i % 3) * 4, z + 8 - jitter, fade * 0.85, 4000 + i);
+        grove.push({ kind: 'pine', x: -74 - (i % 3) * 4, z: z - 10 + j, scale: fade * 0.82, seed: 3000 + i });
+        grove.push({ kind: 'broadleaf', x: 75 + (i % 3) * 4, z: z + 8 - j, scale: fade * 0.85, seed: 4000 + i });
       }
     }
+    buildGrove(scene, track, grove);
 
     // --- Back boundary net + posts -------------------------------------
     const netTex = track(makeNetTexture());

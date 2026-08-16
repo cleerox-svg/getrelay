@@ -534,10 +534,10 @@ export default function PuttGL({
             clearance: PUTT_WATER_LIFT - 0.05,
           });
         }
-        // Segment ~every 0.12 board units so the crests resolve on a small pond.
-        // 1.4-unit shoreline fade, so the pond laps its edge instead of ending
-        // on a hard rectangle (the board has no modeled bank to meet).
-        const geo = track(makeWaterPlane(rw, rh, PUTT_WATER_DEPTH, 0.12, 1.4));
+        // ~0.6 board units per segment. It WAS 0.12, saturating the 160-segment
+        // clamp on BOTH axes (51,200 triangles for ONE rectangle, per pass — 187k
+        // on `putt-water` vs ~10.7k elsewhere) for nothing: waveLen is 3.2 units.
+        const geo = track(makeWaterPlane(rw, rh, PUTT_WATER_DEPTH, 0.6, 1.4));
         const mesh = new THREE.Mesh(geo, waterKit.material);
         mesh.position.set(wx(cx), waterY, wz(cy));
         scene.add(mesh);

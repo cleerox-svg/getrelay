@@ -118,7 +118,9 @@ A data-driven **Range layout** picker (persisted, default `fairway`):
 ### Key files
 | Area | Path |
 |---|---|
-| Shared scene kit (turf/sky/trees/fog) | `packages/relay-ui/src/lib/golf/scenery.ts` |
+| Shared scene kit (turf/sky/fog) | `packages/relay-ui/src/lib/golf/scenery.ts` |
+| Instanced scatter primitive (shared kit; batcher + impostor quads) | `packages/relay-ui/src/lib/scene3d/instancing.ts` |
+| The tree grove — shared by Course + Range, 3 draw calls | `packages/relay-ui/src/components/golf/scene/foliage.ts` |
 | Shared WATER (level geometry, Gerstner waves, Fresnel + sky/planar reflection, foam, splash, wet bank, reeds, quality tiers) | `packages/relay-ui/src/lib/golf/water.ts` |
 | Headless screenshot harness | `packages/relay-ui/scripts/shoot-golf.mjs` + `golfpreview.html` + `src/golfpreview.tsx` |
 | Quality tier POLICY (shared kit) + GPU instrumentation | `packages/relay-ui/src/lib/scene3d/quality.ts`, `stats.ts` |
@@ -425,8 +427,12 @@ telemetry**, not guesses — that's why both exist.
 The Course and Range 3D scenes drifted — the Range grew rich lit turf, a cloud
 sky and a two-species tree grove while the Course stayed on flat paint. The
 shared ingredients now live in **`lib/golf/scenery.ts`** (turf colour + normal,
-sky dome, fog, tree kit) and BOTH `CourseGL` and `RangeGL` import them, so a
-look change happens once. The Course terrain is multi-surface (per-vertex
+sky dome, fog) and BOTH `CourseGL` and `RangeGL` import them, so a
+look change happens once. The **tree grove** is shared the same way but lives in
+**`components/golf/scene/foliage.ts`** — it moved there when it was instanced,
+because an `InstancedMesh` needs its count up front and so cannot be a pair of
+`add…()` calls that each drop a `Group` into the scene. Same rule applies: change
+the trees THERE, not per-scene. The Course terrain is multi-surface (per-vertex
 `SURFACE_RGB`), so it uses `makeTurfColor('neutral')` — a near-white luminance
 detail that MULTIPLIES the vertex colour (keeping each lie's hue while adding
 mown texture); the Range bakes `'green'`. `three` stays lazy: `scenery.ts` is
@@ -570,11 +576,14 @@ first. Three pieces, all in `/GRAPHICS.md` §4's terms:
   so baseball can adopt it. Regenerate a baseline explicitly with
   `--update-budgets` — never automatically, or the gate rewrites its own
   thresholds when they fail. Baselines from the committed run: **Course scenes
-  320–1,034 draw calls / 56k–115k triangles, Range 269–290 / 11k–18k, Mini-Golf
-  27–38 / 11k (187k on `putt-water`)**.
-  ⚠ **1,034 draw calls on the tee view of Hole 1 is the standout finding** — an
-  order of magnitude above the whole baseball stadium — and the trees/reeds are
-  the obvious suspects. It is baselined, not endorsed.
+  24–50 draw calls / 59k–119k triangles, Range 89–110 / 15k–23k, Mini-Golf
+  27–38 / 11k (94k on `putt-water`)**.
+  ⚠ **1,034 draw calls on the tee view of Hole 1 WAS the standout finding** — an
+  order of magnitude above the whole baseball stadium. It is now **41**: the cause
+  was un-instanced foliage, see "Instanced foliage" below. The ceilings were
+  re-baselined DOWN in the same change. Tightening a ceiling after a measured win
+  is correct, and is the opposite of the rule against regenerating one because it
+  failed.
 - ⚠ **Worked example of the blind spot: scene IBL cost ZERO draw calls.** Turning
   on `scene.environment` measured identical draw calls and identical triangles on
   all six compared scenes — only `textures` moved, +2. That number is true and it
@@ -627,7 +636,11 @@ too and will legitimately differ.
 tier work).** Recorded here because a subagent's report is not a tracker. Owner
 for all four: `golf`.
 
-1. **`course-celebrate`'s camera is degenerate.** The frame is a straight-down
+**Defects 1 and 2 below are FIXED** (see "Instanced foliage" for the numbers);
+3, 4 and 5 are still open. The text is kept because the *diagnosis* of #2 turned
+out to be wrong in an instructive way.
+
+1. ~~**`course-celebrate`'s camera is degenerate.**~~ **FIXED.** The frame is a straight-down
    extreme close-up of the cup — no sky, no horizon, no stripes, no trees — and
    the ball reads as a flat hexagon because you are looking at the sphere's pole
    cap, where the dimple normal map collapses into facets. It is useless as a QA
@@ -641,7 +654,11 @@ for all four: `golf`.
    it 3.5 units and looking down. The two in-flight branches just above (~2588,
    ~2600) both guard this with `if (tmpDir.lengthSq() < 1e-4)`; **this branch is
    simply missing the guard.** One-line fix: fall back to the last aim direction.
-2. **`putt-water` draws 187,010 triangles**, 17× every other putt scene, on the
+   → **Done**, falling back to `aimDir()` — the aimed line, which is where the
+   player was looking when the putt dropped. The frame is now sky + horizon +
+   rough band + green + cup + flagstick + confetti, i.e. a useful QA frame. It is
+   also the one scene whose before/after diff is ~100% of pixels, by design.
+2. **`putt-water` drew 187,010 triangles**, 17× every other putt scene, on the
    board that should be the cheapest thing golf ships. `PuttGL.tsx:555` calls
    `makeWaterPlane(rw, rh, PUTT_WATER_DEPTH, 0.12, 1.4)`; at 0.12 board-units per
    segment a mini-golf pond saturates `makeWaterPlane`'s 160-segment clamp on
@@ -651,6 +668,26 @@ for all four: `golf`.
    near-overhead camera), and the 1.4-unit shoreline fade does not read either.
    `ydPerSegment ≈ 0.6` should cut ~40k triangles per pass invisibly. The budget
    entry carries a `_bug` note so the ceiling is not mistaken for approval.
+   → **Half done, and THE DIAGNOSIS ABOVE WAS WRONG in an instructive way.**
+   `ydPerSegment` 0.12 → 0.6 is in, and it saved exactly the predicted 41,900 —
+   but that left **145,110**, so the water plane was never the bulk. Ablating the
+   scene in the harness (rendering it with the bank off, the reeds off, and both
+   off) found the real cost: **`water.ts` `makeWetBankRect` was 115,600 of the
+   187,010.** It computed `seg = Math.round(Math.max(w, d) / 0.35)` and passed
+   that to BOTH axes of the `PlaneGeometry`, so the 30×56 tide pool got the LONG
+   side's 170 segments across its 32-unit SHORT side — 0.19 units per segment on
+   an axis the function itself asks for 0.35 on. 170×170 quads = 57,800 triangles,
+   submitted twice. Fixed per-axis (`segW`/`segD`; same intended density, now
+   actually applied), saving another 51,000 → **94,110**.
+   **What remains (~64,600) is a SHAPE problem, not a density one** and is
+   deliberately NOT fixed here: the wet bank is a full plane that tessellates a
+   30×56 *interior* at uniform alpha in order to draw a 1.1-unit band around its
+   *border*. It wants to be a ring. That changes shared water geometry and needs
+   its own visual gate. The `_bug` note was therefore **rewritten, not removed** —
+   94k is still 9× every other putt scene.
+   *Lesson worth keeping: the harness can ablate. Rendering a scene with one
+   object removed costs one 30-second run and beats arithmetic about which mesh is
+   expensive.*
 3. **The tee peg pokes through the top of the ball** (`course-hole1`, visible at
    10×). `LIFT = 0.05` + `pegH = 0.42` puts the peg top at ground + 0.47, while
    `BALL_R = 0.2` puts the ball crown at ground + 0.40 — a 0.07-unit overshoot.
@@ -665,6 +702,69 @@ for all four: `golf`.
    one thing golf's own visual gate cannot review is sand, which is why the sand
    work below had to be judged from a 2× crop of a single frame. A dedicated
    greenside-bunker view is cheap and belongs in `SCENES`.
+
+**Instanced foliage — the single largest GPU win measured on this codebase.**
+The tee view's 1,034 draw calls were **559 individual meshes of tree**. There was
+no `InstancedMesh` anywhere in the golf render path; `scenery.ts` `createTreeKit`
+built a `Group` per tree — one trunk plus five-to-seven leaf blobs for a
+broadleaf, one trunk plus four-to-five cone tiers for a pine — and Hole 1 plants
+92 trees. With every caster submitted a second time for the shadow map that is
+1,118 submissions, which is the measured number minus frustum culling. It was not
+a batching failure; it was un-instanced foliage doing exactly what it was written
+to do.
+
+- **`lib/scene3d/instancing.ts` (shared kit).** Collect a transform and an
+  optional per-instance tint per prop, commit **one `InstancedMesh` per distinct
+  geometry**. Two-phase because an `InstancedMesh` needs its count up front. Also
+  ships `makeImpostorQuads` (N crossed quads, one indexed geometry, atlas-cell
+  UVs) for a future far band. No RNG in the module by design — placement jitter is
+  the caller's, and must stay seeded. Game-neutral: a stadium crowd is the same
+  primitive, and baseball can take it as-is.
+- **`components/golf/scene/foliage.ts` (golf's consumer).** `buildGrove(scene,
+  track, placements)` — it takes the whole list rather than handing back an
+  `add…()` pair, because a builder you have to remember to `commit()` is one
+  somebody will forget, leaving a treeless course that typechecks. Both `CourseGL`
+  and `RangeGL` call it, so the grove is still ONE implementation and cannot
+  drift; `scenery.ts` keeps a pointer where `createTreeKit` used to be.
+- **Three batches, not four.** Trunk / leaf blob / pine tier. The two species'
+  trunks are the same tapered cylinder at different sizes (0.45→0.85 over 5.5 vs
+  0.32→0.6 over 5.0, taper ratios 0.5294 and 0.5333), so ONE unit cylinder scaled
+  per instance serves both, reproducing the pine's top radius to within 0.0024 yd.
+  Three's instancing path divides the normal by each column's squared length
+  before applying the instance matrix, so a non-uniformly scaled cone still shades
+  with the correct slope.
+- **The 5 leaf materials became one white material + `instanceColor`.** Three
+  multiplies `instanceColor` into `diffuseColor`, so the material MUST be white or
+  the palette comes out as a tint of one colour. Same five hexes, one program.
+- **The art is provably unchanged.** The per-tree RNG **draw order** is
+  byte-identical to `createTreeKit`'s, so a seed produces the tree it always
+  produced. A throwaway parity harness rebuilt the old builder and compared all
+  559 world matrices and leaf colours: **558 identical, 1 differing by 0.001 yd**
+  (float32 `instanceMatrix` vs float64 `matrixWorld`). Canopy density, silhouette
+  variety and shadow contribution are indistinguishable at 2× zoom. Variety was
+  never in the meshes or the materials — it is in the seeded jitter, and an
+  instance matrix expresses all of it.
+- **The trade, stated: triangles go UP.** An `InstancedMesh` is frustum-culled
+  all-or-nothing, so the whole grove is submitted in every view including the
+  trees behind the camera. That is +1.6k to +9.9k triangles per course scene and
+  +4.7k on the range. Right way round on mobile — submission is the cost, the
+  shadow pass was drawing most of them anyway, and a grove is ~10k triangles
+  against a terrain mesh's 50k+.
+- **Measured, worst-first.** course **1034 → 41**, augusta2 964 → 33, secondAim
+  895 → 49, aim 790 → 50, augusta13 685 → 24, played 653 → 48, approach 593 → 32,
+  celebrate 583 → 30, green 581 → 28, augusta16 424 → 39, listowel3 419 → 37,
+  augusta12 365 → 39, augusta16pond 320 → 34, range-water 290 → 110, range
+  269 → 89. **The worst scene in the whole game is now 110.** `budgets.golf.json`
+  was re-baselined DOWN in the same change.
+- **Determinism held.** Two consecutive post-change runs differ on exactly the
+  five documented water scenes (`course-played-aim`, `putt-water`, `augusta-12`,
+  `listowel-heritage-3`, `augusta-16-redbud`) at ≤0.011% and max Δ 42. No new
+  scene entered that set; `course-hole1`, `course-celebrate` and both range scenes
+  are byte-identical run to run.
+- **Entry chunk: +0.03 kB** (844.54 → 844.57 kB, gzip 240.40 → 240.42). `three`
+  stays its own 537.75 kB chunk and `foliage` came out as its own 3.13 kB lazy
+  chunk — it is imported only by the `lazy()`-loaded `*GL.tsx`, so it never
+  reaches the app entry.
 
 **Scene-wide IBL, and real sand.** Two changes that deliberately move pixels.
 
