@@ -702,6 +702,26 @@ out to be wrong in an instructive way.
    one thing golf's own visual gate cannot review is sand, which is why the sand
    work below had to be judged from a 2× crop of a single frame. A dedicated
    greenside-bunker view is cheap and belongs in `SCENES`.
+6. **The Augusta flowering holes render no blossom at all.** Counting pink pixels
+   across `augusta-2-pink-dogwood`, `augusta-13-azalea` and `augusta-16-redbud`:
+   **zero, in every one** — and identically zero before and after the instancing
+   change, so this is content that was never built, not something that broke.
+   Three holes are named for flowers the renderer does not draw, and the grove on
+   all three is plain green. This is the clearest single example of the thesis in
+   `/GRAPHICS.md`: the gap is **content**, not the renderer. A per-species blossom
+   tint on the existing instanced canopy is now nearly free — `foliage.ts` already
+   carries per-instance colour, so the whole cost is choosing which trees bloom.
+7. **The hole-out frame does not actually show the ball.** Now that
+   `course-celebrate`'s camera is fixed (defect 1), the frame is legible — sky,
+   horizon, rough, green, cup, flagstick, confetti — but the fallback direction
+   puts the **flagstick directly between the camera and the ball**, leaving two
+   ~2 px wedges visible at 10×. Defensible, since a holed ball is at the bottom of
+   the cup, but the one frame whose job is to evidence "ball in cup" does not.
+   Nudging the fallback azimuth off the pin axis would fix it.
+8. **Confetti reads as stuck pixels.** Sparse, low-alpha, axis-aligned, unrotated
+   flat squares that blend into the green. Pre-existing and untouched by any of
+   this work — but **nobody had ever seen it**, because until defect 1 was fixed
+   the celebration camera pointed straight down at the ball's pole cap.
 
 **Instanced foliage — the single largest GPU win measured on this codebase.**
 The tee view's 1,034 draw calls were **559 individual meshes of tree**. There was
