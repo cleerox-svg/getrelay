@@ -22,6 +22,7 @@ import {
   engageVirtualClock,
   freezeSceneClock,
   sceneClockPending,
+  sceneNow,
 } from './lib/scene3d/clock';
 import CourseGL from './components/golf/CourseGL';
 import RangeGL from './components/golf/RangeGL';
@@ -44,6 +45,8 @@ declare global {
       advance: (ms: number) => void;
       freeze: () => void;
       pending: () => number;
+      /** Virtual time now. A determinism probe: it must match across runs. */
+      now: () => number;
     };
   }
 }
@@ -58,11 +61,17 @@ declare global {
 // produce two different PNGs (measured: 23 of 25 scenes differed). Seeding the
 // RNGs does not help; the generators were already seeded. TIME was the variable.
 //
-// So the preview runs on a VIRTUAL clock: one fixed 60 fps step per rendered
-// frame, engaged here before any scene mounts, and FROZEN the moment we raise
+// So the preview runs on a VIRTUAL clock: one fixed step per RENDERED FRAME,
+// engaged here before any scene mounts, and FROZEN the moment we raise
 // `window.__golfReady`. Frozen means dt === 0 — no substeps, no uniform moves —
 // so the shooter's settle delay and every later rAF tick render the identical
 // frame no matter how long it waits.
+//
+// Readiness is likewise counted in FRAMES, never milliseconds. That matters more
+// than it sounds: SwiftShader renders these scenes at ~3 fps, so the beacon's old
+// "45 frames" condition took ~15 s and its 4 s wall-clock safety net beat it to
+// the flag on EVERY scene — the frame path never once ran, and each shot froze
+// wherever the machine happened to be. Frames in, milliseconds out.
 //
 // `window.__sceneClock.advance(ms)` hands the scene an exact, replayable slice
 // of animation (used by the drag/second-aim sequences, which need the camera to
@@ -70,11 +79,28 @@ declare global {
 // touches any of this: `lib/scene3d/clock.ts` is a pass-through to
 // `performance.now()` unless something engages it, and only this file does.
 // ---------------------------------------------------------------------------
-engageVirtualClock();
+// One virtual frame = 100 ms. That is not arbitrary: all three render loops
+// CLAMP their dt to 100 ms, and under SwiftShader a real frame takes ~200–350 ms,
+// so 100 ms per frame is exactly what the scenes were already being fed — this
+// keeps the captured look, it just makes the amount of it fixed. A 16.7 ms step
+// would also be deterministic but far too slow to converge: the course camera
+// eases by `1 − 0.001^dt`, which is 50% of the remaining distance per 100 ms
+// frame and only 11% per 60 fps frame, so the `?at=` views (which teleport the
+// ball and let the camera fly to it) would be screenshotted mid-flight.
+const VIRTUAL_STEP_MS = 100;
+// Frames of settle before we freeze and report ready. Counted in FRAMES, so it
+// is ~1.2 s of virtual time on every machine — close to what the old harness
+// happened to deliver on this one, and enough for the camera easing to converge
+// (0.5^12) while still catching the hole-out celebration mid-flight (it runs
+// from ~0.4 s to ~2.0 s).
+const SETTLE_FRAMES = 12;
+
+engageVirtualClock(1000, VIRTUAL_STEP_MS);
 window.__sceneClock = {
   advance: (ms: number) => advanceSceneClock(ms),
   freeze: () => freezeSceneClock(),
   pending: () => sceneClockPending(),
+  now: () => sceneNow(),
 };
 
 const params = new URLSearchParams(location.search);
@@ -114,7 +140,7 @@ function ReadyBeacon({ until }: { until?: () => boolean }) {
     const tick = () => {
       // If a readiness predicate is given (e.g. wait for a fired shot to rest),
       // hold until it's satisfied; otherwise a few frames to let textures land.
-      if (until ? until() && frames >= 20 : frames >= 45) {
+      if (frames >= SETTLE_FRAMES && (until ? until() : true)) {
         ready();
         return;
       }
@@ -123,16 +149,18 @@ function ReadyBeacon({ until }: { until?: () => boolean }) {
     };
     raf = requestAnimationFrame(tick);
     // Hard fallback so the shooter never hangs. This is the ONE wall-clock path
-    // left, and tripping it would freeze the scene at an arbitrary frame — i.e.
-    // a non-deterministic shot. It is set well above the worst observed
-    // frame-count time (and below the shooter's own 15 s ready timeout for the
-    // non-predicate case) so it only ever fires on a genuinely stuck scene.
+    // left, and tripping it freezes the scene at an arbitrary frame — i.e. a
+    // NON-deterministic shot, which is exactly the bug this file now exists to
+    // prevent. It used to be 4 s, which under SwiftShader's ~3 fps was shorter
+    // than the settle itself, so it fired on EVERY scene and the "45 frames"
+    // path never once ran. It is now far above the worst observed settle so it
+    // only trips on a genuinely stuck scene.
     const t = window.setTimeout(() => {
       // console.error (not warn) — shoot-golf.mjs captures errors, and a shot
       // frozen at an arbitrary frame is a result worth failing loudly over.
       console.error('[golfpreview] ready fallback fired — this shot is NOT deterministic');
       ready();
-    }, until ? 16000 : 12000);
+    }, 30000);
     return () => {
       cancelAnimationFrame(raf);
       window.clearTimeout(t);

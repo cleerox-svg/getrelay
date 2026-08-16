@@ -111,7 +111,12 @@ const SCENES = {
   },
 };
 const VIEWPORT = { width: 900, height: 1600 };
-const READY_TIMEOUT_MS = 15000;
+// A scene is ready after a FIXED number of rendered frames (see
+// src/golfpreview.tsx), and SwiftShader renders these at ~3 fps, so readiness
+// takes ~4–8 s of wall time here. This budget has to clear the preview's own
+// 30 s non-determinism fallback, or a slow scene would be captured mid-settle
+// instead of failing loudly.
+const READY_TIMEOUT_MS = 40000;
 // Sim fixed timestep (mirror of tuning.ts FIXED_MS) — used to step a fired shot
 // to true rest deterministically, since headless rAF is throttled.
 const FIXED_MS = 1000 / 120;
@@ -145,6 +150,28 @@ async function loadPlaywright() {
   );
 }
 
+// Block until the page has rendered `n` more animation frames.
+//
+// This closes a one-frame compositor race. `pending() === 0` goes true inside
+// the render loop's LAST budgeted frame, but the pixels Chromium hands back to
+// captureScreenshot are whatever the compositor last picked up — which can still
+// be the frame before it. That is a full virtual step of animation, and it was
+// the entire residual after the clock went virtual: 20/25 scenes byte-identical,
+// the other 5 differing by a few dozen pixels on a distant shoreline. The clock
+// is already frozen by the time we get here, so these extra frames are all the
+// SAME frame; whichever one the compositor shows, it is the right one.
+async function settleFrames(page, n = 3) {
+  await page.evaluate(
+    (count) =>
+      new Promise((resolve) => {
+        let left = count;
+        const tick = () => (left-- > 0 ? requestAnimationFrame(tick) : resolve());
+        requestAnimationFrame(tick);
+      }),
+    n,
+  );
+}
+
 // Hand the scene an exact slice of animation and wait for it to render.
 //
 // The preview freezes a VIRTUAL clock the moment it reports ready (see
@@ -153,8 +180,8 @@ async function loadPlaywright() {
 // wait, which is what makes two runs byte-identical. Where a sequence genuinely
 // needs motion (a camera settling after a shot, water moving on a bit before we
 // capture), ask for it in VIRTUAL milliseconds instead of sleeping. The clock
-// spends the budget one fixed 60 fps step per rendered frame and re-freezes, so
-// the result depends on the amount asked for and nothing else.
+// spends the budget one fixed step per rendered frame and re-freezes, so the
+// result depends on the amount asked for and nothing else.
 async function advanceScene(page, ms) {
   const drained = await page.evaluate((m) => {
     const c = window.__sceneClock;
@@ -169,10 +196,12 @@ async function advanceScene(page, ms) {
     return;
   }
   try {
-    await page.waitForFunction('window.__sceneClock.pending() === 0', { timeout: 10000 });
+    await page.waitForFunction('window.__sceneClock.pending() === 0', { timeout: 30000 });
   } catch {
     console.log(`  (warn: virtual clock did not drain ${ms}ms — is the render loop running?)`);
   }
+  // Frozen frames only from here — see settleFrames().
+  await settleFrames(page);
 }
 
 // Multi-aim regression driver. Renders a REAL first aim at the tee (a genuine
