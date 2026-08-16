@@ -54,12 +54,6 @@ const SCENES = {
   'putt-slope': { query: 'scene=putt&hole=6', label: 'putt-sidehill' },
   'putt-ramp': { query: 'scene=putt&hole=3', label: 'putt-ramp' },
   'putt-bank': { query: 'scene=putt&hole=1', label: 'putt-bank-rail' },
-  // Pirate Cove hole 2 (0-based idx 1) carries a water hazard — the only putt
-  // view that exercises the shared water surface.
-  'putt-water': {
-    query: 'scene=putt&course=pirate-cove&hole=1',
-    label: 'putt-water-cove',
-  },
   // The mini-golf ball sits higher on screen than the course tee, so start the
   // pull ON the ball (dragFrom, viewport fractions) — the grab test needs the
   // pointer-down within the ball's grab radius.
@@ -83,6 +77,8 @@ const SCENES = {
     label: 'putt-pendulum',
   },
   'putt-tunnel': { query: 'scene=putt&course=pirate-cove&hole=2', label: 'putt-tunnel' },
+  // Pirate Cove hole 2 (0-based idx 1) carries a water hazard — the only putt
+  // view that exercises the shared water surface.
   'putt-water': { query: 'scene=putt&course=pirate-cove&hole=1', label: 'putt-water' },
   'putt-sand': { query: 'scene=putt&course=pirate-cove&hole=0', label: 'putt-sand' },
   // Regression guard for the frustum-cull second-aim bug: the aim arc/reticles
