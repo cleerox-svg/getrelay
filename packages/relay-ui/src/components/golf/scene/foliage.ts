@@ -34,6 +34,22 @@
  * `instanceColor`, which three multiplies into `diffuseColor` — the same five
  * colours, one program.
  *
+ * BLOSSOM RIDES THE SAME BATCH
+ * ----------------------------
+ * A flowering hole (`CourseHole.bloom`, authored in the hole DATA — the renderer
+ * never parses the hole's name) tints the crown of a seeded fraction of its
+ * broadleaves toward a blossom colour and adds a few smaller flower clusters.
+ * Both are ordinary leaf-blob instances: the same unit icosahedron and the same
+ * white material, differing only in `instanceColor`. So the whole feature costs
+ * **zero extra draw calls** — 20 triangles per cluster and nothing else. That is
+ * the constraint it was designed against; a mesh per blooming tree would have
+ * undone the 25× win this file exists for.
+ *
+ * The blossom tint is drawn from a SEPARATE generator seeded off the same tree
+ * seed, never from `r()`. That is deliberate: it means a blooming tree keeps the
+ * exact silhouette, crown count, blob placement and jitter it would have had
+ * plain, so bloom moves colour and nothing else.
+ *
  * THE TRADE, STATED
  * -----------------
  * An `InstancedMesh` is frustum-culled all-or-nothing, so the whole grove is now
@@ -61,6 +77,13 @@ export interface TreePlacement {
   scale: number;
   seed: number;
   y?: number;
+  /**
+   * Blossom colour for a flowering tree, or absent for a plain green one. The
+   * CHOICE of which trees flower is made upstream, in the hole data
+   * (`terrain.courseTrees`), so it is seeded, testable without `three`, and
+   * cannot drift from what the sim sees. Broadleaves only — pines ignore it.
+   */
+  bloom?: number;
 }
 
 /**
@@ -68,7 +91,11 @@ export interface TreePlacement {
  * collides against, so drawn == played) to grove placements. World z = −d.
  */
 export function groveFromCourseTrees(trees: readonly CourseTree[]): TreePlacement[] {
-  return trees.map((t) => ({ kind: t.kind, x: t.x, z: -t.d, scale: t.scale, seed: t.seed, y: t.ground }));
+  return trees.map((t) => {
+    const p: TreePlacement = { kind: t.kind, x: t.x, z: -t.d, scale: t.scale, seed: t.seed, y: t.ground };
+    if (t.bloom !== undefined) p.bloom = t.bloom;
+    return p;
+  });
 }
 
 /** The 5-tone leaf palette, unchanged from the per-material version. */
@@ -99,6 +126,37 @@ function treeRng(seed: number): () => number {
 
 const pickLeaf = (r: number): number =>
   LEAF_COLORS[Math.floor(r * LEAF_COLORS.length)] ?? LEAF_COLORS[0]!;
+
+/**
+ * How far a flowering crown blob is pushed toward the blossom colour, at least.
+ * The remaining 0.4 is seeded spread, so the crown is mostly in flower with
+ * green showing through rather than a flat repaint. Set this low and the tree
+ * reads as measles: one pink blob in six is a diseased tree, not a blossom.
+ */
+const BLOOM_MIX_MIN = 0.6;
+/**
+ * Extra flower clusters per blooming tree. Small, near-pure blossom, hung around
+ * the crown's outside so the bloom reads as flowers ON a tree rather than a tree
+ * that was painted. They are leaf-blob instances, so 3 of them cost 60 triangles
+ * and no draw call.
+ */
+export const BLOOM_TUFTS = 3;
+
+const _mixA = new THREE.Color();
+const _mixB = new THREE.Color();
+
+/**
+ * Blend `base` toward `bloom` by `BLOOM_MIX_MIN + (1−BLOOM_MIX_MIN)·r`, where
+ * `r` is a seeded [0,1) roll. Both colours go through `setHex`, so the mix
+ * happens in three's working (linear) space and comes back as sRGB hex — the
+ * same round trip the palette already makes.
+ */
+function blossom(base: number, bloom: number, r: number): number {
+  return _mixA
+    .setHex(base)
+    .lerp(_mixB.setHex(bloom), BLOOM_MIX_MIN + (1 - BLOOM_MIX_MIN) * r)
+    .getHex();
+}
 
 /**
  * Build the whole grove and add it to the scene.
@@ -156,6 +214,12 @@ export function buildGrove(
     const r = treeRng(t.seed);
     const y = t.y ?? 0;
 
+    // Blossom draws from its OWN generator so it cannot perturb `r()`: a
+    // flowering tree keeps the exact shape, crown count and jitter the same seed
+    // gives it plain, and bloom is provably a colour-only change.
+    const bloomHex = t.kind === 'broadleaf' ? t.bloom : undefined;
+    const br = bloomHex === undefined ? null : treeRng((t.seed ^ 0x9e3779b9) >>> 0);
+
     if (t.kind === 'broadleaf') {
       // RNG DRAW ORDER IS LOAD-BEARING — it reproduces the old tree kit exactly.
       const lean = (r() - 0.5) * 0.12;
@@ -171,7 +235,7 @@ export function buildGrove(
         const bsy = bs * (0.8 + r() * 0.25);
         const rot = [r() * 3, r() * 3, r() * 3] as const;
         const slot = crown[i]!;
-        slot.c = col;
+        slot.c = br ? blossom(col, bloomHex!, br()) : col;
         composeInstance(
           slot.m,
           Math.cos(ang) * rad,
@@ -193,6 +257,23 @@ export function buildGrove(
       for (let i = 0; i < blobs; i++) {
         local.copy(crown[i]!.m);
         push('leaf', crown[i]!.c);
+      }
+      // Flower clusters — same geometry, same material, same InstancedMesh, so
+      // this is triangles only. Hung wider (0.55–1.05 crownR) and smaller
+      // (0.3–0.52 crownR) than a leaf blob, biased to the upper crown where a
+      // flowering tree actually carries its blossom.
+      if (br) {
+        for (let i = 0; i < BLOOM_TUFTS; i++) {
+          const ang = br() * Math.PI * 2;
+          const rad = crownR * (0.55 + br() * 0.5);
+          const by = crownY + (br() - 0.3) * crownR * 0.8;
+          const bs = crownR * (0.3 + br() * 0.22);
+          composeInstance(local, Math.cos(ang) * rad, by, Math.sin(ang) * rad, 0, ang, 0, bs, bs * 0.85, bs);
+          // Pure blossom, lightened up to 40% toward white — flowers catch the
+          // sun where leaves do not, and it keeps the clusters from flattening
+          // into one silhouette against the tinted crown behind them.
+          push('leaf', blossom(0xffffff, bloomHex!, br()));
+        }
       }
     } else {
       const tiers = 4 + Math.floor(r() * 2);

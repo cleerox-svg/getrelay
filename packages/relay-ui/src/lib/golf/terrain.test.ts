@@ -17,6 +17,7 @@ import {
   surfaceAt,
   corridorHalfAt,
   corridorEdgeDist,
+  courseTrees,
   fairwayEdgeDist,
   edgeRadius,
   edgeNoise,
@@ -561,5 +562,88 @@ describe('terrain corridor — corner bevel', () => {
       else if (sawRough) roughThenFairway = true; // fairway AFTER rough = a gap
     }
     expect(roughThenFairway).toBe(false);
+  });
+});
+
+// --- Bloom (flowering canopy) ----------------------------------------------
+// The contract is narrow and worth pinning exactly: a bloom is a RENDER TINT and
+// nothing else. If any of these fail, a hole named for a flower has started
+// changing where the ball goes.
+describe('flowering canopy (hole.bloom) — a render tint and nothing else', () => {
+  const BLOOMING: CourseHole = {
+    ...HOLE_1,
+    bloom: { color: 0xf2a0bd, fraction: 0.6 },
+  };
+
+  it('leaves a hole without a bloom field byte-identical, absent key and all', () => {
+    const plain = courseTrees(HOLE_1);
+    expect(plain.some((t) => 'bloom' in t)).toBe(false);
+    // JSON, not toEqual: an accidental `bloom: undefined` would pass toEqual.
+    expect(JSON.stringify(plain)).toBe(JSON.stringify(courseTrees(HOLE_1)));
+  });
+
+  it('changes NOTHING the sim reads — same trees, same trunks, same ground', () => {
+    const plain = courseTrees(HOLE_1);
+    const flowering = courseTrees(BLOOMING);
+    expect(flowering).toHaveLength(plain.length);
+    for (let i = 0; i < plain.length; i++) {
+      const { bloom, ...rest } = flowering[i]!;
+      // Every field the physics or the placement touches is untouched.
+      expect(rest).toEqual(plain[i]);
+      // …and the tint, where present, is the hole's authored colour.
+      if (bloom !== undefined) expect(bloom).toBe(0xf2a0bd);
+    }
+  });
+
+  it('flowers a seeded FRACTION of the broadleaves, and never a pine', () => {
+    const trees = courseTrees(BLOOMING);
+    const broadleaf = trees.filter((t) => t.kind === 'broadleaf');
+    const pines = trees.filter((t) => t.kind === 'pine');
+    expect(broadleaf.length).toBeGreaterThan(10);
+    expect(pines.some((t) => t.bloom !== undefined)).toBe(false);
+
+    const bloomed = broadleaf.filter((t) => t.bloom !== undefined).length;
+    // A fraction, not all and not none — a uniformly pink grove reads as paint
+    // and an empty one is the defect this exists to fix.
+    expect(bloomed).toBeGreaterThan(0);
+    expect(bloomed).toBeLessThan(broadleaf.length);
+    // Within ±0.25 of the requested share on a grove this size.
+    expect(Math.abs(bloomed / broadleaf.length - 0.6)).toBeLessThan(0.25);
+  });
+
+  it('picks the SAME trees on every load (the screenshot gate depends on it)', () => {
+    const a = courseTrees(BLOOMING).map((t) => t.bloom ?? 0);
+    const b = courseTrees(BLOOMING).map((t) => t.bloom ?? 0);
+    expect(a).toEqual(b);
+  });
+
+  it('scales monotonically with `fraction`, and 0 flowers nothing', () => {
+    const count = (fraction: number) =>
+      courseTrees({ ...HOLE_1, bloom: { color: 0xffffff, fraction } }).filter(
+        (t) => t.bloom !== undefined,
+      ).length;
+    expect(count(0)).toBe(0);
+    expect(count(0.3)).toBeLessThanOrEqual(count(0.7));
+    expect(count(0.7)).toBeLessThanOrEqual(count(1));
+    // fraction 1 flowers every broadleaf and still no pine.
+    const all = courseTrees({ ...HOLE_1, bloom: { color: 0xffffff, fraction: 1 } });
+    expect(all.filter((t) => t.bloom !== undefined).length).toBe(
+      all.filter((t) => t.kind === 'broadleaf').length,
+    );
+  });
+
+  it('varies WHICH trees flower per hole, so two flowering holes do not rhyme', () => {
+    // Tree seeds are a function of `d` alone, so without mixing the hole's
+    // terrain seed into the roll every flowering hole would bloom at identical
+    // downrange stations — a visible repeat across a round.
+    const pattern = (seed: number) =>
+      courseTrees({
+        ...HOLE_1,
+        terrain: { ...HOLE_1.terrain, seed },
+        bloom: { color: 0xffffff, fraction: 0.5 },
+      })
+        .map((t) => (t.bloom === undefined ? '.' : '#'))
+        .join('');
+    expect(pattern(202)).not.toBe(pattern(213));
   });
 });

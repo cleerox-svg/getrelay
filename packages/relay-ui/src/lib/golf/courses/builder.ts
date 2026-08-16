@@ -12,6 +12,7 @@ import {
   type CircleFeature,
   type CourseHole,
   type GreenDef,
+  type HoleBloom,
   type Pt,
 } from '../terrain';
 import { greenRollDecel } from '../greenPhysics';
@@ -42,6 +43,8 @@ export interface HoleInput {
   par: number;
   yards: number;
   name?: string;
+  // Optional flowering canopy (render-only) — see terrain.ts "THE CANOPY".
+  bloom?: HoleBloom;
   tee?: Pt;
   pin: Pt;
   centerline: Pt[];

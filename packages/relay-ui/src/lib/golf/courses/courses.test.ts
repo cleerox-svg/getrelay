@@ -16,6 +16,7 @@ import {
   surfaceAt,
   heightAt,
   greenPadRadius,
+  courseTrees,
   EDGE_WOBBLE,
   type CourseHole,
 } from '../terrain';
@@ -178,4 +179,59 @@ describe('golf courses — per-hole invariants + playability', () => {
       }
     });
   }
+});
+
+// --- Flowering canopy (data guard) -----------------------------------------
+// Augusta names 13 of its 18 holes after a flowering plant and every one of them
+// used to render a plain green tree line (GOLF.md defect 6). The blossom is
+// authored per hole as DATA — deliberately NOT derived from the display name at
+// render time — so this is the guard that the data and the names still agree.
+describe('Augusta — the flowering holes actually flower', () => {
+  const augusta = getCourse('augusta');
+  const byId = (id: number): CourseHole => augusta.holes.find((h) => h.id === id)!;
+
+  // Every hole named for a plant that visibly flowers or fruits.
+  const FLOWERING = [2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 15, 16, 17];
+  // Tea Olive's flowers are tiny and hidden; the rest are conifers/grass/holly.
+  const PLAIN = [1, 6, 7, 14, 18];
+
+  it('gives every flowering hole a bloom, and every other hole none', () => {
+    expect(FLOWERING.filter((id) => !byId(id).bloom)).toEqual([]);
+    expect(PLAIN.filter((id) => byId(id).bloom)).toEqual([]);
+  });
+
+  it('authors a plausible blossom on each — a real colour, a real fraction', () => {
+    for (const id of FLOWERING) {
+      const b = byId(id).bloom!;
+      expect(b.color).toBeGreaterThan(0);
+      expect(b.color).toBeLessThanOrEqual(0xffffff);
+      // Never 0 (a hole that renders nothing) and never 1 (a grove of one hue).
+      expect(b.fraction).toBeGreaterThan(0.2);
+      expect(b.fraction).toBeLessThan(1);
+    }
+  });
+
+  it('actually plants flowering trees on the three holes the visual gate shoots', () => {
+    // 2 Pink Dogwood, 13 Azalea, 16 Redbud — the frames that measured ZERO pink.
+    for (const id of [2, 13, 16]) {
+      const bloomed = courseTrees(byId(id)).filter((t) => t.bloom !== undefined);
+      expect(bloomed.length, `hole ${id} planted no flowering tree`).toBeGreaterThan(4);
+      expect(bloomed.every((t) => t.kind === 'broadleaf')).toBe(true);
+    }
+  });
+
+  it('does not change a single thing the ball touches', () => {
+    // The whole safety argument for bloom: strip it and the tree list is
+    // byte-identical, so a flowering hole plays exactly as a plain one would.
+    for (const id of FLOWERING) {
+      const h = byId(id);
+      const { bloom: _bloom, ...plain } = h;
+      const stripped = courseTrees(plain as CourseHole).map((t) => JSON.stringify(t));
+      const flowering = courseTrees(h).map((t) => {
+        const { bloom: _b, ...rest } = t;
+        return JSON.stringify(rest);
+      });
+      expect(flowering, `hole ${id}`).toEqual(stripped);
+    }
+  });
 });

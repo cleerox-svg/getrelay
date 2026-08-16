@@ -91,6 +91,31 @@
 //                       the designed tilt (not noise) is what breaks a putt.
 //   wind { along, cross } — steady wind (yd/s), along = downrange, cross = +x.
 //
+//   THE CANOPY (optional, RENDER-ONLY):
+//   bloom? { color, fraction } — a FLOWERING grove. Augusta names 13 of its 18
+//                       holes after a flowering plant and every one of them used
+//                       to render a plain green tree line, so bloom is authored
+//                       HERE, as data, per hole:
+//                         color    = the blossom hex the canopy is tinted toward;
+//                         fraction = share (0..1) of this hole's BROADLEAF trees
+//                                    that flower. Pines never do.
+//                       Which trees flower is a SEEDED roll off each tree's own
+//                       seed mixed with terrain.seed (bloomRoll below) — never
+//                       Math.random, so the same trees flower on every load and
+//                       the screenshot gate can still tell a regression from a
+//                       reseeded grove. Two rules make this safe:
+//                         • It is a RENDER TINT AND NOTHING ELSE. courseTrees()
+//                           copies the colour onto CourseTree.bloom; every value
+//                           the sim reads (d, x, kind, scale, seed, ground,
+//                           trunkR, height, canopyR, canopyH) is byte-identical
+//                           to the same hole without the field, so a flowering
+//                           hole plays EXACTLY as it would plain. Never let a
+//                           bloom field move where a ball bounces.
+//                         • OMIT IT and the grove is unchanged, down to the JSON:
+//                           `bloom` is left ABSENT rather than set undefined.
+//                       Do NOT derive a colour from `name` at render time — the
+//                       renderer must not parse copy text.
+//
 // CLASSIFICATION PRECEDENCE (surfaceAt, highest wins — the crispness guarantee):
 //   green  >  fringe  >  bunker/water  >  cartpath  >  tee  >  fairway  >  rough  >  ob
 // Exactly ONE lie is returned per point. Because green and fringe outrank the
@@ -147,6 +172,17 @@ export interface GreenDef {
   undulation: number;
 }
 
+// A flowering canopy for a hole — RENDER-ONLY (see the contract header). The
+// hole is named after a plant; this is where that plant's colour is AUTHORED, so
+// the renderer never has to parse the display name to know a hole flowers.
+export interface HoleBloom {
+  // Blossom colour (hex). The crown of a flowering tree is tinted toward it.
+  color: number;
+  // Share (0..1) of this hole's BROADLEAF trees that flower. Not 1: a uniformly
+  // pink grove reads as paint, where a fraction reads as accent trees.
+  fraction: number;
+}
+
 // A hole as data. The fairway is a CENTERLINE polyline with a half-width, so a
 // dogleg is just bent points; everything else (green, hazards, rough, cart path)
 // is placed relative to it. See the "HOW TO AUTHOR A HOLE" block above for every
@@ -159,6 +195,9 @@ export interface CourseHole {
   // read-only on the `hole` object, so it is safe against the CourseSnapshot
   // guard (which excludes the static `hole`). HOLE_1 leaves it undefined.
   name?: string;
+  // OPTIONAL flowering canopy — a render tint only, see HoleBloom and the
+  // "THE CANOPY" block of the contract header. Omit for a plain green grove.
+  bloom?: HoleBloom;
   tee: Pt;
   pin: Pt;
   centerline: Pt[];
@@ -808,6 +847,24 @@ export interface CourseTree {
   height: number; // trunk-top height (yd above the base) up to which a trunk hit reflects
   canopyR: number; // canopy sphere radius (yd)
   canopyH: number; // canopy-sphere centre height (yd above the base)
+  // RENDER TINT ONLY — the blossom colour for a flowering tree (hole.bloom), or
+  // ABSENT. Nothing in the sim reads it, and setting it changes no other field
+  // on this object, so a flowering hole collides exactly like a plain one.
+  bloom?: number;
+}
+
+// A seeded [0,1) roll deciding whether one tree flowers: mulberry32's first
+// output for the tree's seed mixed with the hole's terrain seed. Two reasons for
+// the mix: it decorrelates the pick from the per-tree RENDER rng (which walks
+// the same generator, so choosing WHICH trees bloom cannot disturb what each
+// tree LOOKS like), and it varies the flowering trees hole to hole — the tree
+// seeds themselves are a function of `d` alone, so without it every flowering
+// hole would bloom at the same downrange stations.
+function bloomRoll(seed: number, holeSeed: number): number {
+  const a = ((seed ^ Math.imul(holeSeed, 0x9e3779b1)) + 0x6d2b79f5) | 0;
+  let t = Math.imul(a ^ (a >>> 15), 1 | a);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 }
 
 // The framed downrange extent CourseGL meshes to — MUST match the renderer so a
@@ -835,6 +892,7 @@ export function courseTrees(hole: CourseHole): CourseTree[] {
   const out: CourseTree[] = [];
   const dMax = treeSpanMaxD(hole);
   const off = hole.roughHalf + 8;
+  const bloom = hole.bloom;
   const push = (kind: 'pine' | 'broadleaf', x: number, d: number, scale: number, seed: number) => {
     // Per-species trunk/canopy dimensions (yd), scaled with the render scale so the
     // collision volumes track the DRAWN tree (see-what-you-play). Trunk radius ≈
@@ -848,7 +906,7 @@ export function courseTrees(hole: CourseHole): CourseTree[] {
     const canopyR = (kind === 'pine' ? 2.9 : 3.4) * scale;
     const canopyH = 7 * scale;
     const height = (kind === 'pine' ? 5.0 : 5.25) * scale;
-    out.push({
+    const tree: CourseTree = {
       d,
       x,
       kind,
@@ -859,7 +917,13 @@ export function courseTrees(hole: CourseHole): CourseTree[] {
       height,
       canopyR,
       canopyH,
-    });
+    };
+    // Bloom is set LAST and only when it applies, so a hole without `bloom`
+    // produces the byte-identical object (and JSON) it always did.
+    if (bloom && kind === 'broadleaf' && bloomRoll(seed, hole.terrain.seed) < bloom.fraction) {
+      tree.bloom = bloom.color;
+    }
+    out.push(tree);
   };
   for (let d = 20; d < dMax - 20; d += 26) {
     const cx = centerlineXAt(hole, d);
