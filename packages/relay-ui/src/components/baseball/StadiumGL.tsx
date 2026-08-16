@@ -15,10 +15,15 @@
 // permanent parity tax and there will not be one.
 //
 // ⚠ NO GAMEPLAY IS COMPUTED HERE. Layer discipline: the sim owns state, GL
-// renders, the HUD polls. M1 has no sim to render yet, so this file reads
-// `parks.ts` and draws it — and `parks.ts` is the SAME module `resolveFence`
-// reads, which is what makes "the fence you see is the fence you clear" a
-// structural fact instead of a hope.
+// renders, the HUD polls. The park is read from `parks.ts` — the SAME module
+// `resolveFence` reads, which is what makes "the fence you see is the fence you
+// clear" a structural fact instead of a hope — and the ball's flight arrives
+// already integrated, as a `PitchTrack` / `BattedTrack`. This file converts
+// frames, interpolates between the sim's own samples and scales a clock. It
+// does not integrate anything, and there is no seam here through which a
+// second, prettier trajectory could be introduced: the screenshot harness reads
+// the DRAWN tracer's vertices back out of the GPU buffer and fails the run if
+// they disagree with the sim's track or bend by a different amount.
 //
 // ⚠ `three` STAYS LAZY. This is a default export so callers reach it through
 // `lazy(() => import('./StadiumGL'))`. Nothing outside this file and its
@@ -38,8 +43,11 @@ import {
 } from 'three';
 import { HARBOURFRONT } from '../../lib/baseball/parks';
 import type { Park } from '../../lib/baseball/parks';
+import { PITCH_TEMPO } from '../../lib/baseball/tuning';
 import { buildField } from './stadium/field';
 import { buildFence } from './stadium/fence';
+import { buildFlight } from './stadium/flight';
+import type { FlightPaths } from './stadium/flight';
 import { buildMound } from './stadium/mound';
 import { buildRoof } from './stadium/roof';
 import { buildScaleReference } from './stadium/scale';
@@ -118,6 +126,16 @@ const SKY = 0x8fb6dd;
  */
 const SHADOW_MARGIN_FT = 60;
 
+/**
+ * Dead air after a play before the live loop replays it, PLAYBACK seconds.
+ *
+ * ⚠ FEEL KNOB, and it is applied to the PLAYBACK clock, never to `dt`. It exists
+ * only so a looping preview does not snap the ball from the outfield back to the
+ * pitcher's hand with no beat between. It cannot reach a sim: `setTime` is only
+ * ever called with true physical seconds inside `[0, durationS]`.
+ */
+const REPLAY_GAP_S = 0.8;
+
 export interface StadiumStats {
   drawCalls: number;
   triangles: number;
@@ -127,6 +145,10 @@ export interface StadiumStats {
   tier: StadiumQuality['tier'];
   shadowMapSize: number;
   qualityReason: string;
+  /** Half-extent of the sun's ortho shadow volume, ft — DERIVED from geometry. */
+  shadowHalfFt: number;
+  /** ft per shadow texel. The number the ball's contact shadow founders on. */
+  shadowTexelFt: number;
 }
 
 export interface StadiumApi {
@@ -135,6 +157,24 @@ export interface StadiumApi {
   measureFence(bearingDeg: number): { distFt: number; heightFt: number } | null;
   setMode(mode: CameraMode): void;
   setExposure(exposure: number): void;
+  /** Hand the renderer a precomputed flight. Nothing here computes gameplay. */
+  setFlight(paths: FlightPaths | null): void;
+  /**
+   * Freeze the ball at a TRUE PHYSICAL time, s, or pass `null` to play the wall
+   * clock at `PITCH_TEMPO`. The screenshot harness always freezes: a ball driven
+   * by a wall clock is the obvious way to make two runs disagree.
+   */
+  setBallTime(tS: number | null): void;
+  /** The DRAWN tracer's vertices, scene ft — the visual gate's read-back seam. */
+  tracer(which: 'pitch' | 'batted'): number[];
+  /** Is that tracer being rendered? Vertices nobody draws prove nothing. */
+  tracerVisible(which: 'pitch' | 'batted'): boolean;
+  /** The drawn ball's scene position, or null when it is not in flight. */
+  ballScene(): [number, number, number] | null;
+  /** Is the ball mesh being rendered? */
+  ballVisible(): boolean;
+  /** The ball's DRAWN radius, scene ft — `MIN_BALL_PX`'s claim, measurable. */
+  ballScale(): number;
 }
 
 export interface StadiumGLProps {
@@ -148,6 +188,32 @@ export interface StadiumGLProps {
   exposure?: number;
   /** `?quality=` override, plumbed from the URL — see `stadium/quality.ts`. */
   qualityOverride?: string | null;
+  /**
+   * Build the magenta 6 ft scale reference (`stadium/scale.ts`).
+   *
+   * ⚠ DEFAULT OFF, AND THE DEFAULT IS THE POINT. It is a measuring stick for the
+   * visual gate, not set dressing, and it was previously built unconditionally
+   * with a comment promising to delete it "the milestone a real batter model
+   * lands". Nothing imports this component yet, so that promise costs nothing
+   * today and becomes a magenta slab in a shipped HUD the moment one does. The
+   * preview harness — the only caller that wants it — asks for it explicitly.
+   */
+  scaleReference?: boolean;
+  /**
+   * The precomputed flight to draw — a `PitchTrack` and/or a `BattedTrack`
+   * exactly as `lib/baseball` produced them.
+   *
+   * ⚠ THE RENDERER DOES NOT SIMULATE. It converts frames and interpolates
+   * between the sim's own samples, and that is the whole of it. A prettier curve
+   * drawn beside a sim that disagrees with it is the defect the visual gate was
+   * built to find, so there is no seam here through which one could be added.
+   */
+  flight?: FlightPaths | null;
+  /**
+   * Freeze the ball at this TRUE PHYSICAL time (s since release), or `null`/
+   * omitted to play the wall clock back at `PITCH_TEMPO`.
+   */
+  ballTimeS?: number | null;
   /** Fired once, after a real frame has been rendered. */
   onReady?: (api: StadiumApi) => void;
 }
@@ -157,23 +223,36 @@ export default function StadiumGL({
   mode = 'wide',
   exposure = 1,
   qualityOverride = null,
+  scaleReference = false,
+  flight = null,
+  ballTimeS = null,
   onReady,
 }: StadiumGLProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const apiRef = useRef<StadiumApi | null>(null);
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
-  const initialRef = useRef({ mode, exposure });
-  initialRef.current = { mode, exposure };
+  const initialRef = useRef({ mode, exposure, flight, ballTimeS });
+  initialRef.current = { mode, exposure, flight, ballTimeS };
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
 
-    // --- disposal ledger. EVERY geometry, material and texture goes through
-    // `track`; the unmount path below walks it. A leaked BufferGeometry is
-    // invisible until the fifth remount, which is exactly why this is a ledger
-    // and not a hand-written list of dispose calls at the bottom.
+    // --- disposal ledger. EVERY geometry, material and texture BUILT BY A
+    // `stadium/*` BUILDER goes through `track`; the unmount path below walks it.
+    // A leaked BufferGeometry is invisible until the fifth remount, which is
+    // exactly why this is a ledger and not a hand-written list of dispose calls
+    // at the bottom.
+    //
+    // ⚠ THE SCOPE CLAUSE ABOVE IS NOT PEDANTRY. This comment used to claim
+    // "EVERY geometry, material and texture", full stop, and it was not true: the
+    // sun's shadow map is a render target this file allocates directly, three's
+    // `WebGLRenderer.dispose()` does not walk lights, and it is not in `owned`.
+    // `forceContextLoss()` below makes that harmless for GPU memory, so it was a
+    // COMMENT bug rather than a leak — but a ledger whose stated invariant is
+    // false is a ledger the next remount bug hides behind. The unmount path now
+    // disposes it explicitly and the claim is true as scoped.
     const owned: Disposable[] = [];
     const track: Track = (r) => {
       owned.push(r);
@@ -214,26 +293,41 @@ export default function StadiumGL({
     // order one texel; raising the map instead is the on-device bet
     // stadium/quality.ts refuses to take.
     //
-    // ⚠⚠ READ THIS THE DAY THE BALL LANDS — IT WILL BREAK ITS CONTACT SHADOW,
-    // AND IT WILL NOT LOOK LIKE A SHADOW BUG. 6 ft is correct only because every
-    // object in this scene is enormous. A baseball's radius is 0.1210237 ft
-    // (`airPhysics.ts`), so this bias is ~50× the whole ball: its shadow will be
-    // pushed clear of it and detach or vanish outright, and the symptom a human
-    // reports is "the ball floats" — a sentence that points at the physics, the
-    // camera or the material, i.e. at three subsystems that are all innocent. M1
-    // already lost time to one of these: a near/far depth bug that presented as
-    // a translucent seating bowl and read as a material problem.
+    // ⚠⚠ THE BALL LANDED IN M2b, AND THIS WARNING STANDS — WITH NUMBERS.
+    // 6 ft is correct only because every object in this scene is enormous. A
+    // baseball's radius is 0.1210237 ft (`airPhysics.ts`), so this bias is
+    // 49.6× the whole ball. Measured by the visual gate, which now prints the
+    // shadow row every run: the volume is ±630 ft at Harbourfront (±645 at
+    // Alpine), i.e. 1.230 ft/texel at 1024² — the texel alone is 10.2× the ball.
+    // A ball in this shadow-casting set therefore produces a shadow pushed clear
+    // of it, and the symptom a human reports is "the ball floats" — a sentence
+    // that points at the physics, the camera or the material, i.e. at three
+    // subsystems that are all innocent. M1 already lost time to one of these: a
+    // near/far depth bug that presented as a translucent seating bowl and read
+    // as a material problem.
     //
-    // The fix is NOT a bigger map (see `stadium/quality.ts`: 1024² is a hard
-    // ceiling until somebody runs a real Android handset) and NOT a smaller
-    // global bias (the acne comes straight back on 1260 ft of turf). It is a
-    // TIGHTER SHADOW CASCADE: the ball is only ever near the infield and the
-    // flight path, so a second shadow-casting light with a small ortho volume —
-    // ~200 ft around the plate rather than ~1260 — buys ~6× the texel density
-    // for the ball at the same 1024², and its normal bias can then be of order
-    // 0.2 ft. That is one extra light against this file's stated budget of one
-    // sun plus one hemisphere fill, so it is a budget decision to take
-    // deliberately, with the crowd instance count in the same conversation.
+    // WHAT M2b DID, and why it is not the recorded fix:
+    //
+    //   • The ball is NOT a shadow caster (`stadium/flight.ts` sets
+    //     `castShadow = false`) and its contact shadow is COMPUTED — the true
+    //     ray from this sun through the ball's true centre to y = 0, drawn as
+    //     one disc. Exact in position, approximate in softness, one draw call,
+    //     and it cannot detach because nothing samples a shadow map.
+    //   • The recorded fix — a tighter cascade around the infield — was measured
+    //     and does NOT solve it at this budget. ~6× texel density means a
+    //     ±100 ft ortho volume: 0.195 ft/texel, still 1.6× the ball, so a normal
+    //     bias "of order 0.2 ft" is still 1.6 ball radii and the shadow still
+    //     detaches. Resolving a 0.121 ft ball needs texel ≲ its radius, i.e. a
+    //     half-extent of ≤ 62 ft at 1024² — which the ball leaves 0.9 s into a
+    //     434 ft fly, so the cascade would have to FOLLOW it. That is a real
+    //     CSM: a second `DirectionalLight` splitting this sun's intensity
+    //     (double-darkening wherever the volumes overlap) plus per-frame shadow
+    //     updates for that light, which forfeits the `autoUpdate = false` above.
+    //     Larger than M2b, and it buys a soft blob the disc already draws.
+    //
+    // The fix is still NOT a bigger map (see `stadium/quality.ts`: 1024² is a
+    // hard ceiling until somebody runs a real Android handset) and still NOT a
+    // smaller global bias (the acne comes straight back on 1260 ft of turf).
     sun.shadow.bias = -0.001;
     sun.shadow.normalBias = 6;
     scene.add(sun, sun.target);
@@ -249,7 +343,18 @@ export default function StadiumGL({
     buildMound(ctx);
     const stands = buildStands(ctx);
     buildRoof(ctx, stands);
-    buildScaleReference(ctx);
+    if (scaleReference) buildScaleReference(ctx);
+    // The ball, its contact shadow and the two tracers. It takes the sun's
+    // direction of travel because it projects the contact shadow itself — see
+    // `stadium/flight.ts` and the `normalBias` note above.
+    const ballFlight = buildFlight(ctx, {
+      sunDir: [
+        SUN_TARGET[0] - SUN_POS[0],
+        SUN_TARGET[1] - SUN_POS[1],
+        SUN_TARGET[2] - SUN_POS[2],
+      ],
+    });
+    if (initialRef.current.flight) ballFlight.setPaths(initialRef.current.flight);
 
     // Shadow volume sized from the geometry that was actually built.
     const half = Math.max(field.apronRadiusFt, stands.outerRadiusFt(0)) + SHADOW_MARGIN_FT;
@@ -288,8 +393,33 @@ export default function StadiumGL({
     // resets its per-frame counters at the start of each `render()`.
     let raf = 0;
     let frames = 0;
-    let last: StadiumStats = emptyStats(quality);
+    const shadowTexelFt = (2 * half) / quality.shadowMapSize;
+    let last: StadiumStats = emptyStats(quality, half, shadowTexelFt);
+    // ⚠ THE ONLY CLOCK IN THE BASEBALL GAME, and it is read in exactly one
+    // branch. `ballTime` is a frozen TRUE PHYSICAL time when the screenshot
+    // harness (or a paused HUD) sets one, and `performance.now()` is never
+    // touched in that case — which is what makes two harness runs byte-identical.
+    let ballTime: number | null = initialRef.current.ballTimeS ?? null;
+    let playStartMs = 0;
     const tick = () => {
+      if (ballTime !== null) {
+        ballFlight.setTime(ballTime);
+      } else {
+        const dur = ballFlight.durationS();
+        if (dur > 0) {
+          if (playStartMs === 0) playStartMs = performance.now();
+          // ⚠ THE TEMPO SCALES THE CLOCK, NEVER `dt`. `pitchSim` integrated this
+          // flight at true physical time and cannot import `PITCH_TEMPO`; the
+          // render layer divides its own wall clock down and asks for a true
+          // physical instant. Time-scaling `dt` instead would re-weight gravity
+          // against the v² aero terms and silently move every break number.
+          const played = ((performance.now() - playStartMs) / 1000) * PITCH_TEMPO;
+          ballFlight.setTime(played % (dur + REPLAY_GAP_S));
+        } else ballFlight.setTime(-1);
+      }
+      // The screen-space size floor, against the DRAWING BUFFER's height —
+      // real pixels, not CSS ones. See `MIN_BALL_PX` in stadium/flight.ts.
+      ballFlight.sizeFor(camera, renderer.domElement.height);
       renderer.render(scene, camera);
       last = {
         drawCalls: renderer.info.render.calls,
@@ -300,6 +430,8 @@ export default function StadiumGL({
         tier: quality.tier,
         shadowMapSize: quality.shadowMapSize,
         qualityReason: quality.reason,
+        shadowHalfFt: half,
+        shadowTexelFt,
       };
       frames++;
       if (frames === 3) onReadyRef.current?.(api);
@@ -313,6 +445,28 @@ export default function StadiumGL({
       setExposure: (e) => {
         renderer.toneMappingExposure = e;
       },
+      // ⚠ A NEW FLIGHT RESTARTS THE PLAYBACK CLOCK, and that is a bug fix, not
+      // symmetry for its own sake. `playStartMs` is latched on the first live
+      // frame after it is zeroed; `setBallTime` zeroed it and this did not, and
+      // the two are INDEPENDENT effects below. So a HUD serving pitch 2 in live
+      // playback (no `?t=`) kept pitch 1's clock and pitch 2 opened at
+      // `played % (dur + REPLAY_GAP_S)` — mid-flight, at whatever fraction the
+      // previous play happened to be at. The screenshot harness cannot see this
+      // because it always freezes, which is precisely why it had to be found by
+      // reading rather than by a red run.
+      setFlight: (paths) => {
+        ballFlight.setPaths(paths ?? { pitch: null, batted: null, contactTS: 0 });
+        playStartMs = 0;
+      },
+      setBallTime: (t) => {
+        ballTime = t;
+        playStartMs = 0;
+      },
+      tracer: (which) => ballFlight.tracer(which),
+      tracerVisible: (which) => ballFlight.tracerVisible(which),
+      ballScene: () => ballFlight.ballScene(),
+      ballVisible: () => ballFlight.ballVisible(),
+      ballScale: () => ballFlight.ballScale(),
     };
     apiRef.current = api;
     raf = requestAnimationFrame(tick);
@@ -329,13 +483,16 @@ export default function StadiumGL({
       scene.clear();
       for (const r of owned) r.dispose();
       owned.length = 0;
+      // The one GPU resource this file allocates itself rather than through a
+      // builder, and so the one that is not in the ledger. See the note above it.
+      sun.shadow.dispose();
       renderer.dispose();
       // ⚠ WebGL contexts are a scarce browser resource (~16 live). Golf learned
       // this remounting a scene per hole; drop it explicitly, do not wait for GC.
       renderer.forceContextLoss();
       if (renderer.domElement.parentNode === host) host.removeChild(renderer.domElement);
     };
-  }, [park, qualityOverride]);
+  }, [park, qualityOverride, scaleReference]);
 
   useEffect(() => {
     apiRef.current?.setMode(mode);
@@ -345,10 +502,22 @@ export default function StadiumGL({
     apiRef.current?.setExposure(exposure);
   }, [exposure]);
 
+  // ⚠ A NEW FLIGHT IS NOT A NEW SCENE. These two are separate effects from the
+  // build above precisely so that serving a pitch does not tear down and rebuild
+  // the park — which is `CourseGL`'s remount-per-hole cost, arriving here once
+  // per pitch instead of once per hole.
+  useEffect(() => {
+    apiRef.current?.setFlight(flight ?? null);
+  }, [flight]);
+
+  useEffect(() => {
+    apiRef.current?.setBallTime(ballTimeS ?? null);
+  }, [ballTimeS]);
+
   return <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />;
 }
 
-function emptyStats(q: StadiumQuality): StadiumStats {
+function emptyStats(q: StadiumQuality, shadowHalfFt: number, shadowTexelFt: number): StadiumStats {
   return {
     drawCalls: 0,
     triangles: 0,
@@ -358,5 +527,7 @@ function emptyStats(q: StadiumQuality): StadiumStats {
     tier: q.tier,
     shadowMapSize: q.shadowMapSize,
     qualityReason: q.reason,
+    shadowHalfFt,
+    shadowTexelFt,
   };
 }

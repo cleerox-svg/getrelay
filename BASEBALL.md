@@ -791,15 +791,32 @@ sweep, of which the dirt-boundary fix is 7,376 cases and the datum a further
 thirteen named rows — the 'bloop into shallow RC' from 67.29 to 68.17 against a
 68 ft threshold, and the 'deep LC screamer' from 129.42 to 131.20 against 130.
 **Both flips are the datum; neither is the boundary.** There is no mechanism
-behind them: `XB_DEPTH_PER_FT` prices the throw back, the throw goes to a base,
-and a base does not move when the grass line curves — while the bearing effect
-that *is* real is already priced twice, through `missFt` (the LF stands at
-290 ft/−29°, so he is 80 ft from a 320 ft ball down the line against the CF's
-15 ft from a 320 ft ball to centre) and through `CORNER_DEG`. So
-`XB_DEPTH_DATUM_FT` is a flat **feel knob** at `infieldDepthFt(0)`, and the
-counterfactual is *computed and printed* by `fielding.test.ts` rather than
-argued, because keeping it flat is also what keeps the ladder still and a
-reviewer is entitled to suspect that is the reason.
+behind them — but *not* because the bearing effect is imaginary. **The infield
+arc is the wrong functional form for it.** The throw back really is longer down
+the line: second base sits 127.28 ft out at 0°, so a 320 ft ball at 45° is
+**247.0 ft** from it against **192.7 ft** for a 320 ft ball to centre — 54.3 ft of
+extra throw, ~**16.3 ft** of index at `XB_DEPTH_PER_FT`. An arc datum hands that
+same ball **8.4 ft**: half the magnitude, and derived from the curvature of a
+grass line that has nothing to do with where anybody throws. Right sign, wrong
+size, wrong cause — a coincidental proxy, not a mechanism. Pricing the effect
+honestly would mean a law of cosines to the **bases** plus a re-fit of
+`XB_DOUBLE_FT`/`XB_TRIPLE_FT`, which is a different change from the one-line
+`infieldDepthFt(inp.bearingDeg)` that prompted it. So `XB_DEPTH_DATUM_FT` is a
+flat **feel knob** at `infieldDepthFt(0)`, and the counterfactual is *computed and
+printed* by `fielding.test.ts` rather than argued, because keeping it flat is also
+what keeps the ladder still and a reviewer is entitled to suspect that is the
+reason.
+
+⚠ **A correction to this section's own earlier claim (M1 review).** It said the
+real bearing effect was "already priced twice, through `missFt` … and through
+`CORNER_DEG`". Half of that was false. `CORNER_DEG` occurs in exactly one
+non-test place — the `outcome === 'offWall'` branch of `fieldBattedBall` — which
+**returns before `xb` is computed**, so it never executes on the extra-base path
+and prices nothing there. The `missFt` half stands and is the argument: the LF is
+80.1 ft from the ladder's 320 ft/−43° ball down the line while the CF is 15.0 ft
+from its 330 ft ball to centre, both printed. **One** honest bearing term, not
+two. The decision does not change — a third, implicit one is still unwelcome —
+only the count and the reason.
 ⚠ One consequence, and it is a real change from stage 4b: the depth term can now
 go **negative** (to −8.37 ft at the foul line) for a ball past the arc but nearer
 than 155.5 ft. It is still not clamped — such a ball is shallow, the throw back

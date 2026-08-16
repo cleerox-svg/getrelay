@@ -1434,6 +1434,20 @@ describe('game challenges', () => {
     expect(await res.json()).toEqual({ error: 'invalid_game' });
   });
 
+  // Regression guard: 'bbderby' is a valid GAME_IDS entry (it has a
+  // leaderboard) but must NOT be challengeable while the challenge metric is
+  // still golf's to-par — see the note on CHALLENGE_GAME_IDS. Unlike 'fog'
+  // above, this id round-trips normalizeGame(), so it is the case that
+  // actually exercises the CHALLENGE_GAME_IDS membership check.
+  it('rejects a leaderboard-only game id that is not challengeable (400)', async () => {
+    const res = await createChallenge(cookies.A, {
+      opponentId: USERS.B.id,
+      game: 'bbderby',
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_game' });
+  });
+
   it('settles the winner by lower to-par once both submit', async () => {
     const created = await createChallenge(cookies.A, {
       opponentId: USERS.B.id,

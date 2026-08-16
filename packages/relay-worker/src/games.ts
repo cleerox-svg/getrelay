@@ -26,7 +26,7 @@ export const MAX_ROUND_REWARDS_PER_DAY = 20;
 // Games that share the game_scores table (and its leaderboard). The
 // column defaults to 'fog', so an omitted/unknown value maps back to fog
 // and every existing client keeps working.
-export const GAME_IDS = ['fog', 'tune', 'golf', 'golfrange', 'golfcourse'] as const;
+export const GAME_IDS = ['fog', 'tune', 'golf', 'golfrange', 'golfcourse', 'bbderby'] as const;
 export type GameId = (typeof GAME_IDS)[number];
 
 // The full 3D Course mode plays up to 18 holes, so its runs need a higher
@@ -141,6 +141,23 @@ async function readGolfRecords(
 // sides have submitted; equal to-par is a tie (winner_id null).
 
 // Only golf modes can be challenged — the metric is to-par.
+//
+// 'bbderby' is DELIBERATELY ABSENT, not an oversight. It is a member of
+// GAME_IDS (the leaderboard is metric-agnostic and handles it fine), but the
+// challenge machinery below is hardwired to golf's metric in three places, so
+// admitting the derby here ships a broken flow rather than an incomplete one:
+//   1. the create handler pushes a hard-coded "Golf challenge" notification
+//      pointing at /games/golf, so the opponent is mislabelled and deep-linked
+//      to the wrong game;
+//   2. the winner is the LOWER submitted score, but a derby is
+//      higher-is-better, so it would crown the worse player;
+//   3. the result endpoint takes a field named `toPar` clamped to
+//      +/-MAX_CHALLENGE_TO_PAR, and a derby session scores into the thousands,
+//      so every real submission is a hard 400.
+// Re-adding it requires generalising the metric FIRST — either a negated-score
+// convention on submit, or a per-game comparator plus a per-game magnitude
+// clamp — along with a per-game push title/url. That redesign is owned by
+// messaging-core, not by whoever notices the id is missing.
 const CHALLENGE_GAME_IDS = ['golf', 'golfrange', 'golfcourse'] as const;
 
 // A challenge score (to-par) is clamped to this magnitude both ways.

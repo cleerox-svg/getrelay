@@ -160,9 +160,21 @@ describe('budget guard', () => {
     // chunk; one import of a stadium builder from a HUD component would drag it
     // into whatever chunk that HUD lands in. The allowed set is exactly the
     // scene: StadiumGL.tsx as the composer, and the builders it composes.
+    //
+    // ⚠ GUARD THE GUARD, AND HERE THAT IS NOT A FORMALITY. Today
+    // `components/baseball/` holds exactly `StadiumGL.tsx` plus `stadium/*`, all
+    // of which are allowed — so the scan below inspects ZERO files and passes
+    // vacuously. It does bite the moment a non-allowed file lands, which is the
+    // case it exists for, but a vacuous pass and a real pass are the same green
+    // tick, and a broken glob would look identical for the rest of the project.
+    // So assert the SET the scan is walking, not just its verdict: the two
+    // directories must be found, the allowed files must be present, and the
+    // scanned set must be exactly `everything − allowed`.
+    const seen: string[] = [];
     const offenders: string[] = [];
     const scan = (dir: string, prefix: string, allowed: (n: string) => boolean) => {
       for (const name of filesIn(dir, (n) => n.endsWith('.ts') || n.endsWith('.tsx'))) {
+        seen.push(`${prefix}${name}`);
         if (allowed(name)) continue;
         const text = readFileSync(join(dir, name), 'utf8');
         text.split('\n').forEach((line, i) => {
@@ -175,6 +187,18 @@ describe('budget guard', () => {
     };
     scan(COMPONENT_DIR, '', (n) => n === 'StadiumGL.tsx');
     scan(STADIUM_DIR, 'stadium/', () => true);
+    expect(seen, 'the three-import scan found no files — the glob is broken').toContain(
+      'StadiumGL.tsx',
+    );
+    expect(seen).toContain('stadium/fence.ts');
+    expect(seen.length).toBeGreaterThan(5);
     expect(offenders, `three imported outside the scene:\n${offenders.join('\n')}`).toEqual([]);
+
+    // And prove the comparison bites, since the live set currently cannot: the
+    // allowed predicate must reject a sibling component, not wave everything
+    // through. `budget.test.ts` itself is a file in neither directory.
+    const allowedInComponents = (n: string) => n === 'StadiumGL.tsx';
+    expect(allowedInComponents('StadiumGL.tsx')).toBe(true);
+    expect(allowedInComponents('DerbyGame.tsx')).toBe(false);
   });
 });
