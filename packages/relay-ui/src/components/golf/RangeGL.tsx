@@ -24,7 +24,7 @@ import {
   pickWaterQuality,
   readWaterQualityOverride,
 } from '../../lib/golf/water';
-import { windBearing, windMph } from '../../lib/golf/wind';
+import { mulberry32, windBearing, windMph } from '../../lib/golf/wind';
 import {
   FAIRWAY_HALF_W,
   FAIRWAY_WATER_END,
@@ -38,6 +38,7 @@ import {
 import type { Pin, RangeLayout } from '../../lib/golf/rangeTargets';
 import { MAX_CLUB_SPEED } from '../../lib/golf/clubs';
 import { FIXED_MS } from '../../lib/golf/tuning';
+import { sceneNow, tickSceneClock } from '../../lib/scene3d/clock';
 
 // Real-time 3D driving range (Three.js). Owns the WebGL renderer, scene and
 // camera; drives the headless RangeSim on a fixed-timestep loop; renders the
@@ -844,6 +845,10 @@ export default function RangeGL({
     // kit — see waterFX above. The turf-divot particles below stay local: they
     // are a GRASS effect, not a water one.
     // Kick a low turf divot: a few short green/brown flecks + a fading mark.
+    // One seeded generator for the whole mount: successive divots still differ
+    // from each other (the stream advances), but the sequence is identical on
+    // every load, so a captured divot is reproducible.
+    const divotRnd = mulberry32(0x64c3a1);
     const spawnDivot = (x: number, z: number, island: boolean) => {
       const y = island ? ISLAND_TOP + 0.05 : 0.05;
       pActive = 14;
@@ -855,15 +860,15 @@ export default function RangeGL({
         partPos[j] = x;
         partPos[j + 1] = y + 0.05;
         partPos[j + 2] = z;
-        const ang = Math.random() * Math.PI * 2;
-        const sp = 2.5 + Math.random() * 5;
+        const ang = divotRnd() * Math.PI * 2;
+        const sp = 2.5 + divotRnd() * 5;
         pVel[j] = Math.cos(ang) * sp;
-        pVel[j + 1] = 3 + Math.random() * 6;
+        pVel[j + 1] = 3 + divotRnd() * 6;
         pVel[j + 2] = Math.sin(ang) * sp;
         // Mix of grass-green flecks and darker soil-brown clumps.
-        if (Math.random() < 0.55) {
-          partCol[j] = 0.32 + Math.random() * 0.2;
-          partCol[j + 1] = 0.55 + Math.random() * 0.2;
+        if (divotRnd() < 0.55) {
+          partCol[j] = 0.32 + divotRnd() * 0.2;
+          partCol[j + 1] = 0.55 + divotRnd() * 0.2;
           partCol[j + 2] = 0.22;
         } else {
           partCol[j] = 0.36;
@@ -880,7 +885,10 @@ export default function RangeGL({
       divotDecal.scale.setScalar(0.8);
       divotDecal.visible = true;
       divotMat.opacity = 0.5;
-      divotStart = performance.now();
+      // Scene clock, not the platform: the fade below is `(now - divotStart)`,
+      // and `now` comes from the same clock — mixing the two would make the
+      // divot pop or vanish the instant the harness freezes time.
+      divotStart = sceneNow();
     };
 
     // Water splash now comes from the shared kit (identical crown + rings in the
@@ -1000,7 +1008,9 @@ export default function RangeGL({
     // --- Fixed-timestep loop -------------------------------------------
     let raf = 0;
     let acc = 0;
-    let last = performance.now();
+    // Scene clock (lib/scene3d/clock.ts): the platform clock in the app, a
+    // freezable virtual one under the screenshot harness.
+    let last = sceneNow();
     let running = false;
 
     // Render-side bounce/roll SFX detection (no discrete sim events for these).
@@ -1015,7 +1025,8 @@ export default function RangeGL({
     let lastRollAt = 0;
     let suppressBounceSfx = false;
 
-    const frame = (now: number) => {
+    const frame = (rafNow: number) => {
+      const now = tickSceneClock(rafNow);
       const dtMs = Math.min(now - last, 100);
       last = now;
       const dt = dtMs / 1000;
@@ -1336,7 +1347,7 @@ export default function RangeGL({
     const start = () => {
       if (running) return;
       running = true;
-      last = performance.now();
+      last = sceneNow();
       raf = requestAnimationFrame(frame);
     };
     const stop = () => {

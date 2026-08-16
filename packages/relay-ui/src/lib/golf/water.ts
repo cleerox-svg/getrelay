@@ -37,6 +37,7 @@
 
 import * as THREE from 'three';
 import { makeSkyGradientTexture, type Track } from './scenery';
+import { sceneNow } from '../scene3d/clock';
 
 // --- Tuning ----------------------------------------------------------------
 
@@ -850,7 +851,7 @@ function makeDropletTexture(): THREE.Texture {
 export interface WaterFX {
   /** Kick a splash at a world point: droplet crown + expanding ripple rings. */
   splash: (x: number, y: number, z: number, strength?: number) => void;
-  /** Per-frame integration. `nowMs` is performance.now(), `dt` seconds. */
+  /** Per-frame integration. `nowMs` is the scene clock (see lib/scene3d/clock.ts), `dt` seconds. */
   update: (nowMs: number, dt: number) => void;
 }
 
@@ -936,7 +937,11 @@ export function makeWaterFX(scene: THREE.Scene, track: Track): WaterFX {
     points.visible = true;
     attr.needsUpdate = true;
 
-    ringStart = performance.now();
+    // Scene clock, not the platform: `update()` is fed the caller's `now`, which
+    // comes from lib/scene3d/clock.ts. Stamping t0 off `performance.now()` while
+    // measuring elapsed against a (possibly frozen) virtual `now` would make the
+    // rings jump to a random phase — or never appear at all.
+    ringStart = sceneNow();
     ringScale = 0.8 + strength * 0.5;
     for (const m of ringMeshes) {
       m.position.set(x, y + 0.04, z);

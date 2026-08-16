@@ -17,6 +17,12 @@
 
 import { StrictMode, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
+import {
+  advanceSceneClock,
+  engageVirtualClock,
+  freezeSceneClock,
+  sceneClockPending,
+} from './lib/scene3d/clock';
 import CourseGL from './components/golf/CourseGL';
 import RangeGL from './components/golf/RangeGL';
 import PuttGL from './components/golf/PuttGL';
@@ -33,8 +39,43 @@ declare global {
   interface Window {
     __golfReady?: boolean;
     __sim?: CourseSim | PuttSim;
+    /** Harness handle on the virtual clock — see the block comment below. */
+    __sceneClock?: {
+      advance: (ms: number) => void;
+      freeze: () => void;
+      pending: () => number;
+    };
   }
 }
+
+// ---------------------------------------------------------------------------
+// DETERMINISM: take time away from the wall clock.
+//
+// Every animated thing in these scenes — Gerstner waves, splash rings, confetti,
+// camera easing, the fixed-step physics accumulator — is driven by elapsed
+// seconds. Sampling that from `performance.now()` makes the captured frame a
+// function of how fast the machine ran, and two identical harness runs then
+// produce two different PNGs (measured: 23 of 25 scenes differed). Seeding the
+// RNGs does not help; the generators were already seeded. TIME was the variable.
+//
+// So the preview runs on a VIRTUAL clock: one fixed 60 fps step per rendered
+// frame, engaged here before any scene mounts, and FROZEN the moment we raise
+// `window.__golfReady`. Frozen means dt === 0 — no substeps, no uniform moves —
+// so the shooter's settle delay and every later rAF tick render the identical
+// frame no matter how long it waits.
+//
+// `window.__sceneClock.advance(ms)` hands the scene an exact, replayable slice
+// of animation (used by the drag/second-aim sequences, which need the camera to
+// settle between steps) and re-freezes when it drains. The shipped app never
+// touches any of this: `lib/scene3d/clock.ts` is a pass-through to
+// `performance.now()` unless something engages it, and only this file does.
+// ---------------------------------------------------------------------------
+engageVirtualClock();
+window.__sceneClock = {
+  advance: (ms: number) => advanceSceneClock(ms),
+  freeze: () => freezeSceneClock(),
+  pending: () => sceneClockPending(),
+};
 
 const params = new URLSearchParams(location.search);
 const scene = params.get('scene') ?? 'course';
@@ -57,24 +98,41 @@ const HOLE = resolveHole();
 
 // Flip the readiness flag after the scene has had time to build its textures and
 // draw a handful of frames (the scenes animate — water shimmer, camera settle —
-// so a few frames in is a stable "address" view).
+// so a few frames in is a stable "address" view). Readiness is counted in
+// FRAMES, never in milliseconds, so with the virtual clock engaged the scene has
+// always advanced exactly the same amount of virtual time when we freeze it.
 function ReadyBeacon({ until }: { until?: () => boolean }) {
   useEffect(() => {
     let raf = 0;
     let frames = 0;
+    const ready = () => {
+      // Stop the world HERE. Everything the shooter does afterwards (its settle
+      // delay, pointer drags, extra rAF ticks) then renders the same frame.
+      freezeSceneClock();
+      window.__golfReady = true;
+    };
     const tick = () => {
       // If a readiness predicate is given (e.g. wait for a fired shot to rest),
       // hold until it's satisfied; otherwise a few frames to let textures land.
       if (until ? until() && frames >= 20 : frames >= 45) {
-        window.__golfReady = true;
+        ready();
         return;
       }
       frames++;
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
-    // Hard fallback so the shooter never hangs.
-    const t = window.setTimeout(() => (window.__golfReady = true), until ? 16000 : 4000);
+    // Hard fallback so the shooter never hangs. This is the ONE wall-clock path
+    // left, and tripping it would freeze the scene at an arbitrary frame — i.e.
+    // a non-deterministic shot. It is set well above the worst observed
+    // frame-count time (and below the shooter's own 15 s ready timeout for the
+    // non-predicate case) so it only ever fires on a genuinely stuck scene.
+    const t = window.setTimeout(() => {
+      // console.error (not warn) — shoot-golf.mjs captures errors, and a shot
+      // frozen at an arbitrary frame is a result worth failing loudly over.
+      console.error('[golfpreview] ready fallback fired — this shot is NOT deterministic');
+      ready();
+    }, until ? 16000 : 12000);
     return () => {
       cancelAnimationFrame(raf);
       window.clearTimeout(t);

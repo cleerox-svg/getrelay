@@ -65,6 +65,7 @@ import type { GolfCosmetics } from '../../lib/golf/cosmetics';
 import { BALL_R, CUP_R } from '../../lib/golf/greenPhysics';
 import type { CourseSim, CoursePrediction, CourseTrailPt } from '../../lib/golf/courseSim';
 import { windBearing, windMph } from '../../lib/golf/wind';
+import { sceneNow, tickSceneClock } from '../../lib/scene3d/clock';
 
 // Regulation liner (sunken cup) geometry. CUP_DEPTH ≈ 3.5×BALL_R so the ball
 // sits clearly below the rim; the aperture punched in the green (grid + cap) is a
@@ -2311,7 +2312,11 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
     // --- Loop -----------------------------------------------------------
     const fixed = FIXED_MS / 1000;
     let acc = 0;
-    let last = performance.now();
+    // Time comes from the scene clock, not the platform. In the app that IS
+    // `performance.now()` / the rAF timestamp, unchanged; under the screenshot
+    // harness it is a virtual clock that can be frozen so every frame renders
+    // identically (see lib/scene3d/clock.ts).
+    let last = sceneNow();
     let raf = 0;
 
     // Render-side SFX detection — Course has NO sim event bus (adding one risks
@@ -2328,8 +2333,9 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
     let lastWindAlong = Number.NaN;
     let lastWindCross = Number.NaN;
 
-    const frame = (now: number) => {
+    const frame = (rafNow: number) => {
       raf = requestAnimationFrame(frame);
+      const now = tickSceneClock(rafNow);
       let dt = (now - last) / 1000;
       last = now;
       if (dt > 0.1) dt = 0.1;

@@ -145,6 +145,36 @@ async function loadPlaywright() {
   );
 }
 
+// Hand the scene an exact slice of animation and wait for it to render.
+//
+// The preview freezes a VIRTUAL clock the moment it reports ready (see
+// src/golfpreview.tsx), so `waitForTimeout` no longer advances anything — that
+// is the whole point: a frozen scene renders the same frame however long we
+// wait, which is what makes two runs byte-identical. Where a sequence genuinely
+// needs motion (a camera settling after a shot, water moving on a bit before we
+// capture), ask for it in VIRTUAL milliseconds instead of sleeping. The clock
+// spends the budget one fixed 60 fps step per rendered frame and re-freezes, so
+// the result depends on the amount asked for and nothing else.
+async function advanceScene(page, ms) {
+  const drained = await page.evaluate((m) => {
+    const c = window.__sceneClock;
+    if (!c) return false;
+    c.advance(m);
+    return true;
+  }, ms);
+  if (!drained) {
+    // No virtual clock (older preview / clock not engaged) — fall back to real
+    // time so the sequence still works, just non-deterministically.
+    await page.waitForTimeout(ms);
+    return;
+  }
+  try {
+    await page.waitForFunction('window.__sceneClock.pending() === 0', { timeout: 10000 });
+  } catch {
+    console.log(`  (warn: virtual clock did not drain ${ms}ms — is the render loop running?)`);
+  }
+}
+
 // Multi-aim regression driver. Renders a REAL first aim at the tee (a genuine
 // pointer drag so CourseGL renders the aim aids and CACHES the aim-aid
 // boundingSphere near the tee), fires it through the sim's own pipeline, rolls
@@ -165,7 +195,7 @@ async function runSecondAim(page, label) {
   await page.mouse.move(cx, y0);
   await page.mouse.down();
   for (let s = 1; s <= 6; s++) await page.mouse.move(cx, y0 - (pull1 * s) / 6);
-  await page.waitForTimeout(600);
+  await advanceScene(page, 600);
   await page.mouse.up(); // arm
 
   // FIRE + roll to true rest downrange. Deterministic stepping (headless rAF is
@@ -182,15 +212,16 @@ async function runSecondAim(page, label) {
     return { lie: st.lie, dist: st.distToPin, d: Math.round(s.ball.d), strokes: st.strokes, resting: st.resting };
   }, FIXED_MS);
   // Let the render loop hide the (now stale-sphere) aim aids and settle the
-  // camera downrange before we re-aim.
-  await page.waitForTimeout(500);
+  // camera downrange before we re-aim. The camera eases per-frame off dt, so
+  // this HAS to be virtual time — a frozen clock would leave it at the tee.
+  await advanceScene(page, 500);
 
   // SECOND aim (real, from the fairway) — the shot that would have been blank.
   const pull2 = 220;
   await page.mouse.move(cx, y0);
   await page.mouse.down();
   for (let s = 1; s <= 6; s++) await page.mouse.move(cx, y0 - (pull2 * s) / 6);
-  await page.waitForTimeout(600);
+  await advanceScene(page, 600);
   const secondAim = await page.evaluate(() => {
     const s = window.__sim;
     if (!s) return { err: 'no __sim' };
@@ -254,8 +285,9 @@ async function main() {
       try {
         await page.goto(url, { waitUntil: 'load', timeout: 20000 });
         await page.waitForFunction('window.__golfReady === true', { timeout: READY_TIMEOUT_MS });
-        // Let one more frame land after the ready beacon.
-        await page.waitForTimeout(150);
+        // Let a little more animation land after the ready beacon — in virtual
+        // time, so it is the same 150 ms of motion on every machine.
+        await advanceScene(page, 150);
         if (sequence === 'secondAim') {
           const file = await runSecondAim(page, label);
           saved.push(file);
@@ -273,7 +305,7 @@ async function main() {
           await page.mouse.move(cx, y0);
           await page.mouse.down();
           for (let s = 1; s <= 6; s++) await page.mouse.move(cx, y0 - (250 * s) / 6);
-          await page.waitForTimeout(300);
+          await advanceScene(page, 300);
         }
         if (drag) {
           const dbg = await page.evaluate(() => {

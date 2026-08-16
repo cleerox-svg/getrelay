@@ -32,7 +32,9 @@ import {
   reedRectAnchors,
   type WaterKit,
 } from '../../lib/golf/water';
+import { mulberry32 } from '../../lib/golf/wind';
 import { FIXED_MS, MAX_LAUNCH_SPEED } from '../../lib/golf/tuning';
+import { sceneNow, tickSceneClock } from '../../lib/scene3d/clock';
 import { play, unlockAudio } from '../../lib/audio';
 
 // Real-time 3D mini-golf (Three.js). Owns the WebGL renderer, scene and
@@ -99,10 +101,13 @@ function makeRoughTexture(): THREE.Texture {
   const g = c.getContext('2d')!;
   g.fillStyle = '#2f6b34';
   g.fillRect(0, 0, c.width, c.height);
+  // Seeded, never Math.random — the speckle must be identical on every load or
+  // the screenshot harness reports a regression for an unchanged scene.
+  const rnd = mulberry32(0x3fa27c);
   for (let i = 0; i < 1400; i++) {
-    const v = Math.random();
-    g.fillStyle = v > 0.5 ? `rgba(255,255,255,${Math.random() * 0.05})` : `rgba(0,0,0,${Math.random() * 0.08})`;
-    g.fillRect(Math.random() * c.width, Math.random() * c.height, 2, 2);
+    const v = rnd();
+    g.fillStyle = v > 0.5 ? `rgba(255,255,255,${rnd() * 0.05})` : `rgba(0,0,0,${rnd() * 0.08})`;
+    g.fillRect(rnd() * c.width, rnd() * c.height, 2, 2);
   }
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -119,10 +124,11 @@ function makeSandTexture(): THREE.Texture {
   const [r, gg, b] = SURFACE_RGB.bunker;
   g.fillStyle = `rgb(${Math.round(r * 255)},${Math.round(gg * 255)},${Math.round(b * 255)})`;
   g.fillRect(0, 0, c.width, c.height);
+  const rnd = mulberry32(0x8d4e19);
   for (let i = 0; i < 2200; i++) {
-    const light = Math.random() < 0.5;
-    g.fillStyle = light ? `rgba(255,255,255,${Math.random() * 0.06})` : `rgba(120,90,50,${Math.random() * 0.08})`;
-    g.fillRect(Math.random() * c.width, Math.random() * c.height, 1.5, 1.5);
+    const light = rnd() < 0.5;
+    g.fillStyle = light ? `rgba(255,255,255,${rnd() * 0.06})` : `rgba(120,90,50,${rnd() * 0.08})`;
+    g.fillRect(rnd() * c.width, rnd() * c.height, 1.5, 1.5);
   }
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -877,6 +883,10 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
     const pVel = new Float32Array(PMAX * 3);
     let pLife = 0;
     let pActive = 0;
+    // One seeded generator for the whole mount: successive bursts still differ
+    // from each other (the stream advances), but the sequence is identical on
+    // every load, so a captured burst is reproducible.
+    const burstRnd = mulberry32(0x1b7d55);
     const spawnBurst = (x: number, yBase: number, z: number, color: number) => {
       partMat.color.setHex(color);
       pActive = PMAX;
@@ -884,10 +894,10 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
         partPos[i * 3] = x;
         partPos[i * 3 + 1] = yBase + 1;
         partPos[i * 3 + 2] = z;
-        const ang = Math.random() * Math.PI * 2;
-        const sp = 8 + Math.random() * 14;
+        const ang = burstRnd() * Math.PI * 2;
+        const sp = 8 + burstRnd() * 14;
         pVel[i * 3] = Math.cos(ang) * sp * 0.5;
-        pVel[i * 3 + 1] = 14 + Math.random() * 16;
+        pVel[i * 3 + 1] = 14 + burstRnd() * 16;
         pVel[i * 3 + 2] = Math.sin(ang) * sp * 0.5;
       }
       pLife = 0.7;
@@ -974,7 +984,9 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
     // --- Fixed-timestep loop --------------------------------------------
     let raf = 0;
     let acc = 0;
-    let last = performance.now();
+    // Scene clock (lib/scene3d/clock.ts): the platform clock in the app, a
+    // freezable virtual one under the screenshot harness.
+    let last = sceneNow();
     let running = false;
     let sunk = false;
     let sinkY = cupTopY + BALL_R;
@@ -982,7 +994,8 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
     // discrete sim event — read from the snapshot state we already render.
     let lastRollAt = 0;
 
-    const frame = (now: number) => {
+    const frame = (rafNow: number) => {
+      const now = tickSceneClock(rafNow);
       const dtMs = Math.min(now - last, 100);
       last = now;
       const dt = dtMs / 1000;
@@ -1113,7 +1126,7 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
     const start = () => {
       if (running) return;
       running = true;
-      last = performance.now();
+      last = sceneNow();
       raf = requestAnimationFrame(frame);
     };
     const stop = () => {
