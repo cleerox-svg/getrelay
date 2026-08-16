@@ -639,10 +639,10 @@ milliseconds (`advanceScene(page, ms)` → `window.__sceneClock.advance`), never
 `waitForTimeout`, then renders a few frozen frames before capturing (Chromium can
 hand back the frame *before* the last one rendered).
 
-**Known residual: ~5–6 water scenes still differ by 5–180 pixels (≤0.012%).**
+**Known residual: 5 water scenes still differ by 10–200 pixels (≤0.015%).**
 `augusta-12`, `augusta-16-redbud`, `course-played-aim`, `listowel-heritage-3`,
-`putt-water`, and sometimes `augusta-16-pond` (membership at the low end
-flickers — one pair had it at 5 px, maxΔ 1). Per-pixel magnitude reaches
+`putt-water` — plus, in one run pair out of three, `augusta-16-pond` at 5 px
+(maxΔ 1), so membership flickers at the very low end. Per-pixel magnitude reaches
 **maxΔ ≈ 44** on `listowel-heritage-3` and ~20–26 on the augusta holes, which is
 higher than the "4–10" first recorded here: that early figure came from a smaller
 sample, not from a since-introduced regression. Measured directly — two
