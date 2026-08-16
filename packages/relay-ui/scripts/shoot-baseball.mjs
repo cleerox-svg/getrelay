@@ -17,7 +17,7 @@
 // THE WHOLE POINT OF THE FILE. An adversarial review drew the outfield wall 5 ft
 // wrong on purpose; this harness printed `worst |Δ| — distance 5.002 ft` and then
 // exited 0. A gate that observes the failure and returns success is not a gate.
-// Two families of number are checked, and every one of them can fail the run:
+// Four families of number are checked, and every one of them can fail the run:
 //   • draw calls and triangles per scene — the charter's rule 7 demands a numeric
 //     GPU budget, so there are ceilings below and they are enforced;
 //   • the fence distance and height at 0°/±22°/±45° MEASURED OUT OF THE BUILT
@@ -25,6 +25,11 @@
 //     input would prove nothing; this reads the BufferGeometry vertices, so a
 //     wall drawn from the five knots instead of the pchip shows up as a delta —
 //     and now as a non-zero exit code.
+//   • THE TRACER AGAINST THE SIM. See the block above `TRACER_TOL_FT`. This is
+//     the check the visual gate was created for and it was blind to it until the
+//     ball existed: the sim reports N inches of break, and the DRAWN curve must
+//     bend the same way and the same amount.
+//   • the batted tracer's own apex and carry, against `BattedFlight`'s.
 //
 // ⚠ SwiftShader validates composition, geometry and materials but NOT real-GPU
 // behaviour. "Renders fine in SwiftShader" is not evidence of on-device safety —
@@ -42,17 +47,36 @@ import path from 'node:path';
 const pkgDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.join(pkgDir, '.baseball-shots');
 
-// The scene matrix. Four camera MODES over one scene, plus the second park —
+// The scene matrix. Four camera MODES over one scene, the second park, and five
+// flight scenes.
+//
 // `park-alpine` is the proof that a park is data: a different fence row must
 // produce a visibly different wall (347/390/415/375/350 against Harbourfront's
 // symmetric 328/375/400, a 16 ft wall in left-centre against a uniform 10, and
 // NO ROOF at all against a 282 ft ring).
+//
+// ⚠ EVERY SCENE CARRIES `t=` OR `bt=`, AND THAT IS A DETERMINISM REQUIREMENT,
+// NOT A FRAMING CHOICE. With neither, `StadiumGL` plays the flight back off
+// `performance.now()` at `PITCH_TEMPO` and the ball lands wherever the frame
+// budget put it — two runs would then differ by a few pixels of ball and the
+// byte-identical check would be meaningless. `t` is TRUE PHYSICAL seconds since
+// release; `bt` is seconds since CONTACT, and implies a swing.
 const SCENES = {
-  batter: { query: 'scene=batter', label: 'batter' },
-  pitcher: { query: 'scene=pitcher', label: 'pitcher' },
-  wide: { query: 'scene=wide', label: 'wide' },
-  flight: { query: 'scene=flight', label: 'flight' },
-  'park-alpine': { query: 'scene=wide&park=alpine', label: 'park-alpine-wide' },
+  batter: { query: 'scene=batter&t=0.30', label: 'batter' },
+  pitcher: { query: 'scene=pitcher&t=0.30', label: 'pitcher' },
+  wide: { query: 'scene=wide&t=0.30', label: 'wide' },
+  flight: { query: 'scene=flight&t=0.30', label: 'flight' },
+  'park-alpine': { query: 'scene=wide&park=alpine&t=0.30', label: 'park-alpine-wide' },
+  // The three break shots. Same camera, same target, same frozen fraction of the
+  // flight — so the ONLY thing that differs between the three PNGs is the pitch
+  // row, and a human comparing them is comparing break and nothing else.
+  'pitch-4seam': { query: 'scene=batter&pitch=ff&t=0.30', label: 'pitch-4seam' },
+  'pitch-curve': { query: 'scene=batter&pitch=cu&t=0.35', label: 'pitch-curve' },
+  'pitch-sweeper': { query: 'scene=batter&pitch=st&t=0.35', label: 'pitch-sweeper' },
+  // The ball just off the bat, from the box, and the same ball near its apex
+  // from the upper deck.
+  contact: { query: 'scene=batter&pitch=ff&bt=0.12', label: 'contact' },
+  homerun: { query: 'scene=flight&pitch=ff&bt=2.6', label: 'homerun' },
 };
 
 // Portrait, a phone screen. Same shape as the golf harness so the two sets of
@@ -92,21 +116,79 @@ const FENCE_BEARINGS = [-45, -22, 0, 22, 45];
 const FENCE_TOL_FT = 0.05;
 
 /**
+ * ⚠ THE TRACER GATE, AND ITS TWO DERIVED TOLERANCES.
+ *
+ * `baseball-visual-qa`'s highest-value check is: read the sim's reported break,
+ * then confirm the DRAWN tracer bends the same way and by the same amount. A
+ * tracer drawn from a separate visual spline that disagrees with the sim is the
+ * exact bug class the gate exists for, and it went unchecked through M1 because
+ * there was no ball to draw.
+ *
+ * Two independent comparisons, because they fail on different mistakes:
+ *
+ *   (1) POSITION — for every DRAWN vertex, the sim's own track is interpolated
+ *       to that vertex's distance-from-the-plate and the two are differenced.
+ *       Catches an offset, a scale error, a mirrored axis, a wrong frame
+ *       conversion, a truncated buffer.
+ *   (2) DEFLECTION — the departure of the path from the straight line tangent to
+ *       it at `segmentFt`, evaluated at the plate, computed by the SAME function
+ *       on the drawn polyline and on the sim's dense track. Catches the case
+ *       position cannot: a curve that agrees at its ends and bends differently
+ *       in between. A constant offset cancels out of a deflection, which is
+ *       precisely why (1) is not redundant.
+ *
+ * ⚠ THE HARNESS CONVERTS FRAMES ITSELF, from `zone.ts`'s REPORT definition and
+ * `stadium/geom.ts`'s scene frame, and deliberately does NOT call the
+ * renderer's converter. A gate that reuses the code under test is a tautology.
+ *
+ * TRACER_TOL_FT = 0.002. Derived. The tracer's vertices live in a Float32
+ * `BufferAttribute` (that is what the GPU draws, so that is what is read back),
+ * whose quantum at the largest scene coordinate a fly ball reaches — ~500 ft —
+ * is 500·2⁻²⁴ = 3.0e-5 ft, and 3.8e-6 ft over the 60 ft of a pitch. The
+ * interpolation in (1) lands on a track node whenever the tracer is a subsample
+ * of the track, and on the exact chord otherwise, so it contributes nothing.
+ * 0.002 ft is ~65× that residual and 40× BELOW one inch — the scale at which a
+ * break error is a physics claim. Nothing about the tolerance is physical.
+ *
+ * DEFLECT_TOL_IN = 0.05. Derived from the same float32 residual through the
+ * metric's own lever arm: the tangent is estimated over one substep (~1.1 ft at
+ * 94 mph) and extrapolated 50 ft, so a 3.8e-6 ft vertex error is amplified
+ * ~46× to 1.7e-4 ft = 0.002 in. 0.05 in is ~25× that and ~300× below the
+ * ~15 in of break it is measuring. It is dominated by tracer SAMPLING — a
+ * tracer decimated to every 10th substep would move it by the chord error of
+ * the tangent estimate, which is the intended sensitivity.
+ */
+const TRACER_TOL_FT = 0.002;
+const DEFLECT_TOL_IN = 0.05;
+
+/**
+ * The batted tracer's own carry and apex against `BattedFlight`'s reported
+ * numbers, ft. Looser than TRACER_TOL_FT and for a stated reason: apex is a
+ * MAXIMUM over the drawn samples, and the sim's `apexFt` is the same maximum
+ * over the same samples, so they agree exactly — but `carryFt` is measured to
+ * the interpolated ground crossing while the drawn polyline's last vertex is
+ * that same interpolated point, so the only error is float32 at ~450 ft
+ * (2.7e-5 ft). 0.01 ft is 370× that and is 0.12 in on a 430 ft fly.
+ */
+const BATTED_TOL_FT = 0.01;
+
+/**
  * The GPU ceiling, per scene. Charter rule 7: "GPU budget with a number", and a
  * number nobody enforces is a comment.
  *
- * Today's worst scene is `wide` at 18 draws / 1,845 triangles (11–18 and
- * 1,365–1,845 across the five). The two ceilings are deliberately NOT set the
- * same multiple of that, because the two costs do not grow the same way:
+ * M1's worst scene was `wide` at 18 draws / 1,845 triangles. M2b adds at most
+ * four: the ball, its contact shadow, the pitch tracer and the batted tracer
+ * (three geometries draw nothing when their draw range is 0, which three skips
+ * before it counts a call). The two ceilings are deliberately NOT set the same
+ * multiple of that, because the two costs do not grow the same way:
  *
  *   • DRAW CALLS are the dominant mobile cost and the one thing the charter
  *     legislates directly — the crowd is ONE `InstancedMesh`, repeated geometry
  *     is instanced or merged. Draw calls should therefore grow by ones as M2 art
- *     lands (crowd, lights, scoreboard, skyline, ball, bat), not by multiples.
- *     40 is 2.2× today's worst, leaving 22 new draws for the whole M2 art pass,
- *     and sits UNDER 3 × 18 = 54, so the "somebody gave every seating section its
- *     own material" regression trips it. That is the failure this number exists
- *     for.
+ *     lands (crowd, lights, scoreboard, skyline, bat), not by multiples.
+ *     40 is 1.8× today's worst, and sits UNDER 3 × 22 = 66, so the "somebody
+ *     gave every seating section its own material" regression trips it. That is
+ *     the failure this number exists for.
  *   • TRIANGLES are cheap per instance and expensive per bad decision. An
  *     instanced crowd legitimately adds six figures of triangles inside ONE draw
  *     call, so a 3× ceiling here would fire on correct M2 art and get raised,
@@ -152,6 +234,102 @@ async function loadPlaywright() {
 }
 
 const f2 = (v) => (v === null || v === undefined ? '   —  ' : v.toFixed(2).padStart(7));
+const f3 = (v) => (v === null || v === undefined ? '    —  ' : v.toFixed(3).padStart(8));
+
+// ---------------------------------------------------------------------------
+// The tracer gate's arithmetic. Pure, so it can be reasoned about on its own.
+// ---------------------------------------------------------------------------
+
+/**
+ * Scene ft → the REPORT frame the pitch sim publishes in.
+ *
+ * `stadium/geom.ts`: scene x is lateral (+ = first-base side), scene y is up,
+ * scene −z is toward centre field. `zone.ts`: REPORT d is + toward centre field
+ * from the plate, x is + to the umpire's right = the first-base side, h is
+ * height. So d = −z, x = x, h = y. Written out here, from those two documents,
+ * rather than imported — see the note above TRACER_TOL_FT.
+ */
+const reportFromSceneFlat = (flat) => {
+  const out = [];
+  for (let i = 0; i + 2 < flat.length; i += 3) {
+    out.push({ d: -flat[i + 2], x: flat[i], h: flat[i + 1] });
+  }
+  return out;
+};
+
+/** The sim's REPORT-frame parallel arrays as the same list of points. */
+const reportFromTrack = (track) =>
+  track.d.map((d, i) => ({ d, x: track.x[i], h: track.h[i] }));
+
+/** Linear interpolation of a d-ordered (descending) path at a given `d`. */
+function atDistance(path, d) {
+  if (path.length === 0) return null;
+  if (d >= path[0].d) return path[0];
+  const last = path[path.length - 1];
+  if (d <= last.d) return last;
+  let hi = 1;
+  while (hi < path.length - 1 && path[hi].d > d) hi++;
+  const a = path[hi - 1];
+  const b = path[hi];
+  const f = a.d === b.d ? 0 : (a.d - d) / (a.d - b.d);
+  return { d, x: a.x + (b.x - a.x) * f, h: a.h + (b.h - a.h) * f };
+}
+
+/**
+ * The deflection functional: how far the path has departed, at the plate, from
+ * the straight line tangent to it at `segFt` out.
+ *
+ * This is the geometry of "break" applied to a polyline. It is NOT identical to
+ * `measureBreak`'s number — that one differences against a spinless trajectory
+ * that carries the same drag, whose lateral path is straight in TIME rather than
+ * in distance — so the two are printed side by side and only the SIGN is
+ * asserted between them. What IS asserted numerically is drawn-vs-sim of this
+ * same functional, which is a statement about the renderer and not about physics.
+ */
+function deflectionIn(path, segFt) {
+  let i = 0;
+  while (i + 1 < path.length && path[i + 1].d >= segFt) i++;
+  const a = path[i];
+  const b = path[i + 1];
+  if (!a || !b || a.d < segFt) return null;
+  const f = a.d === b.d ? 0 : (a.d - segFt) / (a.d - b.d);
+  const p0x = a.x + (b.x - a.x) * f;
+  const p0h = a.h + (b.h - a.h) * f;
+  const sx = (b.x - a.x) / (b.d - a.d);
+  const sh = (b.h - a.h) / (b.d - a.d);
+  const end = path[path.length - 1];
+  const dd = end.d - segFt;
+  return { xIn: (end.x - (p0x + sx * dd)) * 12, hIn: (end.h - (p0h + sh * dd)) * 12 };
+}
+
+/** WORLD (batted) ft → scene, and back. `geom.ts`: scene = (world.y, z, x). */
+const worldFromSceneFlat = (flat) => {
+  const out = [];
+  for (let i = 0; i + 2 < flat.length; i += 3) {
+    out.push({ x: flat[i + 2], y: flat[i], z: flat[i + 1] });
+  }
+  return out;
+};
+
+const worldFromTrack = (track) => track.t.map((_, i) => ({ x: track.x[i], y: track.y[i], z: track.z[i] }));
+
+/** Ground-plane radius from the contact point — monotone along a fly ball. */
+const radiusOf = (p) => Math.hypot(p.x, p.y);
+
+function atRadius(path, r) {
+  if (path.length === 0) return null;
+  if (r <= radiusOf(path[0])) return path[0];
+  const last = path[path.length - 1];
+  if (r >= radiusOf(last)) return last;
+  let hi = 1;
+  while (hi < path.length - 1 && radiusOf(path[hi]) < r) hi++;
+  const a = path[hi - 1];
+  const b = path[hi];
+  const ra = radiusOf(a);
+  const rb = radiusOf(b);
+  const f = ra === rb ? 0 : (r - ra) / (rb - ra);
+  return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, z: a.z + (b.z - a.z) * f };
+}
 
 /**
  * Print the scene's numbers AND JUDGE THEM. Returns the list of violations —
@@ -164,11 +342,11 @@ const f2 = (v) => (v === null || v === undefined ? '   —  ' : v.toFixed(2).pad
 function checkReport(report) {
   if (!report || report.err) {
     // ⚠ THIS IS A FAILURE, NOT A WARNING. It is the one branch in the file that
-    // reports a problem, and it used to return success. `window.__stadium` is
-    // set from StadiumGL's `onReady`, so its absence after the ready beacon means
-    // the scene handle is broken — every number below is then unmeasured, which
-    // is strictly worse than measured-and-wrong.
-    console.error(`  ✗ no scene handle: ${report?.err ?? 'window.__stadium missing'}`);
+    // reports a problem, and it used to return success. `window.__baseball` is
+    // completed from StadiumGL's `onReady`, so its absence after the ready
+    // beacon means the scene handle is broken — every number below is then
+    // unmeasured, which is strictly worse than measured-and-wrong.
+    console.error(`  ✗ no scene handle: ${report?.err ?? 'window.__baseball missing'}`);
     return ['no scene handle'];
   }
   const violations = [];
@@ -177,6 +355,11 @@ function checkReport(report) {
     `  GPU   draws ${String(s.drawCalls).padStart(3)}  tris ${String(s.triangles).padStart(6)}` +
       `  progs ${s.programs}  geos ${s.geometries}  texs ${s.textures}` +
       `  tier ${s.tier} (${s.shadowMapSize}²) — ${s.qualityReason}`,
+  );
+  console.log(
+    `  SHADOW  volume ±${s.shadowHalfFt.toFixed(0)} ft over ${s.shadowMapSize}² =` +
+      ` ${s.shadowTexelFt.toFixed(3)} ft/texel  (ball radius 0.121 ft —` +
+      ` ${(s.shadowTexelFt / 0.1210237).toFixed(1)}× the whole ball)`,
   );
   if (s.drawCalls > MAX_DRAW_CALLS) {
     violations.push(`draw calls ${s.drawCalls} > ceiling ${MAX_DRAW_CALLS}`);
@@ -187,9 +370,7 @@ function checkReport(report) {
   console.log(
     `  FENCE park=${report.parkId}  roofPeak ${report.roofPeakFt} ft  foul ${report.foulTerritoryFt} ft`,
   );
-  console.log(
-    '    bearing   geometry_ft   parks.ts_ft      Δft   geom_h    park_h     Δh',
-  );
+  console.log('    bearing   geometry_ft   parks.ts_ft      Δft   geom_h    park_h     Δh');
   let worstD = 0;
   let worstH = 0;
   for (const row of report.fence) {
@@ -214,6 +395,129 @@ function checkReport(report) {
   }
   if (worstH > FENCE_TOL_FT) {
     violations.push(`fence height off by ${worstH.toFixed(3)} ft > tol ${FENCE_TOL_FT} ft`);
+  }
+
+  violations.push(...checkPitchTracer(report));
+  violations.push(...checkBattedTracer(report));
+  return violations;
+}
+
+function checkPitchTracer(report) {
+  const violations = [];
+  const p = report.pitch;
+  const drawn = reportFromSceneFlat(report.pitchTracer);
+  console.log(
+    `  PITCH ${p.id}  plate ${p.plate.speedMph.toFixed(1)} mph at` +
+      ` x ${p.plate.x.toFixed(2)} h ${p.plate.h.toFixed(2)} ft` +
+      ` (${p.plate.strike ? 'strike' : 'ball'})  flight ${p.flightTimeS.toFixed(3)} s` +
+      `  ball drawn at ${report.ballScene ? report.ballScene.map((v) => v.toFixed(2)).join(', ') : '—'}`,
+  );
+  if (drawn.length < 2) {
+    console.error('    ✗ pitch tracer drew fewer than 2 vertices');
+    return ['pitch tracer empty'];
+  }
+  const sim = reportFromTrack(p.track);
+
+  // (1) POSITION — every drawn vertex against the sim's own path at the same d.
+  let worstX = 0;
+  let worstH = 0;
+  for (const v of drawn) {
+    const ref = atDistance(sim, v.d);
+    if (!ref) continue;
+    worstX = Math.max(worstX, Math.abs(v.x - ref.x));
+    worstH = Math.max(worstH, Math.abs(v.h - ref.h));
+  }
+  console.log(
+    `    tracer ${String(drawn.length).padStart(4)} verts vs sim ${String(sim.length).padStart(4)}` +
+      ` samples — worst |Δx| ${worstX.toExponential(2)} ft, |Δh| ${worstH.toExponential(2)} ft` +
+      `  (tol ${TRACER_TOL_FT} ft)`,
+  );
+  if (worstX > TRACER_TOL_FT) {
+    violations.push(`drawn pitch tracer off laterally by ${worstX.toFixed(4)} ft`);
+  }
+  if (worstH > TRACER_TOL_FT) {
+    violations.push(`drawn pitch tracer off vertically by ${worstH.toFixed(4)} ft`);
+  }
+
+  // (2) DEFLECTION — the same functional on the drawn polyline and on the sim's.
+  const dDrawn = deflectionIn(drawn, p.segmentFt);
+  const dSim = deflectionIn(sim, p.segmentFt);
+  if (!dDrawn || !dSim) {
+    console.error(`    ✗ deflection unmeasurable over ${p.segmentFt} ft`);
+    return [...violations, 'deflection unmeasurable'];
+  }
+  console.log(
+    `    deflection over ${p.segmentFt} ft   horiz ${f3(dDrawn.xIn)} in drawn` +
+      ` vs ${f3(dSim.xIn)} in sim      Δ ${(dDrawn.xIn - dSim.xIn).toExponential(2)} in`,
+  );
+  console.log(
+    `                             vert  ${f3(dDrawn.hIn)} in drawn` +
+      ` vs ${f3(dSim.hIn)} in sim      Δ ${(dDrawn.hIn - dSim.hIn).toExponential(2)} in`,
+  );
+  console.log(
+    `    measureBreak  game air  IVB ${f3(p.breakGameIn.ivbIn)} in  HB ${f3(p.breakGameIn.hbIn)} in` +
+      `   |  published (ISA) air  IVB ${f3(p.breakRefIn.ivbIn)} in  HB ${f3(p.breakRefIn.hbIn)} in`,
+  );
+  const dx = Math.abs(dDrawn.xIn - dSim.xIn);
+  const dh = Math.abs(dDrawn.hIn - dSim.hIn);
+  if (dx > DEFLECT_TOL_IN) {
+    violations.push(`drawn horizontal deflection ${dx.toFixed(4)} in from the sim's`);
+  }
+  if (dh > DEFLECT_TOL_IN) {
+    violations.push(`drawn vertical deflection ${dh.toFixed(4)} in from the sim's`);
+  }
+  // The SIGN check against the physics. A mirrored lateral axis — the exact bug
+  // BASEBALL.md's frame note records having shipped once as a mislabel — leaves
+  // every magnitude above intact and flips this. Convention-free, so no tolerance.
+  if (Math.sign(dDrawn.xIn) !== Math.sign(p.breakGameIn.hbIn)) {
+    violations.push(
+      `drawn horizontal bend (${dDrawn.xIn.toFixed(2)} in) opposes measureBreak's HB ` +
+        `(${p.breakGameIn.hbIn.toFixed(2)} in) — mirrored lateral axis?`,
+    );
+  }
+  return violations;
+}
+
+function checkBattedTracer(report) {
+  if (!report.batted) return [];
+  const violations = [];
+  const b = report.batted;
+  const drawn = worldFromSceneFlat(report.battedTracer);
+  console.log(
+    `  BATTED  EV ${b.evMph.toFixed(1)} mph  LA ${b.laDeg.toFixed(1)}°  spray ${b.sprayDeg.toFixed(1)}°` +
+      `  carry ${b.carryFt.toFixed(1)} ft  apex ${b.apexFt.toFixed(1)} ft  hang ${b.hangS.toFixed(2)} s`,
+  );
+  if (drawn.length < 2) {
+    console.error('    ✗ batted tracer drew fewer than 2 vertices');
+    return ['batted tracer empty'];
+  }
+  const sim = worldFromTrack(b.track);
+  let worst = 0;
+  for (const v of drawn) {
+    const ref = atRadius(sim, radiusOf(v));
+    if (!ref) continue;
+    worst = Math.max(worst, Math.abs(v.x - ref.x), Math.abs(v.y - ref.y), Math.abs(v.z - ref.z));
+  }
+  const drawnApex = drawn.reduce((m, v) => Math.max(m, v.z), 0);
+  const end = drawn[drawn.length - 1];
+  const drawnCarry = Math.hypot(end.x, end.y);
+  console.log(
+    `    tracer ${String(drawn.length).padStart(4)} verts vs sim ${String(sim.length).padStart(4)}` +
+      ` samples — worst |Δ| ${worst.toExponential(2)} ft  (tol ${TRACER_TOL_FT} ft)`,
+  );
+  console.log(
+    `    drawn carry ${drawnCarry.toFixed(2)} ft vs sim ${b.carryFt.toFixed(2)} ft` +
+      `   |   drawn apex ${drawnApex.toFixed(2)} ft vs sim ${b.apexFt.toFixed(2)} ft` +
+      `  (tol ${BATTED_TOL_FT} ft)`,
+  );
+  if (worst > TRACER_TOL_FT) {
+    violations.push(`drawn batted tracer off by ${worst.toFixed(4)} ft`);
+  }
+  if (Math.abs(drawnCarry - b.carryFt) > BATTED_TOL_FT) {
+    violations.push(`drawn carry off by ${Math.abs(drawnCarry - b.carryFt).toFixed(4)} ft`);
+  }
+  if (Math.abs(drawnApex - b.apexFt) > BATTED_TOL_FT) {
+    violations.push(`drawn apex off by ${Math.abs(drawnApex - b.apexFt).toFixed(4)} ft`);
   }
   return violations;
 }
@@ -266,19 +570,26 @@ async function main() {
         await page.waitForTimeout(200);
 
         const report = await page.evaluate((bearings) => {
-          const st = window.__stadium;
-          const sim = window.__sim;
-          if (!st || !sim) return { err: 'window.__stadium / __sim missing' };
+          const bb = window.__baseball;
+          if (!bb || !bb.stadium) return { err: 'window.__baseball incomplete' };
+          const { sim, stadium } = bb;
+          const st = sim.derby.getState();
           return {
             parkId: sim.parkId,
             roofPeakFt: sim.roofPeakFt,
             foulTerritoryFt: sim.foulTerritoryFt,
-            stats: st.stats(),
+            derby: { phase: st.phase, rounds: st.rounds, pitchesPerRound: st.pitchesPerRound },
+            stats: stadium.stats(),
             fence: bearings.map((deg) => ({
               deg,
-              geo: st.measureFence(deg),
+              geo: stadium.measureFence(deg),
               park: sim.fenceAt(deg),
             })),
+            pitch: sim.pitch,
+            batted: sim.batted,
+            pitchTracer: stadium.tracer('pitch'),
+            battedTracer: stadium.tracer('batted'),
+            ballScene: stadium.ballScene(),
           };
         }, FENCE_BEARINGS);
 
@@ -290,7 +601,7 @@ async function main() {
         // before the error check ran, so a shader-broken scene reported "5/5
         // captured" beside its own stack trace. The exit code was right and the
         // summary lied, which is the half a human reads.
-        console.log(`· ${id.padEnd(12)} → ${path.relative(pkgDir, file)}`);
+        console.log(`· ${id.padEnd(14)} → ${path.relative(pkgDir, file)}`);
         const bad = checkReport(report);
         if (errors.length) {
           console.error(`  ✗ PAGE ERRORS (${errors.length}):`);
@@ -299,10 +610,10 @@ async function main() {
         }
         if (bad.length) {
           failed++;
-          console.error(`✗ ${id.padEnd(12)} FAILED — ${bad.join('; ')}`);
+          console.error(`✗ ${id.padEnd(14)} FAILED — ${bad.join('; ')}`);
         } else {
           saved.push(file);
-          console.log(`✓ ${id.padEnd(12)} ok`);
+          console.log(`✓ ${id.padEnd(14)} ok`);
         }
       } catch (e) {
         failed++;
@@ -322,8 +633,8 @@ async function main() {
   console.log(
     `\n${saved.length}/${ids.length} scene(s) passed; PNGs in ${path.relative(process.cwd(), outDir)}`,
   );
-  // A page error, a GPU-budget overrun and a wall that does not match parks.ts
-  // are all FAILURES here, not footnotes. See the header.
+  // A page error, a GPU-budget overrun, a wall that does not match parks.ts and
+  // a tracer that does not match the sim are all FAILURES here, not footnotes.
   process.exit(failed ? 1 : 0);
 }
 
