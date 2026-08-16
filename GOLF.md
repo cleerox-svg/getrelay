@@ -135,7 +135,7 @@ A data-driven **Range layout** picker (persisted, default `fairway`):
 | Range HUD + controls + telemetry + layout picker | `packages/relay-ui/src/components/golf/RangeGame.tsx` |
 | Layouts, pins, `surfaceAt` | `packages/relay-ui/src/lib/golf/rangeTargets.ts` |
 | Club ladder | `packages/relay-ui/src/lib/golf/clubs.ts` |
-| Course terrain data + "HOW TO AUTHOR A HOLE" contract (`heightAt`/`gradientAt`/`surfaceAt`; `TEE_R`/`corridorHalfAt`/`greenPadRadius`; organic edges `edgeNoise`/`edgeRadius`/`featureSeed` + `EDGE_WOBBLE`/`maxGreenPadRadius`; render-only `corridorEdgeDist` first-cut helper; optional render-only `bloom` flowering canopy) | `packages/relay-ui/src/lib/golf/terrain.ts`, `courseData.ts` |
+| Course terrain data + "HOW TO AUTHOR A HOLE" contract (`heightAt`/`gradientAt`/`surfaceAt`; `TEE_R`/`corridorHalfAt`/`greenPadRadius`; organic edges `edgeNoise`/`edgeRadius`/`featureSeed` + `EDGE_WOBBLE`/`maxGreenPadRadius`; render-only `corridorEdgeDist` first-cut helper; optional render-only `bloom` flowering canopy + `BloomForm` canopy/understory) | `packages/relay-ui/src/lib/golf/terrain.ts`, `courseData.ts` |
 | Course sim (terrain-aware; `snapshot`/`restore`/`predict`; putt power/speed; records) | `packages/relay-ui/src/lib/golf/courseSim.ts` |
 | Green + putting physics (Stimp → μ, roll-out, elliptic cup capture, BALL_R/CUP_R scale) | `packages/relay-ui/src/lib/golf/greenPhysics.ts` |
 | Course 3D scene (Three.js) — baked surface map, aim-holing pulse; `buildOrganicDisc`/`buildOrganicAnnulus` draw the green cap, fringe collar, bunkers and terrain-following water from the model's `edgeRadius`+`featureSeed`; long-grass rough, a crisp `corridorEdgeDist` first-cut band (uniform mown collar framed by dark mow lines), textured tee (`makeTeeTurf`); all textures seeded (`mulberry32`) | `packages/relay-ui/src/components/golf/CourseGL.tsx` |
@@ -702,6 +702,11 @@ out to be wrong in an instructive way.
    one thing golf's own visual gate cannot review is sand, which is why the sand
    work below had to be judged from a 2× crop of a single frame. A dedicated
    greenside-bunker view is cheap and belongs in `SCENES`.
+   → Still open, and generalised: "authored art with no harness frame" is the
+   class, and it cost three unreviewed flowering holes (see "Blossom, part 2").
+   Partially relieved by accident — the new `augusta17` tee view catches one of
+   that hole's greenside bunkers at the top of frame — but a view *composed* for
+   sand is still owed.
 6. ~~**The Augusta flowering holes render no blossom at all.**~~ **FIXED — see
    "Blossom" below.** Counting pink pixels
    across `augusta-2-pink-dogwood`, `augusta-13-azalea` and `augusta-16-redbud`:
@@ -714,6 +719,12 @@ out to be wrong in an instructive way.
    carries per-instance colour, so the whole cost is choosing which trees bloom.
    → **Done.** The three scenes now measure **13,926 / 14,642 / 31,308** pink
    pixels (0.97% / 1.02% / 2.17% of frame) at **exactly the same draw calls**.
+   → **And then half-undone, on the holes nobody could see.** The same change
+   bloomed 13 holes; only 3 had harness frames. The gate passed those 3 and
+   rejected every WARM-hued hole (12, 15, 17, and 8 once it was looked at) for
+   reading as autumn. See "Blossom, part 2" below — the fix is a season
+   correction on 15/17 and a new `understory` bloom form on 8/12, plus harness
+   scenes for all three of the holes that had none.
 7. **The hole-out frame does not actually show the ball.** Now that
    `course-celebrate`'s camera is fixed (defect 1), the frame is legible — sky,
    horizon, rough, green, cup, flagstick, confetti — but the fallback direction
@@ -827,6 +838,70 @@ renderer needed one colour path it already had.
 - **Measured:** pink pixels 0 → **13,926** (hole 2), 0 → **14,642** (13),
   0 → **31,308** (16). Draw calls 33 / 24 / 39 — unchanged. Triangles
   +2,160 / +1,920 / +1,320.
+
+**Blossom, part 2 — the warm holes read as AUTUMN, and why.** The visual gate
+reported after the above had merged. It passed 2, 13 and 16 emphatically (whole
+crown masses, mean 650–1,100 px per blob) and rejected **every warm-hued hole and
+no other**. Two separate mistakes were behind it, and the second is the one worth
+carrying forward:
+
+- **The finding, stated generally: pink survives because nothing in nature is a
+  pink tree in autumn.** Yellow, orange and red *are* the autumn palette, so a
+  tree-sized crown in one of them has no signal left that says spring — at any
+  saturation. Chroma is not the lever and neither is the mix floor; the
+  **silhouette** is. Hole 12 measured hue 51° sat **0.49** val 0.87 on its lit
+  facets and RGB `[106,110,23]` — olive khaki — in shade, against a blooming
+  forsythia's near-neon lemon at sat 0.9+. Raising saturation alone would have
+  produced a brighter autumn tree.
+- **Mistake 1 — the wrong season's feature.** 15 Firethorn and 17 Nandina were
+  authored from the colour those plants are famous for: pyracantha's orange
+  BERRIES and nandina's red ones. Both are an autumn/winter feature. Augusta's
+  frame of reference is April, when pyracantha carries white flower corymbs and
+  nandina white panicles with yellow anthers. Those two holes read as October
+  because they *were* October, correctly rendered. Fixed by authoring the April
+  colour (`0xf7f8f2` / `0xf6efd6`), which also moves them into the white/pink
+  family that demonstrably works.
+- **Mistake 2 — the wrong FORM for the hue,** and the reason a new mechanism was
+  needed. `HoleBloom.form` (`terrain.ts` `BloomForm`) is now `'canopy'` (default,
+  byte-identical to what shipped) or **`'understory'`**: the crowns stay GREEN
+  and the blossom becomes a low drift of flowering shrub at the foot of the tree
+  line. Green leaves standing over a warm mass is a silhouette autumn cannot
+  produce, because in autumn the canopy turns first. It is also simply true —
+  **forsythia, pyracantha and nandina are all 2–3 m shrubs**, and 8's Carolina
+  jessamine is a vine. None of them is a canopy tree; the original design had
+  been painting shrubs onto 19 yd hardwoods.
+- **Hole 8 was the same defect, found by a TEST rather than by eye.**
+  `courses.test.ts` now carries an autumn guard: a bloom in hue 0–65° at
+  sat > 0.45 may not use the default `'canopy'` form. It fired on 12, 15, 17 —
+  and on **8 Yellow Jasmine**, which nobody had looked at because it had no
+  harness scene either. The magenta side (~300–355°) is deliberately exempt and
+  must stay exempt: 2, 13 and 16 all sit there at sat 0.47–0.64 and all three
+  passed.
+- **Still zero draw calls.** A drift is 7 more leaf-blob instances on the same
+  unit icosahedron and the same white material — the same trick as the crown
+  tint. Cost is +2.2k triangles on hole 12 and +3.2k on 8. Draw calls unchanged
+  on all 28 scenes.
+- **The three holes that passed did not move.** Holes 2, 13 and 16 are
+  **byte-identical** before and after, by construction: `groveFromCourseTrees`
+  takes the form as an argument and only ever SETS `bloomForm` for
+  `'understory'`, so a canopy hole's placements do not even gain the key.
+- **Measured (share of frame, and connected components ≥40 px).** Hole 12
+  yellow 1.95% mean 5,545 px/blob → **0.76% mean 2,666**, hue 55.9°→**58.4°**,
+  sat 0.656→**0.661** (p90 0.81→**0.94**), val 0.661→**0.725**; the old ochre
+  mean RGB `[167,158,63]` becomes `[181,178,69]` chrome-lemon. Hole 15's orange
+  band goes to **zero** (the 5.5k px left in it are tree trunks) and 20,779 px of
+  white blossom appear; hole 17's red goes to **exactly zero** with 12,077 px of
+  cream. Hole 8 yellow 0.67% → 0.36% at the same chrome shift. Every one of those
+  is in the 0.77–1.76% / 913–2,732 px-per-blob band the three passing holes
+  occupy.
+- **⚠ The gap that let this ship: 8, 15 and 17 were not in `SCENES`.** Three
+  holes carried authored art no gate could see, which is how a berry colour
+  reached `main` unreviewed. They are now `augusta8`, `augusta15` and `augusta17`
+  in `shoot-golf.mjs` with committed budget entries. **The rule this earns: a
+  hole that carries `bloom` (or any authored per-hole art) needs a harness frame
+  in the same change.** Defect 5 below — no frame shows a Course bunker properly
+  — is the same class of gap and is still open, though `augusta17`'s tee view
+  does now catch a greenside bunker at the top of frame.
 
 **Scene-wide IBL, and real sand.** Two changes that deliberately move pixels.
 

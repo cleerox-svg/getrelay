@@ -8,7 +8,13 @@
 
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { BLOOM_TUFTS, buildGrove, groveFromCourseTrees, type TreePlacement } from './foliage';
+import {
+  BLOOM_DRIFT_BLOBS,
+  BLOOM_TUFTS,
+  buildGrove,
+  groveFromCourseTrees,
+  type TreePlacement,
+} from './foliage';
 import { courseTrees, HOLE_1 } from '../../../lib/golf/terrain';
 import type { DisposableResource } from '../../../lib/scene3d/instancing';
 
@@ -296,5 +302,125 @@ describe('the golf grove — blossom', () => {
     expect(groveFromCourseTrees(trees).some((p) => 'bloom' in p)).toBe(false);
     const tinted = groveFromCourseTrees([{ ...trees[0]!, kind: 'broadleaf', bloom: PINK }]);
     expect(tinted[0]!.bloom).toBe(PINK);
+    // A canopy hole must not even GAIN THE KEY — the three holes the gate passed
+    // have to stay pixel-identical, and "same object shape" is the cheap half of
+    // that guarantee.
+    expect('bloomForm' in tinted[0]!).toBe(false);
+    expect(groveFromCourseTrees(trees, 'understory').some((p) => 'bloomForm' in p)).toBe(false);
+  });
+});
+
+// The 'understory' form. It exists because the crown tint above passed the
+// visual gate on pink (2, 13, 16) and failed it on every warm hue (12, 15, 17):
+// yellow/orange/red ARE the autumn palette, so a tree-sized warm crown reads as
+// October whatever its saturation. Moving the blossom BELOW a crown that stays
+// green is the one silhouette autumn cannot make. Forsythia is a shrub anyway.
+describe('the golf grove — understory blossom (a shrub, not a crown)', () => {
+  const YELLOW = 0xfbdc12;
+  const ONE = { kind: 'broadleaf', x: 0, z: 0, scale: 1.7, seed: 5020, y: 3 } as const;
+
+  const build1 = (p: TreePlacement) => buildGrove(new THREE.Scene(), track, [p]);
+  const colours = (mesh: THREE.InstancedMesh): number[] => {
+    const c = new THREE.Color();
+    const out: number[] = [];
+    if (!mesh.instanceColor) return out;
+    for (let i = 0; i < mesh.count; i++) {
+      mesh.getColorAt(i, c);
+      out.push(c.getHex());
+    }
+    return out;
+  };
+
+  it('still costs NO extra draw call — the drift rides the leaf batch', () => {
+    // Same batch count as the identical tree with no bloom at all (trunk + leaf
+    // here; the pine-tier batch is never committed for a lone broadleaf).
+    expect(build1({ ...ONE, bloom: YELLOW, bloomForm: 'understory' })).toHaveLength(
+      build1(ONE).length,
+    );
+    // And in a mixed grove, still the canonical three.
+    const mixed: TreePlacement[] = [
+      { ...ONE, bloom: YELLOW, bloomForm: 'understory' },
+      { kind: 'pine', x: 20, z: -10, scale: 1.4, seed: 9020 },
+    ];
+    expect(buildGrove(new THREE.Scene(), track, mixed)).toHaveLength(3);
+  });
+
+  it('leaves the CROWN completely green — that is the whole point', () => {
+    const palette = new Set([0x2f7d3a, 0x3c8f44, 0x59a24a, 0x276b34, 0x4f9a52]);
+    const plain = colours(build1(ONE)[1]!);
+    const drifted = colours(build1({ ...ONE, bloom: YELLOW, bloomForm: 'understory' })[1]!);
+    // The original crown blobs are the untouched prefix, palette colours and all.
+    expect(drifted.slice(0, plain.length)).toEqual(plain);
+    for (const hex of plain) expect(palette.has(hex)).toBe(true);
+  });
+
+  it('appends exactly one drift, seated at the FOOT of the tree', () => {
+    const plain = build1(ONE);
+    const drift = build1({ ...ONE, bloom: YELLOW, bloomForm: 'understory' });
+    expect(drift[1]!.count - plain[1]!.count).toBe(BLOOM_DRIFT_BLOBS);
+    // Ground is y=3 and the tree is scale 1.7: the crown blobs sit above
+    // 3 + 4·1.7 = 9.8 (pinned by the parity test above). Every drift blob must
+    // be under a fraction of that, or it is a second canopy and reads as autumn
+    // all over again.
+    const m = new THREE.Matrix4();
+    const p = new THREE.Vector3();
+    for (let i = plain[1]!.count; i < drift[1]!.count; i++) {
+      drift[1]!.getMatrixAt(i, m);
+      p.setFromMatrixPosition(m);
+      expect(p.y).toBeGreaterThan(3); // above the ground it stands on
+      expect(p.y).toBeLessThan(3 + 2.5 * 1.7); // and well below the crown
+      // Hugging the trunk: inside 3 local units (≈5.7 yd at course tree scale),
+      // which keeps a drift inside the tree line it is planted in and well clear
+      // of the mown corridor — it is render-only, so a drift on the fairway
+      // would be a mass of blossom the ball flies straight through.
+      expect(Math.hypot(p.x, p.z)).toBeLessThan(3 * 1.7);
+    }
+  });
+
+  it('paints the drift near-pure blossom — forsythia flowers on bare wands', () => {
+    const drift = build1({ ...ONE, bloom: YELLOW, bloomForm: 'understory' });
+    const all = colours(drift[1]!);
+    const blobs = all.slice(all.length - BLOOM_DRIFT_BLOBS);
+    const target = new THREE.Color().setHex(YELLOW);
+    const c = new THREE.Color();
+    for (const hex of blobs) {
+      c.setHex(hex);
+      // A lerp from white toward the blossom, so never darker than it…
+      expect(c.r).toBeGreaterThanOrEqual(target.r - 1e-6);
+      expect(c.b).toBeGreaterThanOrEqual(target.b - 1e-6);
+      // …and no green contamination at all: blue must stay far below red. A
+      // crown blob's 60% floor still lets a dark leaf drag a yellow to olive,
+      // which is exactly what the gate measured ([106,110,23] in shade).
+      expect(c.b).toBeLessThan(c.r * 0.5);
+    }
+  });
+
+  it('does not move the tree, and does not disturb its neighbours', () => {
+    const a = build1(ONE);
+    const b = build1({ ...ONE, bloom: YELLOW, bloomForm: 'understory' });
+    expect(Array.from(b[0]!.instanceMatrix.array)).toEqual(Array.from(a[0]!.instanceMatrix.array));
+    const pa = Array.from(a[1]!.instanceMatrix.array);
+    expect(Array.from(b[1]!.instanceMatrix.array).slice(0, pa.length)).toEqual(pa);
+  });
+
+  it('ignores the form on a pine, exactly as it ignores the colour', () => {
+    const bare: TreePlacement = { kind: 'pine', x: 0, z: 0, scale: 1, seed: 9020 };
+    const a = buildGrove(new THREE.Scene(), track, [bare]);
+    const b = buildGrove(new THREE.Scene(), track, [
+      { ...bare, bloom: YELLOW, bloomForm: 'understory' },
+    ]);
+    expect(b).toHaveLength(a.length);
+    for (let i = 0; i < a.length; i++) {
+      expect(Array.from(b[i]!.instanceMatrix.array)).toEqual(Array.from(a[i]!.instanceMatrix.array));
+    }
+  });
+
+  it('is deterministic — the same seed drifts the same twice', () => {
+    const dump = () =>
+      build1({ ...ONE, bloom: YELLOW, bloomForm: 'understory' }).map((m) => [
+        Array.from(m.instanceMatrix.array),
+        colours(m),
+      ]);
+    expect(dump()).toEqual(dump());
   });
 });

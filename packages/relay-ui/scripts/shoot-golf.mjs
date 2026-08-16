@@ -122,6 +122,19 @@ const SCENES = {
     query: 'scene=course&course=augusta&hole=15&at=pond',
     label: 'augusta-16-pond',
   },
+  // 15 (Firethorn) and 17 (Nandina) are here because they SHIPPED UNREVIEWED.
+  // Both carry a `bloom`, neither was in SCENES, so the visual gate could not
+  // see them and their canopies went out warm-hued (autumn-reading) without
+  // anyone looking at a pixel. A hole that carries authored art and has no
+  // harness frame is a hole that can regress invisibly — the same class of gap
+  // as "no frame shows a Course bunker" (GOLF.md defect 5).
+  // Both are default TEE views, matching augusta2/13/16, so the flowering holes
+  // are compared like for like.
+  augusta15: { query: 'scene=course&course=augusta&hole=14', label: 'augusta-15-firethorn' },
+  augusta17: { query: 'scene=course&course=augusta&hole=16', label: 'augusta-17-nandina' },
+  // 8 (Yellow Jasmine) is the OTHER warm-hued bloom, found by the data guard in
+  // courses.test.ts rather than by eye — and equally unreviewable until now.
+  augusta8: { query: 'scene=course&course=augusta&hole=7', label: 'augusta-8-yellow-jasmine' },
   listowelHeritage3: {
     query: 'scene=course&course=listowel-heritage&hole=2',
     label: 'listowel-heritage-3',

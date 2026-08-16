@@ -38,7 +38,7 @@
       "maxTriangles": 85000,
       "measured": {
         "drawCalls": 39,
-        "triangles": 58796,
+        "triangles": 61036,
         "programs": 23,
         "geometries": 27,
         "textures": 23,
@@ -55,6 +55,19 @@
         "programs": 15,
         "geometries": 16,
         "textures": 13,
+        "tier": "medium",
+        "shadowMapSize": 1536
+      }
+    },
+    "augusta15": {
+      "maxDrawCalls": 56,
+      "maxTriangles": 180000,
+      "measured": {
+        "drawCalls": 37,
+        "triangles": 128514,
+        "programs": 21,
+        "geometries": 25,
+        "textures": 20,
         "tier": "medium",
         "shadowMapSize": 1536
       }
@@ -85,6 +98,19 @@
         "shadowMapSize": 1536
       }
     },
+    "augusta17": {
+      "maxDrawCalls": 57,
+      "maxTriangles": 140000,
+      "measured": {
+        "drawCalls": 38,
+        "triangles": 98336,
+        "programs": 19,
+        "geometries": 28,
+        "textures": 21,
+        "tier": "medium",
+        "shadowMapSize": 1536
+      }
+    },
     "augusta2": {
       "maxDrawCalls": 50,
       "maxTriangles": 170000,
@@ -93,6 +119,19 @@
         "triangles": 119083,
         "programs": 18,
         "geometries": 23,
+        "textures": 21,
+        "tier": "medium",
+        "shadowMapSize": 1536
+      }
+    },
+    "augusta8": {
+      "maxDrawCalls": 51,
+      "maxTriangles": 175000,
+      "measured": {
+        "drawCalls": 34,
+        "triangles": 121474,
+        "programs": 19,
+        "geometries": 24,
         "textures": 21,
         "tier": "medium",
         "shadowMapSize": 1536

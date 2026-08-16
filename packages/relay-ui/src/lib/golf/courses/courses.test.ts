@@ -211,6 +211,60 @@ describe('Augusta — the flowering holes actually flower', () => {
     }
   });
 
+  // ⚠ THE AUTUMN GUARD. This is the rule the visual gate enforced by eye after
+  // the first blossom pass had already merged, and it cost three holes: yellow,
+  // orange and red ARE the autumn palette, so a full tree-sized crown in one of
+  // them reads as October over green turf at ANY saturation. Pink escapes it
+  // because nothing in nature is a pink tree in autumn.
+  //
+  // The rule, therefore: a WARM, SATURATED bloom may not use the default
+  // 'canopy' form. Either it belongs on a plant that is really a shrub (12
+  // Golden Bell → forsythia → 'understory'), or the colour was the wrong
+  // SEASON's feature in the first place (15 Firethorn and 17 Nandina were
+  // authored from autumn/winter BERRIES; both flower white in April).
+  it('never puts a warm saturated bloom on a tree-sized CANOPY', () => {
+    const warm: string[] = [];
+    for (const id of FLOWERING) {
+      const h = byId(id);
+      const b = h.bloom!;
+      const r = (b.color >> 16) & 255;
+      const g = (b.color >> 8) & 255;
+      const bl = b.color & 255;
+      const mx = Math.max(r, g, bl);
+      const sat = mx === 0 ? 0 : (mx - Math.min(r, g, bl)) / mx;
+      let hue = 0;
+      const d = mx - Math.min(r, g, bl);
+      if (d > 0) {
+        if (mx === r) hue = (60 * (((g - bl) / d) % 6) + 360) % 360;
+        else if (mx === g) hue = 60 * ((bl - r) / d + 2);
+        else hue = 60 * ((r - g) / d + 4);
+      }
+      // THE AUTUMN WEDGE is hue 0–65°: crimson, scarlet, orange, gold, lemon —
+      // the colours a deciduous leaf actually turns. The MAGENTA side (rose,
+      // pink, mauve, ~300–355°) is deliberately exempt and must stay exempt:
+      // 2 Pink Dogwood, 13 Azalea and 16 Redbud all sit there at sat 0.47–0.64
+      // and all three passed the gate emphatically. Widening this wedge to cover
+      // them would fail the only holes known to be right.
+      const autumnHue = hue <= 65;
+      if (autumnHue && sat > 0.45 && (b.form ?? 'canopy') === 'canopy') {
+        warm.push(`hole ${id}: #${b.color.toString(16)} hue ${hue.toFixed(0)}° sat ${sat.toFixed(2)}`);
+      }
+    }
+    expect(warm, 'warm saturated bloom on a canopy — see the BLOOM header in augusta.ts').toEqual([]);
+  });
+
+  it('plants a drift under an understory hole, and never on a pine', () => {
+    const understory = augusta.holes.filter((h) => h.bloom?.form === 'understory');
+    // 12 Golden Bell is the reason this form exists; if it ever goes back to a
+    // canopy the test above is what should fail, not this one.
+    expect(understory.map((h) => h.id)).toContain(12);
+    for (const h of understory) {
+      const bloomed = courseTrees(h).filter((t) => t.bloom !== undefined);
+      expect(bloomed.length, `hole ${h.id} planted no flowering tree`).toBeGreaterThan(4);
+      expect(bloomed.every((t) => t.kind === 'broadleaf')).toBe(true);
+    }
+  });
+
   it('actually plants flowering trees on the three holes the visual gate shoots', () => {
     // 2 Pink Dogwood, 13 Azalea, 16 Redbud — the frames that measured ZERO pink.
     for (const id of [2, 13, 16]) {
