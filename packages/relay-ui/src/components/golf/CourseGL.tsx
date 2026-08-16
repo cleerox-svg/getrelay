@@ -65,6 +65,14 @@ import type { GolfCosmetics } from '../../lib/golf/cosmetics';
 import { BALL_R, CUP_R } from '../../lib/golf/greenPhysics';
 import type { CourseSim, CoursePrediction, CourseTrailPt } from '../../lib/golf/courseSim';
 import { windBearing, windMph } from '../../lib/golf/wind';
+import { sceneNow, tickSceneClock } from '../../lib/scene3d/clock';
+import {
+  makeFrameProbe,
+  sampleSceneStats,
+  shouldSampleStats,
+  type SceneStats,
+} from '../../lib/scene3d/stats';
+import { resolveGolfQuality } from './scene/quality';
 
 // Regulation liner (sunken cup) geometry. CUP_DEPTH ≈ 3.5×BALL_R so the ball
 // sits clearly below the rim; the aperture punched in the green (grid + cap) is a
@@ -84,6 +92,14 @@ interface Props {
   // effect); the default equip leaves both undefined → stock white ball + white
   // tracer, so the pre-economy render is unchanged.
   cosmetics?: GolfCosmetics;
+  /**
+   * GPU instrumentation. Called from the render loop roughly every 30 frames
+   * with `renderer.info` plus the resolved quality tier — see
+   * `lib/scene3d/stats.ts`. Undefined in the app (so it costs nothing); the
+   * preview harness passes it and publishes the sample as `window.__golfStats`,
+   * which is what `scripts/shoot-golf.mjs` checks against `budgets.golf.json`.
+   */
+  onStats?: (s: SceneStats) => void;
 }
 
 // Per-lie base albedo, the intermediate-cut band width and the bold mow-stripe
@@ -844,7 +860,7 @@ function buildFirstCutBand(
   return geo;
 }
 
-export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
+export default function CourseGL({ sim, onArm, paused, cosmetics, onStats }: Props) {
   // Snapshot the equipped skin so the mount effect (which reads it to build the
   // ball material + tracer colour) doesn't re-run when the parent passes a new
   // object identity mid-round.
@@ -855,6 +871,8 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
   onArmRef.current = onArm;
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
+  const onStatsRef = useRef(onStats);
+  onStatsRef.current = onStats;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -872,11 +890,15 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
     };
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    // Quality tier. Shared policy (default DOWN, promote only on measured
+    // evidence) over golf's own budget table — see components/golf/scene/quality.ts
+    // for why the Course sits at 1536² and what ?quality= / ?shadow= are for.
+    const quality = resolveGolfQuality(renderer, 'course');
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, quality.pixelRatioCap));
     let w = host.clientWidth || window.innerWidth;
     let h = host.clientHeight || window.innerHeight;
     renderer.setSize(w, h, false);
-    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.enabled = quality.shadows;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -917,8 +939,8 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
     scene.add(hemi);
     const sun = new THREE.DirectionalLight(0xfff1d6, 2.7);
     sun.position.set(-160, 260, 120);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.castShadow = quality.shadows;
+    sun.shadow.mapSize.set(quality.shadowMapSize, quality.shadowMapSize);
     sun.shadow.camera.near = 1;
     sun.shadow.camera.far = 900;
     sun.shadow.camera.left = -320;
@@ -2311,7 +2333,11 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
     // --- Loop -----------------------------------------------------------
     const fixed = FIXED_MS / 1000;
     let acc = 0;
-    let last = performance.now();
+    // Time comes from the scene clock, not the platform. In the app that IS
+    // `performance.now()` / the rAF timestamp, unchanged; under the screenshot
+    // harness it is a virtual clock that can be frozen so every frame renders
+    // identically (see lib/scene3d/clock.ts).
+    let last = sceneNow();
     let raf = 0;
 
     // Render-side SFX detection — Course has NO sim event bus (adding one risks
@@ -2328,8 +2354,15 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
     let lastWindAlong = Number.NaN;
     let lastWindCross = Number.NaN;
 
-    const frame = (now: number) => {
+    // GPU instrumentation (lib/scene3d/stats.ts). The probe is wall-clock by
+    // design — a virtual-clock step would report the step, not the machine — and
+    // nothing it produces is rendered, so it cannot affect a screenshot.
+    const frameProbe = makeFrameProbe();
+    let statFrames = 0;
+
+    const frame = (rafNow: number) => {
       raf = requestAnimationFrame(frame);
+      const now = tickSceneClock(rafNow);
       let dt = (now - last) / 1000;
       last = now;
       if (dt > 0.1) dt = 0.1;
@@ -2609,6 +2642,16 @@ export default function CourseGL({ sim, onArm, paused, cosmetics }: Props) {
       waterKit?.renderReflection(renderer, scene, camera);
 
       renderer.render(scene, camera);
+
+      // AFTER the render: three resets info.render at the START of render(), so
+      // a sample taken before the draw reports the previous frame.
+      frameProbe.sample();
+      statFrames++;
+      if (onStatsRef.current && shouldSampleStats(statFrames)) {
+        onStatsRef.current(
+          sampleSceneStats(renderer, quality, statFrames, frameProbe.medianMs()),
+        );
+      }
     };
     raf = requestAnimationFrame(frame);
 

@@ -17,6 +17,14 @@
 
 import { StrictMode, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
+import {
+  advanceSceneClock,
+  engageVirtualClock,
+  freezeSceneClock,
+  sceneClockPending,
+  sceneNow,
+} from './lib/scene3d/clock';
+import type { SceneStats } from './lib/scene3d/stats';
 import CourseGL from './components/golf/CourseGL';
 import RangeGL from './components/golf/RangeGL';
 import PuttGL from './components/golf/PuttGL';
@@ -33,8 +41,87 @@ declare global {
   interface Window {
     __golfReady?: boolean;
     __sim?: CourseSim | PuttSim;
+    /**
+     * Latest GPU instrumentation sample from whichever scene is mounted — draw
+     * calls, triangles, programs, geometries, textures, the resolved quality
+     * tier and why it was chosen. `scripts/shoot-golf.mjs` reads this after the
+     * screenshot and checks it against `scripts/budgets.golf.json`; on a real
+     * handset you can read it straight out of the console.
+     */
+    __golfStats?: SceneStats;
+    /** Harness handle on the virtual clock — see the block comment below. */
+    __sceneClock?: {
+      advance: (ms: number) => void;
+      freeze: () => void;
+      pending: () => number;
+      /** Virtual time now. A determinism probe: it must match across runs. */
+      now: () => number;
+    };
   }
 }
+
+// ---------------------------------------------------------------------------
+// DETERMINISM: take time away from the wall clock.
+//
+// Every animated thing in these scenes — Gerstner waves, splash rings, confetti,
+// camera easing, the fixed-step physics accumulator — is driven by elapsed
+// seconds. Sampling that from `performance.now()` makes the captured frame a
+// function of how fast the machine ran, and two identical harness runs then
+// produce two different PNGs (measured: 23 of 25 scenes differed). Seeding the
+// RNGs does not help; the generators were already seeded. TIME was the variable.
+//
+// So the preview runs on a VIRTUAL clock: one fixed step per RENDERED FRAME,
+// engaged here before any scene mounts, and FROZEN the moment we raise
+// `window.__golfReady`. Frozen means dt === 0 — no substeps, no uniform moves —
+// so the shooter's settle delay and every later rAF tick render the identical
+// frame no matter how long it waits.
+//
+// Readiness is likewise counted in FRAMES, never milliseconds. That matters more
+// than it sounds: SwiftShader renders these scenes at ~3 fps, so the beacon's old
+// "45 frames" condition took ~15 s and its 4 s wall-clock safety net beat it to
+// the flag on EVERY scene — the frame path never once ran, and each shot froze
+// wherever the machine happened to be. Frames in, milliseconds out.
+//
+// `window.__sceneClock.advance(ms)` hands the scene an exact, replayable slice
+// of animation (used by the drag/second-aim sequences, which need the camera to
+// settle between steps) and re-freezes when it drains. The shipped app never
+// touches any of this: `lib/scene3d/clock.ts` is a pass-through to
+// `performance.now()` unless something engages it, and only this file does.
+// ---------------------------------------------------------------------------
+// One virtual frame = 100 ms. That is not arbitrary: all three render loops
+// CLAMP their dt to 100 ms, and under SwiftShader a real frame takes ~200–350 ms,
+// so 100 ms per frame is exactly what the scenes were already being fed — this
+// keeps the captured look, it just makes the amount of it fixed. A 16.7 ms step
+// would also be deterministic but far too slow to converge: the course camera
+// eases by `1 − 0.001^dt`, which is 50% of the remaining distance per 100 ms
+// frame and only 11% per 60 fps frame, so the `?at=` views (which teleport the
+// ball and let the camera fly to it) would be screenshotted mid-flight.
+const VIRTUAL_STEP_MS = 100;
+// Frames of settle before we freeze and report ready. Counted in FRAMES, so it
+// is ~1.2 s of virtual time on every machine — close to what the old harness
+// happened to deliver on this one, and enough for the camera easing to converge
+// (0.5^12) while still catching the hole-out celebration mid-flight (it runs
+// from ~0.4 s to ~2.0 s).
+const SETTLE_FRAMES = 12;
+
+engageVirtualClock(1000, VIRTUAL_STEP_MS);
+window.__sceneClock = {
+  advance: (ms: number) => advanceSceneClock(ms),
+  freeze: () => freezeSceneClock(),
+  pending: () => sceneClockPending(),
+  now: () => sceneNow(),
+};
+
+/**
+ * Publish a scene's instrumentation sample. Push-only and side-effect free: it
+ * writes a plain object to `window` and touches nothing the renderer reads, so
+ * it cannot move a pixel. `?quality=` and `?shadow=` are read by the scenes
+ * themselves (components/golf/scene/quality.ts), exactly as they are in the app,
+ * so a tier forced here is the same code path a handset takes.
+ */
+const publishStats = (s: SceneStats) => {
+  window.__golfStats = s;
+};
 
 const params = new URLSearchParams(location.search);
 const scene = params.get('scene') ?? 'course';
@@ -57,27 +144,55 @@ const HOLE = resolveHole();
 
 // Flip the readiness flag after the scene has had time to build its textures and
 // draw a handful of frames (the scenes animate — water shimmer, camera settle —
-// so a few frames in is a stable "address" view).
+// so a few frames in is a stable "address" view). Readiness is counted in
+// FRAMES, never in milliseconds, so with the virtual clock engaged the scene has
+// always advanced exactly the same amount of virtual time when we freeze it.
 function ReadyBeacon({ until }: { until?: () => boolean }) {
   useEffect(() => {
     let raf = 0;
     let frames = 0;
+    let fallback = 0;
+    const ready = () => {
+      // ⚠ CANCEL THE FALLBACK. It used to be cleared only by the effect cleanup,
+      // i.e. on unmount — so on a page that outlives 30 s (the `secondAim`
+      // sequence drives two real aims, a fire and a roll-out at SwiftShader's
+      // ~3 fps) the timer fired long AFTER a perfectly deterministic ready and
+      // logged "this shot is NOT deterministic" at the one scene that exists to
+      // catch a regression. A false alarm on a gate is worse than no alarm: it
+      // trains the reader to skip the line.
+      window.clearTimeout(fallback);
+      // Stop the world HERE. Everything the shooter does afterwards (its settle
+      // delay, pointer drags, extra rAF ticks) then renders the same frame.
+      freezeSceneClock();
+      window.__golfReady = true;
+    };
     const tick = () => {
       // If a readiness predicate is given (e.g. wait for a fired shot to rest),
       // hold until it's satisfied; otherwise a few frames to let textures land.
-      if (until ? until() && frames >= 20 : frames >= 45) {
-        window.__golfReady = true;
+      if (frames >= SETTLE_FRAMES && (until ? until() : true)) {
+        ready();
         return;
       }
       frames++;
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
-    // Hard fallback so the shooter never hangs.
-    const t = window.setTimeout(() => (window.__golfReady = true), until ? 16000 : 4000);
+    // Hard fallback so the shooter never hangs. This is the ONE wall-clock path
+    // left, and tripping it freezes the scene at an arbitrary frame — i.e. a
+    // NON-deterministic shot, which is exactly the bug this file now exists to
+    // prevent. It used to be 4 s, which under SwiftShader's ~3 fps was shorter
+    // than the settle itself, so it fired on EVERY scene and the "45 frames"
+    // path never once ran. It is now far above the worst observed settle so it
+    // only trips on a genuinely stuck scene.
+    fallback = window.setTimeout(() => {
+      // console.error (not warn) — shoot-golf.mjs captures errors, and a shot
+      // frozen at an arbitrary frame is a result worth failing loudly over.
+      console.error('[golfpreview] ready fallback fired — this shot is NOT deterministic');
+      ready();
+    }, 30000);
     return () => {
       cancelAnimationFrame(raf);
-      window.clearTimeout(t);
+      window.clearTimeout(fallback);
     };
   }, []);
   return null;
@@ -89,7 +204,13 @@ function Preview() {
     const sim = new RangeSim({ pins, layout, isChallenge: false });
     return (
       <>
-        <RangeGL sim={sim} pins={pins} layout={layout} isChallenge={false} />
+        <RangeGL
+          sim={sim}
+          pins={pins}
+          layout={layout}
+          isChallenge={false}
+          onStats={publishStats}
+        />
         <ReadyBeacon />
       </>
     );
@@ -127,7 +248,7 @@ function PuttPreview() {
   window.__sim = sim; // dev-only: lets the shooter inspect aim state
   return (
     <>
-      <PuttGL sim={sim} hole={hole} />
+      <PuttGL sim={sim} hole={hole} onStats={publishStats} />
       <ReadyBeacon />
     </>
   );
@@ -217,7 +338,7 @@ function CoursePreview({ at }: { at: string | null }) {
 
   return (
     <>
-      <CourseGL sim={sim} />
+      <CourseGL sim={sim} onStats={publishStats} />
       <ReadyBeacon until={waitRest} />
     </>
   );

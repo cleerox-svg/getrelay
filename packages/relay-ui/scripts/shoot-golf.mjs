@@ -15,19 +15,40 @@
 // UI contributor). SwiftShader validates composition/materials but NOT real-GPU
 // behaviour — see the on-device shadow-map caveat in GOLF.md.
 //
+// ⚠ IT ALSO ASSERTS NUMBERS. Every scene publishes `window.__golfStats` from
+// inside its render loop (draw calls, triangles, programs, geometries, textures,
+// plus the resolved quality tier and why it was chosen — see
+// `src/lib/scene3d/stats.ts`). Those are printed per scene and CHECKED against
+// the committed `scripts/budgets.golf.json`; a regression exits non-zero. Golf
+// is the bigger, shipped scene and it used to print nothing numeric at all while
+// baseball printed a full GPU line — which meant every cost the fidelity roadmap
+// adds would have landed unmeasured.
+//
 // Usage:
 //   node scripts/shoot-golf.mjs                 # all scenes
 //   node scripts/shoot-golf.mjs course          # one or more scene ids
 //   node scripts/shoot-golf.mjs course range
 //   node scripts/shoot-golf.mjs augusta12       # a named real-course hole shot
+//   node scripts/shoot-golf.mjs --update-budgets   # rewrite budgets.golf.json
+//                                                  # from THIS run (all scenes)
+//   node scripts/shoot-golf.mjs --query=shadow=2048   # force a tier knob on
+//                                                     # every scene (see below)
 
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
+import {
+  checkSceneStats,
+  formatStatsLine,
+  loadBudgets,
+  reportViolations,
+  writeBudgets,
+} from './lib/shoot-report.mjs';
 
 const pkgDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.join(pkgDir, '.golf-shots');
+const budgetFile = path.join(pkgDir, 'scripts', 'budgets.golf.json');
 
 // Scene matrix: id → preview query. Portrait viewport ~ a phone screen.
 // `drag` scenes perform a pointer pull-back (down near the ball, move up) and
@@ -54,12 +75,6 @@ const SCENES = {
   'putt-slope': { query: 'scene=putt&hole=6', label: 'putt-sidehill' },
   'putt-ramp': { query: 'scene=putt&hole=3', label: 'putt-ramp' },
   'putt-bank': { query: 'scene=putt&hole=1', label: 'putt-bank-rail' },
-  // Pirate Cove hole 2 (0-based idx 1) carries a water hazard — the only putt
-  // view that exercises the shared water surface.
-  'putt-water': {
-    query: 'scene=putt&course=pirate-cove&hole=1',
-    label: 'putt-water-cove',
-  },
   // The mini-golf ball sits higher on screen than the course tee, so start the
   // pull ON the ball (dragFrom, viewport fractions) — the grab test needs the
   // pointer-down within the ball's grab radius.
@@ -83,6 +98,8 @@ const SCENES = {
     label: 'putt-pendulum',
   },
   'putt-tunnel': { query: 'scene=putt&course=pirate-cove&hole=2', label: 'putt-tunnel' },
+  // Pirate Cove hole 2 (0-based idx 1) carries a water hazard — the only putt
+  // view that exercises the shared water surface.
   'putt-water': { query: 'scene=putt&course=pirate-cove&hole=1', label: 'putt-water' },
   'putt-sand': { query: 'scene=putt&course=pirate-cove&hole=0', label: 'putt-sand' },
   // Regression guard for the frustum-cull second-aim bug: the aim arc/reticles
@@ -111,12 +128,34 @@ const SCENES = {
   },
 };
 const VIEWPORT = { width: 900, height: 1600 };
-const READY_TIMEOUT_MS = 15000;
+// A scene is ready after a FIXED number of rendered frames (see
+// src/golfpreview.tsx), and SwiftShader renders these at ~3 fps, so readiness
+// takes ~4–8 s of wall time here. This budget has to clear the preview's own
+// 30 s non-determinism fallback, or a slow scene would be captured mid-settle
+// instead of failing loudly.
+const READY_TIMEOUT_MS = 40000;
 // Sim fixed timestep (mirror of tuning.ts FIXED_MS) — used to step a fired shot
 // to true rest deterministically, since headless rAF is throttled.
 const FIXED_MS = 1000 / 120;
 
-const requested = process.argv.slice(2);
+const argv = process.argv.slice(2);
+// Rewriting the baseline is an explicit act. A gate that quietly moves its own
+// thresholds when they fail is not a gate.
+const updateBudgets = argv.includes('--update-budgets');
+/**
+ * `--query=k=v[&k=v]` — extra query appended to EVERY scene URL.
+ *
+ * The tier knobs (`?quality=`, `?shadow=`) are read by the scenes themselves, so
+ * this shoots the whole matrix at a forced tier: `--query=shadow=2048`
+ * reproduces the shadow-map configuration that killed the Android WebView GPU
+ * process, and `--query=quality=low` shoots the no-shadow path. Off by default,
+ * so a plain run is unchanged.
+ *
+ * ⚠ The shots still land on the SAME filenames. Copy `.golf-shots/` aside before
+ * a comparison run, or the second run overwrites the first.
+ */
+const extraQuery = (argv.find((a) => a.startsWith('--query=')) ?? '').slice('--query='.length);
+const requested = argv.filter((a) => !a.startsWith('--'));
 const ids = requested.length ? requested : Object.keys(SCENES);
 for (const id of ids) {
   if (!SCENES[id]) {
@@ -145,6 +184,60 @@ async function loadPlaywright() {
   );
 }
 
+// Block until the page has rendered `n` more animation frames.
+//
+// This closes a one-frame compositor race. `pending() === 0` goes true inside
+// the render loop's LAST budgeted frame, but the pixels Chromium hands back to
+// captureScreenshot are whatever the compositor last picked up — which can still
+// be the frame before it. That is a full virtual step of animation, and it was
+// the entire residual after the clock went virtual: 20/25 scenes byte-identical,
+// the other 5 differing by a few dozen pixels on a distant shoreline. The clock
+// is already frozen by the time we get here, so these extra frames are all the
+// SAME frame; whichever one the compositor shows, it is the right one.
+async function settleFrames(page, n = 3) {
+  await page.evaluate(
+    (count) =>
+      new Promise((resolve) => {
+        let left = count;
+        const tick = () => (left-- > 0 ? requestAnimationFrame(tick) : resolve());
+        requestAnimationFrame(tick);
+      }),
+    n,
+  );
+}
+
+// Hand the scene an exact slice of animation and wait for it to render.
+//
+// The preview freezes a VIRTUAL clock the moment it reports ready (see
+// src/golfpreview.tsx), so `waitForTimeout` no longer advances anything — that
+// is the whole point: a frozen scene renders the same frame however long we
+// wait, which is what makes two runs byte-identical. Where a sequence genuinely
+// needs motion (a camera settling after a shot, water moving on a bit before we
+// capture), ask for it in VIRTUAL milliseconds instead of sleeping. The clock
+// spends the budget one fixed step per rendered frame and re-freezes, so the
+// result depends on the amount asked for and nothing else.
+async function advanceScene(page, ms) {
+  const drained = await page.evaluate((m) => {
+    const c = window.__sceneClock;
+    if (!c) return false;
+    c.advance(m);
+    return true;
+  }, ms);
+  if (!drained) {
+    // No virtual clock (older preview / clock not engaged) — fall back to real
+    // time so the sequence still works, just non-deterministically.
+    await page.waitForTimeout(ms);
+    return;
+  }
+  try {
+    await page.waitForFunction('window.__sceneClock.pending() === 0', { timeout: 30000 });
+  } catch {
+    console.log(`  (warn: virtual clock did not drain ${ms}ms — is the render loop running?)`);
+  }
+  // Frozen frames only from here — see settleFrames().
+  await settleFrames(page);
+}
+
 // Multi-aim regression driver. Renders a REAL first aim at the tee (a genuine
 // pointer drag so CourseGL renders the aim aids and CACHES the aim-aid
 // boundingSphere near the tee), fires it through the sim's own pipeline, rolls
@@ -165,7 +258,7 @@ async function runSecondAim(page, label) {
   await page.mouse.move(cx, y0);
   await page.mouse.down();
   for (let s = 1; s <= 6; s++) await page.mouse.move(cx, y0 - (pull1 * s) / 6);
-  await page.waitForTimeout(600);
+  await advanceScene(page, 600);
   await page.mouse.up(); // arm
 
   // FIRE + roll to true rest downrange. Deterministic stepping (headless rAF is
@@ -182,15 +275,16 @@ async function runSecondAim(page, label) {
     return { lie: st.lie, dist: st.distToPin, d: Math.round(s.ball.d), strokes: st.strokes, resting: st.resting };
   }, FIXED_MS);
   // Let the render loop hide the (now stale-sphere) aim aids and settle the
-  // camera downrange before we re-aim.
-  await page.waitForTimeout(500);
+  // camera downrange before we re-aim. The camera eases per-frame off dt, so
+  // this HAS to be virtual time — a frozen clock would leave it at the tee.
+  await advanceScene(page, 500);
 
   // SECOND aim (real, from the fairway) — the shot that would have been blank.
   const pull2 = 220;
   await page.mouse.move(cx, y0);
   await page.mouse.down();
   for (let s = 1; s <= 6; s++) await page.mouse.move(cx, y0 - (pull2 * s) / 6);
-  await page.waitForTimeout(600);
+  await advanceScene(page, 600);
   const secondAim = await page.evaluate(() => {
     const s = window.__sim;
     if (!s) return { err: 'no __sim' };
@@ -214,6 +308,17 @@ async function runSecondAim(page, label) {
   return file;
 }
 
+// The scene's own GPU sample, published from inside its render loop (see
+// src/golfpreview.tsx). Absent means no frame path ever ran — checkSceneStats
+// treats that as a failure, not a warning.
+async function readSceneStats(page) {
+  try {
+    return await page.evaluate(() => window.__golfStats ?? null);
+  } catch {
+    return null;
+  }
+}
+
 async function main() {
   mkdirSync(outDir, { recursive: true });
 
@@ -229,6 +334,10 @@ async function main() {
 
   let failed = 0;
   const saved = [];
+  /** id → the scene's GPU sample, for the budget check and `--update-budgets`. */
+  const samples = {};
+  const budgets = loadBudgets(budgetFile);
+  const violations = [];
   // Everything after the server is listening goes through this finally so the
   // Vite server is always closed — even if chromium.launch throws.
   let browser;
@@ -250,16 +359,21 @@ async function main() {
       page.on('console', (m) => {
         if (m.type() === 'error') errors.push(m.text().slice(0, 400));
       });
-      const url = `${base}/golfpreview.html?${query}`;
+      const url = `${base}/golfpreview.html?${query}${extraQuery ? `&${extraQuery}` : ''}`;
       try {
         await page.goto(url, { waitUntil: 'load', timeout: 20000 });
         await page.waitForFunction('window.__golfReady === true', { timeout: READY_TIMEOUT_MS });
-        // Let one more frame land after the ready beacon.
-        await page.waitForTimeout(150);
+        // Let a little more animation land after the ready beacon — in virtual
+        // time, so it is the same 150 ms of motion on every machine.
+        await advanceScene(page, 150);
         if (sequence === 'secondAim') {
           const file = await runSecondAim(page, label);
           saved.push(file);
           console.log(`✓ ${id.padEnd(7)} → ${path.relative(pkgDir, file)}`);
+          const stats = await readSceneStats(page);
+          samples[id] = stats;
+          console.log(formatStatsLine(stats));
+          if (!updateBudgets) violations.push(...checkSceneStats(id, stats, budgets));
           if (errors.length) console.log(`  (page errors: ${errors.slice(0, 3).join(' | ')})`);
           continue;
         }
@@ -273,7 +387,7 @@ async function main() {
           await page.mouse.move(cx, y0);
           await page.mouse.down();
           for (let s = 1; s <= 6; s++) await page.mouse.move(cx, y0 - (250 * s) / 6);
-          await page.waitForTimeout(300);
+          await advanceScene(page, 300);
         }
         if (drag) {
           const dbg = await page.evaluate(() => {
@@ -310,6 +424,13 @@ async function main() {
         if (drag) await page.mouse.up();
         saved.push(file);
         console.log(`✓ ${id.padEnd(7)} → ${path.relative(pkgDir, file)}`);
+        // Read AFTER the screenshot: the sample must describe the frame that was
+        // captured, and reading first would cost an extra evaluate round-trip
+        // before the capture for no benefit.
+        const stats = await readSceneStats(page);
+        samples[id] = stats;
+        console.log(formatStatsLine(stats));
+        if (!updateBudgets) violations.push(...checkSceneStats(id, stats, budgets));
         if (errors.length) {
           console.log(`  (page errors: ${errors.slice(0, 3).join(' | ')})`);
         }
@@ -327,7 +448,22 @@ async function main() {
   }
 
   console.log(`\n${saved.length}/${ids.length} scene(s) captured in ${path.relative(process.cwd(), outDir)}`);
-  process.exit(failed ? 1 : 0);
+
+  if (updateBudgets) {
+    // A partial run would write a file that silently drops every scene it did
+    // not shoot, and the next full run would then fail on "no entry" for all of
+    // them. Refuse rather than half-write.
+    if (ids.length !== Object.keys(SCENES).length) {
+      console.error('--update-budgets needs a FULL run (no scene ids).');
+      process.exit(2);
+    }
+    writeBudgets(budgetFile, samples, { viewport: VIEWPORT, renderer: 'swiftshader (headless)' });
+    console.log(`Wrote ${path.relative(process.cwd(), budgetFile)} from this run.`);
+    process.exit(failed ? 1 : 0);
+  }
+
+  const overBudget = reportViolations(violations);
+  process.exit(failed || overBudget ? 1 : 0);
 }
 
 main().catch((e) => {

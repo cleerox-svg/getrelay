@@ -19,6 +19,7 @@
 
 import * as THREE from 'three';
 import type { Surface } from './terrain';
+import { mulberry32 } from './wind';
 
 export interface Disposable {
   dispose: () => void;
@@ -241,17 +242,28 @@ export function makeSkyEnvMap(
 // Shared blade-streak + sun/shade-mottle detail painted over an existing turf
 // base (used by both makeTurfColor and makeFairwayTurf so the grass grain can't
 // diverge). `S` is the canvas edge in px.
-function paintTurfDetail(g: CanvasRenderingContext2D, S: number): void {
+//
+// `rnd` is a SEEDED generator, never Math.random. Every caller passes its own
+// fixed seed, so the two turf maps stay visually distinct from each other but
+// each is byte-identical on every load. This is load-bearing for the screenshot
+// harness: with Math.random here, 23 of 25 golf scenes differed between two
+// runs of `pnpm shoot:golf` with no code change at all, which made the visual
+// gate unable to prove a change was pixel-identical.
+function paintTurfDetail(
+  g: CanvasRenderingContext2D,
+  S: number,
+  rnd: () => number,
+): void {
   const blade = (n: number, alpha: number, light: boolean) => {
     for (let i = 0; i < n; i++) {
-      const x = Math.random() * S;
-      const y = Math.random() * S;
-      const len = 3 + Math.random() * 7;
-      const lean = (Math.random() - 0.5) * 2.2;
-      const hue = 95 + Math.random() * 30;
-      const lum = light ? 46 + Math.random() * 20 : 22 + Math.random() * 12;
+      const x = rnd() * S;
+      const y = rnd() * S;
+      const len = 3 + rnd() * 7;
+      const lean = (rnd() - 0.5) * 2.2;
+      const hue = 95 + rnd() * 30;
+      const lum = light ? 46 + rnd() * 20 : 22 + rnd() * 12;
       g.strokeStyle = `hsla(${hue},46%,${lum}%,${alpha})`;
-      g.lineWidth = Math.random() < 0.25 ? 1.5 : 1;
+      g.lineWidth = rnd() < 0.25 ? 1.5 : 1;
       g.beginPath();
       g.moveTo(x, y);
       g.lineTo(x + lean, y - len);
@@ -261,11 +273,11 @@ function paintTurfDetail(g: CanvasRenderingContext2D, S: number): void {
   blade(5200, 0.16, false);
   blade(4200, 0.16, true);
   for (let i = 0; i < 120; i++) {
-    const x = Math.random() * S;
-    const y = Math.random() * S;
-    const r = 20 + Math.random() * 70;
+    const x = rnd() * S;
+    const y = rnd() * S;
+    const r = 20 + rnd() * 70;
     const rg = g.createRadialGradient(x, y, 0, x, y, r);
-    const dark = Math.random() < 0.5;
+    const dark = rnd() < 0.5;
     rg.addColorStop(0, dark ? 'rgba(30,60,25,0.06)' : 'rgba(150,200,120,0.06)');
     rg.addColorStop(1, 'rgba(0,0,0,0)');
     g.fillStyle = rg;
@@ -303,7 +315,7 @@ export function makeTurfColor(): THREE.Texture {
     g.fillStyle = grad;
     g.fillRect(i * sw, 0, sw, S);
   }
-  paintTurfDetail(g, S);
+  paintTurfDetail(g, S, mulberry32(0x7a1f3c));
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
@@ -337,7 +349,7 @@ export function makeFairwayTurf(): THREE.Texture {
   g.fillRect(0, 0, S, S / 2);
   g.fillStyle = band(STRIPE_LO);
   g.fillRect(0, S / 2, S, S / 2);
-  paintTurfDetail(g, S);
+  paintTurfDetail(g, S, mulberry32(0x2c9b64));
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;

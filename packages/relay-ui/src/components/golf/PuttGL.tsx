@@ -32,7 +32,16 @@ import {
   reedRectAnchors,
   type WaterKit,
 } from '../../lib/golf/water';
+import { mulberry32 } from '../../lib/golf/wind';
 import { FIXED_MS, MAX_LAUNCH_SPEED } from '../../lib/golf/tuning';
+import { sceneNow, tickSceneClock } from '../../lib/scene3d/clock';
+import {
+  makeFrameProbe,
+  sampleSceneStats,
+  shouldSampleStats,
+  type SceneStats,
+} from '../../lib/scene3d/stats';
+import { resolveGolfQuality } from './scene/quality';
 import { play, unlockAudio } from '../../lib/audio';
 
 // Real-time 3D mini-golf (Three.js). Owns the WebGL renderer, scene and
@@ -88,6 +97,12 @@ interface Props {
   // Equipped ball skin (golf economy). Mini-golf has no flight tracer, so only
   // the ball colour applies; default equip → stock white ball, unchanged.
   cosmetics?: GolfCosmetics;
+  /**
+   * GPU instrumentation — `renderer.info` plus the resolved tier, roughly every
+   * 30 frames (see lib/scene3d/stats.ts). Undefined in the app; the preview
+   * harness passes it and publishes the sample as `window.__golfStats`.
+   */
+  onStats?: (s: SceneStats) => void;
 }
 
 // --- Procedural canvas textures (no binary assets) ------------------------
@@ -99,10 +114,13 @@ function makeRoughTexture(): THREE.Texture {
   const g = c.getContext('2d')!;
   g.fillStyle = '#2f6b34';
   g.fillRect(0, 0, c.width, c.height);
+  // Seeded, never Math.random — the speckle must be identical on every load or
+  // the screenshot harness reports a regression for an unchanged scene.
+  const rnd = mulberry32(0x3fa27c);
   for (let i = 0; i < 1400; i++) {
-    const v = Math.random();
-    g.fillStyle = v > 0.5 ? `rgba(255,255,255,${Math.random() * 0.05})` : `rgba(0,0,0,${Math.random() * 0.08})`;
-    g.fillRect(Math.random() * c.width, Math.random() * c.height, 2, 2);
+    const v = rnd();
+    g.fillStyle = v > 0.5 ? `rgba(255,255,255,${rnd() * 0.05})` : `rgba(0,0,0,${rnd() * 0.08})`;
+    g.fillRect(rnd() * c.width, rnd() * c.height, 2, 2);
   }
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -119,10 +137,11 @@ function makeSandTexture(): THREE.Texture {
   const [r, gg, b] = SURFACE_RGB.bunker;
   g.fillStyle = `rgb(${Math.round(r * 255)},${Math.round(gg * 255)},${Math.round(b * 255)})`;
   g.fillRect(0, 0, c.width, c.height);
+  const rnd = mulberry32(0x8d4e19);
   for (let i = 0; i < 2200; i++) {
-    const light = Math.random() < 0.5;
-    g.fillStyle = light ? `rgba(255,255,255,${Math.random() * 0.06})` : `rgba(120,90,50,${Math.random() * 0.08})`;
-    g.fillRect(Math.random() * c.width, Math.random() * c.height, 1.5, 1.5);
+    const light = rnd() < 0.5;
+    g.fillStyle = light ? `rgba(255,255,255,${rnd() * 0.06})` : `rgba(120,90,50,${rnd() * 0.08})`;
+    g.fillRect(rnd() * c.width, rnd() * c.height, 1.5, 1.5);
   }
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -156,7 +175,14 @@ function inRoundRect(g: Green, x: number, y: number): boolean {
   return (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r;
 }
 
-export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }: Props) {
+export default function PuttGL({
+  sim,
+  hole,
+  paused = false,
+  onEvent,
+  cosmetics,
+  onStats,
+}: Props) {
   const cosmeticsRef = useRef(cosmetics);
   cosmeticsRef.current = cosmetics;
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -164,6 +190,8 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
   onEventRef.current = onEvent;
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
+  const onStatsRef = useRef(onStats);
+  onStatsRef.current = onStats;
   const ctlRef = useRef<{ start: () => void; stop: () => void } | null>(null);
 
   useEffect(() => {
@@ -222,11 +250,17 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
 
     // --- Renderer / scene / camera --------------------------------------
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    // Quality tier (components/golf/scene/quality.ts). ⚠ Mini-golf's row is
+    // 1024², which is what this scene already shipped — the Course/Range step
+    // DOWN to 1536² but Putt must NOT be stepped UP to meet them. A whole hole
+    // fits in ~140 units under a fixed overhead camera, so 1024² already resolves
+    // the rails and the ball; more would be 2.25× the memory for nothing.
+    const quality = resolveGolfQuality(renderer, 'putt');
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, quality.pixelRatioCap));
     let w = host.clientWidth || window.innerWidth;
     let h = host.clientHeight || window.innerHeight;
     renderer.setSize(w, h, false);
-    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.enabled = quality.shadows;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -267,8 +301,8 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
     scene.add(hemi);
     const sun = new THREE.DirectionalLight(0xfff4e0, 2.2);
     sun.position.set(-70, 150, 60);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(1024, 1024);
+    sun.castShadow = quality.shadows;
+    sun.shadow.mapSize.set(quality.shadowMapSize, quality.shadowMapSize);
     sun.shadow.camera.near = 40;
     sun.shadow.camera.far = 380;
     const shadowHalf = Math.max(70, Math.max(spanX, spanY) * 0.62);
@@ -877,6 +911,10 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
     const pVel = new Float32Array(PMAX * 3);
     let pLife = 0;
     let pActive = 0;
+    // One seeded generator for the whole mount: successive bursts still differ
+    // from each other (the stream advances), but the sequence is identical on
+    // every load, so a captured burst is reproducible.
+    const burstRnd = mulberry32(0x1b7d55);
     const spawnBurst = (x: number, yBase: number, z: number, color: number) => {
       partMat.color.setHex(color);
       pActive = PMAX;
@@ -884,10 +922,10 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
         partPos[i * 3] = x;
         partPos[i * 3 + 1] = yBase + 1;
         partPos[i * 3 + 2] = z;
-        const ang = Math.random() * Math.PI * 2;
-        const sp = 8 + Math.random() * 14;
+        const ang = burstRnd() * Math.PI * 2;
+        const sp = 8 + burstRnd() * 14;
         pVel[i * 3] = Math.cos(ang) * sp * 0.5;
-        pVel[i * 3 + 1] = 14 + Math.random() * 16;
+        pVel[i * 3 + 1] = 14 + burstRnd() * 16;
         pVel[i * 3 + 2] = Math.sin(ang) * sp * 0.5;
       }
       pLife = 0.7;
@@ -974,7 +1012,9 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
     // --- Fixed-timestep loop --------------------------------------------
     let raf = 0;
     let acc = 0;
-    let last = performance.now();
+    // Scene clock (lib/scene3d/clock.ts): the platform clock in the app, a
+    // freezable virtual one under the screenshot harness.
+    let last = sceneNow();
     let running = false;
     let sunk = false;
     let sinkY = cupTopY + BALL_R;
@@ -982,7 +1022,13 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
     // discrete sim event — read from the snapshot state we already render.
     let lastRollAt = 0;
 
-    const frame = (now: number) => {
+    // GPU instrumentation (lib/scene3d/stats.ts) — wall-clock probe, nothing it
+    // produces is rendered, so it cannot affect a screenshot.
+    const frameProbe = makeFrameProbe();
+    let statFrames = 0;
+
+    const frame = (rafNow: number) => {
+      const now = tickSceneClock(rafNow);
       const dtMs = Math.min(now - last, 100);
       last = now;
       const dt = dtMs / 1000;
@@ -1107,13 +1153,22 @@ export default function PuttGL({ sim, hole, paused = false, onEvent, cosmetics }
       waterKit?.renderReflection(renderer, scene, camera);
 
       renderer.render(scene, camera);
+
+      // AFTER the render — three resets info.render at the start of render().
+      frameProbe.sample();
+      statFrames++;
+      if (onStatsRef.current && shouldSampleStats(statFrames)) {
+        onStatsRef.current(
+          sampleSceneStats(renderer, quality, statFrames, frameProbe.medianMs()),
+        );
+      }
       raf = requestAnimationFrame(frame);
     };
 
     const start = () => {
       if (running) return;
       running = true;
-      last = performance.now();
+      last = sceneNow();
       raf = requestAnimationFrame(frame);
     };
     const stop = () => {
