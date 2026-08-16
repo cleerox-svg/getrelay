@@ -12,6 +12,47 @@
 const SHELL_CACHE = 'relay-shell-v5';
 const SHELL_URLS = ['/', '/index.html', '/manifest.webmanifest', '/favicon.svg', '/icon.svg'];
 
+// Upper bound on how many hashed assets SHELL_CACHE may hold.
+//
+// WHY THIS EXISTS: the /assets/ branch below caches every ok response and
+// `activate` only purges a cache when its NAME changes. Asset URLs are
+// content-hashed, so every deploy mints new URLs and the old entries are never
+// requested again — but they are also never deleted. Left uncapped the cache
+// grows without limit across deploys until the browser hits its origin quota.
+// That is not a soft failure: Safari evicts the WHOLE ORIGIN under storage
+// pressure, which takes the app shell and IndexedDB with it and strands the app
+// offline. A ceiling costs one extra `cache.keys()` per asset miss.
+// NOT bumping SHELL_CACHE for this change, deliberately. The bump convention
+// above exists to clear a POISONED shell; adding a ceiling cannot poison
+// anything, and the trim self-applies on the next asset response, so an
+// over-cap cache heals without one. Bumping would instead force every device to
+// re-download the whole shell and asset set over cellular — the exact cost this
+// cap is meant to reduce.
+const SHELL_ASSET_MAX = 96;
+
+/**
+ * Evict oldest-first until at most `max` non-shell entries remain.
+ *
+ * ⚠ The shell URLs are EXCLUDED from eviction, and that exclusion is the whole
+ * correctness of this function. Cache Storage returns keys in insertion order,
+ * and the shell is inserted first (during `install`) — so a naive FIFO trim
+ * would delete `/index.html` before any asset, breaking the offline fallback
+ * that the navigation handler depends on.
+ */
+async function trimShellAssets(cache, max) {
+  const keys = await cache.keys();
+  const evictable = keys.filter((req) => {
+    try {
+      return !SHELL_URLS.includes(new URL(req.url).pathname);
+    } catch {
+      return false;
+    }
+  });
+  for (let i = 0; i < evictable.length - max; i++) {
+    await cache.delete(evictable[i]);
+  }
+}
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(SHELL_CACHE).then((cache) =>
@@ -87,7 +128,18 @@ self.addEventListener('fetch', (event) => {
         const cached = await cache.match(req);
         const network = fetch(req)
           .then((res) => {
-            if (res.ok) cache.put(req, res.clone()).catch(() => undefined);
+            // Write-then-trim is kept alive past the response with waitUntil:
+            // returning `cached` short-circuits this promise, so without it the
+            // SW could be killed before the trim runs and the cap would only
+            // apply on cold misses.
+            if (res.ok) {
+              event.waitUntil(
+                cache
+                  .put(req, res.clone())
+                  .then(() => trimShellAssets(cache, SHELL_ASSET_MAX))
+                  .catch(() => undefined),
+              );
+            }
             return res;
           })
           .catch(() => cached ?? Response.error());
