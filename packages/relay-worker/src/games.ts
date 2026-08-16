@@ -33,6 +33,21 @@ export type GameId = (typeof GAME_IDS)[number];
 // rounds ceiling than the arcade mini games (MAX_ROUNDS = 8).
 export const MAX_COURSE_ROUNDS = 18;
 
+// Pitches in one Home Run Derby round. The derby is the one game whose
+// `rounds` unit is NOT one attempt: a round is this many pitches, and its
+// `bestStreak` counts consecutive HOME RUNS across pitches. So a legitimate
+// 3-round derby can streak to 24 while submitting rounds = 3, which the flat
+// `bestStreak <= rounds` rule below used to reject with a 400 for nearly every
+// competently-played session.
+//
+// ⚠ THIS MIRRORS `PITCHES_PER_ROUND` IN
+// `packages/relay-ui/src/lib/baseball/derbyRules.ts`, WHICH IS THE SOURCE OF
+// TRUTH. The worker must not import from the UI package, so the number is
+// duplicated here and THE TWO MUST BE CHANGED TOGETHER: raise the UI's alone
+// and real runs start 400ing again; raise this alone and the anti-cheat bound
+// is wider than anything the format can actually produce.
+export const DERBY_PITCHES_PER_ROUND = 8;
+
 // Sanity clamps for golf best-shot records (see /game/golf-records). Like
 // the Fog score clamps above, these only reject values that couldn't come
 // from a real shot — the longest recorded drive in pro golf is ~500yd, a
@@ -452,16 +467,28 @@ export function gamesRoutes() {
     // stay capped at MAX_ROUNDS (8).
     const maxRounds = game === 'golfcourse' ? MAX_COURSE_ROUNDS : MAX_ROUNDS;
 
-    // rounds + bestStreak are validated the same for every game: rounds
-    // 1..maxRounds, bestStreak 0..rounds (you can't streak more rounds than
-    // you played).
+    // The streak ceiling is per-game for the same reason maxRounds is. For fog,
+    // tune and every golf mode a "round" IS one attempt, so you can't streak
+    // more rounds than you played and the bound stays `bestStreak <= rounds`.
+    // The derby's round is DERBY_PITCHES_PER_ROUND pitches and its streak
+    // counts consecutive home runs across them, so its bound is
+    // `rounds * pitches-per-round` — 24 for a 3-round session. It is still a
+    // real bound: 25 in a 3-round derby is a 400, exactly as before.
+    const maxStreak =
+      game === 'bbderby'
+        ? (rounds as number) * DERBY_PITCHES_PER_ROUND
+        : (rounds as number);
+
+    // rounds 1..maxRounds, bestStreak 0..maxStreak. `rounds` is proven an
+    // integer by the first conjunct before either bound is read, so a
+    // non-numeric `rounds` can never launder itself through maxStreak.
     const roundsAndStreakValid =
       Number.isInteger(rounds) &&
       Number.isInteger(bestStreak) &&
       (rounds as number) >= 1 &&
       (rounds as number) <= maxRounds &&
       (bestStreak as number) >= 0 &&
-      (bestStreak as number) <= (rounds as number);
+      (bestStreak as number) <= maxStreak;
     if (!roundsAndStreakValid) return c.json({ error: 'invalid_score' }, 400);
 
     // toPar is optional for the mini games but, when supplied, is held to the
