@@ -45,6 +45,70 @@ UaaL puts the game **inside the binary**. Every gameplay tweak becomes a store
 review, each shell grows 30–60 MB, and PWA users lose the games entirely. It
 trades away the single best property of Relay's release pipeline.
 
+**But the disqualifier is the runtime lifecycle, not the release pipeline**, and
+it is specific to Relay being a *messenger*:
+
+- Only **one Unity runtime per process, ever**. You cannot load a second instance.
+- After `Application.Unload`, Unity **retains 80–180 MB resident** so it can
+  resume instantly.
+- On **iOS, after `Application.Quit` you cannot reload Unity in the same app
+  session at all** — one load/unload cycle per process.
+- UaaL renders **full-screen only**.
+
+Now picture the real access pattern: a user is chatting, taps Games → Golf,
+plays a hole, backs out to answer a message, taps back in. That
+enter/leave/re-enter loop is precisely what UaaL handles worst. In a *game* app
+Unity is the app and never unloads; in a messenger the game is a transient
+screen, and on iOS the second entry may simply not work. That is structural, not
+something to engineer around.
+
+### Native-only was evaluated and deferred — how to revisit it
+
+Going native-only (dropping the web app) is a real way to raise the ceiling: it
+escapes the WebView GPU sandbox and its heap cap, gets native compressed
+textures and compute, makes post-processing affordable, unlocks Play Asset
+Delivery / iOS on-demand resources instead of streaming assets every cold load,
+and brings engine *authoring* tooling — Shader Graph, Timeline, animation state
+machines, lightmap baking.
+
+It was not chosen, for four reasons beyond the lifecycle problem above:
+
+1. **~43,000 lines of tested TypeScript would need porting.** Golf's sim is
+   ~8k lines with 3.2k of tests; baseball's ~3.7k with 4.8k of tests, real-units
+   RK4 with drag-crisis modelling and mechanically-enforced determinism. Porting
+   hand-tuned physics to C# risks silently changing behaviour, and the tests that
+   would catch that need porting too.
+2. **The agent fleet cannot do Unity Editor work.** Much of engine fidelity work
+   is *in the editor* — scene authoring, material graphs, lightmap baking,
+   animation state machines. Agents write C# fine; they cannot drive the Editor.
+   This project is agent-delivered end to end.
+3. **Assets remain the gate either way.** An engine with programmer-art renders
+   programmer-art with better lighting. The reference titles (PGA Shootout,
+   Baseball Clash) are *stylized*, not photoreal, and a well-executed stylized
+   look is reachable on WebGL2.
+4. **The current budget is not spent.** The measured 1,034 draw calls on the
+   course tee view are not a web limitation — they are ~400 un-instanced tree
+   meshes. Instancing returns roughly 30× the draw-call headroom without
+   changing platform.
+
+> **Revisit native when BOTH hold:** (a) the web path has actually been pushed —
+> scene IBL, instanced foliage, and at least one commissioned asset set landed
+> and judged on the visual gate — and it demonstrably falls short of the target
+> look; and (b) the target is confirmed as photoreal/broadcast rather than
+> polished-stylized. Deciding before (a) means changing platform to solve a
+> content problem.
+
+**If native is ever chosen, prefer a separate game app over UaaL.** Its own
+process sidesteps the runtime-lifecycle trap entirely and decouples release
+cadence. The cost is losing the in-messenger retention hook, which is the reason
+the games exist — so that trade is the actual decision, not the rendering tech.
+
+**Also consider Filament** before assuming native means an engine. Google's
+real-time PBR renderer is C++, mobile-first, Metal on iOS, Vulkan/GLES3 on
+Android — **and WebGL2**, so it does not force abandoning web. It offers a
+materially better material model than hand-rolled Three.js. It is a renderer,
+not an engine: no editor, no animation tooling, no Capacitor integration story.
+
 ### What actually closes the gap
 
 Three.js r185 is already a renderer. The gap to a reference title is **content
