@@ -47,8 +47,8 @@ import path from 'node:path';
 const pkgDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.join(pkgDir, '.baseball-shots');
 
-// The scene matrix. Four camera MODES over one scene, the second park, and five
-// flight scenes.
+// The scene matrix. Four camera MODES over one scene, two shots of the second
+// park, and five flight scenes.
 //
 // `park-alpine` is the proof that a park is data: a different fence row must
 // produce a visibly different wall (347/390/415/375/350 against Harbourfront's
@@ -67,6 +67,30 @@ const SCENES = {
   wide: { query: 'scene=wide&t=0.30', label: 'wide' },
   flight: { query: 'scene=flight&t=0.30', label: 'flight' },
   'park-alpine': { query: 'scene=wide&park=alpine&t=0.30', label: 'park-alpine-wide' },
+  // ⚠ THE SECOND SCALE SHOT, AND IT IS HERE BECAUSE THE FIRST ONE DIED. M1 had
+  // two: `pitcher` and `batter`, the 6 ft marker legible in both. M2c re-framed
+  // `batter` to hold the strike zone, which put the marker at 121 % of frame
+  // width — outside — so `stadium/scale.ts` is now readable in ONE shot, and one
+  // photographic check of a whole game's scale is not a check. This restores the
+  // pair along a different axis: the same camera at the OTHER park, for one line
+  // and no new geometry.
+  //
+  // ⚠ AND IT IS THE ROOF AND THE FOUL DISTANCE, NOT THE WALL. An earlier version
+  // of this note claimed the shot exercises "Alpine's 347/390/415 wall"; it
+  // cannot. `CAMERAS.pitcher` stands on the mound at [0, 6, −55] looking IN at
+  // [0, 2.6, 0], so the outfield fence is 290–360 ft BEHIND the camera and is
+  // never in frame. What DOES differ inside this box is `roof` (Harbourfront's
+  // 282 ft retractable vs Alpine's none) and `foulTerritoryFt` (28 vs 22), which
+  // moves the backstop and the foot of the stand behind the plate. Measured
+  // against `pitcher.png`: 9.63 % of pixels differ, all of it the roof/sky rows
+  // plus two thin bands; ~90 % of the frame is identical. That is the honest
+  // claim — a park-scoped STRUCTURE check against a fixed 6 ft reference — and it
+  // is still worth a shot. A wall check is `StadiumApi.measureFence`'s job, and
+  // `wide` / `park-alpine-wide` are the pair that photograph one.
+  'park-alpine-pitcher': {
+    query: 'scene=pitcher&park=alpine&t=0.30',
+    label: 'park-alpine-pitcher',
+  },
   // The three break shots. Same camera, same target, same frozen fraction of the
   // flight — so the ONLY thing that differs between the three PNGs is the pitch
   // row, and a human comparing them is comparing break and nothing else.
@@ -77,6 +101,13 @@ const SCENES = {
   // from the upper deck.
   contact: { query: 'scene=batter&pitch=ff&bt=0.12', label: 'contact' },
   homerun: { query: 'scene=flight&pitch=ff&bt=2.6', label: 'homerun' },
+  // The DERBY's aim aid: the rule-zone frame and the reticle, drawn as geometry
+  // at the plate rather than as a DOM overlay. Placed low and to the pull side
+  // (u = −0.55, v = −0.45) rather than dead centre, because a centred reticle
+  // sits on the zone frame's own centre and a mis-sized one would look correct.
+  // Same camera and same frozen instant as `pitch-4seam`, so the pair differ by
+  // the aid and nothing else.
+  aim: { query: 'scene=batter&pitch=ff&t=0.30&aim=-0.55,-0.45', label: 'aim' },
 };
 
 // Portrait, a phone screen. Same shape as the golf harness so the two sets of
@@ -467,7 +498,12 @@ function atTime(times, comps, t) {
  * `pitchSim.ts`) and its own frame conversion.
  *
  * ⚠ AND `visible` IS ASSERTED, because a scene that never turns the ball on
- * reports a perfectly correct position and photographs an empty sky.
+ * reports a perfectly correct position and photographs an empty sky. But it is
+ * `Object3D.visible`, NOT "in this picture", and the two come apart: `flight.png`
+ * at t = 0.30 s passes this check with no ball anywhere in the frame — that
+ * camera is 120 ft up at z = +90 looking out, and the pitch is still below its
+ * bottom crop. Read it as "the scene did not switch the ball off", never as a
+ * photographic guarantee; in-frame is what the PNG diff is for.
  *
  * ⚠ AND `scale`, because it was unmeasured and it is a DESIGN CLAIM:
  * `MIN_BALL_PX`'s note argues at length that there is no constant inflation

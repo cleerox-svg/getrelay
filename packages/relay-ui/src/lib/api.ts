@@ -298,7 +298,9 @@ export const api = {
     score: number;
     rounds: number;
     bestStreak: number;
-    game?: 'fog' | 'tune' | 'golf' | 'golfrange' | 'golfcourse';
+    // Mirrors relay-worker/src/games.ts GAME_IDS. 'bbderby' is the baseball
+    // Home Run Derby; the worker has accepted it since the games table landed.
+    game?: 'fog' | 'tune' | 'golf' | 'golfrange' | 'golfcourse' | 'bbderby';
     // Golf-only, both optional: the course played and the run's to-par
     // (negative = under par). The server stores them as cosmetic metadata;
     // a bad course is dropped silently, a bad toPar is a 400.

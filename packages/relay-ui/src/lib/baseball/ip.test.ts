@@ -26,6 +26,11 @@ const SCAN_DIRS = [
   HERE,
   join(HERE, '..', '..', 'components', 'baseball'),
   join(HERE, '..', '..', 'components', 'baseball', 'stadium'),
+  // The HUD widgets. This is the layer that shows player-facing TEXT, so it is
+  // the likeliest place for a club nickname or a real park name to arrive —
+  // scanning the sim and the scene but not the strings on screen would have
+  // been guarding the wrong file.
+  join(HERE, '..', '..', 'components', 'baseball', 'shared'),
 ];
 
 // Club nicknames. Word-boundary matched and case-insensitive, so "arrays" does

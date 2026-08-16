@@ -15,6 +15,9 @@
 //   ?bt=<seconds>                       freeze at seconds since CONTACT
 //                                       (implies hit=1)
 //   ?seed=<int>                         DerbySim seed
+//   ?aim=<u>,<v>                        SHOW the zone frame + reticle, placed
+//                                       at reticle (u, v) ∈ [−1, 1] (zone.ts).
+//                                       Omit and neither is built into a shot.
 //
 // ⚠ THE READY BEACON WAITS FOR A REAL FRAME. `window.__baseballReady` is set
 // from StadiumGL's `onReady`, which fires after three rendered frames — not on
@@ -40,7 +43,7 @@ import { GAME_AIR, measureBreak, simulatePitch } from './lib/baseball/pitchSim';
 import { launchFromAngles, simulateBattedBall } from './lib/baseball/battedBallSim';
 import { DerbySim } from './lib/baseball/derbySim';
 import { BREAK_SEGMENT_FT } from './lib/baseball/tuning';
-import { ZONE_CENTER } from './lib/baseball/zone';
+import { reticleToPlate, ZONE_CENTER } from './lib/baseball/zone';
 
 /**
  * ⚠ ONE PER-GAME NAMESPACE, NOT `window.__sim`. `src/golfpreview.tsx` declares
@@ -200,6 +203,21 @@ const frozenTS = params.has('bt')
 
 const derby = new DerbySim({ seed, park });
 
+/**
+ * The aim aid, as the DERBY sees it. `?aim=u,v` goes through
+ * `DerbySim.setReticle` — i.e. through the sim's own clamp — rather than being
+ * handed to the renderer directly, so the shot photographs a reticle the game
+ * could actually have produced. `reticleToPlate` is the same mapping `servePitch`
+ * locates against, which is what makes "the reticle you see is the reticle the
+ * bat swings at" true rather than hopeful.
+ */
+const aimParam = params.get('aim');
+if (aimParam) {
+  const [u, v] = aimParam.split(',').map((s) => Number.parseFloat(s));
+  const p = reticleToPlate(Number.isFinite(u) ? u! : 0, Number.isFinite(v) ? v! : 0);
+  derby.setReticle(p.x, p.h);
+}
+
 w.__baseball = {
   sim: {
     parkId: park.id,
@@ -254,6 +272,7 @@ function Preview() {
   const onReady = useCallback((api: StadiumApi) => {
     const handle = w.__baseball;
     if (!handle) return;
+    if (aimParam) api.setReticle(derby.reticleX, derby.reticleH);
     handle.stadium = {
       mode,
       stats: () => api.stats(),
@@ -277,6 +296,7 @@ function Preview() {
       // can never reach a HUD; ON here, because this preview IS the visual gate
       // and the scale check is one of the things it exists to photograph.
       scaleReference
+      aiming={!!aimParam}
       flight={flight}
       ballTimeS={frozenTS}
       onReady={onReady}

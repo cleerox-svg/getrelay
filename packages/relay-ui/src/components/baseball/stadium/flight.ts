@@ -9,10 +9,15 @@
 // spline that disagrees with the sim is the single bug class the visual gate
 // exists to catch, so it is designed out rather than tested for.
 //
-// ⚠ NO CLOCK LIVES HERE. `setTime` takes TRUE PHYSICAL seconds since release.
-// `StadiumGL` owns the clock and is the one place `PITCH_TEMPO` is applied; a
-// frozen `?t=` from the screenshot harness and a live rAF loop reach this file
-// through the same call, which is what makes a shot reproducible.
+// ⚠ NO CLOCK LIVES HERE. `setTime` takes TRUE PHYSICAL seconds since release,
+// and every caller MULTIPLIES its own wall clock by `PITCH_TEMPO` to get one
+// (`trueS = wallS × PITCH_TEMPO`; dividing is the direction that reads
+// plausible and puts the ball 3.3× past the plate). There are two such callers
+// and neither is this file: `DerbyGame.trueTimeOf` when a HUD is playing — that
+// is the one that matters, because it is also what `DerbySim.swing()` is handed
+// — and `StadiumGL`'s own replay loop when the scene stands alone. A frozen
+// `?t=` from the screenshot harness bypasses both and lands here directly,
+// which is what makes a shot reproducible.
 //
 // ⚠ THE BALL'S SIZE IS A LIE AND ITS POSITION IS NOT. See `MIN_BALL_PX`.
 

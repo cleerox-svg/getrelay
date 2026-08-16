@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Suspense, lazy, useState } from 'react';
 import { Link, Navigate, useLocation, useParams } from 'react-router-dom';
 import { Navbar, Page } from 'konsta/react';
 import { Avatar } from '../components/Avatar';
@@ -20,7 +20,34 @@ import { getGolfStats } from '../lib/golf/stats';
 // lib/games/useGameFlow.ts); hub↔menu is plain state with a "‹ Games"
 // affordance handled by each screen's onExitToHub.
 
-export type GameId = 'fog' | 'tune' | 'golf';
+// ⚠ BASEBALL IS LAZY AT THE *SCREEN*, NOT JUST AT THE SCENE, AND THAT IS
+// MEASURED. `DerbyGame` already `lazy()`-imports `StadiumGL`, so `three` was
+// never the question — but the HUD imports `DerbySim`, which pulls `pitchSim`,
+// `batSim`, `battedBallSim`, `airPhysics`, `parks`, `pitches`, `pchip` and
+// `zone` behind it. Imported eagerly here, the way `GolfScreen` is, that puts
+// the whole baseball physics library in the ENTRY chunk, i.e. in the download
+// of every user who opens Relay to read a message.
+//
+// The comparison, RE-MEASURED in the M2c follow-up pass, one build each,
+// entry-chunk bytes on disk (`stat -c%s`) rather than vite's rounded kB — an
+// earlier version of this note quoted the difference between two baselines that
+// were not the same build, and rounded it up on top:
+//
+//     eager `import { BaseballScreen }`   875,998 B raw   251,317 B gzip
+//     lazy (what ships)                   844,519 B raw   239,047 B gzip
+//     ────────────────────────────────────────────────────────────────────
+//     the boundary is worth               +31,479 B raw   +12,270 B gzip
+//
+// The physics lands instead in the baseball chunk (31,966 B raw / 12,622 B
+// gzip), which only a player who opens the game pays for, and `three` stays in
+// its own (533,037 B). Replacing the `lazy()` above with a stub that imports
+// nothing leaves the entry at 844,347 B, so this boundary's own machinery — the
+// dynamic import and its `__vite__mapDeps` row — costs 172 B.
+export type GameId = 'fog' | 'tune' | 'golf' | 'baseball';
+
+const BaseballScreen = lazy(() =>
+  import('../components/baseball/BaseballScreen').then((m) => ({ default: m.BaseballScreen })),
+);
 
 // The chiclet grid, as data so adding a game is one more entry. `id`
 // drives which screen renders; `icon` is a flat SVG under /public/games.
@@ -42,6 +69,12 @@ const GAMES: { id: GameId; title: string; subtitle: string; icon: string }[] = [
     title: 'Golf',
     subtitle: 'Putt the mini-golf course or bomb it down the driving range.',
     icon: '/games/golf.svg',
+  },
+  {
+    id: 'baseball',
+    title: 'Baseball',
+    subtitle: 'Sit on a pitch, pick your spot, and put it over the wall.',
+    icon: '/games/baseball.svg',
   },
 ];
 
@@ -122,7 +155,7 @@ export function Games() {
             <div className="games-head">
               <p className="games-eyebrow">Relay Arcade</p>
               <h2 className="games-hub-title">Games</h2>
-              <p className="games-sub">Three games, each its own world. Pick one to play.</p>
+              <p className="games-sub">Four games, each its own world. Pick one to play.</p>
             </div>
 
             {/* Featured Golf — the flagship: a painted CSS "broadcast" hero
@@ -197,6 +230,20 @@ export function Games() {
                   )}
                 </div>
               </button>
+
+              <button
+                type="button"
+                className="games-card games-card--baseball"
+                onClick={() => setSelected('baseball')}
+              >
+                <div className="games-card-cap">
+                  <img className="games-card-icon" src={iconOf('baseball')} alt="" />
+                </div>
+                <div className="games-card-b">
+                  <b>Baseball</b>
+                  <span>Home Run Derby</span>
+                </div>
+              </button>
             </div>
 
             <p className="games-note">
@@ -207,6 +254,10 @@ export function Games() {
           <FogScreen onExitToHub={() => setSelected(null)} />
         ) : selected === 'tune' ? (
           <TuneScreen onExitToHub={() => setSelected(null)} />
+        ) : selected === 'baseball' ? (
+          <Suspense fallback={<div className="bb-menu bb-sub">Warming up…</div>}>
+            <BaseballScreen onExitToHub={() => setSelected(null)} />
+          </Suspense>
         ) : (
           <GolfScreen onExitToHub={() => setSelected(null)} />
         )}

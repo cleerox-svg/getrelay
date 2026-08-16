@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <!-- Generic ball + seams. No club mark, no wordmark, no borrowed art:
+       a sphere with two arcs of stitching is the game, not a brand. -->
+  <circle cx="24" cy="24" r="15" fill="#fdfdfb" stroke="#1d2b52" stroke-width="2" />
+  <path
+    d="M13.2 13.6c4.6 5.6 4.6 15.2 0 20.8"
+    stroke="#d1444a"
+    stroke-width="2"
+    stroke-linecap="round"
+    fill="none"
+  />
+  <path
+    d="M34.8 13.6c-4.6 5.6-4.6 15.2 0 20.8"
+    stroke="#d1444a"
+    stroke-width="2"
+    stroke-linecap="round"
+    fill="none"
+  />
+  <g stroke="#d1444a" stroke-width="1.6" stroke-linecap="round">
+    <path d="M15.6 17.2l2.7-1.1M15.6 21.2l3.1-.6M15.6 26.8l3.1.6M15.6 30.8l2.7 1.1" />
+    <path d="M32.4 17.2l-2.7-1.1M32.4 21.2l-3.1-.6M32.4 26.8l-3.1.6M32.4 30.8l-2.7 1.1" />
+  </g>
+</svg>

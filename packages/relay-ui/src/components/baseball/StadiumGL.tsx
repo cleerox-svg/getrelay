@@ -39,16 +39,19 @@ import {
   PCFSoftShadowMap,
   PerspectiveCamera,
   Scene,
+  Vector3,
   WebGLRenderer,
 } from 'three';
 import { HARBOURFRONT } from '../../lib/baseball/parks';
 import type { Park } from '../../lib/baseball/parks';
 import { PITCH_TEMPO } from '../../lib/baseball/tuning';
+import { ZONE_CENTER } from '../../lib/baseball/zone';
 import { buildField } from './stadium/field';
 import { buildFence } from './stadium/fence';
 import { buildFlight } from './stadium/flight';
 import type { FlightPaths } from './stadium/flight';
 import { buildMound } from './stadium/mound';
+import { buildReticle } from './stadium/reticle';
 import { buildRoof } from './stadium/roof';
 import { buildScaleReference } from './stadium/scale';
 import { buildStands } from './stadium/stands';
@@ -85,9 +88,29 @@ const CAMERAS: Record<
   CameraMode,
   { pos: [number, number, number]; look: [number, number, number]; fov: number; near: number }
 > = {
-  // Over the batter, inside the backstop (which stands at `foulTerritoryFt`, so
-  // the camera has to sit nearer than that or it shoots through the stands).
-  batter: { pos: [0, 8.5, 20], look: [0, 4, -55], fov: 40, near: 1 },
+  // Behind the plate at CATCHER/UMPIRE height, inside the backstop (which stands
+  // at `foulTerritoryFt`, so the camera has to sit nearer than that or it shoots
+  // through the stands).
+  //
+  // ⚠ RE-FRAMED IN M2c, AND THE OLD ONE WAS MEASURABLY UNPLAYABLE. The previous
+  // placement — [0, 8.5, 20] looking at [0, 4, −55] — put the strike zone 13.3°
+  // below the look axis against a 20° half-FOV, i.e. 78 % of the way DOWN a
+  // portrait screen, under the HUD's own bottom chrome. The visual gate
+  // photographed it the moment the reticle existed to sit in it. The zone is
+  // this mode's SUBJECT now, so the framing is derived from the two things the
+  // shot has to contain:
+  //
+  //     release point  (0, 5.8, −54) → +2.4° from a camera at (0, 3.2, 8)
+  //     zone centre    (0, 2.5,   0) → −5.0° from the same camera
+  //
+  // Aim at the bisector (−1.3°) and the whole pitch spans 41 %→59 % of the
+  // frame, dead centre, with the 1.8 ft zone 32 % of the screen height tall.
+  // The eye height is a crouching catcher's, not a standing batter's, for the
+  // same reason every baseball game uses it: a camera ABOVE the zone and close
+  // to it must look DOWN at it, and that is the geometry that pushed the old
+  // framing into the floor. Framing is the one honestly subjective thing in this
+  // file (see the note above `CAMERAS`); the numbers it is derived FROM are not.
+  batter: { pos: [0, 3.2, 8], look: [0, 2.52, -30], fov: 40, near: 1 },
   // From the mound, looking in at the plate. Narrow, because a pitcher's view of
   // a 17 in plate 55 ft away IS narrow and pretending otherwise flatters the aim.
   pitcher: { pos: [0, 6, -55], look: [0, 2.6, 0], fov: 26, near: 1 },
@@ -169,8 +192,34 @@ export interface StadiumApi {
   tracer(which: 'pitch' | 'batted'): number[];
   /** Is that tracer being rendered? Vertices nobody draws prove nothing. */
   tracerVisible(which: 'pitch' | 'batted'): boolean;
+  /**
+   * Move the aiming reticle to REPORT (x, h), ft.
+   *
+   * ⚠ IMPERATIVE ON PURPOSE, and it is the ONLY path — there is deliberately no
+   * `reticle` prop beside it. This is called from a `pointermove` handler, and a
+   * prop would mean a React render per move event; the reticle's own charter
+   * note (`stadium/reticle.ts`) is that it is two writes to a Vector3, which is
+   * only true if nothing above it re-renders to deliver them. Visibility IS a
+   * prop (`aiming`), because that changes once per pitch.
+   */
+  setReticle(x: number, h: number): void;
+  setAiming(on: boolean): void;
+  /** Where the reticle is DRAWN, scene ft. */
+  reticleScene(): [number, number, number];
   /** The drawn ball's scene position, or null when it is not in flight. */
   ballScene(): [number, number, number] | null;
+  /**
+   * The drawn ball projected into the viewport: `[x, y]` in 0…1 with y DOWN, or
+   * null when the ball is not drawn or is behind the camera.
+   *
+   * ⚠ THIS IS PROJECTION, NOT GAMEPLAY. It exists so `ExitVeloTag` can fly with
+   * the ball by writing a transform under its own rAF instead of the HUD
+   * re-rendering at 60 Hz. The camera and its matrices live here and nowhere
+   * else, so a second copy of this maths in the HUD would be a second camera
+   * model to keep in step — the exact "state mirrored across layers" the layer
+   * rule forbids.
+   */
+  ballScreen(): [number, number] | null;
   /** Is the ball mesh being rendered? */
   ballVisible(): boolean;
   /** The ball's DRAWN radius, scene ft — `MIN_BALL_PX`'s claim, measurable. */
@@ -200,6 +249,12 @@ export interface StadiumGLProps {
    */
   scaleReference?: boolean;
   /**
+   * Show the strike-zone frame and the aiming reticle (`stadium/reticle.ts`).
+   * Changes once per pitch — between pitches the derby is aiming, during the
+   * flight it is not — so unlike the reticle's POSITION this is a prop.
+   */
+  aiming?: boolean;
+  /**
    * The precomputed flight to draw — a `PitchTrack` and/or a `BattedTrack`
    * exactly as `lib/baseball` produced them.
    *
@@ -224,6 +279,7 @@ export default function StadiumGL({
   exposure = 1,
   qualityOverride = null,
   scaleReference = false,
+  aiming = false,
   flight = null,
   ballTimeS = null,
   onReady,
@@ -232,8 +288,8 @@ export default function StadiumGL({
   const apiRef = useRef<StadiumApi | null>(null);
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
-  const initialRef = useRef({ mode, exposure, flight, ballTimeS });
-  initialRef.current = { mode, exposure, flight, ballTimeS };
+  const initialRef = useRef({ mode, exposure, flight, ballTimeS, aiming });
+  initialRef.current = { mode, exposure, flight, ballTimeS, aiming };
 
   useEffect(() => {
     const host = hostRef.current;
@@ -355,6 +411,11 @@ export default function StadiumGL({
       ],
     });
     if (initialRef.current.flight) ballFlight.setPaths(initialRef.current.flight);
+    // The zone frame + aiming reticle, at the plate, in perspective. It owns no
+    // gameplay: the HUD hands it a REPORT (x, h) that `DerbySim` already holds.
+    const reticle = buildReticle(ctx);
+    reticle.setReticle(ZONE_CENTER.x, ZONE_CENTER.h);
+    reticle.setVisible(initialRef.current.aiming, initialRef.current.aiming);
 
     // Shadow volume sized from the geometry that was actually built.
     const half = Math.max(field.apronRadiusFt, stands.outerRadiusFt(0)) + SHADOW_MARGIN_FT;
@@ -401,6 +462,7 @@ export default function StadiumGL({
     // touched in that case — which is what makes two harness runs byte-identical.
     let ballTime: number | null = initialRef.current.ballTimeS ?? null;
     let playStartMs = 0;
+    const projScratch = new Vector3();
     const tick = () => {
       if (ballTime !== null) {
         ballFlight.setTime(ballTime);
@@ -408,11 +470,15 @@ export default function StadiumGL({
         const dur = ballFlight.durationS();
         if (dur > 0) {
           if (playStartMs === 0) playStartMs = performance.now();
-          // ⚠ THE TEMPO SCALES THE CLOCK, NEVER `dt`. `pitchSim` integrated this
-          // flight at true physical time and cannot import `PITCH_TEMPO`; the
-          // render layer divides its own wall clock down and asks for a true
-          // physical instant. Time-scaling `dt` instead would re-weight gravity
-          // against the v² aero terms and silently move every break number.
+          // ⚠ THE TEMPO SCALES THE CLOCK, NEVER `dt`, AND IT IS A MULTIPLY.
+          // `pitchSim` integrated this flight at true physical time and cannot
+          // import `PITCH_TEMPO`; the render layer MULTIPLIES its own wall clock
+          // by it (`trueS = wallS × 0.55`, so the flight takes 1.8× as long to
+          // watch) and asks for a true physical instant. Time-scaling `dt`
+          // instead would re-weight gravity against the v² aero terms and
+          // silently move every break number. This branch is the STANDALONE
+          // scene's replay; when a HUD is driving, `DerbyGame.trueTimeOf` owns
+          // the same identity and `setBallTime` arrives already converted.
           const played = ((performance.now() - playStartMs) / 1000) * PITCH_TEMPO;
           ballFlight.setTime(played % (dur + REPLAY_GAP_S));
         } else ballFlight.setTime(-1);
@@ -462,9 +528,25 @@ export default function StadiumGL({
         ballTime = t;
         playStartMs = 0;
       },
+      setReticle: (x, h) => reticle.setReticle(x, h),
+      setAiming: (on) => reticle.setVisible(on, on),
+      reticleScene: () => reticle.reticleScene(),
       tracer: (which) => ballFlight.tracer(which),
       tracerVisible: (which) => ballFlight.tracerVisible(which),
       ballScene: () => ballFlight.ballScene(),
+      ballScreen: () => {
+        const p = ballFlight.ballVisible() ? ballFlight.ballScene() : null;
+        if (!p) return null;
+        // `project` mutates in place, so one scratch vector for the lifetime of
+        // the scene — this is read every frame by the ExitVelo tag's rAF and a
+        // fresh Vector3 per frame is the per-frame allocation the HUD rules ban.
+        projScratch.set(p[0], p[1], p[2]).project(camera);
+        // NDC z outside [-1, 1] is outside the frustum; behind the camera it is
+        // > 1 AND x/y are mirrored, so returning a position there would fly the
+        // tag to the wrong side of the screen.
+        if (projScratch.z < -1 || projScratch.z > 1) return null;
+        return [(projScratch.x + 1) / 2, (1 - projScratch.y) / 2];
+      },
       ballVisible: () => ballFlight.ballVisible(),
       ballScale: () => ballFlight.ballScale(),
     };
@@ -513,6 +595,10 @@ export default function StadiumGL({
   useEffect(() => {
     apiRef.current?.setBallTime(ballTimeS ?? null);
   }, [ballTimeS]);
+
+  useEffect(() => {
+    apiRef.current?.setAiming(aiming);
+  }, [aiming]);
 
   return <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />;
 }

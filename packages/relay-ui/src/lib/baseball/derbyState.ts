@@ -13,6 +13,7 @@
 // but not to `DerbyCore` cannot be silently half-snapshotted, because the guard
 // test compares the snapshot's keys against `Object.keys(sim)`.
 
+import type { BattedFlight } from './battedBallSim';
 import type { DerbyOutcome, DerbyPhase, ResolvedConfig } from './derbyRules';
 import type { FenceOutcome } from './parks';
 import type { PitchId } from './pitches';
@@ -41,6 +42,23 @@ export interface SwingResult {
   /** `resolveFence`'s raw five-way answer, kept so nothing is lost in mapping. */
   fence: FenceOutcome | null;
   fenceDistFt: number;
+  /**
+   * The WHOLE batted flight, sampled — null on a whiff/take.
+   *
+   * ⚠ THIS IS THE OBJECT THE RENDERER DRAWS, and it is here because M2b found
+   * the alternative and refused it: `resolveSwing` integrated a `BattedFlight`,
+   * reported six scalars off it and dropped the track, so a HUD wanting to draw
+   * the derby's own home run had to re-derive a launch from EV/LA/spray — which
+   * loses the spin the oblique-impulse solve produced, i.e. draws a curve the
+   * sim did not compute. `src/baseballpreview.tsx` says so in full and filed
+   * "adding `flight: BattedFlight` to `SwingResult` is the fix". This is it.
+   *
+   * More precisely: what `swing()` RETURNS carries the live object, so
+   * `DerbyGame` hands the renderer the very track the sim integrated. What
+   * `getState()` and `snapshot()` hand back is a copy — see `copySwing`.
+   * The samples are the sim's own; there is no second, prettier trajectory.
+   */
+  flight: BattedFlight | null;
   pitchId: PitchId;
   plateX: number;
   plateH: number;
@@ -68,6 +86,9 @@ export interface DerbyState {
   strikes: number;
   homeRuns: number;
   barrels: number;
+  /** Consecutive home runs right now, and the best run of the session. */
+  curStreak: number;
+  bestStreak: number;
   roundScore: number;
   score: number;
   roundScores: number[];
@@ -92,6 +113,8 @@ export interface DerbySnapshot {
   strikes: number;
   homeRuns: number;
   barrels: number;
+  curStreak: number;
+  bestStreak: number;
   score: number;
   roundScore: number;
   roundScores: number[];
@@ -110,6 +133,37 @@ export interface DerbyCore extends Omit<DerbySnapshot, 'roundScores'> {
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
+/**
+ * A `SwingResult` nothing outside the sim can mutate back into it.
+ *
+ * ⚠ THE SPREAD ALONE WAS NOT ENOUGH, AND THAT IS THE POINT OF THIS FUNCTION.
+ * `{ ...s.last }` is SHALLOW, so `flight` — and `flight.track`'s four sample
+ * arrays, and `flight.landing` — stayed ALIASED across the live sim,
+ * `getState()` and `snapshot()`. That was one exception to an invariant this
+ * file states with "no exceptions to remember", and the independence assertions
+ * in `derbySim.test.ts` could not see it because they only ever mutated scalars.
+ * Copying costs four array copies of a ~700-sample track at the HUD's 8 Hz poll,
+ * i.e. some tens of microseconds a second — far below the price of a claim that
+ * is true of everything except one field.
+ *
+ * The live object is still what `DerbySim.swing()` RETURNS, which is what the
+ * renderer draws; this is only what the two READOUTS hand out.
+ */
+function copySwing(r: SwingResult | null): SwingResult | null {
+  if (!r) return null;
+  const f = r.flight;
+  return {
+    ...r,
+    flight: f
+      ? {
+          ...f,
+          landing: { ...f.landing },
+          track: { t: [...f.track.t], x: [...f.track.x], y: [...f.track.y], z: [...f.track.z] },
+        }
+      : null,
+  };
+}
+
 export function derbyState(s: DerbyCore): DerbyState {
   const pr = s.served?.result ?? null;
   const started = s.roundIdx + (s.pitchIdx > 0 || s.phase === 'inFlight' ? 1 : 0);
@@ -126,6 +180,8 @@ export function derbyState(s: DerbyCore): DerbyState {
     strikes: s.strikes,
     homeRuns: s.homeRuns,
     barrels: s.barrels,
+    curStreak: s.curStreak,
+    bestStreak: s.bestStreak,
     roundScore: s.roundScore,
     score: s.score,
     roundScores: [...s.roundScores],
@@ -136,15 +192,17 @@ export function derbyState(s: DerbyCore): DerbyState {
     plate: pr
       ? { x: pr.plate.x, h: pr.plate.h, speedMph: pr.plate.speedMph, strike: pr.plate.strike }
       : null,
-    // ⚠ A COPY, NOT THE LIVE OBJECT. `resolveSwing` builds a fresh literal every
-    // call and never mutates it, so handing out `s.last` is benign TODAY — but
-    // it is a mutable-typed field on a public readout, and `roundScores` proved
-    // exactly this shape can rot: a mutation that returned it by reference
-    // survived all 19 tests until the copy was asserted. Every other object this
-    // function returns is built fresh; this one is now too, so the invariant is
-    // "nothing `getState` hands back aliases sim state" with no exceptions to
-    // remember.
-    last: s.last ? { ...s.last } : null,
+    // ⚠ A COPY, NOT THE LIVE OBJECT, AND A COPY ALL THE WAY DOWN. `resolveSwing`
+    // builds a fresh literal every call and never mutates it, so handing out
+    // `s.last` is benign TODAY — but it is a mutable-typed field on a public
+    // readout, and `roundScores` proved exactly this shape can rot: a mutation
+    // that returned it by reference survived all 19 tests until the copy was
+    // asserted. A spread was then not enough either, because `flight` and its
+    // sample arrays stayed aliased through it — see `copySwing`. Every other
+    // object this function returns is built fresh; this one is now too, so the
+    // invariant is "nothing `getState` hands back aliases sim state" with no
+    // exceptions to remember.
+    last: copySwing(s.last),
     roundsPlayed,
     maxScore: roundsPlayed * MAX_POINTS_PER_ROUND,
   };
@@ -155,8 +213,8 @@ export function derbyState(s: DerbyCore): DerbyState {
  * enumerates `Object.keys(sim)` and fails if one is missing, because a field
  * left out of the pair is a preview that silently leaks into the live session.
  * `served` is never mutated in place, so a reference is a correct copy;
- * `roundScores` is pushed to, so it is copied, and `last` is copied for the
- * reason `derbyState` gives.
+ * `roundScores` is pushed to, so it is copied, and `last` goes through
+ * `copySwing` for the reason `derbyState` gives.
  */
 export function derbySnapshot(s: DerbyCore): DerbySnapshot {
   return {
@@ -169,6 +227,8 @@ export function derbySnapshot(s: DerbyCore): DerbySnapshot {
     strikes: s.strikes,
     homeRuns: s.homeRuns,
     barrels: s.barrels,
+    curStreak: s.curStreak,
+    bestStreak: s.bestStreak,
     score: s.score,
     roundScore: s.roundScore,
     roundScores: [...s.roundScores],
@@ -177,7 +237,7 @@ export function derbySnapshot(s: DerbyCore): DerbySnapshot {
     reticleH: s.reticleH,
     phase: s.phase,
     served: s.served,
-    last: s.last ? { ...s.last } : null,
+    last: copySwing(s.last),
   };
 }
 
@@ -190,6 +250,6 @@ export function derbySnapshot(s: DerbyCore): DerbySnapshot {
 export function derbyRestore(s: DerbyCore, snap: DerbySnapshot): void {
   Object.assign(s, snap, {
     roundScores: [...snap.roundScores],
-    last: snap.last ? { ...snap.last } : null,
+    last: copySwing(snap.last),
   });
 }

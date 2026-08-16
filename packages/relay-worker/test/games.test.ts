@@ -882,6 +882,157 @@ describe('POST /game/score', () => {
     expect(ok.status).toBe(200);
   });
 
+  // ---- Per-game bestStreak ceiling ---------------------------------------
+  //
+  // For fog / tune / golf a "round" IS one attempt, so a streak can never
+  // exceed the rounds played. A derby round is EIGHT PITCHES
+  // (derbyRules.PITCHES_PER_ROUND) and its bestStreak counts consecutive HOME
+  // RUNS across pitches, so a legitimate 3-round derby can streak to 24 with
+  // rounds = 3. The flat `bestStreak <= rounds` clamp 400'd nearly every
+  // competently-played derby, and DerbyGame's bank() swallows the rejection.
+  //
+  // ⚠ THE NUMBERS BELOW ARE WRITTEN OUT (3 x 8 = 24, 8 x 8 = 64) RATHER THAN
+  // DERIVED FROM THE WORKER'S CONSTANT ON PURPOSE. A test that computes its
+  // expectation from the implementation constant passes for every value of it,
+  // which is the exact class of hollow test this suite keeps getting bitten by.
+  describe('bestStreak ceiling', () => {
+    it('accepts a derby streak longer than its rounds, up to rounds x 8', async () => {
+      // The real symptom: competent play streaks ~9-12 home runs over 24
+      // pitches. Under the flat clamp this was a 400.
+      const good = await postScore(cookies.A, {
+        score: 900,
+        rounds: 3,
+        bestStreak: 12,
+        game: 'bbderby',
+      });
+      expect(good.status).toBe(200);
+      expect(await good.json()).toEqual({ ok: true, best: 900 });
+
+      const row = await testEnv.DB.prepare(
+        `SELECT rounds, best_streak AS bestStreak FROM game_scores
+          WHERE user_id = ? AND game = 'bbderby' ORDER BY created_at DESC LIMIT 1`,
+      )
+        .bind(USERS.A.id)
+        .first<{ rounds: number; bestStreak: number }>();
+      // The submitted streak is stored as-is, not collapsed to the rounds.
+      expect(row).toEqual({ rounds: 3, bestStreak: 12 });
+
+      // The boundary itself: a perfect 3-round derby is 24 straight home runs.
+      const boundary = await postScore(cookies.A, {
+        score: 6000,
+        rounds: 3,
+        bestStreak: 24,
+        game: 'bbderby',
+      });
+      expect(boundary.status).toBe(200);
+    });
+
+    it('still rejects a derby streak past rounds x 8', async () => {
+      // One past the ceiling: 25 home runs cannot happen in 24 pitches. The
+      // clamp is still a real anti-cheat bound, not a hole.
+      const res = await postScore(cookies.A, {
+        score: 900,
+        rounds: 3,
+        bestStreak: 25,
+        game: 'bbderby',
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid_score' });
+
+      // A negative streak is still rejected, derby or not.
+      const negative = await postScore(cookies.A, {
+        score: 900,
+        rounds: 3,
+        bestStreak: -1,
+        game: 'bbderby',
+      });
+      expect(negative.status).toBe(400);
+      expect(await negative.json()).toEqual({ error: 'invalid_score' });
+    });
+
+    it('scales the derby ceiling with the rounds submitted', async () => {
+      // The ceiling is rounds x 8, not a flat 24: at MAX_ROUNDS it is 64...
+      const ok = await postScore(cookies.A, {
+        score: 1000,
+        rounds: MAX_ROUNDS,
+        bestStreak: MAX_ROUNDS * 8,
+        game: 'bbderby',
+      });
+      expect(ok.status).toBe(200);
+
+      const over = await postScore(cookies.A, {
+        score: 1000,
+        rounds: MAX_ROUNDS,
+        bestStreak: MAX_ROUNDS * 8 + 1,
+        game: 'bbderby',
+      });
+      expect(over.status).toBe(400);
+
+      // ...and at one round it is 8, so 9 is out of reach even though 24 is
+      // fine for a 3-round session.
+      const oneRound = await postScore(cookies.A, {
+        score: 500,
+        rounds: 1,
+        bestStreak: 8,
+        game: 'bbderby',
+      });
+      expect(oneRound.status).toBe(200);
+      const oneRoundOver = await postScore(cookies.A, {
+        score: 500,
+        rounds: 1,
+        bestStreak: 9,
+        game: 'bbderby',
+      });
+      expect(oneRoundOver.status).toBe(400);
+
+      // rounds itself is unchanged: the derby gets no MAX_ROUNDS escape hatch.
+      const tooManyRounds = await postScore(cookies.A, {
+        score: 500,
+        rounds: MAX_ROUNDS + 1,
+        bestStreak: 1,
+        game: 'bbderby',
+      });
+      expect(tooManyRounds.status).toBe(400);
+    });
+
+    it('leaves every non-derby game on bestStreak <= rounds', async () => {
+      // The widened ceiling must NOT leak into the other games. Each one is
+      // checked twice: streak == rounds accepted (so the 400 below is about
+      // the streak clamp and nothing else), streak == rounds + 1 rejected.
+      // A derby-sized streak (12) is rejected for all of them too.
+      const others = ['fog', 'tune', 'golf', 'golfrange', 'golfcourse'] as const;
+      for (const game of others) {
+        // golfcourse derives its score from toPar and requires one; the others
+        // ignore toPar entirely, so sending it is harmless.
+        const base = { score: 900, game, toPar: -2 };
+
+        const atLimit = await postScore(cookies.A, { ...base, rounds: 3, bestStreak: 3 });
+        expect(atLimit.status, `${game} streak == rounds`).toBe(200);
+
+        const overByOne = await postScore(cookies.A, { ...base, rounds: 3, bestStreak: 4 });
+        expect(overByOne.status, `${game} streak == rounds + 1`).toBe(400);
+        expect(await overByOne.json()).toEqual({ error: 'invalid_score' });
+
+        const derbySized = await postScore(cookies.A, { ...base, rounds: 3, bestStreak: 12 });
+        expect(derbySized.status, `${game} derby-sized streak`).toBe(400);
+        expect(await derbySized.json()).toEqual({ error: 'invalid_score' });
+      }
+    });
+
+    it('does not widen the ceiling for an unknown game id (it falls back to fog)', async () => {
+      // normalizeGame() maps anything unrecognised to 'fog', so a spoofed id
+      // cannot buy the derby's ceiling.
+      const res = await postScore(cookies.A, {
+        score: 900,
+        rounds: 3,
+        bestStreak: 12,
+        game: 'bbderby-but-not-really',
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid_score' });
+    });
+  });
+
   it('records a score under the requested game and reports that game\'s best', async () => {
     // A tune submission lands with game='tune'...
     const res = await postScore(cookies.A, {

@@ -1140,6 +1140,13 @@ the render layer; contact resolves at the true physical state.
   the batter's box to its front so that its BASE stays in the `batter` frame — it
   was 0.9° from being cropped, and a height reference whose contact with the
   ground is off-frame is not a height reference.
+  > ⚠ **SUPERSEDED AT M2c, and left standing as the record rather than quietly
+  > rewritten.** "Legible in two" was true of the M1 cameras and is **false
+  > today**: M2c re-framed `batter` onto the strike zone and the marker left that
+  > frame sideways, so it is built in four and legible in **one** (`pitcher`).
+  > `stadium/scale.ts` is the current answer and the M2c entry below is where it
+  > changed. The gate's magenta scan measures it directly — 40,336 px in each
+  > `pitcher` shot, 11 px in each `wide`, **0 px in `batter`**.
 - **M2 — art, and four things the gate photographed.** Recorded here so they are
   not lost, and deliberately **not** fixed in the M1 follow-up pass:
   - **The bowl is not a building.** It is an open lofted ribbon with no back and
@@ -1158,6 +1165,121 @@ the render layer; contact resolves at the true physical state.
     roughly 7,000 ft² of the arc's ~15,800 ft² of fair area. This, not the arc
     radius, is why the batter's-eye frame reads as a dirt lot, and it is the one
     M2 item with a measurement behind it.
+- **M2c follow-ups — the review's blocker and its findings, closed.** → **Done.**
+  **(1) Leaving a derby is no longer finishing one.** `DerbyGame`'s unmount
+  safety net called `finish()`, which called `onFinish` — so "‹ Exit" one pitch
+  into a session banked the run *and* told `BaseballScreen` the session was over.
+  Measured with history `['/chats', '/games']`: the player landed on `/chats`
+  with "Derby complete" on screen, because the results screen came up over the
+  menu they asked for AND `consumeHistoryEntry('guess')` fired a second `nav(-1)`
+  before `histGameRef` had re-rendered. One press, two pops, out of the Games
+  tab. Split into `bank()` (score only) and `finish()` (bank **then** report),
+  the net calling only `bank()` — golf's shape, which its nets state outright
+  ("No setState here — the whole route may be unmounting"). New
+  `BaseballScreen.test.tsx` holds it from inside the flow machine, with a
+  sentinel `/chats` entry so a second pop is a visible screen rather than an
+  argument.
+  **(2) A tap during the ~380 ms wind-up no longer burns the pitch** — and the
+  second-order half of that is the finding. `swingNow` guarded on the stage
+  alone, so a tap before release resolved as a "−456 ms EARLY" whiff at a ball
+  still in the hand (reachable by a double-tap on "Pitch it in": the button
+  unmounts on serve and `ZoneReticle`'s full-bleed layer is live underneath).
+  Ignoring it in the HUD was **not enough** — `ZoneReticle.swungRef` is a
+  one-shot per flight, so the refused tap still latched the surface and ate the
+  real swing. `onSwing` now returns whether the game took the tap.
+  **(3) The home-run streak moved into the sim.** `bestStreak` is submitted to
+  the leaderboard beside `score`/`homeRuns`/`bestFt`, all of which `commit()`
+  already books — but it lived in a `useRef` in the HUD, i.e. outside
+  `derbySnapshot` and un-round-trippable by `restore()`.
+  **(4) The drawn contact window is derived, not copied.** `TimingBar` painted
+  `CONTACT_MS = 26.4`, a figure that existed in `lib/baseball` only as
+  `console.log` output. `derbyRules.contactWindowS` now *inverts*
+  `contactGeometry` by bisection (one implementation, no re-derived algebra) and
+  the widget takes it as a prop, per pitch. Measured, and the direction is the
+  opposite of the plausible guess: the window is **28.91 ms at 72 mph and
+  25.31 ms at 96 mph** — θ_c is increasing in pitch speed, so a fast ball reaches
+  a bat that is further off square, and mistiming a fastball costs *more*.
+  **(5) `getState().last` no longer aliases sim state anywhere.** `{ ...s.last }`
+  is shallow, so `flight`, its `landing` and its four sample arrays were shared
+  across the live sim, `getState()` and `snapshot()` — while `derbyState.ts`
+  claimed "no exceptions to remember". The existing independence assertions
+  mutated only scalars and could not see it.
+  **(6) `stadium/scale.ts` said something false.** M2c re-framed the `batter`
+  camera onto the strike zone, which put the 6 ft marker's centre at **121 % of
+  frame width** — outside — while the file still called `batter` the scale
+  cross-check. The marker did **not** move: fitting the whole box inside that
+  frame needs |x| ≤ 1.50 ft, where its inner face lands at 66.6 % of frame width
+  against a rule zone spanning 24.7 → 75.3 %, i.e. a magenta slab across the
+  subject the camera exists to hold. The doc is corrected and the harness gains
+  `park-alpine-pitcher` instead — the surviving scale camera at the second park,
+  which exercises the park axis the old `batter`/`pitcher` pair never did.
+  **Its claim was then overstated in turn, and is corrected in the M2c follow-up
+  below:** that shot cannot see a fence.
+  **Smaller:** the tempo's direction is written as a MULTIPLY in the four places
+  that had it backwards (`derbySim.ts` ×2, `stadium/flight.ts`, `StadiumGL.tsx`);
+  `BaseballScreen` sets `immersive` so the tab bar and navbar unmount under the
+  canvas instead of painting beneath it; `apiRef` is nulled on unmount; the
+  Games hub says four games.
+  **Eight mutations were watched to fail** — the four in `DerbyGame.test.tsx`'s
+  header and (19)–(22) in `derbySim.test.ts`'s.
+- **M2c follow-up — two live surfaces nobody had watched fail, and two claims
+  bigger than their evidence.** Both gates passed on the round above; the review
+  is what found these, and every one was survivable by all 12 baseball tests.
+  **(1) The contact band's POSITION was unasserted.** `DerbyGame.test.tsx` read
+  `band.style.width` and nothing else, so `left: plateP − msToPct(contactMs)`
+  mutated to `plateP + …` and the suite stayed green — a correctly-*sized* band
+  sitting entirely on the LATE side of the plate crossing, i.e. the HUD telling
+  the player to swing ~26 ms late on every pitch. Live surface, not dormant: the
+  round above is what made `left` depend on `contactMs`. Now asserted against
+  `platePct − expectedPct / 2`.
+  **(2) `BaseballScreen`'s `setImmersive` effect was deletable.** It landed as a
+  one-line footnote in a commit about four other things and no test could see it
+  — the flag is invisible while a full-screen canvas covers the chrome anyway.
+  Now asserted on mount, on the screen change to results, on "‹ Exit", and on
+  unmount. Golf's equivalent (`components/golf/GolfScreen.tsx`) is untested the
+  same way; that is context for how this happened, not a reason to leave it, and
+  it is flagged to the golf owner rather than fixed from here.
+  **(3) `park-alpine-pitcher` claimed a wall it cannot photograph.** The note
+  said the shot exercises "Alpine's 347/390/415 wall"; `CAMERAS.pitcher` stands
+  on the mound at `[0, 6, −55]` looking IN at `[0, 2.6, 0]`, so the fence is
+  290–360 ft BEHIND the camera. What the pair actually differ by is the **roof**
+  (282 ft retractable vs none) and **`foulTerritoryFt`** (28 vs 22, moving the
+  backstop and stand foot) — 9.63 % of pixels, in the roof/sky rows plus two thin
+  bands. Corrected in `shoot-baseball.mjs`, `stadium/scale.ts` and above. The
+  shot is kept: a park-scoped structure check against a fixed 6 ft reference is
+  still the second photographic scale shot. No geometry and no marker moved.
+  **(4) `contactWindowS`'s `batSpeedMph` was accepted and never exercised.**
+  `derbySim.test.ts` now drives it at 55 / 71.5 / 130 mph — harder is NARROWER,
+  by the same ∂θ_c/∂ω > 0 that makes a faster pitch narrower — and asserts that
+  `undefined` *is* the published swing. The HUD's call site is covered by the
+  one white-box seam in `DerbyGame.test.tsx`, because `sim.cfg.batSpeedMph` is
+  `undefined` for every shipping config and dropping the argument therefore moves
+  no pixel and no number. ⚠ The first assertion written for it,
+  `toHaveBeenCalledWith(v, undefined)`, **matches a one-argument call** and
+  passed the mutation it existed for; the arguments array's LENGTH is what
+  separates `f(v)` from `f(v, undefined)`.
+  **Smaller:** `apiRef.current = null` deleted from the unmount net — `StadiumGL`
+  is a CHILD of `DerbyGame` and cannot outlive it, so the justification was
+  unfalsifiable and the write released nothing; `finish()`'s `if (result)` guard
+  kept but recorded as unreachable today, with the argument, so the next reader
+  does not go hunting; `contactWindowS`'s handle-side bound documented as
+  unreachable inside the bracket and kept because it is `resolveSwing`'s overlap
+  test written once, not a narrowed copy.
+  **Five mutations were watched to fail** — (5) and (6) in `DerbyGame.test.tsx`'s
+  header, the two in `BaseballScreen.test.tsx`'s, and (23) in `derbySim.test.ts`'s
+  — **and a sixth was watched to PASS**, which is why the arity assertion above
+  is written the way it is.
+- **M2d — the HUD in the visual gate.** *Not done, and deliberately not attempted
+  in the M2c follow-up pass.* The screenshot harness photographs `StadiumGL`
+  through `baseballpreview.tsx`; it has never photographed `DerbyGame`, so the
+  count chip, the timing bar, the exit-velocity tag and the reticle copy are
+  outside the only gate that catches a broken render. Two things are missing and
+  both are small: (a) a `?now=` clock stub in `baseballpreview.tsx`, because the
+  HUD's play clock is `performance.now()` and a shot has to freeze it the way
+  `?t=` freezes the ball; and (b) a ready-beacon pass-through —
+  `DerbyGame` consumes `StadiumGL.onReady` without chaining it, so
+  `window.__baseballReady` never fires with a HUD mounted. Neither is physics
+  and neither is urgent; both are a milestone, not a follow-up.
 - **Stage 5 — game & scene.** `derbySim.ts`, `duelSim.ts` (3 innings, 3 outs, no
   steals/errors/subs/shifts), `ai.ts`, the crowd/lights/skyline builders, HUDs,
   and the budget / determinism / IP guard tests.
