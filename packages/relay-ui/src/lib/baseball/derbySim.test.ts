@@ -36,7 +36,24 @@
 //  18. `tuning.MAX_ROUNDS` drifts from the worker's      → 1 fail, in
 //      `tuning.test.ts`, which reads the WORKER's source text
 //
-// ⚠ THREE OF THOSE SURVIVED THE FIRST PASS, and all three were real gaps:
+// THREE MORE WERE WATCHED TO FAIL in the M2c review pass, when the streak moved
+// into the sim and the contact window stopped being a hand-copied number:
+//
+//  19. `curStreak = 0` dropped from `commit()`'s non-HR
+//      branch (the streak never breaks)                  → 1 fail
+//  20. `bestStreak` dropped from `derbySnapshot`          → 1 fail
+//  21. `contactWindowS` hand-set to the 0.0264 s that
+//      `shared/TimingBar.tsx` used to carry as a const    → 1 fail
+//  22. `copySwing` flattened back to `{ ...r }` — the
+//      shallow spread that left `flight` aliased          → 1 fail
+//
+// ⚠ (22) IS A GAP THIS FILE HAD, not one it caught. The independence assertions
+// in the snapshot test mutated only SCALARS, so `getState().last.flight` — and
+// its four sample arrays — could alias sim state through every one of them. It
+// is the same "benign today" shape as (7) and (11) and it is now asserted the
+// same way.
+//
+// ⚠ THREE OF THE EARLIER ONES SURVIVED THE FIRST PASS, and all three were real gaps:
 //   • (7) the dry run in the snapshot test never crossed a ROUND BOUNDARY, so
 //     `roundScores` — the only array the snapshot copies — was never written
 //     during it. The mutation was unobservable, not merely unobserved.
@@ -49,6 +66,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { mulberry32 } from '../golf/wind';
+import { vLen } from './airPhysics';
 import { LOC_DISTANCE_IN, SWEET_SPOT_M } from './bat';
 import { contactGeometry, swingContact } from './batSim';
 import {
@@ -65,6 +83,7 @@ import {
   RETICLE_FULL_MISS_IN,
   SERVE_SPREAD,
   SWING_UNDERCUT_IN,
+  contactWindowS,
   derbyDraw,
   homeRunPoints,
   pullIntentOffsetIn,
@@ -328,6 +347,35 @@ describe('derby — determinism', () => {
     (snapLeak.last as SwingResult).distFt = -1;
     expect(sim.getState().last?.distFt).not.toBe(-1);
 
+    // ⚠ AND THE COPY GOES ALL THE WAY DOWN, WHICH THE SPREAD DID NOT. `last`
+    // was copied with `{ ...s.last }` — SHALLOW — so `flight`, its `landing`
+    // and its four sample arrays stayed ALIASED across the live sim,
+    // `getState()` and `snapshot()`. The assertions above could not see it
+    // because every one of them mutates a SCALAR, which is exactly the shape
+    // that let `roundScores` rot. `derbyState.copySwing` closes it; these two
+    // lines are what fail if anyone re-flattens it.
+    const flightSim = new DerbySim({ seed: 20260816 });
+    while (flightSim.last?.flight == null && flightSim.phase !== 'done') {
+      const pr = flightSim.servePitch();
+      flightSim.setReticle(pr.plate.x, pr.plate.h);
+      flightSim.swing(pr.plate.t);
+    }
+    // Guard the guard: no batted flight means every line below is vacuous.
+    expect(flightSim.last?.flight, 'no batted flight was produced').toBeTruthy();
+    const trueCarry = flightSim.last!.flight!.carryFt;
+    const trueX0 = flightSim.last!.flight!.track.x[0]!;
+    const leakedFlight = flightSim.getState().last!.flight!;
+    leakedFlight.carryFt = -1;
+    leakedFlight.track.x[0] = -1;
+    leakedFlight.landing.x = -1;
+    expect(flightSim.last!.flight!.carryFt).toBe(trueCarry);
+    expect(flightSim.last!.flight!.track.x[0]).toBe(trueX0);
+    expect(flightSim.last!.flight!.landing.x).not.toBe(-1);
+    // …and the snapshot's copy is independent of the live flight too.
+    const snapFlight = flightSim.snapshot().last!.flight!;
+    snapFlight.track.y[0] = -1;
+    expect(flightSim.last!.flight!.track.y[0]).not.toBe(-1);
+
     // ⚠ THE DRY RUN MUST CROSS A ROUND BOUNDARY. It did not at first, and the
     // mutation that copies `roundScores` BY REFERENCE survived all 19 tests: the
     // array is only ever written when a round closes, so a shorter dry run never
@@ -483,11 +531,48 @@ describe('derby — the swing mapping', () => {
       if (sim.predict(pr.plate.t - ms / 1000).outcome !== 'whiff') lo = ms;
       if (sim.predict(pr.plate.t + ms / 1000).outcome !== 'whiff') hi = ms;
     }
+    // ⚠ AND THE NUMBER IS NOW EXPORTED, BECAUSE IT IS DRAWN. `TimingBar` paints
+    // the contact band, and it painted `const CONTACT_MS = 26.4` — a figure that
+    // existed in `lib/baseball` only as this `console.log`'s output. Nothing
+    // connected the two, so a change to `contactGeometry` or to the bat's length
+    // would move the real window and leave the drawn band lying about it.
+    // `contactWindowS` inverts `contactGeometry` instead; this is the assertion
+    // that says the inversion and the live `predict()` path agree.
+    const derivedMs = contactWindowS(vLen(pr.plate.v)) * 1000;
     console.log(
       `\nTIMING WINDOW (derived from the bat's length, no knob)\n` +
         `  contact from ${lo.toFixed(1)} ms early to ${hi.toFixed(1)} ms late; ` +
-        `half-width ${((lo + hi) / 2).toFixed(1)} ms, asymmetry ${(hi - lo).toFixed(2)} ms`,
+        `half-width ${((lo + hi) / 2).toFixed(1)} ms, asymmetry ${(hi - lo).toFixed(2)} ms\n` +
+        `  contactWindowS(${vLen(pr.plate.v).toFixed(2)} ft/s) = ${derivedMs.toFixed(4)} ms ` +
+        `— what shared/TimingBar.tsx draws`,
     );
+    // The sweep steps 0.1 ms and reports the last value INSIDE the window, so
+    // the true edge is in [lo, lo + 0.1). One sweep step is the whole tolerance.
+    expect(derivedMs).toBeGreaterThanOrEqual(lo);
+    expect(derivedMs).toBeLessThan(lo + 0.1);
+    expect(derivedMs).toBeGreaterThanOrEqual(hi);
+    expect(derivedMs).toBeLessThan(hi + 0.1);
+
+    // ⚠ AND IT MOVES WITH THE PITCH — the other half of why it cannot be a
+    // constant, and the direction is the opposite of the plausible guess. From
+    // `contactGeometry`, θ_c = ω·Δt·v_p/(ω·d + v_p), which is INCREASING in
+    // v_p: a faster ball reaches the bat sooner after the mistimed swing
+    // started, so the bat is further off square when they meet, so contact is
+    // further out the barrel. A fast pitch therefore has a NARROWER window, not
+    // a wider one — mistiming a fastball costs more than mistiming a curveball,
+    // which is the right answer for the right reason. (This assertion was
+    // written the other way round first and failed; the arithmetic is the
+    // authority, not the intuition.) A hand-copied 26.4 ms was one pitch's
+    // answer standing in for all eight.
+    const slow = contactWindowS(72 * 1.4666667) * 1000;
+    const fast = contactWindowS(96 * 1.4666667) * 1000;
+    expect(fast).toBeLessThan(slow);
+    console.log(
+      `  and it is a function of the pitch — FASTER is NARROWER: ` +
+        `${slow.toFixed(2)} ms at 72 mph (a curveball at the plate), ` +
+        `${fast.toFixed(2)} ms at 96 mph`,
+    );
+
     expect(lo).toBeGreaterThan(20);
     expect(lo).toBeLessThan(35);
     // EXACTLY symmetric — the geometry's cos θ is even in Δt.
@@ -971,6 +1056,23 @@ describe('derby — outcomes', () => {
     expect(st.bestFt).toBe(Math.max(...swings.filter((r) => r.points > 0).map((r) => r.distFt)));
     expect(st.roundsPlayed).toBe(DERBY_ROUNDS);
     expect(() => sim.servePitch()).toThrow();
+
+    // ⚠ THE HOME-RUN STREAK IS BOOKED HERE TOO, and it used to be the one
+    // exception. `bestStreak` is submitted to the leaderboard beside `score`,
+    // `homeRuns` and `bestFt`, but it lived in a `useRef` inside `DerbyGame` —
+    // so it was outside `derbySnapshot`, outside the guard above, and
+    // `restore()` could not round-trip it. Re-derived here from the swings, the
+    // way the other four counters are.
+    const longestRun = swings.reduce(
+      (acc, r) => {
+        const cur = r.outcome === 'homeRun' ? acc.cur + 1 : 0;
+        return { cur, best: Math.max(acc.best, cur) };
+      },
+      { cur: 0, best: 0 },
+    );
+    expect(longestRun.best).toBeGreaterThan(0); // guard the guard
+    expect(st.bestStreak).toBe(longestRun.best);
+    expect(st.curStreak).toBe(longestRun.cur);
 
     // A take costs the pitch, scores a strike and is never an out.
     const t = new DerbySim({ seed: 4 });

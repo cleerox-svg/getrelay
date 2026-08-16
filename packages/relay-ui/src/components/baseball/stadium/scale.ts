@@ -18,31 +18,45 @@
 // first day a HUD mounts the scene. A prop now is cheaper than a bug report at
 // M2, and the delete-on-supersede note below still stands.
 //
-// ⚠ IT IS BUILT IN EVERY CAMERA MODE IT IS ENABLED FOR, AND IT IS ONLY LEGIBLE
-// IN TWO OF THEM. This file
-// used to claim the first half and imply the second, on the reasoning that "a
-// reference present in some shots and not others is a reference somebody will
-// forget to check". The M1 visual gate measured it and the reasoning does not
-// survive arithmetic:
+// ⚠ IT IS BUILT IN EVERY CAMERA MODE IT IS ENABLED FOR, AND IT IS LEGIBLE IN
+// EXACTLY ONE. Measured against the SHIPPING cameras at the harness's 900×1600
+// portrait frame, marker centred on (3.2, 3.0, −3):
 //
-//   pitcher  — legible. 55 ft away, ~6° of a 26° frame. THE reference shot.
-//   batter   — legible. ~20 ft away and large; its BASE used to sit 19.1° below
-//              the camera axis against a 20° half-frame, i.e. 0.9° from being
-//              cropped, so the one thing a height reference must show — where it
-//              meets the ground — was a rounding error away from leaving. It now
-//              stands at the front of the batter's box instead of the middle,
-//              which is 2.5 ft further from the camera and buys ~5° of margin.
+//   pitcher  — legible, and it is now the ONLY photographic scale check.
+//              52.1 ft of depth, 26° vertical frame, the box spanning 36.6 %
+//              → 61.5 % of frame height (6.6° of it) at 26.3 % of frame width.
+//   batter   — OFF-FRAME, horizontally, since M2c re-framed this camera. At
+//              [0, 3.2, 8] → [0, 2.52, −30] the marker sits 11.0 ft deep, and a
+//              40° VERTICAL fov on a 0.5625 frame is only 11.57° horizontally,
+//              which admits |x| ≤ 2.25 ft at that depth. The marker's centre
+//              projects to **121 % of frame width** and even its inner face to
+//              104 %. Not marginal — outside. (The OLD [0, 8.5, 20] rig put it
+//              at 83.6 %, which is where this file's "buys ~5° of margin" claim
+//              came from; that claim was about the BASE's vertical crop, is
+//              still true — 15.2° below the axis against a 20° half-frame — and
+//              is now irrelevant, because the whole object left sideways.)
 //   flight   — off-frame. The camera is 120 ft up at z = +90 looking out to
 //              z = −380; the plate is behind and below it.
 //   wide     — present, ~1 px. The camera is 1000 ft up. A 6 ft object is 1 px
 //              from there and no PLACEMENT changes that; only a bigger object
 //              would, and a bigger object is not a 6 ft reference.
 //
-// So the honest statement is: `pitcher` is the scale shot and `batter` is the
-// cross-check, and a scale claim about `wide` or `flight` has to be made by
-// measuring drawn geometry (`StadiumApi.measureFence`) rather than by eye. The
-// box stays in all four because building it per-mode would be a branch in a
-// builder for no gain, not because it can be read in all four.
+// ⚠ AND THE MARKER IS NOT MOVING TO CHASE THE CAMERA. Fitting the WHOLE box
+// inside the `batter` frame needs |x| ≤ 1.50 ft, at which point its inner face
+// projects to 66.6 % of frame width while the rule zone spans 24.7 % → 75.3 %:
+// a 6 ft magenta slab straight across the zone frame and the reticle, i.e. the
+// subject that camera was re-framed to hold. Pulling it inboard also drags it
+// toward the plate in `pitcher`, which is the shot that still works. A 6 ft
+// reference is worth less than the zone it would cover.
+//
+// So the gate lost one of its two scale shots and got a different second one
+// instead: `shoot-baseball.mjs` shoots `pitcher` at BOTH parks. That exercises
+// the park axis the old `batter`/`pitcher` pair never did, costs one line and
+// no geometry, and a scale claim about `wide`, `flight` or `batter` is made by
+// measuring drawn geometry (`StadiumApi.measureFence`) rather than by eye.
+//
+// The box stays in all four modes because building it per-mode would be a
+// branch in a builder for no gain, not because it can be read in all four.
 //
 // Delete it the milestone a real batter model lands — not before, and see rule
 // 10 about deleting on supersede.
@@ -60,16 +74,22 @@ const FIGURE_D_FT = 0.9;
 
 /**
  * Where it stands: in the left-handed batter's box, on the first-base side. Off
- * the plate so it never occludes it in the `pitcher` view, and on the same side
- * in both parks so a park-to-park comparison is not confused by the marker
- * moving.
+ * the plate so it never occludes it in the `pitcher` view — which is now the
+ * ONLY view it is read in — and on the same side in both parks, so the
+ * park-to-park pair the harness shoots is not confused by the marker moving.
  *
  * `−z` is toward the mound, so this is the FRONT of the box rather than its
- * middle — the box is 6 ft long about the plate's centre, so 3 ft ahead of the
- * rear point is still inside it, and it is what keeps the marker's BASE inside
- * the `batter` frame. See the header: at −0.5 ft the base sat 0.9° from being
- * cropped, and a height reference whose contact with the ground is off-frame is
- * not a height reference.
+ * middle; the box is 6 ft long about the plate's centre, so 3 ft ahead of the
+ * rear point is still inside it.
+ *
+ * ⚠ THE `batter`-FRAME JUSTIFICATION THESE TWO NUMBERS USED TO CARRY IS DEAD,
+ * and it is left recorded rather than deleted so nobody re-derives it. `−3` was
+ * chosen against the OLD [0, 8.5, 20] camera to keep the marker's BASE off the
+ * bottom crop (0.9° of margin at −0.5 ft, ~5° at −3). Against the shipping
+ * camera the marker is 121 % of frame width out to the side, so no `z` rescues
+ * it and no `x` that does is worth what it covers. See the header. What these
+ * two numbers are justified by TODAY is `pitcher`: 3.2 ft off the plate is
+ * 26.3 % of frame width, clear of the zone and clear of the mound line.
  */
 const STANCE_X_FT = 3.2;
 const STANCE_Z_FT = -3;

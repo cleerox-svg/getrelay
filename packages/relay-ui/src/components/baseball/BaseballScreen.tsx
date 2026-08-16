@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useGameFlow } from '../../lib/games/useGameFlow';
 import { unlockAudio } from '../../lib/audio';
+import { useStore } from '../../lib/store';
 import { PARKS } from '../../lib/baseball/parks';
 import { DERBY_ROUNDS, PITCHES_PER_ROUND } from '../../lib/baseball/derbyRules';
 import { DerbyGame } from './DerbyGame';
@@ -35,6 +36,19 @@ export function BaseballScreen({ onExitToHub }: { onExitToHub: () => void }) {
   const { screen, setScreen, paused, setPaused, startGame, consumeHistoryEntry, markAbandoned } =
     useGameFlow();
   const [result, setResult] = useState<DerbyGameResult | null>(null);
+
+  // Full-bleed 3D runs IMMERSIVE, the same as golf's putting round and range
+  // challenge. The `zIndex: 60` wrapper below already covers the z-20 tab bar
+  // and the navbar, so nothing was visibly broken without this — but both stayed
+  // MOUNTED and painting underneath a full-screen WebGL canvas, which is a
+  // second layout and a second set of blur/backdrop surfaces composited every
+  // frame for nobody. Cleared on unmount so leaving by any path restores them.
+  const setImmersive = useStore((s) => s.setImmersive);
+  const immersive = screen === 'guess';
+  useEffect(() => {
+    setImmersive(immersive);
+    return () => setImmersive(false);
+  }, [immersive, setImmersive]);
 
   if (screen === 'guess') {
     return (

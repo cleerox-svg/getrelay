@@ -20,19 +20,24 @@ import { MONO_NUM, frostedSurface } from '../../golf/shared/frosted';
 // right ordering. So the good zone is drawn as a BAND, and the number — the
 // signed error in ms — is what carries the precision.
 //
-// ⚠ AND THE BAND EDGES ARE MEASURED, NOT CHOSEN. Both come off the same printed
-// table, and both are re-derivable by running the test:
-//   • ±26.4 ms is the CONTACT window, and it is DERIVED — `contactGeometry`
-//     drives contact toward the tip as |Δt| grows in EITHER direction, so the
-//     bat's own length closes the window ("TIMING WINDOW ... half-width 26.4 ms,
-//     asymmetry 0.00 ms"). Nothing here may widen it; it is drawn, not set.
-//   • ±10 ms is where barrel rate is still ≥ 88 % — the plateau above. It is a
-//     DISPLAY threshold: it decides a colour, never an outcome.
-// If the table moves, these move with it. They are read by nothing in
-// `lib/baseball` and cannot reach a result.
+// ⚠ AND THE BAND EDGES ARE NOT CHOSEN HERE. There are two of them and they now
+// arrive by different routes, for a reason:
+//   • The CONTACT window is a PROP, computed per pitch by
+//     `derbyRules.contactWindowS` — `contactGeometry` drives contact toward the
+//     tip as |Δt| grows in EITHER direction, so the bat's own length closes the
+//     window, and the number depends on how fast the pitch is arriving. It used
+//     to be `const CONTACT_MS = 26.4`, hand-copied out of a `console.log` in
+//     `derbySim.test.ts` ("TIMING WINDOW … half-width 26.4 ms, asymmetry
+//     0.00 ms") while this header claimed "nothing here may widen it; it is
+//     drawn, not set". Nothing enforced that: a change to `contactGeometry` or
+//     to the bat's length moved the real window and left the drawn band lying.
+//     Now the sim is asked. Nothing here may widen it, and now that is true.
+//   • ±10 ms is where barrel rate is still ≥ 88 % — the plateau above. That one
+//     IS a hand-read number, and it is allowed to be: it is a DISPLAY threshold
+//     which decides a colour and never an outcome, and it has no closed form to
+//     ask for. If the table moves it moves with it.
+// Neither is read by anything in `lib/baseball`; neither can reach a result.
 
-/** Contact window half-width, ms — DERIVED from the bat. See the header. */
-const CONTACT_MS = 26.4;
 /** Barrel plateau half-width, ms — MEASURED. Display threshold only. */
 const BAND_MS = 10;
 
@@ -50,6 +55,11 @@ export interface TimingBarProps {
   live: boolean;
   /** TRUE physical seconds from release to the plate crossing. */
   flightTimeS: number;
+  /**
+   * Contact-window half-width, ms, for THIS pitch — `derbyRules.contactWindowS`
+   * converted at the call site. DERIVED; the widget draws it and never sets it.
+   */
+  contactMs: number;
   /**
    * TRUE physical seconds since release, read every frame.
    *
@@ -70,7 +80,14 @@ const pctFor = (tS: number, flightTimeS: number): number => {
   return Math.max(0, Math.min(100, (tS / span) * 100));
 };
 
-export function TimingBar({ live, flightTimeS, getElapsedS, errorMs, contact }: TimingBarProps) {
+export function TimingBar({
+  live,
+  flightTimeS,
+  contactMs,
+  getElapsedS,
+  errorMs,
+  contact,
+}: TimingBarProps) {
   const markerRef = useRef<HTMLDivElement | null>(null);
 
   // The sweep. Own rAF, straight to `style.left`, cancelled on unmount and
@@ -116,8 +133,8 @@ export function TimingBar({ live, flightTimeS, getElapsedS, errorMs, contact }: 
             position: 'absolute',
             top: 0,
             bottom: 0,
-            left: `${plateP - msToPct(CONTACT_MS)}%`,
-            width: `${2 * msToPct(CONTACT_MS)}%`,
+            left: `${plateP - msToPct(contactMs)}%`,
+            width: `${2 * msToPct(contactMs)}%`,
             background: 'rgba(255,255,255,0.16)',
           }}
         />

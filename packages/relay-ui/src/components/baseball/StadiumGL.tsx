@@ -470,11 +470,15 @@ export default function StadiumGL({
         const dur = ballFlight.durationS();
         if (dur > 0) {
           if (playStartMs === 0) playStartMs = performance.now();
-          // ⚠ THE TEMPO SCALES THE CLOCK, NEVER `dt`. `pitchSim` integrated this
-          // flight at true physical time and cannot import `PITCH_TEMPO`; the
-          // render layer divides its own wall clock down and asks for a true
-          // physical instant. Time-scaling `dt` instead would re-weight gravity
-          // against the v² aero terms and silently move every break number.
+          // ⚠ THE TEMPO SCALES THE CLOCK, NEVER `dt`, AND IT IS A MULTIPLY.
+          // `pitchSim` integrated this flight at true physical time and cannot
+          // import `PITCH_TEMPO`; the render layer MULTIPLIES its own wall clock
+          // by it (`trueS = wallS × 0.55`, so the flight takes 1.8× as long to
+          // watch) and asks for a true physical instant. Time-scaling `dt`
+          // instead would re-weight gravity against the v² aero terms and
+          // silently move every break number. This branch is the STANDALONE
+          // scene's replay; when a HUD is driving, `DerbyGame.trueTimeOf` owns
+          // the same identity and `setBallTime` arrives already converted.
           const played = ((performance.now() - playStartMs) / 1000) * PITCH_TEMPO;
           ballFlight.setTime(played % (dur + REPLAY_GAP_S));
         } else ballFlight.setTime(-1);

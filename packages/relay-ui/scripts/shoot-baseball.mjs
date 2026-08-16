@@ -47,8 +47,8 @@ import path from 'node:path';
 const pkgDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.join(pkgDir, '.baseball-shots');
 
-// The scene matrix. Four camera MODES over one scene, the second park, and five
-// flight scenes.
+// The scene matrix. Four camera MODES over one scene, two shots of the second
+// park, and five flight scenes.
 //
 // `park-alpine` is the proof that a park is data: a different fence row must
 // produce a visibly different wall (347/390/415/375/350 against Harbourfront's
@@ -67,6 +67,19 @@ const SCENES = {
   wide: { query: 'scene=wide&t=0.30', label: 'wide' },
   flight: { query: 'scene=flight&t=0.30', label: 'flight' },
   'park-alpine': { query: 'scene=wide&park=alpine&t=0.30', label: 'park-alpine-wide' },
+  // ⚠ THE SECOND SCALE SHOT, AND IT IS HERE BECAUSE THE FIRST ONE DIED. M1 had
+  // two: `pitcher` and `batter`, the 6 ft marker legible in both. M2c re-framed
+  // `batter` to hold the strike zone, which put the marker at 121 % of frame
+  // width — outside — so `stadium/scale.ts` is now readable in ONE shot, and one
+  // photographic check of a whole game's scale is not a check. This restores the
+  // pair along a different axis: the same camera at the OTHER park. It exercises
+  // what the old pair never did (park geometry against a fixed 6 ft reference:
+  // Alpine's 347/390/415 wall and no roof behind the same box) for one line and
+  // no new geometry.
+  'park-alpine-pitcher': {
+    query: 'scene=pitcher&park=alpine&t=0.30',
+    label: 'park-alpine-pitcher',
+  },
   // The three break shots. Same camera, same target, same frozen fraction of the
   // flight — so the ONLY thing that differs between the three PNGs is the pitch
   // row, and a human comparing them is comparing break and nothing else.

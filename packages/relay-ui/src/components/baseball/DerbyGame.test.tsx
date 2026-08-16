@@ -18,18 +18,42 @@
 // the sim as `x × PITCH_TEMPO` ms. Get the direction of that multiply wrong and
 // every test still compiles, every table still prints, and every swing in the
 // shipped game is a whiff.
+//
+// FOUR MUTATIONS WERE WATCHED TO FAIL in the M2c review pass — applied, this
+// file plus `BaseballScreen.test.tsx` run, then reverted:
+//
+//   1. the unmount net reports `onFinish` again (the abandon
+//      path and the natural finish back in one function)   → 3 fail
+//   2. `swingNow`'s `trueS < 0` wind-up guard removed       → 1 fail
+//   3. `ZoneReticle` latches `swungRef` on a REFUSED tap    → 1 fail
+//   4. `TimingBar` back to a hand-copied CONTACT_MS = 26.4  → 1 fail
+//
+// (3) is the one that was not predicted. Ignoring a wind-up tap in `swingNow`
+// left the pitch burned anyway, because the input surface had already latched
+// its one-shot on the refusal — so `onSwing` now reports whether the game took
+// the tap. "The guard is in the HUD" and "the pitch survives" turned out to be
+// two claims, and only the second is the bug.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { DerbyGame } from './DerbyGame';
 import type { DerbyGameResult } from './DerbyGame';
 import { PITCH_TEMPO } from '../../lib/baseball/tuning';
-import { DERBY_ROUNDS, PITCHES_PER_ROUND } from '../../lib/baseball/derbyRules';
+import { vLen } from '../../lib/baseball/airPhysics';
+import { DerbySim } from '../../lib/baseball/derbySim';
+import { DERBY_ROUNDS, PITCHES_PER_ROUND, contactWindowS } from '../../lib/baseball/derbyRules';
 
 /** Mirrors `DerbyGame`'s own lead-in. Not exported by it; kept in step by hand. */
 const PITCH_LEAD_MS = 380;
 
-vi.mock('../../lib/api', () => ({ api: { submitGameScore: vi.fn(async () => ({ ok: true })) } }));
+const { submitSpy } = vi.hoisted(() => ({
+  submitSpy: vi.fn(
+    async (_body: { score: number; rounds: number; bestStreak: number; game: string }) => ({
+      ok: true,
+    }),
+  ),
+}));
+vi.mock('../../lib/api', () => ({ api: { submitGameScore: submitSpy } }));
 vi.mock('../../lib/audio', () => ({ play: vi.fn(), unlockAudio: vi.fn() }));
 
 // A hand-cranked clock + rAF pump. `performance.now` IS the play clock, so
@@ -40,6 +64,7 @@ let frames: FrameRequestCallback[] = [];
 beforeEach(() => {
   now = 0;
   frames = [];
+  submitSpy.mockClear();
   vi.spyOn(performance, 'now').mockImplementation(() => now);
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
     frames.push(cb);
@@ -164,6 +189,98 @@ describe('DerbyGame — the fixture seam', () => {
         `  score ${r.score}  HR ${r.homeRuns}  barrels ${r.barrels}  ` +
         `longest ${r.bestFt.toFixed(1)} ft  best streak ${r.bestStreak}\n`,
     );
+  });
+
+  it('⚠ a tap during the WIND-UP is not a swing', () => {
+    // `serve()` sets stage 'flight' immediately, but the play clock is negative
+    // until PITCH_LEAD_MS and the ball is not drawn. Guarding on the stage alone
+    // let a tap 100 ms into the wind-up be clamped to t = 0 and resolved as a
+    // ~456 ms EARLY whiff against a ball still in the pitcher's hand — burning
+    // the pitch. Reachable by a plain double-tap on "Pitch it in": that button
+    // unmounts on serve and ZoneReticle's full-bleed layer is live underneath.
+    //
+    // ⚠ THE SECOND HALF OF THIS TEST IS THE HALF THAT FOUND SOMETHING. Ignoring
+    // the tap in `swingNow` was not enough on its own: `ZoneReticle`'s
+    // `swungRef` is a one-shot per flight, so the refused tap still LATCHED the
+    // input surface and the real swing 1 s later never arrived — the pitch was
+    // burned by a different mechanism, with the auto-take firing at the tail.
+    // `onSwing` now returns whether the game took the tap, and the surface
+    // latches only on a yes. Written down because "the guard is in the HUD" and
+    // "the pitch is not burned" are two claims and only the second is the bug.
+    render(<DerbyGame seed={20260816} />);
+    act(() => screen.getByText('Pitch it in').click());
+
+    advance(100, 4);
+    tap(surface());
+    advance(8, 4);
+    // Nothing resolved: no signed error, and the sweep is still running.
+    expect(document.body.textContent).toContain('TAP TO SWING');
+    expect(/[+-]?\d+ ms (LATE|EARLY)/.test(document.body.textContent ?? '')).toBe(false);
+
+    // …and the pitch is NOT burned — the same tap after release still swings.
+    advance(PITCH_LEAD_MS + 745 - 108, 4);
+    tap(surface());
+    advance(16, 8);
+    expect(/[+-]?\d+ ms/.test(document.body.textContent ?? '')).toBe(true);
+  });
+
+  it('⚠ the drawn contact band IS the sim\'s window, not a copy of it', () => {
+    // `TimingBar` used to paint `const CONTACT_MS = 26.4`, a number that existed
+    // in `lib/baseball` only as a `console.log` in `derbySim.test.ts`. Its own
+    // header promised "nothing here may widen it; it is drawn, not set" and
+    // nothing enforced that. This is the enforcement: mirror the served pitch
+    // with a second sim on the same seed, derive the window from it, and read
+    // the band's width straight out of the DOM.
+    render(<DerbyGame seed={20260816} />);
+    act(() => screen.getByText('Pitch it in').click());
+
+    const mirror = new DerbySim({ seed: 20260816 });
+    const pr = mirror.servePitch();
+    const halfMs = contactWindowS(vLen(pr.plate.v)) * 1000;
+    // TimingBar's own span: the crossing plus a 14 % tail.
+    const spanS = pr.flightTimeS * 1.14;
+    const expectedPct = ((2 * halfMs) / 1000 / spanS) * 100;
+
+    // The contact band is the translucent-white one; the barrel band is the
+    // green gradient and the marker is 4 px wide.
+    const band = [...document.querySelectorAll<HTMLElement>('div[style*="position: absolute"]')].find(
+      (el) => el.style.background === 'rgba(255, 255, 255, 0.16)',
+    );
+    expect(band, 'no contact band drawn').toBeTruthy();
+    expect(Number.parseFloat(band!.style.width)).toBeCloseTo(expectedPct, 6);
+    // …and it is not the old constant. 26.4 ms was seed 7's fastball; this pitch
+    // is a different row of the mix, so a hard-coded band would be visibly wrong.
+    expect(Math.abs(halfMs - 26.4)).toBeGreaterThan(0.05);
+  });
+
+  it('⚠ unmounting mid-session BANKS the run and does NOT report a finish', () => {
+    // The abandon path. Golf's nets bank directly and never call back into the
+    // parent ("No setState here — the whole route may be unmounting"); this file
+    // funnelled both paths through one `finish()`, so walking out of a derby
+    // told the parent the session was OVER. `BaseballScreen.test.tsx` measures
+    // what that did to the player; this is the unit-level statement of it.
+    let finished = 0;
+    const { unmount } = render(<DerbyGame seed={20260816} onFinish={() => (finished += 1)} />);
+    act(() => screen.getByText('Pitch it in').click());
+    advance(PITCH_LEAD_MS + 745, 4);
+    tap(surface());
+    advance(14000, 48);
+
+    unmount();
+    expect(submitSpy).toHaveBeenCalledTimes(1);
+    expect(submitSpy.mock.calls[0]![0].rounds).toBe(1);
+    expect(finished).toBe(0);
+  });
+
+  it('a session with NO pitch thrown banks nothing at all', () => {
+    // The other half of the net's guard, and the reason it is not simply "always
+    // submit on unmount": opening the derby and backing straight out is not a
+    // score of zero, it is not a game.
+    let finished = 0;
+    const { unmount } = render(<DerbyGame seed={20260816} onFinish={() => (finished += 1)} />);
+    unmount();
+    expect(submitSpy).not.toHaveBeenCalled();
+    expect(finished).toBe(0);
   });
 
   it('the same seed replays the same session through the HUD', () => {

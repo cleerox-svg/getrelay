@@ -10,6 +10,7 @@
 
 import { mulberry32 } from '../golf/wind';
 import { BAT_LENGTH_IN, M_PER_FT, SWEET_SPOT_M } from './bat';
+import { contactGeometry } from './batSim';
 import { HARBOURFRONT } from './parks';
 import type { Park } from './parks';
 import { PITCHES } from './pitches';
@@ -186,6 +187,54 @@ export const SWING_UNDERCUT_IN = 0.56;
  */
 export const BAT_TIP_M = BAT_LENGTH_IN * IN_TO_FT * M_PER_FT;
 export const BAT_HANDLE_LIMIT_M = 2 * SWEET_SPOT_M - BAT_TIP_M;
+
+/**
+ * The CONTACT WINDOW's half-width, TRUE physical seconds: the largest |Δt| at
+ * which a WELL-AIMED swing still has the ball over the bat, against a pitch
+ * arriving at `pitchSpeedFps`.
+ *
+ * DERIVED, by INVERTING `contactGeometry` rather than by re-solving its algebra.
+ * `R_c = d/cos θ_c > d` for a miss in either direction, so contact walks
+ * monotonically toward the tip with |Δt| and a bisection on the ONE
+ * implementation is exact — and, unlike a closed form copied out of the same
+ * derivation, cannot drift from it when the bat's length or the swing radius
+ * moves. Symmetric in ±Δt by construction (cos is even).
+ *
+ * ⚠ IT EXISTS BECAUSE THE WINDOW IS DRAWN. `shared/TimingBar.tsx` paints the
+ * contact band from this and promises "nothing here may widen it; it is drawn,
+ * not set" — which was a `CONTACT_MS = 26.4` hand-copied out of a `console.log`
+ * in `derbySim.test.ts`, i.e. a promise with nothing holding it. Now the widget
+ * asks, per pitch, and the test asserts this against its 0.1 ms sweep of the
+ * live `predict()` path.
+ *
+ * It is the window for a swing that was AIMED right: a lateral miss moves
+ * `aimZM` along the bat and moves this with it, and a big enough vertical miss
+ * or pull intent fails the overlap test at every Δt. Those are `resolveSwing`'s
+ * business; a drawn band is a statement about timing alone.
+ */
+export function contactWindowS(pitchSpeedFps: number, batSpeedMph?: number): number {
+  const onBat = (dt: number): boolean => {
+    const z = contactGeometry(pitchSpeedFps, {
+      hand: 'R',
+      timingErrorS: dt,
+      undercutIn: 0,
+      ...(batSpeedMph === undefined ? {} : { batSpeedMph }),
+    }).contactZM;
+    return Number.isFinite(z) && z <= BAT_TIP_M && z >= BAT_HANDLE_LIMIT_M;
+  };
+  // Bracket first, from 1 ms, doubling. The window is ~26 ms, where the bat has
+  // turned ~0.46 rad, so the bracket closes long before `cos θ_c` leaves its
+  // monotone quadrant and the bisection below stays well-posed.
+  let hi = 0.001;
+  while (hi < 0.128 && onBat(hi)) hi *= 2;
+  let lo = onBat(hi) ? hi : 0;
+  for (let i = 0; i < 44; i++) {
+    const mid = (lo + hi) / 2;
+    if (onBat(mid)) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+}
 
 /**
  * How far outside the rule zone the reticle may be placed, ft. FEEL KNOB —

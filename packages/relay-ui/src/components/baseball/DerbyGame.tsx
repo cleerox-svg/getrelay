@@ -1,6 +1,8 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api';
 import { play } from '../../lib/audio';
+import { vLen } from '../../lib/baseball/airPhysics';
+import { contactWindowS } from '../../lib/baseball/derbyRules';
 import { DerbySim } from '../../lib/baseball/derbySim';
 import type { DerbyState, SwingResult } from '../../lib/baseball/derbyState';
 import type { Park } from '../../lib/baseball/parks';
@@ -108,9 +110,13 @@ export interface DerbyGameProps {
    * Session seed. A seed replays a session exactly — same pitches, same
    * locations, same weather.
    *
-   * ⚠ OPTIONAL, AND THE DEFAULT IS THE ONLY WALL-CLOCK READ IN THE GAME. It is
-   * taken ONCE, in a lazy initialiser, and never again; a fixture (or the
-   * screenshot harness) passes a seed and the whole session is deterministic.
+   * ⚠ OPTIONAL, AND THE DEFAULT IS THE ONLY WALL-CLOCK READ THAT CAN CHANGE THE
+   * OUTCOME. It is taken ONCE, in a lazy initialiser, and never again; pass a
+   * seed and the whole session replays. (`performance.now()` is read in three
+   * more places — the pause shift, the play loop and `swingNow` — but every one
+   * of them is the PLAY CLOCK, i.e. when the player's tap landed, which is
+   * input, not sim state. A fixture that drives `performance.now()` itself,
+   * which `DerbyGame.test.tsx` does, therefore gets a byte-identical session.)
    * `Math.random` is not used here or anywhere in baseball — `determinism.test`
    * reads the sim sources, and the byte-identical-PNG guarantee depends on it.
    */
@@ -169,6 +175,7 @@ export function DerbyGame({ seed, park, paused = false, onFinish, onExit }: Derb
   const [flight, setFlight] = useState<FlightPaths | null>(null);
   const [last, setLast] = useState<SwingResult | null>(null);
   const [flightTimeS, setFlightTimeS] = useState(0);
+  const [contactMs, setContactMs] = useState(0);
 
   const apiRef = useRef<StadiumApi | null>(null);
   const pitchTrackRef = useRef<PitchTrack | null>(null);
@@ -182,7 +189,6 @@ export function DerbyGame({ seed, park, paused = false, onFinish, onExit }: Derb
   const pausedRef = useRef(paused);
   const pauseAtRef = useRef(0);
   const resultAtRef = useRef(0);
-  const streakRef = useRef({ cur: 0, best: 0 });
   const reportedRef = useRef(false);
   const onFinishRef = useRef(onFinish);
   onFinishRef.current = onFinish;
@@ -271,12 +277,12 @@ export function DerbyGame({ seed, park, paused = false, onFinish, onExit }: Derb
   function commit(r: SwingResult) {
     swungRef.current = true;
     setLast(r);
-    const s = streakRef.current;
-    if (r.outcome === 'homeRun') {
-      s.cur += 1;
-      s.best = Math.max(s.best, s.cur);
-    } else s.cur = 0;
-
+    // ⚠ NO COUNTERS ARE BOOKED HERE. The home-run streak used to be, in a ref,
+    // which made it the one gameplay number the HUD owned: outside
+    // `derbySnapshot`, outside the determinism guard, and un-round-trippable by
+    // `restore()` — while still being submitted to the leaderboard. It lives in
+    // `DerbySim.commit()` now, beside `homeRuns`, `barrels`, `score` and
+    // `bestFt`, and this function only moves the render forward.
     const c = clockRef.current;
     if (r.flight && c && pitchTrackRef.current) {
       // The object reported IS the object drawn — `SwingResult.flight` is the
@@ -323,6 +329,11 @@ export function DerbyGame({ seed, park, paused = false, onFinish, onExit }: Derb
     pitchTrackRef.current = pr.track;
     setFlight({ pitch: pr.track, batted: null, contactTS: pr.plate.t });
     setFlightTimeS(pr.flightTimeS);
+    // The contact band `TimingBar` draws, DERIVED for this pitch — the window
+    // narrows as the ball arrives faster. Taken here, from the served pitch,
+    // rather than off the 120 ms poll: the bar goes live on this same commit and
+    // a poll-latency band would be drawn from the PREVIOUS pitch's speed.
+    setContactMs(contactWindowS(vLen(pr.plate.v), sim.cfg.batSpeedMph) * 1000);
     setLast(null);
     swungRef.current = false;
     elapsedRef.current = -PITCH_LEAD_MS / 1000;
@@ -337,24 +348,53 @@ export function DerbyGame({ seed, park, paused = false, onFinish, onExit }: Derb
     play('ui-tick');
   }
 
-  function swingNow() {
+  /** Returns whether the tap was TAKEN as a swing — `ZoneReticle` latches on it. */
+  function swingNow(): boolean {
     const c = clockRef.current;
-    if (!c || swungRef.current || stageRef.current !== 'flight') return;
+    if (!c || swungRef.current || stageRef.current !== 'flight') return false;
     // The SAME wall→true map the loop uses. Two copies of this arithmetic is how
     // the ball on screen and the instant the sim resolves contact at drift apart.
-    commit(sim.swing(Math.max(0, trueTimeOf(c, (performance.now() - c.t0) / 1000))));
+    const trueS = trueTimeOf(c, (performance.now() - c.t0) / 1000);
+    // ⚠ THE WIND-UP IS NOT LIVE, AND THE STAGE ALONE DOES NOT SAY SO. `serve()`
+    // sets stage 'flight' immediately, but the play clock runs NEGATIVE until
+    // `PITCH_LEAD_MS`; the ball is not drawn yet. Guarding on the stage alone
+    // meant a tap 100 ms into the wind-up was clamped to t = 0 and resolved as
+    // "Swing and a miss −456 ms EARLY" against a ball that had not left the
+    // hand — reachable by a plain double-tap on "Pitch it in", since that button
+    // unmounts on serve and `ZoneReticle`'s full-bleed layer is live underneath
+    // it. A tap before release is not a swing; it is not anything — and saying
+    // so has to reach `ZoneReticle`, whose one-shot latch would otherwise eat
+    // the real swing that follows and burn the pitch anyway.
+    if (trueS < 0) return false;
+    commit(sim.swing(trueS));
+    return true;
   }
 
-  // --- results. Banked once, whether the session finished or was walked out of.
-  function finish() {
-    if (reportedRef.current) return;
+  // --- results. TWO paths, and they are deliberately NOT one function.
+  //
+  // ⚠ `bank()` DOES NOT TELL THE PARENT ANYTHING. Golf's nets say it in one
+  // line — "No setState here — the whole route may be unmounting" — and this
+  // file used to funnel the abandon path and the natural finish through a
+  // single `finish()` that called `onFinish`. Measured, one pitch played and
+  // "‹ Exit" pressed with history ['/chats','/games']: the run was banked, and
+  // then the parent was told the SESSION HAD ENDED, so `BaseballScreen` put
+  // "Derby complete" over the menu the player had just asked for AND called
+  // `consumeHistoryEntry('guess')` a second time — before `histGameRef` had
+  // re-rendered — which fired a second `nav(-1)` and landed on /chats. One
+  // press, two pops, out of the Games tab entirely. The back gesture broke the
+  // same way at its second press.
+  //
+  // So: banking is what an unmount owes the player, and `onFinish` is what a
+  // FINISHED session owes the parent. Different events, different functions.
+  function bank(): DerbyGameResult | null {
+    if (reportedRef.current) return null;
     const st = sim.getState();
-    if (st.pitchesThrown < 1) return;
+    if (st.pitchesThrown < 1) return null;
     reportedRef.current = true;
     const result: DerbyGameResult = {
       score: st.score,
       roundsPlayed: st.roundsPlayed,
-      bestStreak: streakRef.current.best,
+      bestStreak: st.bestStreak,
       homeRuns: st.homeRuns,
       barrels: st.barrels,
       bestFt: st.bestFt,
@@ -367,16 +407,26 @@ export function DerbyGame({ seed, park, paused = false, onFinish, onExit }: Derb
         game: 'bbderby',
       })
       .catch(() => undefined);
-    onFinishRef.current?.(result);
+    return result;
   }
-  const finishRef = useRef(finish);
-  finishRef.current = finish;
+  const bankRef = useRef(bank);
+  bankRef.current = bank;
 
-  // Abandon safety net — the same shape golf's RangeGame uses: unmounted with at
-  // least one pitch thrown and nothing reported yet, bank it.
+  /** The NATURAL finish — the last pitch of the last round. Banks, then reports. */
+  function finish() {
+    const result = bank();
+    if (result) onFinishRef.current?.(result);
+  }
+
+  // Abandon safety net — the same shape golf's `GolfGame` / `RangeGame` use:
+  // unmounted with at least one pitch thrown and nothing reported yet, bank it.
+  // `bank()`, never `finish()`; see above.
   useEffect(() => {
     return () => {
-      finishRef.current();
+      bankRef.current();
+      // The scene is gone with us. Holding the handle past unmount is a live
+      // reference to a disposed renderer if `StadiumGL` ever outlives this.
+      apiRef.current = null;
     };
   }, []);
 
@@ -496,6 +546,7 @@ export function DerbyGame({ seed, park, paused = false, onFinish, onExit }: Derb
         <TimingBar
           live={stage === 'flight'}
           flightTimeS={flightTimeS}
+          contactMs={contactMs}
           getElapsedS={getElapsedS}
           errorMs={last && last.outcome !== 'take' ? last.timingErrorS * 1000 : null}
           contact={!!last && last.contactZM !== null}

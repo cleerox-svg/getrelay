@@ -61,8 +61,20 @@ export interface ZoneReticleProps {
   getReticle: () => { x: number; h: number };
   /** Hand the sim an absolute REPORT (x, h) in ft. It clamps; this does not. */
   onAim: (x: number, h: number) => void;
-  /** One tap, anywhere, during the flight. */
-  onSwing: () => void;
+  /**
+   * One tap, anywhere, during the flight. Returns whether the game ACCEPTED it.
+   *
+   * ⚠ THE RETURN VALUE IS LOAD-BEARING, and it is what stops this file having an
+   * opinion about when a swing is legal. `swungRef` below is a one-shot per
+   * flight, so a tap that the game declines — during the ~380 ms wind-up, say,
+   * when the play clock is still negative and the ball has not been released —
+   * would otherwise latch the surface and eat the REAL swing that follows.
+   * Measured: the pitch was still burned (auto-take at the tail) after
+   * `DerbyGame.swingNow` learned to ignore wind-up taps, because the refusal
+   * never reached the input layer. The rule is: the game decides what a swing
+   * is; this surface only de-duplicates the ones it took.
+   */
+  onSwing: () => boolean;
 }
 
 export function ZoneReticle({ mode, getReticle, onAim, onSwing }: ZoneReticleProps) {
@@ -77,8 +89,8 @@ export function ZoneReticle({ mode, getReticle, onAim, onSwing }: ZoneReticlePro
   const down = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (mode === 'swing') {
       if (swungRef.current) return;
-      swungRef.current = true;
-      onSwing();
+      // Latch only on an ACCEPTED swing — see `onSwing`'s note.
+      if (onSwing()) swungRef.current = true;
       return;
     }
     if (mode !== 'aim') return;

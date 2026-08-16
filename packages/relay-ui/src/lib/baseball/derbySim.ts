@@ -27,9 +27,15 @@
 // ⚠ AND `PITCH_TEMPO` IS NOT IMPORTED. `simulatePitch` precomputes the whole
 // flight at TRUE physical time; the render layer plays that track back slowly.
 // `swing(tapTimeS)` therefore takes TRUE physical seconds since release, and it
-// is the RENDERER's job to divide its wall clock by `PITCH_TEMPO` before calling
-// in. Contact resolves at the true physical state or the break numbers are a
-// lie. `determinism.test.ts` reads this source to keep it that way.
+// is the RENDERER's job to MULTIPLY its wall clock by `PITCH_TEMPO` before
+// calling in — `trueS = wallS × PITCH_TEMPO`, so 0.55 makes a 0.41 s pitch take
+// 0.75 s of wall clock. `DerbyGame.trueTimeOf` is that map and `pitchSim.ts`'s
+// `sampleTrack` states the same identity. DIVIDING is the direction that looks
+// plausible and is wrong: it would hand this file 1.36 s at the moment the ball
+// reached the plate, 3.3× past the crossing, i.e. every single swing a whiff
+// against a ±26 ms contact window. Contact resolves at the true physical state
+// or the break numbers are a lie. `determinism.test.ts` reads this source to
+// keep the tempo out of it.
 
 import { vLen, vec3 } from './airPhysics';
 import { LOC_DISTANCE_IN, M_PER_FT, SWEET_SPOT_M } from './bat';
@@ -75,6 +81,18 @@ export class DerbySim {
   strikes = 0;
   homeRuns = 0;
   barrels = 0;
+  /**
+   * Consecutive home runs, and the best run of them this session.
+   *
+   * ⚠ THE SIM BOOKS THIS, AND IT DID NOT USE TO. `bestStreak` is submitted to
+   * the leaderboard beside `score`, `homeRuns` and `bestFt` — every one of which
+   * `commit()` already owned — but the streak lived in a `useRef` inside
+   * `DerbyGame`. That put ONE gameplay counter outside `derbySnapshot`, so
+   * `restore()` could not round-trip it and the ⚠ RULE in `derbyState.ts` was
+   * true of four counters out of five. `commit()` already had the branch.
+   */
+  curStreak = 0;
+  bestStreak = 0;
   score = 0;
   roundScore = 0;
   roundScores: number[] = [];
@@ -144,8 +162,10 @@ export class DerbySim {
    * Swing, at `tapTimeS` TRUE PHYSICAL seconds since release.
    *
    * ⚠ NOT playback seconds. The renderer plays the track back at `PITCH_TEMPO`
-   * and must divide before calling in; this file never sees the tempo, so a
-   * tempo change cannot move a single break, exit velocity or carry number.
+   * and must MULTIPLY its wall clock by it before calling in (`trueS = wallS ×
+   * PITCH_TEMPO` — see `DerbyGame.trueTimeOf`, which is the one implementation
+   * of that map). This file never sees the tempo, so a tempo change cannot move
+   * a single break, exit velocity or carry number.
    */
   swing(tapTimeS: number): SwingResult {
     const r = this.resolveSwing(tapTimeS);
@@ -341,9 +361,16 @@ export class DerbySim {
     this.score += r.points;
     if (r.outcome === 'homeRun') {
       this.homeRuns++;
+      this.curStreak++;
+      if (this.curStreak > this.bestStreak) this.bestStreak = this.curStreak;
       if (r.distFt > this.bestFt) this.bestFt = r.distFt;
-    } else if (r.outcome === 'inPlay') this.outs++;
-    else this.strikes++;
+    } else {
+      // Anything that is not over the wall ends the run — an out, a foul, a
+      // whiff and a take alike. Same rule the HUD's ref used to apply.
+      this.curStreak = 0;
+      if (r.outcome === 'inPlay') this.outs++;
+      else this.strikes++;
+    }
     if (r.barrel) this.barrels++;
     this.pitchIdx++;
     if (this.pitchIdx >= this.cfg.pitchesPerRound) {
