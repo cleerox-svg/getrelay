@@ -121,6 +121,7 @@ A data-driven **Range layout** picker (persisted, default `fairway`):
 | Shared scene kit (turf/sky/fog) | `packages/relay-ui/src/lib/golf/scenery.ts` |
 | Instanced scatter primitive (shared kit; batcher + impostor quads) | `packages/relay-ui/src/lib/scene3d/instancing.ts` |
 | The tree grove — shared by Course + Range, 3 draw calls; per-hole blossom rides the same batch | `packages/relay-ui/src/components/golf/scene/foliage.ts` |
+| The understory drift's geometry — blobs inscribed in the sim's collider (`shrubR`/`shrubH`), with the containment proof | `packages/relay-ui/src/components/golf/scene/drift.ts` |
 | Shared WATER (level geometry, Gerstner waves, Fresnel + sky/planar reflection, foam, splash, wet bank, reeds, quality tiers) | `packages/relay-ui/src/lib/golf/water.ts` |
 | Headless screenshot harness | `packages/relay-ui/scripts/shoot-golf.mjs` + `golfpreview.html` + `src/golfpreview.tsx` |
 | Quality tier POLICY (shared kit) + GPU instrumentation | `packages/relay-ui/src/lib/scene3d/quality.ts`, `stats.ts` |
@@ -135,7 +136,7 @@ A data-driven **Range layout** picker (persisted, default `fairway`):
 | Range HUD + controls + telemetry + layout picker | `packages/relay-ui/src/components/golf/RangeGame.tsx` |
 | Layouts, pins, `surfaceAt` | `packages/relay-ui/src/lib/golf/rangeTargets.ts` |
 | Club ladder | `packages/relay-ui/src/lib/golf/clubs.ts` |
-| Course terrain data + "HOW TO AUTHOR A HOLE" contract (`heightAt`/`gradientAt`/`surfaceAt`; `TEE_R`/`corridorHalfAt`/`greenPadRadius`; organic edges `edgeNoise`/`edgeRadius`/`featureSeed` + `EDGE_WOBBLE`/`maxGreenPadRadius`; render-only `corridorEdgeDist` first-cut helper; optional render-only `bloom` flowering canopy + `BloomForm` canopy/understory) | `packages/relay-ui/src/lib/golf/terrain.ts`, `courseData.ts` |
+| Course terrain data + "HOW TO AUTHOR A HOLE" contract (`heightAt`/`gradientAt`/`surfaceAt`; `TEE_R`/`corridorHalfAt`/`greenPadRadius`; organic edges `edgeNoise`/`edgeRadius`/`featureSeed` + `EDGE_WOBBLE`/`maxGreenPadRadius`; render-only `corridorEdgeDist` first-cut helper; optional `bloom` flowering canopy + `BloomForm` — `canopy` is render-only, `understory` also emits the drift collider `shrubR`/`shrubH`) | `packages/relay-ui/src/lib/golf/terrain.ts`, `courseData.ts` |
 | Course sim (terrain-aware; `snapshot`/`restore`/`predict`; putt power/speed; records) | `packages/relay-ui/src/lib/golf/courseSim.ts` |
 | Green + putting physics (Stimp → μ, roll-out, elliptic cup capture, BALL_R/CUP_R scale) | `packages/relay-ui/src/lib/golf/greenPhysics.ts` |
 | Course 3D scene (Three.js) — baked surface map, aim-holing pulse; `buildOrganicDisc`/`buildOrganicAnnulus` draw the green cap, fringe collar, bunkers and terrain-following water from the model's `edgeRadius`+`featureSeed`; long-grass rough, a crisp `corridorEdgeDist` first-cut band (uniform mown collar framed by dark mow lines), textured tee (`makeTeeTurf`); all textures seeded (`mulberry32`) | `packages/relay-ui/src/components/golf/CourseGL.tsx` |
@@ -749,10 +750,19 @@ out to be wrong in an instructive way.
    shrink the drift inside the trunk radius, or teach `courseTrees` to emit it as
    a collidable. `foliage.ts`'s header now says so rather than claiming
    drawn == played unqualified.
+   → **FIXED, by the collider — and NOT by a wider trunk.** See "The drift, made
+   honest" below. Drawn extent is now **0.95 of the collider radius** (was 5.7×
+   it), and the art is *inscribed in the collider by construction* rather than
+   sized to match it by hand.
 10. **The drift is bigger than the tree it grows under.** Radius 7.5–9.9 yd
    against a canopy radius of 5.6–7.4 yd, and 4.3–5.7 yd tall is nearly double a
    real forsythia. That is why the near clumps read faintly boulder-like.
    Shrinking it also shrinks defect 9.
+   → **FIXED in the same change.** Radius **5.3–7.0 yd** against a canopy radius
+   of 5.6–7.4 (inside it at every scale, by arithmetic: 3.2 < 3.4) and
+   **2.6–3.5 yd** tall, which is a real 2.4–3.2 m forsythia. The boulder read
+   turned out to be the BLOB size rather than the mass size — individual blobs
+   were 3.6–7.6 yd across and are now 2.5–4.7.
 11. **15 Firethorn and 17 Nandina got half the fix, and now look like each
    other.** They were corrected for SEASON (berry colour → April white flowers)
    but remain `form: 'canopy'` — so the argument that justified the fix, that
@@ -769,11 +779,35 @@ out to be wrong in an instructive way.
    still olive [134,138,32]. At tee distance that reads as shading; to a player
    who has missed into the trees it may not. Same "authored art with no frame"
    class as defects 5 and 6.
-13. **`augusta-16-redbud` cannot be exact-pixel regression-checked.** It produced
-   three different hashes across three runs *including two runs of identical
-   code* — 24–37 px at x 513–664 / y 623–634, which is the animated pond
-   surface caught at a different phase. Not a leak; a limit on what that frame
-   can prove.
+13. **Any frame with open water cannot be exact-pixel regression-checked.** First
+   caught on `augusta-16-redbud`, which produced three different hashes across
+   three runs *including two runs of identical code* — 24–37 px at
+   x 513–664 / y 623–634, the animated pond surface at a different phase.
+   ⚠ **It is not that frame only.** A later gate re-shot `augusta-12-golden-bell`
+   at an unchanged HEAD and got 68 px of variance at x 257–466 / y 623–638 — its
+   own pond. The scenes already in the documented water set are
+   `course-played-aim`, `listowel-heritage-3`, `putt-water`, `augusta-12`,
+   `augusta-16-redbud` and `augusta-16-pond`; **treat "has open water in frame"
+   as the predicate, not the list.** Everything else on those frames is exact:
+   in the same run pair hole 12's yellow was bit-identical, 5,412 px across the
+   same 54 components, so the drift render itself is fully seeded.
+14. **The near-corridor tree on hole 8 is a dogleg-layout bug.** Hole 8 plants a
+   full-size **collidable** tree at `d 332, x 0.2` — in the rough, near the
+   middle of the corridor at the dogleg corner — and five more overhang playable
+   ground by 2.4–5.3 yd. Pre-existing: that trunk has always been there and has
+   always been drawn. The cause is that the grove is laid out at a lateral
+   **x-offset** from the centerline rather than perpendicular to it, so on a
+   34° dogleg the tree line crosses the corridor it is supposed to flank.
+   **That makes it a content bug on every dogleg, not a hole-8 quirk**, and it
+   is only visible now because making a collider match its art put a second
+   volume on the same ground. Worth its own investigation.
+15. **Hole 8 is under-planted for a hole called Yellow Jasmine.** After the drift
+   was resized to its collider, yellow fell to 0.165% of frame and only the near
+   right-hand cluster reads as deliberate planting; on the before frame you would
+   name yellow as a feature of the hole, on the after you probably would not.
+   Not a defect but a tuning value: `yellowJasmine.fraction` 0.6 → ~0.85, with
+   hole 12 at 0.8 / 0.376% as the reference for "enough". Deliberately left out
+   of the collider change so the physics delta stayed reviewable on its own.
 
 **Instanced foliage — the single largest GPU win measured on this codebase.**
 The tee view's 1,034 draw calls were **559 individual meshes of tree**. There was
@@ -857,15 +891,23 @@ renderer needed one colour path it already had.
   **Draw calls are IDENTICAL on every scene**; the cost is +1.3k to +2.2k
   triangles on a flowering hole. A mesh per blooming tree would have undone the
   25× win, which is why the design started from that constraint.
-- **It is a RENDER TINT and provably nothing else.** `courseTrees()` sets
-  `CourseTree.bloom` and touches no other field, so a flowering hole's tree list
-  is byte-identical to the same hole with the field stripped — same trunks, same
-  collision radii, same ground. And the tint is drawn from a SEPARATE generator
-  seeded off the tree's own seed rather than from the per-tree render RNG, so a
-  blooming tree keeps the exact silhouette, crown count and jitter it had plain.
-  Both properties are unit-tested (`terrain.test.ts`, `foliage.test.ts`,
-  `courses.test.ts`), which matters more than usual here: a bloom field that
-  moved a ball would break see-what-you-play silently.
+- **A `'canopy'` bloom is a RENDER TINT and provably nothing else.**
+  `courseTrees()` sets `CourseTree.bloom` and touches no other field, so a
+  canopy-flowering hole's tree list is byte-identical to the same hole with the
+  field stripped — same trunks, same collision radii, same ground. And the tint is
+  drawn from a SEPARATE generator seeded off the tree's own seed rather than from
+  the per-tree render RNG, so a blooming tree keeps the exact silhouette, crown
+  count and jitter it had plain. Both properties are unit-tested
+  (`terrain.test.ts`, `foliage.test.ts`, `courses.test.ts`).
+  **⚠ THIS NO LONGER COVERS `'understory'`, AND THE UNQUALIFIED CLAIM WAS WRONG
+  FOR TWO HOLES.** A drift is a solid-looking mass at ball height, so as of "The
+  drift, made honest" below it emits `shrubR`/`shrubH` and the sim brushes a ball
+  through it. The narrower guarantee that DOES hold — "an understory bloom adds a
+  drift and changes nothing else the ball touches" — is what `courses.test.ts`
+  now asserts, alongside the byte-identical one for every canopy hole. The
+  general rule is worth more than either: **a bloom field that moved a ball
+  without the sim knowing is exactly the silent see-what-you-play break, and
+  moving the blossom DOWN is what caused it. Art at ball height is an obstacle.**
 - **Seeded selection, and per hole.** Which broadleaves flower is
   `bloomRoll(tree.seed, hole.terrain.seed)` — mulberry32, never `Math.random`.
   The hole seed is in the mix because tree seeds are a function of `d` alone, so
@@ -918,11 +960,12 @@ carrying forward:
 - **Still zero draw calls.** A drift is 7 more leaf-blob instances on the same
   unit icosahedron and the same white material — the same trick as the crown
   tint. Cost is +2.2k triangles on hole 12 and +3.2k on 8. Draw calls unchanged
-  on all 28 scenes.
+  on all 28 scenes. *(Blob count and triangle cost superseded by "The drift, made
+  honest" below; draw calls are still zero.)*
 - **The three holes that passed did not move.** Holes 2, 13 and 16 are
-  **byte-identical** before and after, by construction: `groveFromCourseTrees`
-  takes the form as an argument and only ever SETS `bloomForm` for
-  `'understory'`, so a canopy hole's placements do not even gain the key.
+  **byte-identical** before and after, by construction: only a tree that really
+  carries a drift gains the extra placement keys, so a canopy hole's placements
+  are the same objects, with the same keys, they always were.
 - **Measured (share of frame, and connected components ≥40 px).** Hole 12
   yellow 1.95% mean 5,545 px/blob → **0.76% mean 2,666**, hue 55.9°→**58.4°**,
   sat 0.656→**0.661** (p90 0.81→**0.94**), val 0.661→**0.725**; the old ochre
@@ -940,6 +983,72 @@ carrying forward:
   in the same change.** Defect 5 below — no frame shows a Course bunker properly
   — is the same class of gap and is still open, though `augusta17`'s tee view
   does now catch a greenside bunker at the top of frame.
+
+**The drift, made honest — defects 9 and 10, and the sentence that had to
+change.** The understory form shipped with a real cost: a mass **7.5–9.9 yd
+across and 4.3–5.7 yd tall** drawn at ball height, against a **1.32–1.74 yd**
+trunk cylinder as the only thing the sim collided with down there. Drawn was
+**5.7× collidable**, and a ball rolled through eight yards of apparent flowering
+shrub and felt nothing.
+
+- **A WIDER TRUNK WAS THE OBVIOUS FIX AND IT IS THE WRONG ONE.** The trunk
+  cylinder REFLECTS (`TRUNK_RESTITUTION`), and it runs from the ground to
+  `5.25·scale` = **8.7–11.4 yd**. Widening it to cover a 3 yd drift would carom
+  balls off invisible air for the **5–8 yd above the shrub**, in the one height
+  band a recovery shot genuinely flies through — trading a phantom on the deck
+  for a bigger one in the air, and making a forsythia bounce like an oak. A drift
+  is short, wide and SOFT, so it needs its own volume with its own height and its
+  own response.
+- **`CourseTree` gains `shrubR`/`shrubH`** — a half-ellipsoid standing on the
+  ground at the trunk, `3.2·scale` by `1.6·scale` = **5.28–6.98 yd radius and
+  2.64–3.49 yd tall** — emitted ONLY for a tree that flowers on a hole whose
+  `bloom.form` is `'understory'`. `courseSim.brushShrub` damps the HORIZONTAL
+  velocity of anything inside it at `SHRUB_KEEP_PER_SEC = 0.02` — a decay 37× the
+  canopy's: clip the rim in 0.05 s and lose ~18%, plough the middle in 0.17 s and lose
+  ~49%, trickle in at rolling pace and stop. It never reflects and never touches
+  `vh` — a shrub catches a ball and drops it, it does not bounce it, and damping
+  the fall would make the ball hang in the bush.
+- **The art is now INSCRIBED IN THE COLLIDER, by construction.** `foliage.ts`
+  has no drift dimensions of its own any more; it reads `shrubR`/`shrubH` and
+  places blobs so that, in the space where the envelope is the unit half-ball,
+  each blob is a sphere of radius ρ with |centre| ≤ 1−ρ. Two unit tests hold the
+  two directions apart: every blob inside the collider, and the drawn mass
+  reaching **≥0.85 of its radius / ≥0.8 of its height** (measured across the
+  grove: **mean 0.95 and 0.92**, worst tree 0.88 and 0.83). *A drift you can see
+  but not feel and a collider you can feel but not see are the same defect.*
+- **Two trees of identical geometry can now carry different colliders**, because
+  only a seeded fraction of the broadleaves flower. That is deliberate and it is
+  written on the tree, not on the hole.
+- **Defect 10 fell out of the same change, and the cause was not what it looked
+  like.** Radius 5.28–6.98 yd is inside the canopy's 5.61–7.41 at every scale
+  (3.2 < 3.4, by arithmetic), and 2.64–3.49 yd is a real 2.4–3.2 m forsythia. But
+  the boulder read came from BLOB size, not mass size: individual blobs were
+  **3.6–7.6 yd across** — glacial erratics — and are now **2.5–4.7 yd**, flatter
+  than they are wide, mounded low at the rim. 16 blobs, not 7, so the smaller
+  mass still merges into one thing.
+- **⚠ THIS CHANGES PHYSICS ON HOLE 8, AND ONLY THERE.** Worth knowing exactly
+  where, because "trees line the OB edge" is nearly but not quite a get-out.
+  Trees stand at `roughHalf + 8`, so on a STRAIGHT hole a rolling ball is out of
+  bounds long before it reaches one. But the grove is laid out at a lateral
+  x-offset from the centerline rather than perpendicular to it, so on a dogleg the
+  tree line cuts the corner: **6 of hole 8's 17 drifts overhang playable ground
+  (by 0.03–5.3 yd) and one stands squarely IN THE ROUGH at d 332, x 0.2**, on the
+  inside of the 34° dogleg. Those six were *already drawn there* and overhung
+  further before (2.97–7.51 yd); they are simply felt now. A ball rolled into the
+  in-play one at 20 yd/s runs **3.1 yd instead of 4.6**. **Hole 12 is unaffected
+  on the ground**: its widest drift used to overhang the corridor by 0.37 yd and
+  now clears it by 2.57, so every hole-12 collider sits in territory a grounded
+  ball never reaches. Nothing else in the game has an `'understory'` bloom, so
+  nothing else moved.
+- **Cost.** Draw calls **unchanged on every scene**. Triangles +2,880 on hole 12
+  and +6,120 on hole 8 (16 blobs vs 7, doubled for the shadow pass, over 8 and 17
+  flowering trees). Yellow share of frame 0.728% → **0.376%** (hole 12) and
+  0.332% → **0.165%** (hole 8) — the drift is now shrub-sized, and comparing it to
+  the 0.77–1.76% band the CANOPY holes occupy is comparing a shrub to a tree.
+  Hue and value hold (58.7°→58.1°, val 0.728→0.732 on 12). If the gate wants more
+  presence, the lever is `fraction` (0.8 and 0.6 today) — deliberately NOT pulled
+  here, because more drifts means more colliders and that belongs in its own
+  judgement.
 
 **Scene-wide IBL, and real sand.** Two changes that deliberately move pixels.
 

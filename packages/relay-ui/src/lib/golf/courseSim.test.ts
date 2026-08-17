@@ -7,7 +7,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { CourseSim } from './courseSim';
-import { HOLE_1, courseTrees, surfaceAt, type CourseHole } from './terrain';
+import { HOLE_1, courseTrees, heightAt, surfaceAt, type CourseHole } from './terrain';
+import { getCourse } from './courses';
 import { CLUBS } from './clubs';
 import { GRAVITY } from './rangeSim';
 import { BALL_R, CUP_R, greenRollDecel, rollOutDistance } from './greenPhysics';
@@ -1046,6 +1047,155 @@ describe('course sim — tree collision (trunk ricochet + canopy brush)', () => 
     );
     // Its lateral rest stays well inside the tree line — proof it never caromed.
     expect(Math.abs(m.restX)).toBeLessThan(HOLE_1.roughHalf);
+  });
+});
+
+// --- The flowering UNDERSTORY drift -----------------------------------------
+// The third tree volume, and the only one that exists because of authored ART.
+// A hole whose bloom.form is 'understory' draws a mass of flowering shrub at the
+// foot of its tree line — 5.3–7.0 yd across and 2.6–3.5 yd tall — and the sim
+// used to know nothing about it: the only collidable down there was the 1.3–1.7
+// yd trunk cylinder, so a ball rolled through eight yards of apparent shrub and
+// felt nothing. `courseTrees` now emits shrubR/shrubH for exactly those trees and
+// `brushShrub` drags a ball inside one. It DAMPS and never caroms — a forsythia
+// is not a trunk.
+describe('course sim — understory drift (a thicket, not a phantom)', () => {
+  // HOLE_1 with each of the two bloom forms. Same hole, same trees, same seeds:
+  // the ONLY difference is which form the blossom takes, which is exactly the
+  // difference under test.
+  const DRIFTED: CourseHole = {
+    ...HOLE_1,
+    bloom: { color: 0xfbdc12, fraction: 0.8, form: 'understory' },
+  };
+  const TINTED: CourseHole = { ...HOLE_1, bloom: { color: 0xf2a0bd, fraction: 0.8 } };
+  const drift = courseTrees(DRIFTED).find((t) => t.shrubR !== undefined)!;
+
+  it('a CANOPY bloom leaves the ball’s world untouched, shot for shot', () => {
+    // The property holes 2, 13 and 16 rest on, asserted through the SIM rather
+    // than through the data: tint the crowns and every shot in the bag finishes
+    // in the identical place. If a future bloom field ever leaks into physics,
+    // this is the test that should fail first.
+    for (const clubId of ['driver', 'iron7', 'wedge']) {
+      const a = new CourseSim(HOLE_1).simulateShot({ clubId, power: 1 });
+      const b = new CourseSim(TINTED).simulateShot({ clubId, power: 1 });
+      expect(JSON.stringify(b), clubId).toBe(JSON.stringify(a));
+    }
+  });
+
+  // Fly a ball through the drift's centre at `relH` above its base and return the
+  // horizontal speed 0.2 s later. The CONTROL is the same flight on TINTED — the
+  // identical hole, grove and seeds with the blossom in the crowns instead — so
+  // air drag, terrain and every other force are bit-for-bit the same and the only
+  // possible difference is the drift.
+  const flyThrough = (hole: CourseHole, relH: number): number => {
+    const s = new CourseSim(hole);
+    const b = s.ball;
+    b.d = drift.d - 3;
+    b.x = drift.x;
+    b.h = drift.ground + relH;
+    b.vd = 30;
+    b.vx = 0;
+    b.vh = 0;
+    b.inFlight = true;
+    b.grounded = false;
+    b.resting = false;
+    for (let i = 0; i < 48 && b.inFlight; i++) s.substep(1 / 240);
+    return Math.hypot(b.vd, b.vx);
+  };
+
+  it('drags a low ball down HARD — this is the phantom, closed', () => {
+    const relH = drift.shrubH! * 0.6;
+    const through = flyThrough(DRIFTED, relH);
+    const clear = flyThrough(TINTED, relH);
+    // Not the canopy's "just a little" (which is >0.95 of clear air over the same
+    // window): a thicket takes a real bite.
+    expect(through).toBeLessThan(clear * 0.75);
+  });
+
+  it('never reverses the ball — a shrub catches, it does not carom', () => {
+    const s = new CourseSim(DRIFTED);
+    const b = s.ball;
+    b.d = drift.d - 12;
+    b.x = drift.x;
+    b.h = drift.ground + drift.shrubH! * 0.3;
+    b.vd = 30;
+    b.vx = 0;
+    b.vh = 0;
+    b.inFlight = true;
+    b.grounded = false;
+    b.resting = false;
+    for (let i = 0; i < 120 && b.inFlight; i++) {
+      s.substep(1 / 240);
+      expect(b.vd).toBeGreaterThanOrEqual(0); // slowed, never sent back
+      expect(Math.abs(b.vx)).toBeLessThan(1e-9); // and never kicked sideways
+    }
+  });
+
+  it('lets a ball OVER the drift through untouched', () => {
+    // A yard above the envelope is clear air: the drift must not reach up into
+    // the band a normal approach flies through. (The canopy sphere starts at
+    // 3.6·scale, well above the drift's 1.6·scale, so there is nothing else here
+    // to confuse the measurement.)
+    const relH = drift.shrubH! + 1;
+    expect(flyThrough(DRIFTED, relH)).toBeCloseTo(flyThrough(TINTED, relH), 6);
+  });
+
+  // ⚠ THE ONE PLACE THIS CHANGES A PLAYABLE SHOT, and it is worth pinning by
+  // name. HOLE_1's tree line stands 8 yd OUTSIDE the OB edge, so a rolling ball
+  // is out of bounds long before it reaches a drift — the whole grove is
+  // unreachable on the ground. Augusta 8 doglegs 34° left, and because the grove
+  // is laid out at a lateral x-offset from the centerline rather than
+  // perpendicular to it, the right-hand tree line crosses the corridor at the
+  // corner: one flowering broadleaf stands at d 332, x 0.2, in ROUGH. Its drift
+  // is drawn on playable ground, and until now the ball went straight through it.
+  it('catches a ball rolling through the drift that stands IN PLAY on Augusta 8', () => {
+    const hole8 = getCourse('augusta').holes.find((h) => h.id === 8)!;
+    const { bloom: _b, ...plain } = hole8;
+    const inPlay = courseTrees(hole8).find(
+      (t) => t.shrubR !== undefined && surfaceAt(hole8, t.d, t.x) === 'rough',
+    );
+    expect(inPlay, 'no drift on playable ground — the premise of this test moved').toBeDefined();
+
+    const roll = (hole: CourseHole) => {
+      const s = new CourseSim(hole);
+      const b = s.ball;
+      b.d = inPlay!.d - inPlay!.shrubR! - 1;
+      b.x = inPlay!.x;
+      b.h = heightAt(hole, b.d, b.x);
+      b.vd = 20;
+      b.vx = 0;
+      b.vh = 0;
+      b.inFlight = true;
+      b.grounded = true;
+      b.resting = false;
+      for (let i = 0; i < 2000 && b.inFlight; i++) s.substep(1 / 240);
+      return b.d - (inPlay!.d - inPlay!.shrubR! - 1);
+    };
+    const withDrift = roll(hole8);
+    const without = roll(plain as CourseHole);
+    // The ball runs into the shrub and gives up in it, a third of its run short
+    // of where the bare hole let it go (measured: 3.1 yd against 4.6). That IS a
+    // gameplay change, and it is the point: there is a flowering mass drawn
+    // there, and it should cost something to roll into it.
+    expect(withDrift).toBeLessThan(without * 0.8);
+  });
+
+  it('the envelope is a SHRUB, and only the flowering trees have one', () => {
+    const trees = courseTrees(DRIFTED);
+    const drifts = trees.filter((t) => t.shrubR !== undefined);
+    expect(drifts.length).toBeGreaterThan(4);
+    expect(drifts.length).toBeLessThan(trees.length); // never the whole grove
+    for (const t of drifts) {
+      expect(t.kind).toBe('broadleaf');
+      expect(t.shrubR!).toBeGreaterThan(t.trunkR); // wider than the trunk it rings
+      expect(t.shrubR!).toBeLessThan(t.canopyR); // narrower than the crown above
+      expect(t.shrubH!).toBeLessThan(t.height); // and shorter than the trunk
+    }
+    // A tree with no bloom has no drift, so two trees of identical geometry can
+    // carry different colliders. That is the point, not an accident.
+    expect(trees.some((t) => t.bloom === undefined && t.shrubR === undefined)).toBe(true);
+    // …and a hole with no bloom at all has none anywhere.
+    expect(courseTrees(HOLE_1).some((t) => t.shrubR !== undefined)).toBe(false);
   });
 });
 

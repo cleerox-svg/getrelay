@@ -91,7 +91,7 @@
 //                       the designed tilt (not noise) is what breaks a putt.
 //   wind { along, cross } — steady wind (yd/s), along = downrange, cross = +x.
 //
-//   THE CANOPY (optional, RENDER-ONLY):
+//   THE CANOPY (optional):
 //   bloom? { color, fraction, form? } — a FLOWERING grove. Augusta names 13 of
 //                       its 18 holes after a flowering plant and every one of
 //                       them used to render a plain green tree line, so bloom is
@@ -128,16 +128,32 @@
 //                       seed mixed with terrain.seed (bloomRoll below) — never
 //                       Math.random, so the same trees flower on every load and
 //                       the screenshot gate can still tell a regression from a
-//                       reseeded grove. Two rules make this safe:
-//                         • It is a RENDER TINT AND NOTHING ELSE. courseTrees()
-//                           copies the colour onto CourseTree.bloom; every value
-//                           the sim reads (d, x, kind, scale, seed, ground,
+//                       reseeded grove.
+//
+//                       ⚠ 'canopy' IS A RENDER TINT; 'understory' IS A SOLID.
+//                       This sentence used to read "a bloom is a render tint and
+//                       nothing else", and it stopped being true the day the
+//                       drift moved the blossom mass down to ball height:
+//                         • form 'canopy' — courseTrees() copies the colour onto
+//                           CourseTree.bloom and sets NOTHING else, so every
+//                           value the sim reads (d, x, kind, scale, seed, ground,
 //                           trunkR, height, canopyR, canopyH) is byte-identical
-//                           to the same hole without the field, so a flowering
-//                           hole plays EXACTLY as it would plain. Never let a
-//                           bloom field move where a ball bounces.
+//                           to the same hole without the field. A canopy-flowering
+//                           hole plays EXACTLY as it would plain, and holes 2, 13
+//                           and 16 depend on that.
+//                         • form 'understory' — the drift is a visible mass
+//                           standing ON THE GROUND, so it is also a COLLIDABLE:
+//                           courseTrees() emits shrubR/shrubH (see CourseTree) and
+//                           courseSim brushes a ball that enters it. Nothing else
+//                           moves — the tree keeps the same position, trunk and
+//                           canopy it had — but this form is NOT free of the ball,
+//                           and must not be authored as though it were.
+//                       That is the see-what-you-play rule doing its job rather
+//                       than an exception to it: art you can see at ball height
+//                       has to be art the ball can feel.
 //                         • OMIT IT and the grove is unchanged, down to the JSON:
-//                           `bloom` is left ABSENT rather than set undefined.
+//                           `bloom` is left ABSENT rather than set undefined, and
+//                           so are shrubR/shrubH.
 //                       Do NOT derive a colour from `name` at render time — the
 //                       renderer must not parse copy text.
 //
@@ -212,12 +228,19 @@ export interface GreenDef {
  *   which yellow/orange/red can read as spring: a green canopy standing over a
  *   warm mass is a silhouette autumn cannot make, because in autumn the canopy
  *   turns first.
+ *
+ * ⚠ The two forms differ in one more way, and it is not cosmetic: `canopy` puts
+ * the blossom where nothing was ever collidable, so it stays a pure tint;
+ * `understory` puts a solid-looking mass at BALL height, so it emits a collider
+ * (CourseTree.shrubR/shrubH) and the ball feels it. Choosing `understory` is
+ * therefore choosing to put an obstacle on the hole.
  */
 export type BloomForm = 'canopy' | 'understory';
 
-// A flowering canopy for a hole — RENDER-ONLY (see the contract header). The
-// hole is named after a plant; this is where that plant's colour is AUTHORED, so
-// the renderer never has to parse the display name to know a hole flowers.
+// A flowering canopy for a hole. The hole is named after a plant; this is where
+// that plant's colour is AUTHORED, so the renderer never has to parse the display
+// name to know a hole flowers. Render-only at form 'canopy'; an obstacle too at
+// form 'understory' (see BloomForm).
 export interface HoleBloom {
   // Blossom colour (hex) — the colour this plant carries in APRIL. Not its
   // berry, not its autumn leaf: see "SEASON AND FORM" in the contract header.
@@ -894,10 +917,29 @@ export interface CourseTree {
   height: number; // trunk-top height (yd above the base) up to which a trunk hit reflects
   canopyR: number; // canopy sphere radius (yd)
   canopyH: number; // canopy-sphere centre height (yd above the base)
-  // RENDER TINT ONLY — the blossom colour for a flowering tree (hole.bloom), or
-  // ABSENT. Nothing in the sim reads it, and setting it changes no other field
-  // on this object, so a flowering hole collides exactly like a plain one.
+  // The blossom colour for a flowering tree (hole.bloom), or ABSENT. A COLOUR and
+  // nothing else: nothing in the sim reads it.
   bloom?: number;
+  // The flowering UNDERSTORY DRIFT, when this tree blooms under a hole whose
+  // bloom.form is 'understory' — otherwise BOTH ABSENT. A half-ellipsoid standing
+  // on the ground at the trunk, radius shrubR and height shrubH (yd), which the
+  // renderer fills with blossom blobs and the sim brushes a ball through.
+  //
+  // ⚠ TWO TREES OF IDENTICAL GEOMETRY CAN CARRY DIFFERENT COLLIDERS, and that is
+  // deliberate: only a seeded FRACTION of a hole's broadleaves flower, so two
+  // trees at the same scale, one flowering and one not, differ by exactly this
+  // pair of fields. Read them off the tree, never off the hole.
+  //
+  // These exist because the drift is a SOLID-LOOKING MASS AT BALL HEIGHT. The
+  // crown-tint form needed nothing like this — its blossom sits up where nothing
+  // was collidable anyway — but moving the mass down moved it into the one height
+  // band the collision model ignored, and for two holes a ball rolled through
+  // eight yards of apparent flowering shrub and felt nothing. The numbers are
+  // deliberately the SAME numbers the renderer sizes the drift from
+  // (foliage.ts `groveFromCourseTrees`), so the drawn mass cannot grow past the
+  // collidable one again without someone changing the value the sim reads.
+  shrubR?: number;
+  shrubH?: number;
 }
 
 // A seeded [0,1) roll deciding whether one tree flowers: mulberry32's first
@@ -934,6 +976,30 @@ function centerlineXAt(hole: CourseHole, d: number): number {
   return cl[cl.length - 1]!.x;
 }
 
+// The understory drift envelope, in LOCAL tree units (multiplied by the tree's
+// render scale, exactly like trunkR/canopyR/canopyH above). It is a half-ellipsoid
+// standing on the ground at the trunk: radius SHRUB_R, height SHRUB_H.
+//
+// Both numbers are answers to a measurement, not guesses:
+//   • SHRUB_R 3.2 sits just INSIDE the canopy's 3.4, so a drift can no longer be
+//     wider than the tree it grows under. The first pass was 4.55 (7.5–9.9 yd at
+//     course scales) against a 5.6–7.4 yd crown, which is why the near clumps read
+//     as boulders rather than as planting.
+//   • SHRUB_H 1.6 is 2.6–3.5 yd at course scales — 2.4–3.2 m, which is what a
+//     mature forsythia/pyracantha/nandina actually is. The first pass stood
+//     4.3–5.7 yd tall, roughly double the plant.
+//
+// ⚠ ONLY THE HEIGHT IS A SHRUB. SHRUB_R gives a radius of 5.28–6.98 yd, i.e. a
+// footprint 10.6–14.0 yd ACROSS against a ~3 yd height — about 4:1. That is not
+// one plant; it is a DRIFT of them, which is how Augusta actually plants
+// forsythia and is why hole 12's ribbon reads well. Say "drift", not "shrub",
+// when reasoning about it, because the volume `courseSim.brushShrub` damps a
+// ball inside is 11–14 yd wide, not 3 m. The visual gate caught this doc
+// conflating the two, and the next person tuning the envelope should not be
+// surprised by how much ground it covers.
+const SHRUB_R = 3.2;
+const SHRUB_H = 1.6;
+
 // The tree grove for a hole. Deterministic in the hole (integer d steps, no RNG).
 export function courseTrees(hole: CourseHole): CourseTree[] {
   const out: CourseTree[] = [];
@@ -966,9 +1032,17 @@ export function courseTrees(hole: CourseHole): CourseTree[] {
       canopyH,
     };
     // Bloom is set LAST and only when it applies, so a hole without `bloom`
-    // produces the byte-identical object (and JSON) it always did.
+    // produces the byte-identical object (and JSON) it always did — and so does a
+    // hole whose bloom is a 'canopy' tint, which is what keeps 2, 13 and 16
+    // pixel-identical.
     if (bloom && kind === 'broadleaf' && bloomRoll(seed, hole.terrain.seed) < bloom.fraction) {
       tree.bloom = bloom.color;
+      // …and ONLY the understory form adds a collidable. This is the one place a
+      // bloom becomes visible to the sim.
+      if (bloom.form === 'understory') {
+        tree.shrubR = SHRUB_R * scale;
+        tree.shrubH = SHRUB_H * scale;
+      }
     }
     out.push(tree);
   };

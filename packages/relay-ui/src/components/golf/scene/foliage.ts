@@ -60,14 +60,23 @@
  * October at any saturation. Chroma is not the lever, and neither is the mix
  * floor: the SILHOUETTE is.
  *
- * So `TreePlacement.bloomForm` selects where the blossom goes. `'canopy'` (the
- * default, and byte-identical to what shipped) tints the crown. `'understory'`
- * leaves the crown GREEN and hangs a low drift of flowering shrub round the foot
- * of the trunk instead — which is also what forsythia, pyracantha and nandina
- * actually are, none of them being trees. Green leaves standing over a warm mass
- * is a silhouette autumn cannot produce, because in autumn the canopy turns
- * first. The drift is more leaf-blob instances, so the draw-call cost is still
- * zero.
+ * So a tree either gets a crown tint (the default, byte-identical to what
+ * shipped) or an UNDERSTORY DRIFT: the crown stays GREEN and a low mass of
+ * flowering shrub sits round the foot of the trunk instead — which is also what
+ * forsythia, pyracantha and nandina actually are, none of them being trees. Green
+ * leaves standing over a warm mass is a silhouette autumn cannot produce, because
+ * in autumn the canopy turns first. The drift is more leaf-blob instances, so the
+ * draw-call cost is still zero.
+ *
+ * THE DRIFT IS DRAWN INSIDE THE COLLIDER, NOT BESIDE IT
+ * ----------------------------------------------------
+ * `TreePlacement.shrubR/shrubH` are the SIM's numbers — the half-ellipsoid
+ * `terrain.courseTrees` emits and `courseSim.brushShrub` slows a ball inside.
+ * `scene/drift.ts` FILLS that envelope and proves it does; this file only decides
+ * which trees get one. The first version of the form had its own dimensions and
+ * drew a mass 5.7× wider than anything the sim collided with, and a ball rolled
+ * through eight yards of apparent shrub and felt nothing. The fix was not smaller
+ * art — it was making the art's size and the collider's size THE SAME NUMBER.
  *
  * THE TRADE, STATED
  * -----------------
@@ -81,7 +90,8 @@
 
 import * as THREE from 'three';
 import { createInstanceBatcher, composeInstance, type TrackFn } from '../../../lib/scene3d/instancing';
-import type { BloomForm, CourseTree } from '../../../lib/golf/terrain';
+import { BLOOM_DRIFT_BLOBS, composeDrift } from './drift';
+import type { CourseTree } from '../../../lib/golf/terrain';
 
 /**
  * One tree. `y` is the ground elevation at its base (the range is flat, so it
@@ -104,49 +114,51 @@ export interface TreePlacement {
    */
   bloom?: number;
   /**
-   * Where that blossom goes — see "TWO FORMS" in the header. Absent means
-   * `'canopy'`, which is the behaviour that shipped, so a placement built
-   * without this field renders exactly as it always did.
+   * The UNDERSTORY drift envelope in world yards — radius and height of the
+   * half-ellipsoid standing on the ground at the trunk. Present together or not
+   * at all; absent means the blossom goes in the CROWN (`'canopy'`), which is the
+   * behaviour that shipped, so a placement built without these renders exactly as
+   * it always did.
+   *
+   * These are `CourseTree.shrubR/shrubH` verbatim — the volume the SIM brushes a
+   * ball through. Drawing the drift from the collider's own dimensions is the
+   * whole point: the presence of these fields is what "this tree has a drift"
+   * means, to the renderer and to the ball alike.
    */
-  bloomForm?: BloomForm;
+  shrubR?: number;
+  shrubH?: number;
 }
 
 /**
  * Adapt the course's tree DATA (`terrain.courseTrees` — the same list the sim
  * collides against) to grove placements. World z = −d.
  *
- * ⚠ DRAWN == PLAYED HOLDS FOR THE TRUNK, AND NOT FOR AN UNDERSTORY DRIFT. The
- * sim collides with the trunk cylinder only (r 1.32–1.74 yd). A `'canopy'` bloom
- * is fine — it sits up in the crown, where nothing was collidable anyway. But an
- * `'understory'` drift is a visually solid mass 7.5–9.9 yd across and 4.3–5.7 yd
- * tall sitting at exactly ball height, so a ball can roll straight through eight
- * yards of apparent flowering shrub and feel nothing.
+ * DRAWN == PLAYED, FOR ALL THREE VOLUMES. The trunk cylinder, the canopy sphere
+ * and — since the understory form gained one — the drift's half-ellipsoid all
+ * come off the same `CourseTree`. A `'canopy'` bloom stays a pure tint because
+ * its blossom sits up in the crown where nothing was ever collidable; an
+ * `'understory'` drift is a solid-looking mass at ball height, so the tree
+ * carries `shrubR`/`shrubH` and this function hands them straight to the
+ * renderer, which draws INSIDE them.
  *
- * The visual gate found this, and it is the one real cost of the form: moving
- * the bloom mass DOWN moved it into the one height band the collision model
- * ignores. It is tolerable at two holes (8, 12) where the drifts sit inside a
- * tree line the ball has no business being in — and it is exactly what has to be
- * resolved BEFORE this form spreads further, either by shrinking the drift
- * inside the trunk radius or by teaching `courseTrees` to emit it as a
- * collidable. Do not read the sentence above as covering it.
- *
- * `form` is the hole's `bloom.form`, passed in rather than carried on
- * `CourseTree` on purpose: it is one constant for the whole hole and nothing in
- * the sim has any business seeing it, so keeping it off the tree list preserves
- * the "strip `bloom` and the list is byte-identical" guarantee unchanged — one
- * render-only field on the sim's data structure, not two.
+ * That is why the drift's form is no longer passed in as the hole's
+ * `bloom.form`: a drift is now a property of the TREE (only a seeded fraction of
+ * a hole's broadleaves have one) and the same fields tell the renderer to draw it
+ * and the sim to collide with it. One source of truth, so the two cannot
+ * disagree — which they did, by 5.7×, when the size lived in this file.
  */
-export function groveFromCourseTrees(
-  trees: readonly CourseTree[],
-  form?: BloomForm,
-): TreePlacement[] {
+export function groveFromCourseTrees(trees: readonly CourseTree[]): TreePlacement[] {
   return trees.map((t) => {
     const p: TreePlacement = { kind: t.kind, x: t.x, z: -t.d, scale: t.scale, seed: t.seed, y: t.ground };
     if (t.bloom !== undefined) {
       p.bloom = t.bloom;
-      // Only ever SET for the non-default form, so a canopy hole's placements
-      // are the same objects (same keys) the harness has been shooting.
-      if (form === 'understory') p.bloomForm = form;
+      // Only ever SET for a tree that really carries a drift, so a canopy hole's
+      // placements are the same objects (same keys) the harness has been
+      // shooting — holes 2, 13 and 16 must stay pixel-identical.
+      if (t.shrubR !== undefined && t.shrubH !== undefined) {
+        p.shrubR = t.shrubR;
+        p.shrubH = t.shrubH;
+      }
     }
     return p;
   });
@@ -195,49 +207,6 @@ const BLOOM_MIX_MIN = 0.6;
  * and no draw call.
  */
 export const BLOOM_TUFTS = 3;
-
-/**
- * Blobs in one `'understory'` drift. Six overlapping blobs at the foot of the
- * trunk merge into a single mass at every distance this camera uses; a handful
- * fewer leaves gaps the eye reads as separate bushes, which is the ground-level
- * version of the measles failure the crown mix floor exists to avoid.
- */
-export const BLOOM_DRIFT_BLOBS = 7;
-/**
- * Drift geometry, in the tree's LOCAL units — the group matrix applies the
- * tree's own scale (1.65–2.2 on a course), so a drift stays proportionate to the
- * tree it is planted under instead of shrinking against the big ones.
- *
- * At a typical scale of 1.9 these give a mass ~9 yd across and ~5 yd tall under
- * a ~19 yd tree, against a canopy whose lowest blobs start around 8.5 yd: a
- * quarter of the tree's height with clear air between the two, which is what an
- * arching shrub under mature hardwood looks like — and the gap is the whole
- * point, because "green leaves ABOVE, warm mass BELOW" is the read that autumn
- * cannot fake. The first pass at 5 blobs of 0.85–1.35 measured only 0.33% of
- * frame against 0.77–1.76% on the three holes the gate passed, and read as
- * scattered dots; these are sized from that measurement.
- *
- * Blobs are squashed in y (0.72) so more of each facet faces the sun — a
- * ground-level icosahedron otherwise turns half its faces away from the key
- * light, and an unlit yellow facet is olive.
- */
-const DRIFT_SPREAD = 2.8;
-const DRIFT_R = [1.1, 1.75] as const;
-const DRIFT_Y = [0.8, 1.35] as const;
-const DRIFT_SQUASH = 0.72;
-/**
- * How close a drift blob sits to the pure blossom colour: 0.88–1.0 of the way
- * from white, i.e. barely washed at all. Unlike a crown blob there is no green
- * to blend with, and that is botanically right — forsythia flowers on bare
- * wands, before a single leaf opens.
- *
- * It started at 0.75 on the theory that lightening would keep the sun-facing
- * facets from going dark. The measurement said otherwise: value was already
- * healthy (0.73 mean) and SATURATION was the weak axis (0.58 against an authored
- * 0.93), because washing toward white is exactly a saturation cut. Chroma is the
- * scarce resource here, so spend the white sparingly.
- */
-const DRIFT_PURITY_MIN = 0.88;
 
 const _mixA = new THREE.Color();
 const _mixB = new THREE.Color();
@@ -316,10 +285,12 @@ export function buildGrove(
     // gives it plain, and bloom is provably a colour-only change.
     const bloomHex = t.kind === 'broadleaf' ? t.bloom : undefined;
     const br = bloomHex === undefined ? null : treeRng((t.seed ^ 0x9e3779b9) >>> 0);
-    // 'understory' keeps the crown green and puts the blossom on the ground —
-    // see "TWO FORMS" in the header. Absent/`'canopy'` is the shipped path and
-    // must stay bit-identical, so this is a strict equality, not a truthiness.
-    const understory = br !== null && t.bloomForm === 'understory';
+    // A drift keeps the crown green and puts the blossom on the ground — see
+    // "TWO FORMS" in the header. A tree has one exactly when it carries the sim's
+    // envelope; the crown-tint path is the shipped one and must stay
+    // bit-identical, so this is an explicit undefined check, not a truthiness.
+    const understory =
+      br !== null && t.shrubR !== undefined && t.shrubH !== undefined && t.shrubR > 0;
 
     if (t.kind === 'broadleaf') {
       // RNG DRAW ORDER IS LOAD-BEARING — it reproduces the old tree kit exactly.
@@ -377,29 +348,17 @@ export function buildGrove(
         }
       } else if (br) {
         // UNDERSTORY: a drift of flowering shrub round the base of the trunk,
-        // under a crown that stayed green. Same unit icosahedron, same white
-        // material, same InstancedMesh — triangles only, no draw call. Placed in
-        // the tree's local frame, so the group matrix seats it on the terrain at
-        // the tree's own scale and there is no second heightfield lookup to get
-        // wrong.
+        // under a crown that stayed green (see `scene/drift.ts`). Same unit
+        // icosahedron, same white material, same InstancedMesh — triangles only,
+        // no draw call. Placed in the tree's LOCAL frame, so the group matrix
+        // seats it on the terrain at the tree's own scale and there is no second
+        // heightfield lookup to get wrong; which is why the SIM's envelope is
+        // divided back down by the scale that matrix will re-apply.
+        const a = t.shrubR! / t.scale;
+        const bh = t.shrubH! / t.scale;
         for (let i = 0; i < BLOOM_DRIFT_BLOBS; i++) {
-          const ang = br() * Math.PI * 2;
-          const rad = br() * DRIFT_SPREAD;
-          const bs = DRIFT_R[0] + br() * (DRIFT_R[1] - DRIFT_R[0]);
-          const by = DRIFT_Y[0] + br() * (DRIFT_Y[1] - DRIFT_Y[0]);
-          composeInstance(
-            local,
-            Math.cos(ang) * rad,
-            by,
-            Math.sin(ang) * rad,
-            0,
-            ang,
-            0,
-            bs,
-            bs * DRIFT_SQUASH,
-            bs,
-          );
-          push('leaf', blossom(0xffffff, bloomHex!, DRIFT_PURITY_MIN + (1 - DRIFT_PURITY_MIN) * br()));
+          const purity = composeDrift(local, a, bh, br);
+          push('leaf', blossom(0xffffff, bloomHex!, purity));
         }
       }
     } else {
