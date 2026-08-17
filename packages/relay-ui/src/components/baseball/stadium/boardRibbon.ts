@@ -15,13 +15,18 @@
 // park. Hand-setting it stretches the typeface, so it is computed, and the scene
 // only has to promise that `u` runs 0 → 1 once around the ring.
 //
-// ⚠ AND THE HONEST HALF: A RIBBON IS NOT READABLE FROM THE PLATE. `ribbonReadRangeFt`
-// derives the crossover — a 5 ft band sets 3.5 ft of glyph, which reaches the
-// 10 CSS px floor at **325 ft** and no further. So the ribbons down the lines and
-// behind the plate carry TEXT (the count, the score, the park's name) and the
-// ones out in centre field, 430 ft away, are LIGHT. That is a property of the
-// camera, not a failure of the content, and it is what the sweep is for: light
-// is legible at any distance.
+// ⚠ AND THE HONEST HALF: A RIBBON IS NOT READABLE FROM EVERYWHERE.
+// `ribbonReadRangeFt` derives the crossover, and the number moved once the real
+// batter lens arrived: this file was authored against a 40° camera and the
+// shipped one is 20°, so the same band reads twice as far. On the NOMINAL 5 ft
+// band the crossover is 668 ft, i.e. everywhere in the park; on the bowl's REAL
+// band (`stands.ribbonHeightFt`, ~3.5 ft — the height this module is actually
+// handed, because `board.ts` measures it rather than typing it) it is ~470 ft.
+// The bowl's ribbon runs from ~60 ft behind the plate to ~530 ft in centre, so
+// the bands down the lines and behind the plate carry TEXT (the count, the
+// score, the park's name) and the deepest ones are LIGHT. That is a property of
+// the camera and of the band's height, not a failure of the content, and it is
+// what the sweep is for: light is legible at any distance.
 //
 // No canvas, no `three`, no clock, no gameplay. Ops only, rasterised by
 // `emitBoardOps` — the SAME rasteriser the atlas uses. One implementation.
@@ -101,7 +106,11 @@ export const ribbonWraps = (g: BoardGeometry) =>
 
 /**
  * The distance inside which ribbon text reaches the legibility floor, ft.
- * Derived by inverting `boardCssPxPerFt`, which is `952.4 / (d + 8)`.
+ * Derived by INVERTING `boardCssPxPerFt` — numerically, by bisection, so that
+ * this function cannot go stale when that one's camera changes. It has already:
+ * the closed form quoted here used to read `952.4 / (d + 8)`, which was the 40°
+ * lens, and the shipped 20° one is `1966 / (d + 19.5)`. A bisection over the
+ * real function has no such copy in it.
  */
 export function ribbonReadRangeFt(g: BoardGeometry): number {
   let lo = 1;
@@ -222,4 +231,58 @@ export function ribbonOffsetU(array: BoardArray, tS: number, g: BoardGeometry): 
       ? ribbonWraps(g) / RIBBON_SWEEP_S
       : RIBBON_SCROLL_FT_S / ribbonTileFt(g);
   return -(t * rate) % ribbonWraps(g);
+}
+
+// ---------------------------------------------------------------------------
+// THE THIRD LINK OF THE CELEBRATION CHAIN — the tower
+// ---------------------------------------------------------------------------
+
+/**
+ * How many times the tower's chase runs its whole length during a sweep.
+ *
+ * ⚠ TIED TO `RIBBON_SWEEP_S`, NOT PICKED. The chain is board → ribbon → tower,
+ * and the three have to read as ONE event rather than three animations that
+ * happen to be running: the light leaves the board, goes round the ring once per
+ * `RIBBON_SWEEP_S`, and climbs the tower in the same beat. Two laps per sweep,
+ * because the tower is a vertical run a spectator reads in a glance while the
+ * ring takes a full turn of the head.
+ */
+export const TOWER_SWEEPS_PER_LAP = 2;
+
+/** Peak emissive multiplier the tower reaches on a strobe frame. FEEL KNOB. */
+export const TOWER_FLASH_LEVEL = 2.6;
+
+/**
+ * The tower's state at `tS` seconds into the current screen: how bright, and how
+ * far the chase has climbed.
+ *
+ * ⚠ ONE FUNCTION, TWO NUMBERS, AND NO `three` — which is what lets it be
+ * asserted without a renderer. `rest` is the daylight row's own resting glow,
+ * passed in rather than imported, so this module keeps knowing nothing about
+ * lighting; it knows about the CELEBRATION'S CLOCK, which is the concept it
+ * already owns for the ribbon.
+ *
+ * The strobe is `strobeOn` — the SAME function that decides whether the ribbon's
+ * ground is red and whether the board's word is white — so the tower cannot
+ * flash out of step with the board by construction. Both are quantised to
+ * `BOARD_ANIM_FPS`, so a frozen clock freezes all three surfaces on the same
+ * frame and two harness runs photograph the same instant.
+ */
+export function towerState(
+  array: BoardArray,
+  tS: number,
+  frame: number,
+  rest: number,
+): { level: number; offsetV: number } {
+  if (array.main.kind !== 'homeRun') return { level: rest, offsetV: 0 };
+  const t = Number.isFinite(tS) && tS > 0 ? Math.floor(tS * RIBBON_SCROLL_FPS) / RIBBON_SCROLL_FPS : 0;
+  // Negative offset pulls the map DOWN past the strips, i.e. the pulse climbs.
+  // ⚠ `t === 0 ? 0` RATHER THAN LETTING THE ARITHMETIC PRODUCE IT, because
+  // `-(0 · k)` is NEGATIVE ZERO. It renders identically and compares equal under
+  // `==`, but it is a different value under `Object.is` and under
+  // `JSON.stringify`, which is what a repaint key and a `current()` read-back
+  // are made of. A -0 that only appears at t = 0 is the kind of thing that makes
+  // one harness run differ from another for no visible reason.
+  const offsetV = t === 0 ? 0 : -(t * TOWER_SWEEPS_PER_LAP) / RIBBON_SWEEP_S;
+  return { level: strobeOn(frame) ? TOWER_FLASH_LEVEL : rest * 1.35, offsetV };
 }

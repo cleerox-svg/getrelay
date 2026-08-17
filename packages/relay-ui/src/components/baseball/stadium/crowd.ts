@@ -99,7 +99,11 @@ const SPECKLE_DENSITY = 0.16;
  * tier has switched the crowd off — the caller then ships a flat navy material,
  * which is a legitimate low tier and not a broken one.
  */
-export function buildCrowdTexture(px: number, rng: () => number): CanvasTexture | null {
+export function buildCrowdTexture(
+  px: number,
+  rng: () => number,
+  base = 1,
+): CanvasTexture | null {
   if (px <= 0 || typeof document === 'undefined') return null;
   const w = px * SECTIONS_PER_TILE;
   const canvas = document.createElement('canvas');
@@ -127,7 +131,15 @@ export function buildCrowdTexture(px: number, rng: () => number): CanvasTexture 
   // shell is still one geometry and one material. (`mergeGeometries` takes the
   // INTERSECTION of attributes — one band without UVs would silently drop the
   // texture off all nine.)
-  band(0, 1, '#ffffff', 0, SECTIONS_PER_TILE);
+  // ⚠ `base` IS 1 IN DAYLIGHT AND ~0.26 AT NIGHT, AND IT IS THE WHOLE NIGHT
+  // CROWD. This map MULTIPLIES the seat colour, so a texel can only ever DARKEN
+  // — "bright points on dark" is therefore authored by dropping the GROUND and
+  // raising the seat colour to match (`daylight.seatsHex`), never by brightening
+  // the dots. The speckle below already writes near-1.0 texels; against a 0.26
+  // ground they become the dense field of phone screens the night photographs
+  // actually show, out of the same texels the day crowd was already paying for.
+  const lvl = Math.round(255 * Math.max(0, Math.min(1, base)));
+  band(0, 1, `rgb(${lvl},${lvl},${lvl})`, 0, SECTIONS_PER_TILE);
 
   // --- OCTAVE 1: crowd CLUMPS, the octave that survives minification. Blocks of
   // `CLUMP_PX` texels, brighter low in the bowl because that is where a real
@@ -145,7 +157,7 @@ export function buildCrowdTexture(px: number, rng: () => number): CanvasTexture 
       for (let y = by * CLUMP_PX; y < Math.min(seatRows, (by + 1) * CLUMP_PX); y++) {
         for (let x = bx * CLUMP_PX; x < Math.min(w, (bx + 1) * CLUMP_PX); x++) {
           const i = (y * w + x) * 4;
-          const c = Math.max(0, Math.min(255, 255 * k));
+          const c = Math.max(0, Math.min(255, 255 * base * k));
           img.data[i] = c;
           img.data[i + 1] = c;
           img.data[i + 2] = c;

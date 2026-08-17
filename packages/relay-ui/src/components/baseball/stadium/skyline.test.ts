@@ -20,6 +20,14 @@ import type { Park } from '../../../lib/baseball/parks';
 import { buildSkyline } from './skyline';
 import type { StadiumCtx } from './geom';
 import { pickStadiumQuality } from './quality';
+import { DAYLIGHT } from './daylight';
+
+/**
+ * The session seed the scene is built with here. FIXED — `StadiumCtx.seed`
+ * exists so the tower's LED programme can differ per session, and a test that
+ * fed it a clock would be the one thing the whole determinism chapter forbids.
+ */
+const TEST_SEED = 20260816;
 
 /**
  * The minimum a `(scene, track) => handle` builder needs. `pickStadiumQuality`
@@ -41,6 +49,8 @@ function ctxFor(park: Park): { ctx: StadiumCtx; owned: Array<{ dispose(): void }
       }) as StadiumCtx['track'],
       park,
       quality,
+      seed: TEST_SEED,
+      daylight: DAYLIGHT.day,
     },
     owned,
   };
@@ -55,10 +65,20 @@ describe('the skyline is park DATA', () => {
 
     const city = ctxFor(HARBOURFRONT);
     const cityPart = buildSkyline(city.ctx);
-    expect(cityPart.group.children.length).toBe(1);
-    // ONE mesh for the whole city — the draw-call budget, asserted rather than
-    // intended. A box per building would be seventeen.
-    expect(city.owned.length).toBe(2); // one geometry, one material
+    // TWO meshes: the whole city in one, and the tower's LED strips in the
+    // other. Still the draw-call budget asserted rather than intended — a box
+    // per building would be seventeen, and a strip per band fifteen more.
+    //
+    // ⚠ THE STRIPS ARE A SECOND CALL AND CANNOT BE THE FIRST. They are unlit
+    // (`MeshBasicMaterial`) and the city is Lambert, and the whole reason the
+    // strips exist is that an unlit surface is exactly as bright at midnight as
+    // at noon — which is what carries the night mode with no extra lights. One
+    // material cannot be both.
+    expect(cityPart.group.children.length).toBe(2);
+    // city geometry + city material, strip geometry + strip material. The chase
+    // map is `null` with no DOM (this suite runs in node), which is the same
+    // fallback `buildWindowTexture` takes and why the count is 4 and not 5.
+    expect(city.owned.length).toBe(4);
 
     const alp = ctxFor(ALPINE_HEIGHTS);
     const alpPart = buildSkyline(alp.ctx);

@@ -72,7 +72,7 @@ const TRUSS_MEMBER_FT = 2.2;
  * survive being lit from one side only. The truss stays the darkest thing in
  * the group, because "picked out against the underside" is the whole effect.
  */
-const COLORS = { deck: 0x969ba2, under: 0x6b727c, lip: 0x4a4f58, truss: 0x272b32 };
+const COLORS = { deck: 0x969ba2, under: 0x6b727c };
 
 export interface RoofPart extends StadiumPart {
   /**
@@ -94,7 +94,7 @@ export interface RoofPart extends StadiumPart {
 }
 
 export function buildRoof(
-  { scene, track, park, quality }: StadiumCtx,
+  { scene, track, park, quality, daylight }: StadiumCtx,
   stands: StandsPart,
 ): RoofPart {
   const group = new Group();
@@ -152,16 +152,40 @@ export function buildRoof(
   deck.castShadow = true;
   group.add(deck);
 
+  // ⚠ THE UNDERSIDE AND THE TRUSS CARRY AN EMISSIVE AT NIGHT, AND IT IS NOT A
+  // FLOURISH. Both face DOWN, so an overhead night rig reaches neither and the
+  // whole roof renders black — which loses the element that frames the tower in
+  // the one shot `homerun` and `flight` are composing. The alternative is a
+  // second light pointing up, which the shadow budget refuses. See
+  // `daylight.trussHex`.
   const under = new Mesh(
     track(loft(outerLow, innerLow)),
-    track(new MeshLambertMaterial({ color: COLORS.under, side: FrontSide })),
+    track(
+      new MeshLambertMaterial({
+        color: COLORS.under,
+        emissive: daylight.roofEmissiveHex,
+        side: FrontSide,
+      }),
+    ),
   );
   under.name = 'roofUnderside';
   group.add(under);
 
+  // ⚠ THE LEADING EDGE IS THE BUILDING'S NIGHT SIGNATURE. See
+  // `daylight.roofEdgeHex`: in every night photograph this arc is a thick bright
+  // BLUE band and it is the most identifiable thing about the roof from outside.
+  // It is also the arc `homerun`, `flight` and the three `follow-*` scenes
+  // compose the celebration against, so it is the highest-value surface in the
+  // night palette. In daylight it keeps the dark rim it always had.
   const fascia = new Mesh(
     track(loft(lip, inner)),
-    track(new MeshLambertMaterial({ color: COLORS.lip, side: DoubleSide })),
+    track(
+      new MeshLambertMaterial({
+        color: daylight.roofEdgeHex,
+        emissive: daylight.roofEdgeEmissiveHex,
+        side: DoubleSide,
+      }),
+    ),
   );
   fascia.name = 'roofLip';
   group.add(fascia);
@@ -170,7 +194,13 @@ export function buildRoof(
   if (truss) {
     const mesh = new Mesh(
       track(truss),
-      track(new MeshLambertMaterial({ color: COLORS.truss, side: DoubleSide })),
+      track(
+        new MeshLambertMaterial({
+          color: daylight.trussHex,
+          emissive: daylight.roofEmissiveHex,
+          side: DoubleSide,
+        }),
+      ),
     );
     mesh.name = 'roofTruss';
     group.add(mesh);

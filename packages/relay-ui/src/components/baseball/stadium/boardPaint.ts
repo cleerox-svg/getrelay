@@ -109,9 +109,26 @@ export const TONE_COLOR: Record<string, string> = {
 /** `CAMERAS.batter`'s eye, scene ft, and its vertical fov. Duplicated on purpose:
  * importing `camera.ts` here would pull the rig into a module whose whole point
  * is that it is pure layout. The values are asserted against `CAMERAS.batter` in
- * `scoreboard.test.ts`, so the copy cannot drift. */
-const BATTER_EYE_Z_FT = 8;
-const BATTER_FOV_DEG = 40;
+ * `scoreboard.test.ts`, so the copy cannot drift.
+ *
+ * ⚠⚠ AND THE GUARD EARNED ITS KEEP THE FIRST TIME TWO BRANCHES MET. These read
+ * 8 ft / 40° — the pre-M3b batter camera — and the shipped one is 19.5 ft / 20°.
+ * The board slice was authored against one branch and the M3b re-frame landed on
+ * another, so the merge produced a legibility floor derived from a lens that no
+ * longer exists. Nothing about it was visible: the board still built, still
+ * passed its own `boardGeometryComplaints`, and 52 tests were green. The ONE
+ * thing that saw it is the assertion in `scoreboard.test.ts` that pins these two
+ * numbers against `CAMERAS.batter` itself — which is exactly the case its own
+ * comment predicted ("the camera moving, or the ART AGENT building a different
+ * array").
+ *
+ * The error was CONSERVATIVE — a 20° lens magnifies ~2× against a 40° one, so
+ * every glyph was twice the size the floor demanded — but conservative in a
+ * derivation is still wrong, and it was suppressing the whole information budget:
+ * an 18 ft column carries 10 characters at the real floor, not 5.
+ */
+const BATTER_EYE_Z_FT = 19.5;
+const BATTER_FOV_DEG = 20;
 /** Portrait phone: CSS px across, and the harness frame's px across and down. */
 const PHONE_CSS_W = 390;
 const SHOT_PX_W = 900;
@@ -121,6 +138,27 @@ const SHOT_PX_H = 1600;
  * ⚠ THE REFERENCE ARRAY EVERY NUMBER BELOW IS DERIVED AGAINST — exported because
  * it is an INTEGRATION CONTRACT, not documentation.
  *
+ * ⚠⚠ **66 × 33, NOT 100 × 50 — AN OWNER DECISION ON A MEASUREMENT.** The array
+ * was authored at 100 × 50 against a 40° batter lens; the shipped camera is a
+ * 20° lens at 19.5 ft, which magnifies ~2×, so that board was 1009 px of a
+ * 900 px frame and **cropped on three sides** — and on a 390 px phone the two
+ * side columns were very nearly outside the picture entirely (73.4 % of the
+ * width in frame, 84.2 % of the height). `board.test.ts` pinned those as goldens
+ * and the owner's call was that they are wrong "regardless of what the atlas
+ * would prefer".
+ *
+ * ⚠ AND IT HAD TO MOVE HERE, NOT IN THE SCENE. `boardGeometryComplaints` refuses
+ * a board shorter than `BOARD_REF`, because the atlas is authored at these
+ * proportions and STRETCHED onto whatever quad the scene builds — so a smaller
+ * quad draws smaller type and lands under the floor. 100 × 50 @ 430 was the
+ * UNIQUE admissible point of this module's own rules. Re-authoring the reference
+ * and the panel table TOGETHER is the only move that changes the size without
+ * changing the legibility guarantee, which is why it is one commit and not two.
+ *
+ * The aspect is unchanged at 2.0, so every UV rect, every panel's own aspect and
+ * every derived fraction survives; what changes is the information BUDGET, and
+ * `scoreboard.test.ts` prints the new per-panel table beside the old one.
+ *
  * The array's real size and position are scene art and belong to whoever owns
  * the bowl and the truss, not to this module. But every legibility number here
  * scales linearly with `heightFt / faceDistFt`, so an array built at, say, 30 ft
@@ -128,7 +166,7 @@ const SHOT_PX_H = 1600;
  * stops meaning anything. `buildScoreboard` now TAKES the real geometry and
  * THROWS when it lands under the threshold — see `scoreboard.ts`.
  */
-export const BOARD_REF = { widthFt: 100, heightFt: 50, faceDistFt: 430 } as const;
+export const BOARD_REF = { widthFt: 66, heightFt: 33, faceDistFt: 430 } as const;
 
 /** CSS pixels per foot of board face, on a portrait phone, from `CAMERAS.batter`. */
 export function boardCssPxPerFt(faceDistFt: number = BOARD_REF.faceDistFt): number {
@@ -189,12 +227,31 @@ export const MIN_LEGIBLE_FT = MIN_LEGIBLE_CSS_PX / boardCssPxPerFt();
  *
  * `label` sits EXACTLY on `MIN_LEGIBLE_FT`, so the smallest named size is the
  * floor by construction rather than by coincidence.
+ *
+ * ⚠⚠ **AND THE OTHER FOUR ARE MULTIPLES OF IT NOW, WHICH IS A CORRECTION, NOT A
+ * TIDY-UP.** They were absolute feet — 13 / 8 / 6.5 / 5.5 — chosen when the
+ * floor was 4.599 ft, i.e. at 2.83× / 1.74× / 1.41× / 1.20× the floor. Fixing
+ * the floor for the real 20° batter lens halved it to 2.286 ft and moved
+ * `label` with it, because `label` IS the floor — but left the other four
+ * where they were. The scale silently became 5.7× / 3.5× / 2.8× / 2.4× the
+ * floor: an internally inconsistent type ramp in which `body` was more than
+ * twice `label` where it had been a fifth more.
+ *
+ * Nothing failed. What it cost was ROOM, and the bill arrived at the resize: on
+ * a 22 ft main panel the batter card's four rows summed to 1.05 of the panel and
+ * the bottom stack overflowed into the linescore strip — which the overlap walk
+ * caught as `"7/27" overlaps "1"`, i.e. as a collision between two different
+ * panels, which is what an overflowing panel looks like from the outside.
+ *
+ * Written as multiples, the ramp cannot drift from the floor again: change the
+ * camera, change the floor, and all five sizes follow. The ratios are the ones
+ * the array was designed at, recovered to three decimals.
  */
 export const TYPE_FT = {
-  hero: 13.0,
-  head: 8.0,
-  title: 6.5,
-  body: 5.5,
+  hero: 2.827 * MIN_LEGIBLE_FT,
+  head: 1.740 * MIN_LEGIBLE_FT,
+  title: 1.414 * MIN_LEGIBLE_FT,
+  body: 1.196 * MIN_LEGIBLE_FT,
   label: MIN_LEGIBLE_FT,
 } as const;
 

@@ -41,6 +41,7 @@ import {
 } from 'three';
 import type { Scene } from 'three';
 import { mulberry32 } from '../../../lib/golf/wind';
+import type { Daylight } from './daylight';
 import type { Track } from './geom';
 
 /**
@@ -54,12 +55,12 @@ import type { Track } from './geom';
  */
 const SKY_RADIUS_FT = 3000;
 
-/** Zenith, mid and horizon-haze colours. FEEL KNOBS — a clear afternoon. */
-const ZENITH = [0x4f8bc9, 0x74a8dc, 0xc6dcef] as const;
-
-/** Cloud band count and their brightness lift. FEEL KNOBS. */
+/**
+ * Cloud band count. FEEL KNOB. The band LIFT is not here — it is a column of
+ * `daylight.ts`, because a cloud lift authored for an afternoon reads as fog at
+ * night, and the two skies are one dome under one gradient function.
+ */
 const BANDS = 9;
-const BAND_LIFT = 0.16;
 
 const SKY_SEED = 20260819;
 
@@ -69,7 +70,7 @@ const SKY_SEED = 20260819;
  * in `u`. Clouds break that column up horizontally, which is the only reason it
  * is not 1 px wide.
  */
-function skyTexture(px: number, rng: () => number): CanvasTexture | null {
+function skyTexture(px: number, rng: () => number, sky: Daylight): CanvasTexture | null {
   if (typeof document === 'undefined') return null;
   const w = px;
   const h = px;
@@ -82,12 +83,14 @@ function skyTexture(px: number, rng: () => number): CanvasTexture | null {
   // Canvas y runs DOWN and texture v runs UP, so row 0 is the zenith.
   const grad = ctx.createLinearGradient(0, 0, 0, h);
   const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
-  grad.addColorStop(0, hex(ZENITH[0]));
-  grad.addColorStop(0.55, hex(ZENITH[1]));
+  grad.addColorStop(0, hex(sky.skyStops[0]));
+  grad.addColorStop(0.55, hex(sky.skyStops[1]));
   // The haze band is TIGHT to the horizon. A gradient that reaches its palest
-  // value halfway up reads as fog, not as distance.
-  grad.addColorStop(0.9, hex(ZENITH[2]));
-  grad.addColorStop(1, hex(ZENITH[2]));
+  // value halfway up reads as fog, not as distance. At night the same band is
+  // the city's glow, which is the one thing that keeps a dark dome from being
+  // a black rectangle behind the bowl.
+  grad.addColorStop(0.9, hex(sky.skyStops[2]));
+  grad.addColorStop(1, hex(sky.skyStops[2]));
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, w, h);
 
@@ -98,7 +101,7 @@ function skyTexture(px: number, rng: () => number): CanvasTexture | null {
     const half = h * (0.012 + rng() * 0.035);
     const x0 = rng() * w;
     const wide = w * (0.25 + rng() * 0.5);
-    const a = BAND_LIFT * (0.4 + rng() * 0.6);
+    const a = sky.skyBandLift * (0.4 + rng() * 0.6);
     const g = ctx.createLinearGradient(0, cy - half, 0, cy + half);
     g.addColorStop(0, 'rgba(255,255,255,0)');
     g.addColorStop(0.5, `rgba(255,255,255,${a.toFixed(3)})`);
@@ -124,9 +127,15 @@ function skyTexture(px: number, rng: () => number): CanvasTexture | null {
  * Build the sky dome. `px` is the map edge — `0` (the `low` tier) ships no map
  * and the dome is a flat fill, i.e. exactly the old behaviour, which is a
  * legitimate cheap tier.
+ *
+ * ⚠ NIGHT IS THIS SAME DOME WITH A DIFFERENT PALETTE ROW, not a second sky.
+ * That is why the gradient stops and the cloud lift were moved out to
+ * `daylight.ts`: a night sky built by a second function would drift from the day
+ * one the first time either was touched, which is precisely the "second scene"
+ * tax the charter's camera-modes rule exists to avoid, one surface down.
  */
-export function buildSky(scene: Scene, track: Track, px: number): Mesh {
-  const tex = px > 0 ? skyTexture(px, mulberry32(SKY_SEED)) : null;
+export function buildSky(scene: Scene, track: Track, px: number, sky: Daylight): Mesh {
+  const tex = px > 0 ? skyTexture(px, mulberry32(SKY_SEED), sky) : null;
   if (tex) track(tex);
   const dome = new Mesh(
     track(new SphereGeometry(SKY_RADIUS_FT, 32, 16)),
@@ -135,7 +144,7 @@ export function buildSky(scene: Scene, track: Track, px: number): Mesh {
     // stadium's shadow logic in charge of the horizon.
     track(
       new MeshBasicMaterial({
-        color: tex ? 0xffffff : ZENITH[1],
+        color: tex ? 0xffffff : sky.skyStops[1],
         side: BackSide,
         ...(tex ? { map: tex } : {}),
         // The dome is drawn like a background: never occludes, never occluded.

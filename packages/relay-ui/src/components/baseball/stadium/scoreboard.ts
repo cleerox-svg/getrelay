@@ -69,15 +69,26 @@ export { HOME_RUN_WORD, boardResultRows } from './boardScreens';
 /**
  * Atlas width, texels.
  *
- * ⚠ CHOSEN AGAINST THE ONLY CAMERA THAT READS THE BOARD, not by habit. From
- * `CAMERAS.batter` the reference 100 ft array spans 5.018 px/ft × 100 ft ≈ 502 px
- * of the harness's 900 px-wide frame, and ≈ 653 device px on a 1170-px phone. So
- * 1024 texels across is ~1.6 texels per device pixel — comfortably oversampled,
- * which is what keeps a stroked glyph's edge clean when the quad is minified.
- * 512 would be 0.78 texels/px, i.e. UNDER-sampled on the one surface whose whole
- * job is to be read; 2048 would quadruple the upload for a board that is never
- * larger than ~650 px on screen. No other camera gets closer: `flight` is 520 ft
- * out with a 55° fov, `wide` is 1000 ft up, and `pitcher` faces the other way.
+ * ⚠ CHOSEN AGAINST THE ONLY CAMERA THAT READS THE BOARD, not by habit — and
+ * RE-MEASURED once that camera turned out to be a 20° lens rather than the 40°
+ * this module was authored against (see `boardPaint.ts`).
+ *
+ * From `CAMERAS.batter` the reference 100 ft array spans 10.09 px/ft × 100 ft ≈
+ * 1009 px of the harness's 900 px-wide frame — i.e. the array is WIDER than the
+ * frame, and on a 1170-px phone it is the full 1170 device px. 1024 texels
+ * across is therefore ~0.87 texels per device pixel, marginally UNDER 1:1.
+ *
+ * ⚠ AND 1024 STAYS, WITH THE TRADE STATED RATHER THAN THE NUMBER RAISED. What is
+ * actually being sampled is a STROKED glyph: the smallest one is 2.29 ft of a
+ * 50 ft board, i.e. 23 texels of a 512-tall atlas, drawn at ~30 device px — so
+ * the type is magnified ~1.3×, which costs a little softness on an edge and
+ * nothing else. Against that, 2048 × 1024 RGBA is 8.0 MB per upload, and the
+ * home-run eruption repaints at `BOARD_ANIM_FPS` = 12 Hz: 96 MB/s of texel
+ * traffic on a phone during the one moment the whole game is built around,
+ * against 24 MB/s at 1024. Softness is cheaper than a dropped celebration.
+ * (512 would be 0.44 texels/px, which is genuinely under-sampled.) No other
+ * camera gets closer: `flight` is 520 ft out with a 55° fov, `wide` is 1000 ft
+ * up, and `pitcher` faces the other way.
  */
 export const BOARD_TEXTURE_W = 1024;
 

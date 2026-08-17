@@ -184,6 +184,58 @@ const SCENES = {
     label: 'follow-ease',
     expectBallInFrame: true,
   },
+  // ⚠ THE BOARD ARRAY, FROM THE ONLY CAMERA THAT READS IT. `boardPaint.ts`
+  // derives the whole legibility floor from `CAMERAS.batter`, and at that
+  // camera's real 20° lens a 100 ft board 430 ft out spans 1009 px of a 900 px
+  // frame — i.e. it is now the DOMINANT object in the batter's view and there
+  // was no shot of it. Same camera and same frozen instant as `pitch-4seam`, so
+  // the pair differ by the board's content and nothing else.
+  //
+  // `board=batter` is the derby's own resting card, built by the HUD's own
+  // `derbyBoardArray` rather than authored in the preview — a photograph of a
+  // picture the game cannot produce would be worth nothing.
+  board: { query: 'scene=batter&pitch=ff&t=0.30&board=batter', label: 'board' },
+  // The array's four panels against the frame, from far enough back to see the
+  // whole assembly — the shot that says whether the GAPS read, which is the
+  // entire content of "it is an array, not one rectangle".
+  'board-wide': { query: 'scene=flight&pitch=ff&t=0.30&board=batter', label: 'board-wide' },
+  // The eruption, frozen at 0.5 s — inside `BOARD_ANIM_END_S` (2.6 s) and past
+  // the first strobe, so the board, both columns, the strip and the ribbon are
+  // all in their celebration state at once.
+  'board-homerun': {
+    query: 'scene=batter&pitch=ff&t=0.30&board=homerun&bts=0.5',
+    label: 'board-homerun',
+  },
+  // ⚠ THE DAY / NIGHT PAIR, ON ONE CAMERA. There has never been a night scene at
+  // all, so nothing has ever tested one. These two differ by `?daylight=` and by
+  // nothing else, which is what lets `checkDayNightPairs` below assert the
+  // charter's hard rule mechanically: a cosmetic toggle must not move a single
+  // draw call, triangle, geometry, fence measurement or tracer vertex.
+  'daynight-day': {
+    query: 'scene=wide&pitch=ff&t=0.30&board=batter&daylight=day',
+    label: 'daynight-day',
+    pairWith: 'daynight-night',
+  },
+  'daynight-night': {
+    query: 'scene=wide&pitch=ff&t=0.30&board=batter&daylight=night',
+    label: 'daynight-night',
+  },
+  // The batter's own frame at night: floodlit turf, a dark dome, and the board
+  // and ribbons as the brightest things in the picture.
+  night: {
+    query: 'scene=batter&pitch=ff&t=0.30&board=batter&daylight=night',
+    label: 'night',
+  },
+  // ⚠ THE MONEY MOMENT. Board erupting, ribbons sweeping the ring, tower
+  // flashing — all three from one `(BoardArray, tS)`, all three quantised, and
+  // the ball near its apex so the tower is in frame beside it. `bts=0.6` is a
+  // strobe-ON frame (`STROBE_S` = 0.2 s, so 0.6 s is the start of the fourth
+  // half-period), which is the frame worth photographing.
+  'night-homerun': {
+    query: 'scene=flight&pitch=ff&hit=1&bt=2.6&board=homerun&bts=0.6&daylight=night',
+    label: 'night-homerun',
+    expectBallInFrame: true,
+  },
 };
 
 // Portrait, a phone screen. Same shape as the golf harness so the two sets of
@@ -540,7 +592,8 @@ function checkReport(report) {
   console.log(
     `  GPU   draws ${String(s.drawCalls).padStart(3)}  tris ${String(s.triangles).padStart(6)}` +
       `  progs ${s.programs}  geos ${s.geometries}  texs ${s.textures}` +
-      `  tier ${s.tier} (${s.shadowMapSize}²) — ${s.qualityReason}`,
+      `  tier ${s.tier} (${s.shadowMapSize}²) — ${s.qualityReason}` +
+      `  light ${s.daylight}`,
   );
   console.log(
     `  SHADOW  volume ±${s.shadowHalfFt.toFixed(0)} ft over ${s.shadowMapSize}² =` +
@@ -583,6 +636,7 @@ function checkReport(report) {
     violations.push(`fence height off by ${worstH.toFixed(3)} ft > tol ${FENCE_TOL_FT} ft`);
   }
 
+  violations.push(...checkBoard(report));
   violations.push(...checkRoof(report));
   violations.push(...checkPitchTracer(report));
   violations.push(...checkBattedTracer(report));
@@ -590,6 +644,111 @@ function checkReport(report) {
   violations.push(...checkContactSeam(report));
   violations.push(...checkReveal(report));
   violations.push(...checkFraming(report));
+  return violations;
+}
+
+/**
+ * THE BOARD ARRAY, MEASURED OUT OF THE BUILT GEOMETRY.
+ *
+ * ⚠ FOUR PANELS, ONE DRAW CALL, AND THE GAPS ARE THE POINT. The array's whole
+ * design claim is that it reads as an ARRAY rather than as one rectangle, and
+ * that rests on two things a screenshot alone cannot adjudicate: the four quads
+ * are separated by real gaps in the park, and their UV rects tile the atlas
+ * without overlapping. Both are arithmetic on the rects the geometry was
+ * actually built from, so both are asserted here.
+ *
+ * ⚠ AND THE REPAINT BUDGET, WHICH IS THE ONE PERFORMANCE DECISION THE BOARD
+ * MAKES. A 1024 × 512 RGBA atlas is 2.0 MB per upload. In a FROZEN scene the
+ * board's state and `tS` are both constant, so the count must stop — this
+ * harness renders many frames after the beacon and a board that repainted every
+ * frame would be uploading 2 MB × 60/s for a picture that never changes. The
+ * count is read beside `texture.version`, which three increments inside its own
+ * `needsUpdate` setter: the module's own counter alone is self-referential (its
+ * source says so), so the PAIR is the measurement.
+ */
+const BOARD_MAX_UPLOADS = 3;
+
+function checkBoard(report) {
+  const b = report.board;
+  if (!b) {
+    console.log('  BOARD  none (park has no centre-field structure)');
+    // A park with no board must not be paying for one either — that is the
+    // `scoreboard: null` branch, and its absence here is what proves it taken.
+    return [];
+  }
+  const violations = [];
+  const wFt = b.geometry.widthFt;
+  console.log(
+    `  BOARD  ${wFt}×${b.geometry.heightFt} ft at ${b.geometry.faceDistFt} ft` +
+      `   ribbon ${b.geometry.ribbonHeightFt.toFixed(2)} ft band on a ` +
+      `${(2 * Math.PI * b.geometry.ribbonRadiusFt).toFixed(0)} ft ring` +
+      `   tS ${b.tS.toFixed(3)} s`,
+  );
+  console.log(
+    `         uploads atlas ${b.uploads} (texture.version ${b.textureVersion})` +
+      `  ribbon ${b.ribbonUploads}   frame ${b.current?.frame ?? '—'}` +
+      `  offsetU ${(b.current?.offsetU ?? 0).toFixed(4)}`,
+  );
+  for (const p of b.panels) {
+    console.log(
+      `         ${p.id.padEnd(8)} x ${f2(p.x0)} → ${f2(p.x1)}   y ${f2(p.y0)} → ${f2(p.y1)}` +
+        `   uv ${p.uv.u0.toFixed(3)}–${p.uv.u1.toFixed(3)} × ${p.uv.v0.toFixed(3)}–${p.uv.v1.toFixed(3)}`,
+    );
+  }
+  if (b.panels.length !== 4) {
+    violations.push(`the board built ${b.panels.length} panels, not 4`);
+  }
+  // (1) EVERY PANEL IS INSIDE THE DECLARED FACE. A quad hanging off the board is
+  // a quad hanging in front of the recess's back wall.
+  for (const p of b.panels) {
+    if (p.x0 < -wFt / 2 - 1e-6 || p.x1 > wFt / 2 + 1e-6) {
+      violations.push(`panel ${p.id} runs x ${p.x0} → ${p.x1}, outside the ${wFt} ft face`);
+    }
+  }
+  // (2) NO TWO PANELS OVERLAP, AND EVERY NEIGHBOURING PAIR HAS A REAL GAP.
+  // Both in the PARK, in feet, because that is what a player sees.
+  let minGap = Infinity;
+  for (let i = 0; i < b.panels.length; i++) {
+    for (let j = i + 1; j < b.panels.length; j++) {
+      const a = b.panels[i];
+      const c = b.panels[j];
+      const gapX = Math.max(a.x0 - c.x1, c.x0 - a.x1);
+      const gapY = Math.max(a.y0 - c.y1, c.y0 - a.y1);
+      const gap = Math.max(gapX, gapY);
+      minGap = Math.min(minGap, gap);
+      if (gap <= 0) violations.push(`panels ${a.id} and ${c.id} OVERLAP by ${(-gap).toFixed(2)} ft`);
+    }
+  }
+  console.log(
+    `         smallest gap between two panels ${minGap.toFixed(2)} ft` +
+      `  — the mullion the atlas leaves texels for`,
+  );
+  // (3) THE FROZEN SCENE STOPPED REPAINTING. See BOARD_MAX_UPLOADS.
+  if (b.uploads > BOARD_MAX_UPLOADS) {
+    violations.push(
+      `the board repainted ${b.uploads} times in a frozen scene (budget ${BOARD_MAX_UPLOADS}) — ` +
+        `each one is 2.0 MB of texel traffic for a picture that cannot have changed`,
+    );
+  }
+  // (4) THE MODULE'S COUNTER AND THREE'S AGREE, OFF BY THE CONSTRUCTOR.
+  //
+  // ⚠ THE `+ 1` IS MEASURED, NOT FUDGED. `Texture.needsUpdate`'s setter does
+  // `version++`, and `CanvasTexture`'s CONSTRUCTOR sets `needsUpdate = true` —
+  // so a texture that has never been repainted is already at version 1. The
+  // first draft of this check asserted equality and fired on every scene at
+  // 2 vs 3, which is the check working: it found a wrong assumption about
+  // three's internals on its first run rather than a wrong board.
+  //
+  // This is what kills a mutation that deletes `needsUpdate = true` and leaves
+  // the module's own counter perfectly correct — the board's own source names
+  // that hole and says the counter alone cannot close it.
+  if (b.textureVersion !== b.uploads + 1) {
+    violations.push(
+      `the board counted ${b.uploads} uploads but three's texture.version is ` +
+        `${b.textureVersion} (expected ${b.uploads + 1}) — one of them is not measuring an upload`,
+    );
+  }
+  if (b.uploads < 1) violations.push('the board never painted at all — the atlas is transparent');
   return violations;
 }
 
@@ -1232,6 +1391,85 @@ function checkBattedTracer(report) {
   return violations;
 }
 
+/**
+ * ⚠ THE DAY / NIGHT TOGGLE IS COSMETIC, ASSERTED ACROSS TWO SCENES.
+ *
+ * `stadium/daylight.ts` states the hard rule — a *player-selectable* option that
+ * changed how far the ball carried would be a "pick the easy mode" button on a
+ * leaderboard game — and `shared/prefs.test.ts` asserts the PHYSICS half by
+ * running the published carry ladder with the preference set both ways and
+ * requiring the two byte-identical.
+ *
+ * This is the RENDER half, and it is a different claim: that nothing about the
+ * scene except its lighting moved. The two scenes differ by `?daylight=` alone,
+ * so every number below is one that a lighting change has no business touching.
+ * Draw calls and triangles catch "night quietly added four floodlights"; the
+ * geometry count catches "night built a second sky"; the fence and the tracer
+ * catch a night mode that re-derived anything it should have read.
+ *
+ * ⚠ IT IS NOT A PNG DIFF, ON PURPOSE. The two pictures MUST differ — that is the
+ * whole feature — so a pixel comparison is exactly the wrong instrument. What
+ * has to be identical is everything a pixel comparison cannot see.
+ */
+function checkDayNightPairs(reports) {
+  const violations = [];
+  for (const [id, scene] of Object.entries(SCENES)) {
+    if (!scene.pairWith) continue;
+    const a = reports.get(id);
+    const b = reports.get(scene.pairWith);
+    if (!a || !b) {
+      // Only a complaint when BOTH were asked for — a single-scene run is fine.
+      if (ids.includes(id) && ids.includes(scene.pairWith)) {
+        violations.push(`${id}/${scene.pairWith}: one of the pair produced no report`);
+      }
+      continue;
+    }
+    if (a.stats.daylight === b.stats.daylight) {
+      violations.push(
+        `${id}/${scene.pairWith}: both report light "${a.stats.daylight}" — the pair is not ` +
+          `testing anything, so ?daylight= is not reaching the scene`,
+      );
+    }
+    const rows = [
+      ['draw calls', a.stats.drawCalls, b.stats.drawCalls],
+      ['triangles', a.stats.triangles, b.stats.triangles],
+      ['geometries', a.stats.geometries, b.stats.geometries],
+      ['textures', a.stats.textures, b.stats.textures],
+      ['shadow map', a.stats.shadowMapSize, b.stats.shadowMapSize],
+      ['shadow volume ft', a.stats.shadowHalfFt, b.stats.shadowHalfFt],
+      ['fence @0°', a.fence.find((r) => r.deg === 0)?.geo?.distFt, b.fence.find((r) => r.deg === 0)?.geo?.distFt],
+      ['tracer verts', a.pitchTracerAll.length, b.pitchTracerAll.length],
+      ['board panels', a.board?.panels.length ?? 0, b.board?.panels.length ?? 0],
+    ];
+    console.log(`\n· DAY/NIGHT  ${id} (${a.stats.daylight}) vs ${scene.pairWith} (${b.stats.daylight})`);
+    for (const [name, x, y] of rows) {
+      const same = x === y;
+      console.log(`    ${String(name).padEnd(17)} ${String(x).padStart(9)} ${same ? '=' : '≠'} ${String(y)}`);
+      if (!same) {
+        violations.push(
+          `${id}/${scene.pairWith}: ${name} differs (${x} vs ${y}) — the daylight toggle is ` +
+            `supposed to change LIGHT and nothing else`,
+        );
+      }
+    }
+    // The tracer, float for float. A night mode that rebuilt the flight would
+    // pass every count above and fail here.
+    const n = Math.min(a.pitchTracerAll.length, b.pitchTracerAll.length);
+    let diff = -1;
+    for (let i = 0; i < n; i++) {
+      if (a.pitchTracerAll[i] !== b.pitchTracerAll[i]) {
+        diff = i;
+        break;
+      }
+    }
+    console.log(`    ${'tracer ≡ tracer'.padEnd(17)} ${diff < 0 ? 'yes' : `NO @float ${diff}`}`);
+    if (diff >= 0) {
+      violations.push(`${id}/${scene.pairWith}: the drawn flight differs at float ${diff}`);
+    }
+  }
+  return violations;
+}
+
 async function main() {
   mkdirSync(outDir, { recursive: true });
 
@@ -1247,6 +1485,8 @@ async function main() {
 
   let failed = 0;
   const saved = [];
+  /** Every scene's report, for the CROSS-SCENE checks below. */
+  const reports = new Map();
   let browser;
   try {
     const base = server.resolvedUrls?.local?.[0]?.replace(/\/$/, '');
@@ -1290,6 +1530,7 @@ async function main() {
             foulTerritoryFt: sim.foulTerritoryFt,
             derby: { phase: st.phase, rounds: st.rounds, pitchesPerRound: st.pitchesPerRound },
             stats: stadium.stats(),
+            board: stadium.board(),
             fence: bearings.map((deg) => ({
               deg,
               geo: stadium.measureFence(deg),
@@ -1322,7 +1563,10 @@ async function main() {
 
         // The scene's own claim about itself, carried into the checks. Guarded
         // because `report` is `{ err }` when the handle is broken.
-        if (report && !report.err) report.expectBallInFrame = !!SCENES[id].expectBallInFrame;
+        if (report && !report.err) {
+          report.expectBallInFrame = !!SCENES[id].expectBallInFrame;
+          reports.set(id, report);
+        }
 
         const file = path.join(outDir, `${label}.png`);
         await page.screenshot({ path: file });
@@ -1357,6 +1601,16 @@ async function main() {
   } finally {
     if (browser) await browser.close();
     await server.close();
+  }
+
+  // The CROSS-SCENE checks. They cannot run inside the per-scene loop because
+  // they compare two scenes, and they are counted as failures like everything
+  // else — a check whose verdict is only printed is the defect this file's own
+  // header is about.
+  const pairBad = checkDayNightPairs(reports);
+  if (pairBad.length) {
+    failed++;
+    console.error(`✗ day/night pair FAILED — ${pairBad.join('; ')}`);
   }
 
   // `saved` counts scenes that PASSED, not scenes whose PNG got written — the

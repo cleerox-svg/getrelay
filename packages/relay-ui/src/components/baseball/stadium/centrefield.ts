@@ -2,16 +2,19 @@
 //
 // ⚠ THIS SLICE OWNS THE RECESS AND THEREFORE OWNS THE BOARD'S GEOMETRY, and the
 // numbers live next door in `centrefieldSpec.ts` — `CENTREFIELD_BOARD` and
-// `CENTREFIELD_PANELS` and NOTHING ELSE about the board: no panel mesh, no
-// content, no material. That split is the same one `parks.ts` makes for the
-// fence — one set of numbers, read by the thing that draws the hole and by the
-// thing that fills it — and it exists so the opening a player sees and the board
-// a player reads cannot drift apart by a foot.
+// NOTHING ELSE about the board: no panel mesh, no content, no material. That
+// split is the same one `parks.ts` makes for the fence — one set of numbers,
+// read by the thing that draws the hole and by the thing that fills it — and it
+// exists so the opening a player sees and the board a player reads cannot drift
+// apart by a foot.
 //
 // ⚠ AND NO BOARD IS MOUNTED HERE. The array (video panel, lineup column,
-// pitcher panel, linescore strip) is a separate slice. What this file builds is
-// everything AROUND it, from a reference photo of the real venue's centre-field
-// elevation, and a recess in the seating deck for the whole assembly to sit in.
+// pitcher panel, linescore strip) is `stadium/board.ts`, which takes
+// `CENTREFIELD_BOARD` as its geometry and THROWS if that size at that range
+// would put its smallest glyph under the legibility floor. What this file builds
+// is everything AROUND it, from a reference photo of the real venue's
+// centre-field elevation, a recess in the seating deck for the whole assembly to
+// sit in, and the one dark surface the array's own panel gaps show through.
 //
 // WHAT THE REFERENCE SHOWS, from the field looking out, bottom to top:
 //
@@ -60,13 +63,13 @@ import {
   BOARD_CLEARANCE_FT,
   BUILDING_HALF_DEG,
   CENTREFIELD_BOARD,
-  CENTREFIELD_PANELS,
   COLORS,
   FRAME_BOTTOM_FT,
   FRAME_HALF_DEG,
   FRAME_R_FT,
   FRAME_TOP_FT,
   MULLION_BEHIND_FT,
+  MULLION_BLEED_FT,
   OPENING_HALF_DEG,
   PLINTH_TOP_FT,
   RECESS_BACK_R_FT,
@@ -136,6 +139,29 @@ function flatColors(count: number, hex: number): Float32Array {
 /** UVs that run 0…1 across the band and 0…1 up it — the window map's frame. */
 function bandUV(count: number): { v0: number; v1: number; u: number[] } {
   return { v0: 0, v1: 1, u: Array.from({ length: count }, (_, i) => i / (count - 1 || 1)) };
+}
+
+/**
+ * A FLAT vertical rectangle across dead centre — the one surface in this file
+ * that is not built on a ring, and it is flat because the thing it backs is.
+ *
+ * `stadium/board.ts` builds the array as four flat quads at `faceDistFt`,
+ * because a video board is flat and because the atlas's UV rects are a
+ * rectangle. A curved backing behind a flat face crosses it (measured: 2.3 ft of
+ * crossing at the board's own edge), so this follows the board rather than the
+ * bowl. The sagitta it gives up is 2.9 ft over 100 ft at 430, which is less than
+ * the step-back between two of this assembly's own layers.
+ */
+function boardBacking(
+  halfWFt: number,
+  y0: number,
+  y1: number,
+  distFt: number,
+  hex: number,
+): BufferGeometry {
+  const a: Ring = [-halfWFt, y0, -distFt, halfWFt, y0, -distFt];
+  const b: Ring = [-halfWFt, y1, -distFt, halfWFt, y1, -distFt];
+  return loft(a, b, { colors: flatColors(2, hex) });
 }
 
 /** One flat quad standing at a bearing, hanging from `yTop` down `drop`. */
@@ -213,51 +239,38 @@ export function buildCentrefield(
     ledge(step, -OPENING_HALF_DEG, OPENING_HALF_DEG, FRAME_R_FT, RECESS_BACK_R_FT, FRAME_TOP_FT, COLORS.reveal),
   );
 
-  // --- THE MULLIONS: the 1 ft members the board's atlas leaves empty texels
-  // for. Two verticals between the three upper panels, one horizontal under
-  // them, and a perimeter margin — all `MULLION_BEHIND_FT` behind the board
-  // plane so a lit panel always wins the depth test and only a GAP shows them.
-  // See `CENTREFIELD_PANELS` for the arithmetic and for what is assumed.
-  {
-    const P = CENTREFIELD_PANELS;
-    const r = CENTREFIELD_BOARD.faceDistFt + MULLION_BEHIND_FT;
-    const y0 = CENTREFIELD_BOARD.sillFt;
-    const y1 = y0 + CENTREFIELD_BOARD.heightFt;
-    /** Half-angle of a lateral offset `xFt` from the board's centre, at `r`. */
-    const deg = (xFt: number) => (Math.atan(xFt / r) * 180) / Math.PI;
-    const half = P.mainWidthFt / 2;
-    for (const s of [-1, 1]) {
-      // The vertical gap between the main screen and its flanking column.
-      lit.push(
-        slab(step, deg(s * half) , deg(s * (half + P.gapFt)), r, y0, y1, COLORS.mullion),
-      );
-      // The 1 ft margin at the board's own outer edge.
-      lit.push(
-        slab(
-          step,
-          deg(s * (CENTREFIELD_BOARD.widthFt / 2 - P.gapFt)),
-          deg((s * CENTREFIELD_BOARD.widthFt) / 2),
-          r,
-          y0,
-          y1,
-          COLORS.mullion,
-        ),
-      );
-    }
-    // The horizontal gap between the upper row and the linescore strip.
-    const yGap = y0 + P.linescoreFt;
-    lit.push(
-      slab(
-        step,
-        -deg(CENTREFIELD_BOARD.widthFt / 2),
-        deg(CENTREFIELD_BOARD.widthFt / 2),
-        r,
-        yGap,
-        yGap + P.gapFt,
-        COLORS.mullion,
-      ),
-    );
-  }
+  // --- THE MULLION FIELD: ONE flat dark panel filling the whole board opening,
+  // `MULLION_BEHIND_FT` behind the board plane.
+  //
+  // ⚠ IT IS THE COMPLEMENT OF THE PANELS, NOT A COPY OF THEIR GAPS, AND THAT IS
+  // THE FIX FOR A REAL MISALIGNMENT. The first draft built five separate members
+  // from a hand-copied panel table (`upperFt: 38 / gap 1 / linescore 11`) and
+  // laid them on RINGS at the board's radius. Both halves were wrong:
+  //
+  //   • The atlas's real split is 1 / 29.5 / 1.5 / 17 / 1 from the TOP, so the
+  //     horizontal member sat at 37–38 ft where the actual gap is at 44–45.5 —
+  //     7 ft out, i.e. a dark bar across the middle of a lit panel and a gap
+  //     with nothing behind it. The suite could not see it: no test compares a
+  //     scene constant against `BOARD_PANEL_SPECS`.
+  //   • A ring at 430.6 ft and a FLAT board face at 430 ft cross. At the board's
+  //     own outer edge the ring stands 2.3 ft in FRONT of the panel corner, so
+  //     the very members meant to hide behind the display would have overdrawn
+  //     its edges.
+  //
+  // A single flat backing has neither failure mode by construction: whatever the
+  // panel table says, the gaps between the quads are holes, and what shows
+  // through a hole is this. It is also four slabs cheaper. The atlas deliberately
+  // paints its own frame gaps `FRAME`-dark as well, so the two agree even at a
+  // grazing angle where the parallax between the planes opens up.
+  lit.push(
+    boardBacking(
+      CENTREFIELD_BOARD.widthFt / 2 + MULLION_BLEED_FT,
+      CENTREFIELD_BOARD.sillFt - MULLION_BLEED_FT,
+      CENTREFIELD_BOARD.sillFt + CENTREFIELD_BOARD.heightFt + MULLION_BLEED_FT,
+      CENTREFIELD_BOARD.faceDistFt + MULLION_BEHIND_FT,
+      COLORS.mullion,
+    ),
+  );
 
   // --- the step-back soffit between the frame's top and the window band.
   lit.push(

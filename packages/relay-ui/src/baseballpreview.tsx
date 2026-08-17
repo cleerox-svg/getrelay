@@ -24,6 +24,16 @@
 //   ?ease=<ms>                          virtual ms of that transition to run
 //                                       before freezing. Must be a multiple of
 //                                       VIRTUAL_STEP_MS.
+//   ?daylight=day|night                 which row of stadium/daylight.ts. It is
+//                                       COSMETIC — see that file; nothing here
+//                                       hands it to the sim, and it cannot.
+//   ?board=<id>                         which BOARD SCREEN to show. See
+//                                       BOARD_SCENES below.
+//   ?bts=<seconds>                      FREEZE the board at this many seconds
+//                                       since its screen appeared — the board's
+//                                       own `?t=`, and the only way to
+//                                       photograph a specific frame of the
+//                                       2.6 s home-run eruption.
 //
 // ⚠ THE READY BEACON WAITS FOR A REAL FRAME. `window.__baseballReady` is set
 // from StadiumGL's `onReady`, which fires after three rendered frames — not on
@@ -57,7 +67,10 @@ import {
   sceneNow,
 } from './lib/scene3d/clock';
 import StadiumGL, { isCameraMode } from './components/baseball/StadiumGL';
-import type { CameraMode, StadiumApi } from './components/baseball/StadiumGL';
+import type { BoardFeed, CameraMode, StadiumApi } from './components/baseball/StadiumGL';
+import { isDaylightId } from './components/baseball/stadium/daylight';
+import type { DaylightId } from './components/baseball/stadium/daylight';
+import type { BoardArray } from './components/baseball/stadium/scoreboard';
 import type { FlightPaths } from './components/baseball/stadium/flight';
 import { vec3 } from './lib/baseball/airPhysics';
 import { fenceAt, HARBOURFRONT, parkById, parkConditions } from './lib/baseball/parks';
@@ -66,6 +79,7 @@ import type { PitchId } from './lib/baseball/pitches';
 import { GAME_AIR, measureBreak, simulatePitch } from './lib/baseball/pitchSim';
 import { launchFromAngles, simulateBattedBall } from './lib/baseball/battedBallSim';
 import { DerbySim } from './lib/baseball/derbySim';
+import { derbyBoardArray } from './components/baseball/shared/derbyBoard';
 import { BREAK_SEGMENT_FT } from './lib/baseball/tuning';
 import { reticleToPlate, ZONE_CENTER } from './lib/baseball/zone';
 
@@ -122,6 +136,8 @@ interface BaseballHandle {
   stadium: {
     mode: CameraMode;
     stats(): ReturnType<StadiumApi['stats']>;
+    /** The board array AS BUILT and AS PAINTED. `null` in a park with none. */
+    board(): ReturnType<StadiumApi['board']>;
     /** What the BUILT GEOMETRY says the wall is at a bearing. */
     measureFence(bearingDeg: number): { distFt: number; heightFt: number } | null;
     measureRoof(bearingDeg: number): { peakFt: number; innerFt: number; outerFt: number } | null;
@@ -263,6 +279,63 @@ const frozenTS = params.has('bt')
 
 const derby = new DerbySim({ seed, park });
 
+const daylight: DaylightId = isDaylightId(params.get('daylight')) ? (params.get('daylight') as DaylightId) : 'day';
+
+/**
+ * ⚠ THE BOARD'S SCREENS ARE BUILT FROM `derbyBoardArray` — THE HUD'S OWN MAPPER
+ * — AND NOT AUTHORED HERE. A preview that hand-wrote a `BoardArray` would be
+ * photographing a picture the game cannot produce, which is the same class of
+ * mistake as a gate that reuses the code under test. The two states below are
+ * the derby's own resting card and its own home-run screen, off a real
+ * `DerbySim`, with the celebration's numbers taken from the published carry
+ * ladder's 105 mph rung so the board's figures and the drawn ball's agree.
+ *
+ * `null` (no `?board=`) mounts the scene with no feed at all, which is what
+ * every M1–M3 scene did and is why their PNGs are unaffected by any of this.
+ */
+const BOARD_SCENES: Record<string, () => BoardArray> = {
+  batter: () => derbyBoardArray(derby.getState(), park, null, false),
+  homerun: () =>
+    derbyBoardArray(derby.getState(), park, HOME_RUN_FIXTURE, false),
+};
+
+/**
+ * A home run to put on the board, as a `SwingResult`.
+ *
+ * ⚠ IT IS A FIXTURE, AND EVERY FIELD IS EITHER THE PREVIEW'S OWN BATTED BALL OR
+ * A PUBLISHED NUMBER. `distFt`, `evMph`, `laDeg` and `hangS` are read off the
+ * flight this same file integrates (`batted`), so the board says what the ball
+ * did rather than what a designer typed; `chainIndex` is 3, which is
+ * `CHAIN_START` — the first position that pays a multiplier, i.e. the state
+ * worth photographing.
+ */
+const HOME_RUN_FIXTURE = {
+  outcome: 'homeRun',
+  points: 214,
+  chainIndex: 3,
+  timingErrorS: 0,
+  undercutIn: 0.56,
+  lateralIn: 0,
+  contactZM: 0.72,
+  evMph: batted?.evMph ?? battedEvMph,
+  laDeg: batted?.laDeg ?? battedLaDeg,
+  sprayDeg: batted?.sprayDeg ?? battedSprayDeg,
+  distFt: batted?.carryFt ?? 430,
+  hangS: batted?.hangS ?? 5.6,
+  apexFt: batted?.apexFt ?? 110,
+  barrel: true,
+  fence: 'homeRun',
+  fenceDistFt: fenceAt(park, batted?.sprayDeg ?? 0).distFt,
+  flight: null,
+  strike: true,
+} as unknown as Parameters<typeof derbyBoardArray>[2];
+
+const boardParam = params.get('board');
+const boardArray = boardParam ? (BOARD_SCENES[boardParam] ?? BOARD_SCENES.batter)!() : null;
+/** The board's own `?t=`. `sinceS` is 0, so `?bts=` IS `tS`. */
+const boardTimeS = params.has('bts') ? num('bts', 0) : boardArray ? 0 : null;
+const boardFeed: BoardFeed | null = boardArray ? { array: boardArray, sinceS: 0 } : null;
+
 /**
  * The aim aid, as the DERBY sees it. `?aim=u,v` goes through
  * `DerbySim.setReticle` — i.e. through the sim's own clamp — rather than being
@@ -341,6 +414,7 @@ function Preview() {
     handle.stadium = {
       mode,
       stats: () => api.stats(),
+      board: () => api.board(),
       measureFence: (deg) => api.measureFence(deg),
       measureRoof: (deg) => api.measureRoof(deg),
       tracer: (which) => api.tracer(which),
@@ -385,7 +459,11 @@ function Preview() {
       // prop never changes afterwards — `api.setMode` drives the ease — so this
       // does not re-render the tree or rebuild the park.
       mode={mountMode}
+      daylight={daylight}
+      seed={seed}
       exposure={exposure}
+      board={boardFeed}
+      boardTimeS={boardTimeS}
       qualityOverride={params.get('quality')}
       // The magenta 6 ft measuring stick. OFF by default in the component so it
       // can never reach a HUD; ON here, because this preview IS the visual gate

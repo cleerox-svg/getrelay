@@ -129,8 +129,11 @@ const PROFILE: Array<{ dr: number; y: number; kind: BandKind }> = [
  * observation about how upholstered plastic photographs at 400 ft.
  */
 const COLORS = {
-  seats: 0x243356, // deep navy — the single biggest change from the grey box
-  fascia: 0x121620, // near-black, so the ribbon above it has something to sit on
+  // ⚠ `seats` AND `fascia` MOVED TO `daylight.ts` AND THE DAY VALUES DID NOT
+  // CHANGE. Both are read off the lighting row now, because at night the bowl is
+  // read by BLUE LED LINES along each deck edge rather than by seat colour, and
+  // because the crowd's contrast is inverted (bright points on dark) which needs
+  // the seat colour raised. See `daylight.fasciaHex` / `seatsHex` / `crowdBase`.
   concrete: 0x767a82, // the skirt / backstop above the padding
   // ⚠ LIGHTER THAN A REAL PAD LOOKS, AND FOR A LIGHTING REASON. The backstop
   // faces the ONE sun's back (StadiumGL puts the sun behind home so it lights
@@ -181,17 +184,37 @@ export interface StandsPart extends StadiumPart {
    * a partial arc added later (outfield wall boards at field level, say) must
    * cover the SAME FRACTION of the ring or the two will not match.
    *
-   * ⚠ AND DO NOT EXPECT THE OUTFIELD RIBBON TO CARRY TEXT. Measured by the board
-   * slice: a 5 ft band sets 3.5 ft of glyph, which reaches a 10 px legibility
-   * floor at 326 ft. The outfield ribbon is at ~430 ft, so out there it is
+   * ⚠ AND DO NOT EXPECT THE DEEPEST RIBBON TO CARRY TEXT. Measured by the board
+   * slice against the SHIPPED 20° batter lens: this band's real height is
+   * ~3.5 ft, which sets ~2.4 ft of glyph and reaches a 10 px legibility floor at
+   * ~470 ft. The band runs out to ~530 ft in centre field, so out there it is
    * LIGHT — which is what a home-run sweep wants anyway, because light reads at
    * any distance. The bands down the lines and behind the plate are the ones
-   * near enough to carry a readable count.
+   * near enough to carry a readable count. (An earlier version of this note said
+   * 326 ft; that was derived from a 40° camera that no longer exists.)
    */
   ribbon: Mesh;
+  /**
+   * The ribbon band's own SLANT height, ft — measured off `PROFILE`, never
+   * typed. A ribbon texture's glyph size is a fraction of this, so a hand-set
+   * number here would set the type on the wrong scale the moment the rake is
+   * re-shaped by a foot.
+   */
+  ribbonHeightFt: number;
+  /**
+   * The ribbon ring's own CIRCUMFERENCE, ft, summed off the drawn ring.
+   *
+   * ⚠ NOT `2πr` OF ANYTHING. This bowl is not a circle — its inner edge runs
+   * from ~60 ft behind the plate to ~530 ft in centre — so there is no radius
+   * that describes it, and the tile count a ribbon texture needs is a property
+   * of ARC LENGTH. `board.ts` divides this by 2π to hand `boardAtlas`'s
+   * `BoardGeometry` an equivalent radius, which is the one place the two
+   * vocabularies meet.
+   */
+  ribbonRingFt: number;
 }
 
-export function buildStands({ scene, track, park, quality }: StadiumCtx): StandsPart {
+export function buildStands({ scene, track, park, quality, daylight }: StadiumCtx): StandsPart {
   const group = new Group();
   group.name = 'stands';
 
@@ -319,7 +342,7 @@ export function buildStands({ scene, track, park, quality }: StadiumCtx): Stands
       // would drop the map off the whole merged shell.
       lit.push(
         loft(a, b, {
-          colors: bandColors(COLORS.fascia, false),
+          colors: bandColors(daylight.fasciaHex, false),
           uv: { v0: 0.98, v1: 0.98, u: uOf },
         }),
       );
@@ -328,7 +351,7 @@ export function buildStands({ scene, track, park, quality }: StadiumCtx): Stands
       // the rail (v = 0) to the back of the deck.
       lit.push(
         loft(a, b, {
-          colors: bandColors(COLORS.seats, true),
+          colors: bandColors(daylight.seatsHex, true),
           uv: { v0: 0, v1: FASCIA_V0, u: uOf },
         }),
       );
@@ -337,7 +360,7 @@ export function buildStands({ scene, track, park, quality }: StadiumCtx): Stands
 
   const shellGeo = track(mergeGeometries(lit));
   for (const g of lit) g.dispose();
-  const crowd = buildCrowdTexture(quality.seatTexturePx, rng);
+  const crowd = buildCrowdTexture(quality.seatTexturePx, rng, daylight.crowdBase);
   if (crowd) track(crowd);
   const shell = new Mesh(
     shellGeo,
@@ -423,5 +446,32 @@ export function buildStands({ scene, track, park, quality }: StadiumCtx): Stands
   }
 
   scene.add(group);
-  return { group, innerRadiusFt, outerRadiusFt, deckTopFt, ribbon };
+
+  // The ribbon's own metrics, MEASURED off the profile and the drawn ring.
+  // `PROFILE`'s first `led` row is the band; its slant height is the rise and
+  // run between that station and the one below it, which is what a texture
+  // mapped `v` 0 → 1 across the band is actually stretched over.
+  const ledIdx = PROFILE.findIndex((p) => p.kind === 'led');
+  const ledA = PROFILE[ledIdx - 1];
+  const ledB = PROFILE[ledIdx];
+  const ribbonHeightFt =
+    ledA && ledB ? Math.hypot(ledB.dr - ledA.dr, (ledB.y - ledA.y) * yScale) : 1;
+  const ledRing = rings[ledIdx] ?? rings[0] ?? [];
+  let ribbonRingFt = 0;
+  for (let i = 3; i < ledRing.length; i += 3) {
+    ribbonRingFt += Math.hypot(
+      (ledRing[i] ?? 0) - (ledRing[i - 3] ?? 0),
+      (ledRing[i + 2] ?? 0) - (ledRing[i - 1] ?? 0),
+    );
+  }
+
+  return {
+    group,
+    innerRadiusFt,
+    outerRadiusFt,
+    deckTopFt,
+    ribbon,
+    ribbonHeightFt,
+    ribbonRingFt: ribbonRingFt || 1,
+  };
 }

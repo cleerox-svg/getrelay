@@ -87,16 +87,23 @@ const STRIP_GAP = 0.012;
 /**
  * The three row datums, fractions of strip height.
  *
- * ⚠ THE WHOLE STRIP SETS AT THE FLOOR, AND THAT IS ARITHMETIC. Three rows —
- * headings and two teams — at `body` (5.5 ft) plus the round-cap ink between
- * them needs 16.97 ft of the strip's 17, i.e. no margin at all top or bottom,
- * and the overlap walk caught the first attempt with the two team rows' ink
- * touching. At `label` (4.6 ft) the same three rows take 15.0 ft and leave 2 ft
- * of margin. A line score is the smallest type on a real board for exactly this
- * reason; the alternative was a taller strip taken out of the main panel, which
- * is already the binding surface.
+ * ⚠ THE WHOLE STRIP SETS AT THE FLOOR, AND THAT IS ARITHMETIC. A line score is
+ * the smallest type on a real board for exactly this reason.
+ *
+ * ⚠ AND THE DATUMS WERE RE-SOLVED WITH THE 66 × 33 ARRAY. On an 11 ft strip a
+ * `label` row is 0.208 of the panel and its round-cap ink envelope is 0.235, so
+ * three rows occupy 0.705 and these datums leave 0.08 between each pair — which
+ * is separation you can see rather than separation that merely passes an
+ * overlap walk.
+ *
+ * ⚠ THE FIRST ATTEMPT GAVE THE STRIP 8 ft AND THE OVERLAP WALK PASSED IT. Three
+ * rows of ink is 7.75 ft, so 8 ft is arithmetically fine and 0.01 / 0.336 /
+ * 0.662 collides with nothing. Rendered, the duel's two team rows read as one
+ * block and the column headers ran into the numbers beneath them. "Does not
+ * overlap" and "reads as separate rows" are different properties, and only one
+ * of them is testable — which is what `scripts/shoot-board.mjs` is for.
  */
-const STRIP_ROW_Y = [0.03, 0.35, 0.67];
+const STRIP_ROW_Y = [0.06, 0.375, 0.69];
 
 /**
  * Where each column's RIGHT edge sits, fraction of strip width. Equal slots

@@ -24,61 +24,57 @@
  *     where it hangs.
  *   • `bearingDeg` — 0, dead centre. Stated rather than assumed.
  *
- * 100 × 50 ft at 430 ft is the size the visual gate verified against this bowl
- * (505 × 262 px, 56 % of frame width, ~half the bowl's visible height) and this
- * file did NOT move it. The surround is sized around it, not the other way
+ * ⚠ 66 × 33 ft at 430 ft, DOWN FROM 100 × 50, and the reason is the frustum
+ * rather than the atlas. The old size was signed off as "505 × 262 px, 56 % of
+ * frame width" — against a 40° batter lens. The shipped camera is 20°, so the
+ * same board was 1009 px of a 900 px frame and cropped on three sides, and on a
+ * 390 px phone 73.4 % of its width and 84.2 % of its height were in the picture.
+ * `board.test.ts` pinned those as goldens; the owner's call was to move the
+ * reference. `BOARD_REF` and `BOARD_PANEL_SPECS` moved with it in the same
+ * change, because the atlas is stretched onto this quad and a size change alone
+ * would have silently shrunk the type under its own legibility floor. The surround is sized around it, not the other way
  * round: the frame's opening is `BOARD_CLEARANCE_FT` larger on every side, and
  * everything else is derived from the frame.
  */
 export const CENTREFIELD_BOARD = {
-  widthFt: 100,
-  heightFt: 50,
+  widthFt: 66,
+  heightFt: 33,
   faceDistFt: 430,
   sillFt: 26,
   bearingDeg: 0,
 } as const;
 
-/**
- * ⚠ THE PANEL GAPS, AND THEY ARE GEOMETRY RATHER THAN DECORATION.
- *
- * The array is four panels — an 18 ft stats column, a 60 ft main screen, an
- * 18 ft pitcher column, and a 98 ft linescore strip under them — separated by a
- * 1.0 ft frame gap. The board's ATLAS deliberately leaves those texels empty so
- * that a dark structural member shows through, and that is what makes the array
- * read as four panels set into a building instead of one rectangle. If nothing
- * is behind the gaps the two halves disagree and the effect is lost, so the
- * mullions are built HERE, at the board plane, from these numbers:
- *
- *     ├1├────18────┤1├──────────60──────────┤1├────18────┤1┤   = 100 ft
- *
- * i.e. the 98 ft run is centred with a 1 ft margin either side, which is the
- * only arrangement in which 18 + 1 + 60 + 1 + 18 and a 98 ft linescore are both
- * true of a 100 ft board.
- *
- * ⚠ `upperFt` IS THE ONE NUMBER HERE THAT IS NOT GIVEN, and it is flagged. The
- * board slice publishes the widths and the gap but not the split between the
- * upper row and the linescore strip, so 38 / 1 / 11 is chosen and stated. It is
- * a SAFE assumption rather than a guess about someone else's data: the
- * horizontal mullion sits BEHIND the board plane, so if the real split differs
- * the mismatch shows a dark bar behind a lit panel (invisible) and the actual
- * gap falls on the recess's own dark back wall (indistinguishable). Nothing
- * breaks; the gap simply reads one shade less crisply than it could.
- */
-export const CENTREFIELD_PANELS = {
-  gapFt: 1,
-  statsWidthFt: 18,
-  mainWidthFt: 60,
-  pitcherWidthFt: 18,
-  linescoreWidthFt: 98,
-  upperFt: 38,
-  linescoreFt: 11,
-} as const;
-
 /** Gap between the array's edge and the frame's opening, ft. SCENE-ONLY. */
 export const BOARD_CLEARANCE_FT = 3;
 
-/** How far BEHIND the board plane the mullions sit, ft. SCENE-ONLY. */
+/**
+ * How far BEHIND the board plane the dark backing sits, ft. SCENE-ONLY.
+ *
+ * ⚠ THE PANEL GAPS ARE NOT A NUMBER HERE ANY MORE, AND THAT IS THE POINT.
+ * `centrefieldSpec` used to carry its own copy of the array's panel widths and
+ * the split between the upper row and the linescore strip — a second table
+ * beside `boardAtlas.BOARD_PANEL_SPECS`, which is exactly the "one
+ * implementation per concept" failure the charter names. It drifted immediately:
+ * the copy said 38 / 1 / 11 from the sill where the atlas says 29.5 / 1.5 / 17
+ * from the top, so the horizontal member landed 7 ft from the gap it was
+ * supposed to sit in and nothing in the suite could see it.
+ *
+ * What replaces it is ONE flat dark panel filling the whole board face. The gaps
+ * are then whatever the atlas says they are — holes between four lit quads — and
+ * this is simply what is behind them. There is no second table to keep in step,
+ * so there is nothing to drift.
+ */
 export const MULLION_BEHIND_FT = 0.6;
+
+/**
+ * How far the backing over-runs the board's own face, ft. SCENE-ONLY.
+ *
+ * The board quads and the backing are 0.6 ft apart in depth, so any camera off
+ * the board's axis sees a sliver of parallax past its edge — the `flight` camera
+ * at x = −40 sees the array from 5.3° off. A small bleed puts dark rather than
+ * the recess's pale back wall in that sliver.
+ */
+export const MULLION_BLEED_FT = 0.75;
 
 /**
  * The elevation, as DATA, ft above field level. SCENE-ONLY — nothing in the

@@ -507,13 +507,27 @@ describe('board atlas', () => {
           .join('\n') +
         `\n  TOTAL ${rows.reduce((a, b) => a + b.lines, 0)} rows against the ` +
         `${panelRowBudget(BOARD_REF.heightFt)} a single rectangle of the same face carries.\n` +
-        `  ⚠ The columns carry NUMBERS: ${panelCharBudget(18)} characters is a jersey number, not a name.\n`,
+        `  ⚠ The columns carry NUMBERS: ${panelCharBudget(boardPanel("stats").wFt)} characters is a jersey number, not a name.\n`,
     );
     // The columns are narrow, the strip is wide, and both facts are load-bearing.
-    expect(panelCharBudget(boardPanel('stats').wFt)).toBe(5);
+    //
+    // ⚠ THESE NUMBERS HAVE MOVED TWICE AND BOTH MOVES ARE THE SAME STORY. They
+    // read 5 characters and 3 rows on the old 18 ft / 17 ft panels; correcting
+    // the legibility floor for the real 20° batter lens took them to 10 and 7;
+    // re-authoring the array at 66 × 33 to fit that lens's FRUSTUM brings them
+    // to 6 and 3. The RELATIONSHIPS are what these lines are about and none of
+    // them moved through either: the columns are still the narrowest surface,
+    // the strip is still the widest, and the main panel still holds
+    // `Swing and a miss` (16) with room to spare.
+    expect(panelCharBudget(boardPanel('stats').wFt)).toBe(6);
     expect(panelCharBudget(boardPanel('main').wFt)).toBeGreaterThanOrEqual(16);
     expect(panelCharBudget(boardPanel('strip').wFt)).toBeGreaterThanOrEqual(26);
-    expect(panelRowBudget(boardPanel('strip').hFt)).toBe(3);
+    expect(panelRowBudget(boardPanel('strip').hFt)).toBe(4);
+    // …and the columns are still the tightest surface by a factor of three,
+    // which is the property `BoardSide`'s "carry NUMBERS" note rests on.
+    expect(panelCharBudget(boardPanel('main').wFt)).toBeGreaterThan(
+      3 * panelCharBudget(boardPanel('stats').wFt),
+    );
     // The array beats the single rectangle it replaced on total rows.
     expect(rows.reduce((a, b) => a + b.lines, 0)).toBeGreaterThan(panelRowBudget(BOARD_REF.heightFt));
   });
@@ -522,8 +536,15 @@ describe('board atlas', () => {
     // ⚠ THE FLOOR IS A DERIVATION, SO IT IS CHECKED AS ONE. Two things could
     // quietly falsify it: the camera moving, or the ART AGENT building a
     // different array — and the second is the likely one. Both are asserted.
-    expect(CAMERAS.batter.pos[2]).toBe(8);
-    expect(CAMERAS.batter.fov).toBe(40);
+    // ⚠ THIS PAIR HAS ALREADY FIRED ONCE, IN ANGER. It read 8 / 40 — the
+    // pre-M3b batter camera — and the shipped camera is 19.5 ft / 20°, which is
+    // what a merge between the board branch and the art branch produced. The
+    // board still built, `boardGeometryComplaints` still passed, and 52 tests
+    // were green; this assertion was the only thing in the repo that could see
+    // that the floor was derived from a lens nobody looks through. See
+    // `boardPaint.ts`'s note on these two constants.
+    expect(CAMERAS.batter.pos[2]).toBe(19.5);
+    expect(CAMERAS.batter.fov).toBe(20);
     expect(MIN_LEGIBLE_FT * boardCssPxPerFt()).toBeCloseTo(MIN_LEGIBLE_CSS_PX, 9);
     expect(TYPE_FT.label).toBe(MIN_LEGIBLE_FT);
     expect(boardLegibleCssPx(MIN_LEGIBLE_FT / BOARD_REF.heightFt)).toBeCloseTo(10, 6);
@@ -555,7 +576,10 @@ describe('board atlas', () => {
     expect(boardGeometryComplaints(BOARD_GEOMETRY)).toEqual([]);
     expect(boardFloorCssPx(BOARD_GEOMETRY)).toBeCloseTo(MIN_LEGIBLE_CSS_PX, 6);
 
-    const small = { ...BOARD_GEOMETRY, widthFt: 60, heightFt: 30 };
+    // ⚠ THE FIXTURE SCALES WITH `BOARD_REF`, WHICH IS THE POINT OF THE CHECK.
+    // It was 60 × 30 against a 100 × 50 reference — 0.6× linear, i.e. a 6.0 px
+    // floor. The reference is 66 × 33 now, so the same 0.6× is 40 × 20.
+    const small = { ...BOARD_GEOMETRY, widthFt: 39.6, heightFt: 19.8 };
     expect(boardFloorCssPx(small)).toBeCloseTo(6.0, 1);
     expect(boardGeometryComplaints(small).join(' ')).toMatch(/under the 10 px floor/);
     expect(() => buildScoreboard({ geometry: small, createCanvas: fakeCanvas })).toThrow(/CSS px/);
@@ -998,10 +1022,20 @@ describe('board screens', () => {
     expect(fitRun('LONGNAME', 0, 'body', pt).text).toBe('');
     // The empty string keeps the cap rather than dividing by zero.
     expect(fitRun('', 0.5, 'body', pt).size).toBe(pt.t('body'));
-    // The five-character column: the exact inverse of `runH` is load-bearing.
+    // The narrow column's exact budget: the inverse of `runH` is load-bearing.
+    //
+    // ⚠ IT WAS FIVE CHARACTERS AND IT IS TEN, because the floor halved when the
+    // real 20° batter lens replaced the 40° one this module was authored
+    // against (`boardPaint.ts`). The PROPERTY is unchanged and is what this pair
+    // asserts: the budget is exact, and one character past it truncates with a
+    // visible mark rather than shrinking under the floor.
+    // (`panelCharBudget` is the FULL panel width; `fitRun` is given 0.98 of it,
+    // which is one character less. Both numbers are asserted so the relationship
+    // between them stays visible.)
     const col = panelType('c', 18, 29.5);
-    expect(fitRun('99999', 0.98, 'body', col).text).toBe('99999');
-    expect(fitRun('999999', 0.98, 'body', col).text).toBe(`9999${TRUNCATION_MARK}`);
+    expect(panelCharBudget(18)).toBe(10);
+    expect(fitRun('999999999', 0.98, 'body', col).text).toBe('999999999');
+    expect(fitRun('9999999999', 0.98, 'body', col).text).toBe(`99999999${TRUNCATION_MARK}`);
   });
 });
 
@@ -1048,33 +1082,57 @@ describe('board ribbon', () => {
     expect(ribbonWraps({ ...g, ribbonRadiusFt: 600 })).toBe(2 * ribbonWraps(g));
   });
 
-  it('is TEXT near the plate and LIGHT in centre field, and says which', () => {
-    // ⚠ THE HONEST FINDING. A 5 ft band sets 3.5 ft of glyph. At the array's own
-    // 430 ft that is 7.4 CSS px — under the floor — so the outfield ribbon cannot
-    // carry a word, and pretending otherwise would put unreadable copy on the
-    // largest lit surface in the stadium. Inside 325 ft it clears the floor, so
-    // the bands down the lines and behind the plate DO carry the count and the
-    // score. The sweep is what the far ones are for: light reads at any distance.
+  it('is TEXT near the plate and LIGHT at the back of the bowl, and says which', () => {
+    // ⚠ THE FINDING SURVIVED THE LENS CORRECTION; ITS NUMBER DID NOT, AND BOTH
+    // HALVES ARE WORTH RECORDING.
+    //
+    // Authored against a 40° batter lens, this test said a 5 ft band sets 3.5 ft
+    // of glyph, which is 7.4 CSS px at the array's own 430 ft — under the floor —
+    // so the outfield ribbon "cannot carry a word", with a 325 ft crossover. The
+    // shipped camera is 20°, i.e. ~2× the angular resolution, so the same band at
+    // the same distance is 15.3 px and the crossover is 668 ft.
+    //
+    // What that changes: the centre-field ribbon CAN carry text now. What it does
+    // NOT change is the structure of the claim, which is why the test still
+    // exists rather than being deleted as a solved problem — the bowl's own
+    // ribbon runs from ~60 ft behind the plate to ~530 ft in centre field, and at
+    // its REAL band height (`stands.ribbonHeightFt`, ~3.5 ft, not the nominal 5)
+    // the far end is still under the floor. So there is still a crossover, it is
+    // still a property of the camera rather than a failure of the content, and
+    // the sweep is still what the far bands are for.
     const g = BOARD_GEOMETRY;
     const range = ribbonReadRangeFt(g);
+    /** The bowl's real band, measured off `stands.PROFILE`: rise 3.4, run 0.8. */
+    const real = { ...g, ribbonHeightFt: Math.hypot(1.5, 40.6 - 37.2) };
     // eslint-disable-next-line no-console
     console.log(
-      `\n[BOARD — ribbon legibility, ${g.ribbonHeightFt} ft band, ` +
+      `\n[BOARD — ribbon legibility, ${g.ribbonHeightFt} ft nominal band, ` +
         `${(RIBBON_TYPE * g.ribbonHeightFt).toFixed(2)} ft of glyph]\n` +
-        [120, 200, 260, 325, 400, 430]
+        [120, 200, 325, 430, 530, 668]
           .map(
             (d) =>
               `  ${String(d).padStart(4)} ft  →  ${ribbonCssPxAt(g, d).toFixed(1).padStart(5)} CSS px  ` +
-              `${ribbonCssPxAt(g, d) >= MIN_LEGIBLE_CSS_PX ? 'TEXT' : 'light'}`,
+              `${ribbonCssPxAt(g, d) >= MIN_LEGIBLE_CSS_PX ? 'TEXT' : 'light'}` +
+              `   |  real ${real.ribbonHeightFt.toFixed(2)} ft band ` +
+              `${ribbonCssPxAt(real, d).toFixed(1).padStart(5)} px ` +
+              `${ribbonCssPxAt(real, d) >= MIN_LEGIBLE_CSS_PX ? 'TEXT' : 'light'}`,
           )
           .join('\n') +
-        `\n  crossover ${range.toFixed(0)} ft. A 4 ft band would put it at ` +
-        `${ribbonReadRangeFt({ ...g, ribbonHeightFt: 4 }).toFixed(0)} ft, which is why the band is 5.\n`,
+        `\n  crossover ${range.toFixed(0)} ft nominal, ${ribbonReadRangeFt(real).toFixed(0)} ft on the ` +
+        `bowl's real band. A 4 ft band would put it at ` +
+        `${ribbonReadRangeFt({ ...g, ribbonHeightFt: 4 }).toFixed(0)} ft.\n`,
     );
-    expect(range).toBeGreaterThan(300);
+    // It reads near the plate, and it reads at the board's own range now.
     expect(ribbonCssPxAt(g, 120)).toBeGreaterThan(MIN_LEGIBLE_CSS_PX);
-    expect(ribbonCssPxAt(g, BOARD_REF.faceDistFt)).toBeLessThan(MIN_LEGIBLE_CSS_PX);
+    expect(ribbonCssPxAt(g, BOARD_REF.faceDistFt)).toBeGreaterThan(MIN_LEGIBLE_CSS_PX);
+    // …and there is STILL a crossover, on the band the bowl actually builds.
+    expect(ribbonReadRangeFt(real)).toBeLessThan(530);
+    expect(ribbonCssPxAt(real, 530)).toBeLessThan(MIN_LEGIBLE_CSS_PX);
+    // The bisection lands ON the floor, whichever band it is given.
     expect(ribbonCssPxAt(g, range)).toBeCloseTo(MIN_LEGIBLE_CSS_PX, 3);
+    expect(ribbonCssPxAt(real, ribbonReadRangeFt(real))).toBeCloseTo(MIN_LEGIBLE_CSS_PX, 3);
+    // Taller band, longer reach — the monotonicity the whole argument rests on.
+    expect(range).toBeGreaterThan(ribbonReadRangeFt(real));
   });
 
   it('scrolls without uploading, and sweeps the ring during a home run', () => {

@@ -30,6 +30,14 @@ import { buildField } from './field';
 import { bearingOf } from './geom';
 import type { StadiumCtx } from './geom';
 import { pickStadiumQuality } from './quality';
+import { DAYLIGHT } from './daylight';
+
+/**
+ * The session seed the scene is built with here. FIXED — `StadiumCtx.seed`
+ * exists so the tower's LED programme can differ per session, and a test that
+ * fed it a clock would be the one thing the whole determinism chapter forbids.
+ */
+const TEST_SEED = 20260816;
 
 const log = (s: string) => {
   // eslint-disable-next-line no-console
@@ -45,6 +53,8 @@ function build(park: Park) {
       return r;
     }) as StadiumCtx['track'],
     park,
+    seed: TEST_SEED,
+    daylight: DAYLIGHT.day,
     // The DEFAULT tier, because `fenceStepDeg` decides how finely the turf and
     // the dirt arc are sampled and the shipping tier is the one to measure.
     quality: pickStadiumQuality({

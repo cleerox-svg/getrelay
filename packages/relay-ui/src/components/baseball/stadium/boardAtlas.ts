@@ -72,26 +72,42 @@ export interface BoardPanelSpec {
  * `BOARD_REF` (100 × 50 ft); everything else — UV rects, aspect ratios, type
  * fractions, character budgets — is derived from these twelve numbers.
  *
- * The proportions are not free. The 1.0 ft frame gap and the 1.0 ft outer margin
- * are art; the SIZES were solved against the legibility floor:
+ * ⚠ RE-SOLVED FOR A 66 × 33 FACE. See `BOARD_REF` for why the reference moved
+ * (it did not fit the batter camera's frustum) and `scoreboard.test.ts` for the
+ * budget table this arrangement produces. Every constraint below is the SAME
+ * constraint as before, re-evaluated at the corrected legibility floor — which
+ * is 2.286 ft of glyph, not the 4.599 ft the old arrangement was solved at,
+ * because that number came off a 40° lens that no longer exists.
  *
- *   • the side columns are 18 ft because 17.57 ft is exactly five characters at
- *     the floor, and a five-digit score is the widest number a derby column has
- *     to carry. At 17 ft it would truncate to `999…`.
- *   • the main panel is 60 ft because the longest single row the HUD's own
- *     vocabulary can produce — `Swing and a miss`, sixteen characters — has to
- *     fit inside a 0.98 text margin. It was 59, and a RENDER showed the whiff
- *     line set as `SWING AND A MI…`. The frame gap came down from 1.5 ft to
- *     `MIN_FRAME_GAP_FT` to pay for it, which is the right trade: a foot of dark
- *     surround is 2.2 CSS px, and a lost character is a lost word.
- *   • the strip is 17 ft tall because it carries three rows — headings and two
- *     teams — and three rows at the floor is 13.8 ft before leading.
+ * The 1.0 ft frame gap and the 1.0 ft outer margin are art and did NOT scale
+ * with the board; a foot of dark surround on a 33 ft face is proportionally
+ * twice what it was, which reads MORE like an array of panels and not less.
+ * The sizes:
+ *
+ *   • the side columns are 12 ft, which is 6 characters at the floor — down
+ *     from 10 on the old 18 ft column, and still comfortably over the 5-digit
+ *     score that was the binding case when the floor was twice as coarse.
+ *   • the main panel is 38 ft, which is 21 characters — the longest single row
+ *     the HUD's own vocabulary can produce is `Swing and a miss` at sixteen, and
+ *     a RENDER of the old 59 ft panel setting it as `SWING AND A MI…` is why
+ *     that constraint is written down rather than assumed. 21 ≥ 16 with five
+ *     characters of margin.
+ *   • the strip is 8 ft tall and it is the BINDING SURFACE of this arrangement.
+ *     It carries three rows — headings and two teams — and three rows of
+ *     round-capped ink is 3 × 2.286 × 1.13 = 7.75 ft, so 8 ft leaves 0.25 ft.
+ *     Every other panel could have been smaller; this one could not.
+ *   • the upper row is 22 ft because that is the smallest height at which a side
+ *     column still carries TWO caption-over-value rows (`sideRowBudget`), and
+ *     dropping to one would have cost the board a field. 22 + 8 + three 1 ft
+ *     gaps and margins is 33 exactly, so the vertical arrangement has no slack
+ *     at all — which is stated rather than hidden, because the next person to
+ *     add a row needs to know they are taking it from somewhere.
  */
 export const BOARD_PANEL_SPECS: readonly BoardPanelSpec[] = [
-  { id: 'stats', xFt: 1.0, yFt: 1.0, wFt: 18.0, hFt: 29.5 },
-  { id: 'main', xFt: 20.0, yFt: 1.0, wFt: 60.0, hFt: 29.5 },
-  { id: 'pitcher', xFt: 81.0, yFt: 1.0, wFt: 18.0, hFt: 29.5 },
-  { id: 'strip', xFt: 1.0, yFt: 32.0, wFt: 98.0, hFt: 17.0 },
+  { id: 'stats', xFt: 1.0, yFt: 1.0, wFt: 12.0, hFt: 19.0 },
+  { id: 'main', xFt: 14.0, yFt: 1.0, wFt: 38.0, hFt: 19.0 },
+  { id: 'pitcher', xFt: 53.0, yFt: 1.0, wFt: 12.0, hFt: 19.0 },
+  { id: 'strip', xFt: 1.0, yFt: 21.0, wFt: 64.0, hFt: 11.0 },
 ] as const;
 
 /** The quad the caller must build for the WHOLE array. Derived — never re-typed. */
@@ -192,11 +208,12 @@ export const BOARD_GEOMETRY: BoardGeometry = {
   widthFt: BOARD_REF.widthFt,
   heightFt: BOARD_REF.heightFt,
   faceDistFt: BOARD_REF.faceDistFt,
-  // 5.0 ft is not decoration: it is the smallest band whose type is legible
-  // anywhere. See `boardRibbon.ribbonReadRangeFt` — a 4 ft band reads only
-  // inside 230 ft, a 5 ft band inside 325, which is the difference between a
-  // ribbon that carries the count down the lines and one that is pure light
-  // everywhere.
+  // ⚠ NOMINAL, AND THE SCENE DOES NOT USE THEM. `board.boardGeometryFor`
+  // MEASURES both off the bowl it actually built — `stands.ribbonHeightFt` and
+  // `stands.ribbonRingFt` — because the tile count that keeps a ribbon glyph the
+  // same shape in the park as on the texture is derived from the band's real
+  // height and the ring's real arc length, and this bowl is not a circle. These
+  // two survive as the DEFAULT a test can reason about, not as a dimension.
   ribbonHeightFt: 5.0,
   ribbonRadiusFt: 300,
 };

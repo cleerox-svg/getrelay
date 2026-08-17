@@ -24,9 +24,10 @@
 // the baseball bearing frame and nothing else in the repo speaks it. If golf
 // ever wants a lofted ring, THAT is the moment they move up, not before.
 
-import { BufferAttribute, BufferGeometry } from 'three';
+import { BufferAttribute, BufferGeometry, Color } from 'three';
 import type { Group, Scene } from 'three';
 import type { Park } from '../../../lib/baseball/parks';
+import type { Daylight } from './daylight';
 import type { StadiumQuality } from './quality';
 
 export const DEG = Math.PI / 180;
@@ -50,6 +51,30 @@ export interface StadiumCtx {
   track: Track;
   park: Park;
   quality: StadiumQuality;
+  /**
+   * The SESSION seed. Everything seeded in the scene that is allowed to differ
+   * between sessions mixes this in; everything that must not — the bowl's
+   * section jitter, the skyline's placement, the crowd speckle — keeps its own
+   * module constant and ignores it.
+   *
+   * ⚠ IT IS A SEED, NOT A CLOCK, WHICH IS WHY IT CAN EXIST AT ALL. The tower's
+   * LED programme changes nightly in the real venue, and "changes nightly" is
+   * the one thing a byte-identical screenshot gate cannot have — so it changes
+   * per SEED. Two runs of the harness pass the same seed and get the same tower.
+   */
+  seed: number;
+  /**
+   * The lighting row — day or night. COSMETIC, and `stadium/daylight.ts` carries
+   * the whole argument for why that is a hard rule rather than a preference.
+   *
+   * ⚠ IT IS IN THE CONTEXT RATHER THAN PASSED TO THE THREE BUILDERS THAT WANT IT
+   * because it is exactly the same kind of input as `quality`: scene-wide, read
+   * only, decided once at build. It arrived as an extra argument on `buildSky`
+   * and an extra field on `buildBoard`'s options, and the third caller (the
+   * roof's truss) is the one that made that a pattern rather than a special
+   * case.
+   */
+  daylight: Daylight;
 }
 
 /** Every builder returns at least its own group, so the composer can dispose it. */
@@ -380,4 +405,30 @@ export function polygon(xz: Array<[number, number]>, y: number): BufferGeometry 
   g.setIndex(idx);
   g.computeVertexNormals();
   return g;
+}
+
+/**
+ * Write a FLAT vertex colour onto a geometry, so differently-tinted parts can be
+ * merged under one material.
+ *
+ * ⚠ THROUGH `Color`, NOT BY UNPACKING HEX BYTES, and `stands.ts` explains the
+ * consequence at length: a vertex-colour attribute is consumed in the renderer's
+ * LINEAR working space while a hex literal is sRGB, so dividing bytes by 255
+ * brightens 0x8b (0.545 sRGB ≈ 0.25 linear) by more than a factor of two. The
+ * first render of the bowl came out a blown-out white cone for exactly that
+ * reason. Taking a `Color` makes the conversion the caller's `set()`.
+ *
+ * `scale` may exceed 1 — that is how the tower's pod ring is authored brighter
+ * than its shaft under one material.
+ */
+export function tintGeometry(geo: BufferGeometry, c: Color, scale = 1): BufferGeometry {
+  const n = geo.getAttribute('position')?.count ?? 0;
+  const arr = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    arr[i * 3] = c.r * scale;
+    arr[i * 3 + 1] = c.g * scale;
+    arr[i * 3 + 2] = c.b * scale;
+  }
+  geo.setAttribute('color', new BufferAttribute(arr, 3));
+  return geo;
 }
