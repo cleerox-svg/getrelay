@@ -1,467 +1,640 @@
-# Golf — in-app game (Mini-Golf + Driving Range)
+# Golf — the in-app game
 
-An in-app 3D golf game in the Relay **Games** hub (`/games`), built with
-Three.js and a hand-rolled physics sim. This doc is the source of truth for what
-exists today and the plan to reach PGA-app-level controls and visuals. Read it
-first when picking up golf work.
+A 3D golf game inside the Relay **Games** hub (`/games`), built on Three.js and
+a small hand-rolled physics sim. It is large and self-contained enough to have
+its own sub-agent (`golf`), its own conventions, and its own visual gate
+(`golf-visual-qa`).
 
-> Reference the user wants to match: **PGA TOUR Golf Shootout** (a Unity game) —
-> its aiming (shot line + landing reticle + power arc + wind-adjusted landing)
-> and its textured, lit 3D look.
+**This doc describes what ships today.** Section 1 is the current state,
+sections 2–5 are the code map and the rules that bite, section 6 is retained
+DECISION HISTORY (clearly marked, not a live plan), and the final section is an
+append-only defect list owned by another session.
+
+Read alongside:
+
+- **`/GRAPHICS.md`** — the platform decision record: why Three.js and not
+  Unity/Unreal, why WebGPU is deferred, why there is no `EffectComposer`, the
+  GPU budget rules, and why the visual gate must be deterministic. Those
+  decisions are NOT restated here; this doc cross-references them.
+- **`packages/relay-ui/src/lib/scene3d/README.md`** — the contract for the
+  shared multi-game 3D kit that golf and baseball both consume.
+- **`terrain.ts`'s "HOW TO AUTHOR A HOLE" header** — the authoring contract for
+  Course holes. It is the source of truth; this doc only points at it.
 
 ---
 
-## What exists today
+## 1. What ships today
 
-Three modes behind the "Golf" chiclet in the Games hub:
+### 1.1 The hub — `GolfScreen`
 
-- **Mini-Golf (putting)** — top-down/angled 3D hole; drag-to-putt; sink the cup;
-  par/stroke scoring. Now a REAL mini-put engine: `puttSim.ts` runs
-  slope-coupled Coulomb physics on a per-hole slope FIELD (`puttField.ts` —
-  tilt planes, ramps, undulation) reusing `greenPhysics.ts`'s functions at
-  mini-scale, so putts BREAK, ramps check/feed the ball, and banked rails
-  (`Wall.bank`) run the ball along the rail. Holes are pure DATA validated
-  against the physics invariants (`puttCourses/`, default `garden.ts` = 8 slope
-  holes). `PuttGL.tsx` renders the green as a DISPLACED BufferGeometry sampled
-  from `puttHeightAt` (see-what-you-play: the ball rides the surface, ramps rise,
-  banked rails read as leaned amber rails), model-driven camera frame, shared
-  scenery kit. HUD (`GolfGame.tsx`) drives off the course's actual hole count.
-  Phase-2 STUBS present but not wired: moving obstacles + hazards physics + a
-  course picker.
-- **Course · Hole 1 (beta)** — a full terrain-aware hole (tee → fairway → green
-  → cup) on `courseSim.ts` + `CourseGL.tsx`; slingshot aim/power, tap-timing,
-  camera-follow, a predicted aim arc, and a real Coulomb-friction putting green
-  that reliably HOLES an on-line putt (elliptic cup capture, no pin collision).
-  The green is clean (no on-turf slope overlay); the aim line + cup reticle pulse
-  gold/green when the current putt will drop. Persisted best-shot records. The
-  hole is fully DATA-driven (`CourseHole`) so holes 2–9 are pure data — see the
-  "HOW TO AUTHOR A HOLE" contract header in `terrain.ts`. See roadmap step 3.
-- **Driving Range** — down-range 3D; **Practice** (open, unlimited) and
-  **Target Challenge** (8 balls, proximity scoring). Full-screen immersive.
+Tapping the Golf chiclet (or the featured hero) in `routes/Games.tsx` mounts
+`components/golf/GolfScreen.tsx`, a self-contained hub with **three top tabs**:
 
-Both are real 3D (Three.js), lazy-loaded so `three` never bloats the main
-bundle, with all GPU resources disposed (`forceContextLoss()`) on unmount.
+| Tab | Segments | What's there |
+|---|---|---|
+| **Play** | — | `GolfMenu`: a painted hero for the selected course with **Play round**, a **Change course** picker, single-hole play, a **Challenge a friend** CTA, a local personal-bests strip, and a mode strip (Mini-Golf / Driving Range / Course) that reveals each mode's picker. |
+| **Arena** | Daily · Events · Ranks | `GolfDaily` (seeded daily hole + streak), `GolfTournaments` (rapid 3-hole events, seeded, synthesized course), `GolfLeaderboard` over three boards (Mini-Golf / Course / Range). |
+| **Clubhouse** | Profile · Locker · Season · Wallet | `GolfProfile` (records + rank), `GolfShop` (cosmetics), `GolfSeason` (season track + claims), `GolfWallet` (coin balance + ledger). |
 
-### Shooting / controls (range) — current
+The header carries the player's framed avatar and a **coin balance chip** on
+every tab; tapping the balance jumps to the Locker. The Arena tab carries a 🔥
+streak chip and a 🏆 live-event chip so a returning player sees them without
+opening the tab.
+
+Immersive play (`setImmersive`) hides the app chrome for the full-bleed 3D
+scenes; background music switches between a menu track and a ducked round pad
+(`lib/audio`), and every HUD carries a `MuteButton`.
+
+**Friend challenges.** `NewChallengeSheet` (course / length / hole + create and
+send) drops a `relay://challenge/<id>` message on the normal composer send path;
+`ChallengeCard` renders that message in the chat rail as a live card and runs
+the round in a `CourseGame` overlay — no cross-tab navigation. Backed by
+`POST /game/challenge`, `POST /game/challenge/:id/result`,
+`GET /game/challenge/:id`.
+
+**Coin economy.** `lib/golf/economy.ts` is a small zustand store (deliberately
+outside the messenger `lib/store.ts`) caching wallet, cosmetics catalog /
+ownership / equip, and the season track, each behind a fetch-once `ensure*()`
+that degrades to empty when unauthed or offline. `lib/golf/cosmetics.ts` is the
+`three`-free render seam: it resolves the equipped catalog item's `visual`
+generically (no per-id logic) into a `GolfCosmetics` the `*GL.tsx` scenes read
+ONCE at scene build — ball skin and tracer colour — plus a `GolfFrame` avatar
+overlay. Default equip renders byte-identically to the pre-economy scenes.
+
+### 1.2 Course mode — 4 courses, 45 authored holes
+
+`lib/golf/courses/` is a registry of real, playable courses, all **pure
+`CourseHole` DATA** — no per-hole code:
+
+| Course | id | Holes | Par | Yards |
+|---|---|---|---|---|
+| Augusta National | `augusta` | 18 | 72 | 7,555 |
+| Listowel · Vintage | `listowel-vintage` | 9 | 36 | 3,366 |
+| Listowel · Heritage | `listowel-heritage` | 9 | 36 | 3,395 |
+| Listowel · Millennium | `listowel-millennium` | 9 | 36 | 3,445 |
+
+`courses/index.ts` exports `GOLF_COURSES` / `getCourse(id)` and is `three`-free,
+so the menu and hole-picker can import it without pulling the 3D chunk.
+`courses/builder.ts` supplies `hole()` (defaults), `greensideHazard()` (places a
+hazard at the minimum distance that clears the wobbled fringe pad) and
+`defineCourse()` (derives `par`/`yards` from the holes so a scorecard can never
+drift from the data). `validateCourse()` is run as a **hard gate** by
+`courses/courses.test.ts` over every hole of every course.
+
+Each course file states its DATA CONFIDENCE up front — Augusta's pars, yardages
+and dogleg directions are real, its survey geometry is not; Listowel Vintage's
+card is confirmed, the other two nines are plausible authoring. Refining them is
+a data edit, never a code change.
+
+Play modes: **full round** (scorecard, running to-par, one wind for the round)
+or **single hole** from the picker's map cards (`HoleThumb` draws a pure-SVG
+top-down map from the same terrain math the scene uses). `CourseGame.tsx` is the
+HUD wrapper (club selector, power meter, accuracy bar, spin puck, wind chip,
+distance-to-pin / strokes / lie, hole-out banner, records recap, telemetry
+panel); `CourseGL.tsx` is the lazy Three.js scene driving a live `CourseSim`.
+
+Signature per-hole content that is authored, not derived: doglegs, elevation
+change, hazard placement, cart paths, and — on 13 of Augusta's 18 holes — a
+`bloom` flowering grove (2 of those in the `'understory'` form). Nothing in the
+renderer parses a hole's name.
+
+### 1.3 Mini-Golf — 3 courses, 24 holes
+
+`lib/golf/puttCourses/` mirrors the Course registry (`PUTT_COURSES`,
+`getPuttCourse(id)`, `three`-free), each course 8 holes, par 23, in the 100×125
+virtual board (`x` right, `y` **down**):
+
+| Course | id | Theme | Signature |
+|---|---|---|---|
+| The Back Garden | `garden` | garden | Physics-coupled slopes, banked rails, a ramp to climb. The default. |
+| Windmill Links | `windmill-links` | links | **Moving obstacles** — windmills and swinging gates you read the beat of, plus timing/carom risk-reward lines. |
+| Pirate Cove | `pirate-cove` | cove | Barrel **tunnels** (portal pairs), tide-pool **water**, **sand** traps, ramps and breaking slopes. |
+
+Both a course picker and single-hole play are wired (same
+`"<id>"` / `"<id>#<holeIdx>"` encoding as Course mode), and the last-played
+course is persisted.
+
+`puttSim.ts` is a real mini-put engine, not the old flat arcade one: Coulomb
+constant deceleration derived from the shared Stimpmeter model, physics-coupled
+slopes from a per-hole slope FIELD (`puttField.ts` — tilt planes, ramps,
+undulation), one static-rest rule mirroring `courseSim`, and speed-dependent cup
+capture through the shared `greenPhysics.cupCaptured` rescaled to mini speeds.
+Banked rails (`Wall.bank`) steer the ball along the rail.
+
+`puttObstacles.ts` is the **moving-obstacle and tunnel math** — pure, no three,
+no canvas — and every obstacle's geometry is a function of the sim's own
+deterministic `simTime` accumulator, never wall-clock. Blades and arms both
+reflect the ball AND impart their surface velocity at the contact point; tunnels
+map velocity from one mouth's local frame onto the other's. `PuttGL.tsx` reads
+the SAME helpers (`windmillBladeAngle` / `pendulumAngle` / `mouthNormal`) to
+draw them, so drawn == played, and renders the green as a displaced
+BufferGeometry sampled from `puttHeightAt`.
+
+Holes are DATA validated by `validatePuttHole` (par 2–3; cup and tee on the
+green; the cup point holds a rest; every obstacle's SWEPT disc fits the bounds
+and clears cup and tee; hazards never cover cup/tee, overlap, or wall the board
+off; both tunnel mouths in bounds and reachable). `GolfGame.tsx` is the HUD and
+drives off the course's ACTUAL hole count.
+
+### 1.4 Driving Range
+
+Down-range 3D with two modes: **Practice** (open, unlimited) and **Target
+Challenge** (8 balls at island pins, proximity scoring). A data-driven **layout**
+picker (persisted, default `fairway`), defined in `rangeTargets.ts`:
+
+- `lane` — grass causeway through the water in both modes; every club lands and rolls.
+- `practiceLane` — lane in Practice; Challenge is full water + islands.
+- `fairway` — grass fairway with a crossing water hazard (247–285 yd) holding island targets.
+
+`RangeGame.tsx` is the HUD (controls, layout picker, telemetry + "Copy
+telemetry"); `RangeGL.tsx` is the lazy scene.
+
+> **Standing user feedback, not yet actioned:** the water + floating-island
+> range reads as "odd" / un-golf-like. Course mode is the destination; the range
+> is a practice surface and a physics test bed.
+
+### 1.5 Controls
+
+Shared between Range and Course, because `CourseSim` deliberately reuses the
+Range's tuned launch/flight/roll pipeline:
+
 - **Pull-back = power + aim (slingshot).** One drag sets both: power tracks the
-  pull MAGNITUDE (vertical **power meter**), and the pull's ANGLE steers the
-  shot — it flings OPPOSITE the pull, so dragging the finger RIGHT aims LEFT and
-  vice-versa, clamped to ±40° with a small deadzone. The on-turf aim arrow and
-  the predicted arc follow it live. (The old dedicated ±40° AIM slider is gone.)
-- **Spin** via a contact-point **spin puck** (back/top + draw/fade) → bounded
-  flight curve; backspin checks/zips back on the bounce.
-- **Accuracy** via a **tap-timing bar** (Golf-Clash style): release arms the
-  shot, a marker sweeps, tap to fire; off-center adds hook/slice.
-- **Live aim prediction** (Roadmap step 1, done): while setting up a shot the
-  turf shows a **wind-adjusted predicted arc** to a **landing reticle**, a
-  **pre-wind reticle** (the gap between the two reads the wind push), a
-  **roll-out marker**, and a **tap-timing dispersion cone** (worst hook ↔ worst
-  slice). It's `rangeSim.predict()` — the CURRENT club/power/aim/spin/wind run
-  through the SAME launch+flight+roll pipeline as the live shot via a
-  snapshot/restore (no commit, no state mutation), so it's true to the yard.
-  The harness asserts `predict()` matches `simulateShot()` per club.
-- **Club ladder** (full power, neutral spin, harness-measured): Driver 291
-  carry / 377 total → SW 109/128. Forgiving/linear power map
-  (`s = baseSpeed·√(FLOOR + (1−FLOOR)·power)`). CARRY is loft+baseSpeed; TOTAL is
-  carry + a run-out the bounce/roll core derives from the LANDING LIE.
-- **Landing lies (surface materials).** The bounce+roll core is one shared model
-  MODULATED per surface by a `TERRAIN` table in `rangeSim.ts` (restitution,
-  forward bounce-keep, roll multiplier, run-out, backspin bite, settle
-  threshold). A **fairway** is firm and lively — a few diminishing FORWARD hops
-  then a long run-out (driver releases ~86yd); a **green** is receptive and
-  CHECKS (short release); **fringe/rough/bunker/tee** are defined too so a future
-  course maps each lie straight onto these numbers without touching the
-  integrator. Today's range only classifies fairway (grass) + green (island);
-  extend `surfaceAt()` + `ShotResult` + `terrainFor()` to add the rest.
+  pull MAGNITUDE (vertical power meter), the pull's ANGLE steers the shot — it
+  flings OPPOSITE the pull (drag right, aim left), clamped to ±40° with a
+  deadzone. On the Course, steering is measured off the bearing-to-pin, so
+  "straight" points at the flag on a dogleg.
+- **Spin** via a contact-point **spin puck** (back/top + draw/fade) → a bounded
+  flight curve; backspin checks and zips back on the bounce.
+- **Accuracy** via a **tap-timing bar**: release arms the shot, a marker sweeps,
+  tap to fire; off-centre adds hook/slice.
+- **Live aim prediction.** While aiming, the turf shows a wind-adjusted
+  predicted arc to a **landing reticle**, a **pre-wind reticle** (the gap reads
+  the wind push), a **roll-out marker** and a **tap-timing dispersion cone**
+  (worst hook ↔ worst slice). It is `predict()` — the CURRENT
+  club/power/aim/spin/wind stepped through the SAME pipeline as the live shot
+  via `snapshot()`/`restore()`, no commit, no state mutation. The harness
+  asserts `predict()` matches the committed shot to the yard, per club.
+- **Aim-holing cue.** On the green the aim line and cup reticle pulse
+  gold/green when `predict(0).result === 'holed'`.
+- **Putting.** A putt-specific quadratic power map with a low minimum speed so a
+  dead tap rolls ~1.5 ft and short putts are controllable.
 
-### Range layouts — current
-A data-driven **Range layout** picker (persisted, default `fairway`):
-- `lane` — grass causeway through the water, both modes; every club lands+rolls.
-- `practiceLane` — lane in Practice; Challenge is full water + islands (aim).
-- `fairway` — grass fairway with a crossing water hazard (247–285 yд) holding
-  island targets; driver carries it to the far fairway; short irons land near.
+**Club ladder** (full power, neutral spin, firm fairway lie, harness-measured):
+Driver 291 carry / 377 total, 3-Wood 260/329, Hybrid 243/303, 5-Iron 217/266,
+7-Iron 191/230, 9-Iron 165/196, PW 137/161, SW 109/128. Forgiving/linear power
+map (`s = baseSpeed·√(FLOOR + (1−FLOOR)·power)`). CARRY is loft + baseSpeed;
+TOTAL is carry plus a run-out the bounce/roll core derives from the LANDING LIE.
 
-> **Known issue (user feedback):** the water + floating-island range reads as
-> "odd" / un-golf-like, and the controls still don't feel like the PGA app. The
-> plan below addresses both. Treat the range layout as a stepping stone toward
-> the hole/course format.
+### 1.6 Physics, surfaces and testing
 
-### Physics, testing, telemetry
-- **Physics** is a small, deterministic ballistics sim — **keep it, don't
+- **The physics is a small, deterministic ballistics sim — keep it, don't
   replace it.** World space: `d` downrange, `x` lateral, `h` height; gravity +
-  drag + wind + bounce/roll; spin as bounded accelerations.
-- **Headless test harness** (vitest): `pnpm --filter @relay/ui test` drives the
-  REAL sim via `simulateShot({clubId,power,aimDeg,spinBack,spinSide,accuracy,
-  layout,isChallenge})` and prints per-club/per-layout tables with
-  regression-failing assertions. **Use this to tune — don't guess.**
-- **In-app telemetry**: a last-shot debug panel + "Copy telemetry" button
-  (last 30 shots as JSON) so real device numbers can be compared to the harness.
+  drag + wind + bounce/roll; spin as bounded accelerations. Yard-space arcade
+  units (`GRAVITY = 16`), not real units.
+- **Landing lies.** One shared bounce+roll core MODULATED per surface by a
+  `TERRAIN` table in `rangeSim.ts` (restitution, forward bounce-keep, roll
+  multiplier, run-out, backspin bite, settle threshold). The Course maps each
+  lie straight onto those numbers without touching the integrator, and adds a
+  `cartpath` material. The Range only classifies `grass` / `island` / `water` /
+  `fence`; the Course classifies tee / fairway / rough / fringe / green /
+  bunker / water / cartpath / OB.
+- **Slopes are physics-coupled EVERYWHERE** — putts break, the ball rolls
+  downhill and checks uphill, sidehill lies push. `heightAt()` / `gradientAt()` /
+  `surfaceAt()` in `terrain.ts` are ONE source of truth for both the rendered
+  mesh and the ball; `slopeAccel()` (≈ −g·gradient) is added each grounded
+  substep.
+- **Greens** run `greenPhysics.ts`: Stimpmeter speed → friction
+  (μ = 0.611/stimp, `GREEN_STIMP = 10`), roll-out `d = v²/(2a)`, and an
+  ELLIPTIC cup-capture falloff (`r_eff = cupR·√(1−(speed/limit)²)`) so an
+  on-line putt at holing pace reliably DROPS. There is no pin collision.
+  `BALL_R = 0.2`, `CUP_R = 0.5` — one source of truth for scale.
+- **One rest rule.** A grounded ball rests when `speed ≤ restSpeed(surf)` AND
+  `|slopeAccel| ≤ staticHold(surf)`, on every surface. Off the green the hold is
+  static friction (`frictionFor(surf) · STATIC_HOLD_FACTOR`, 1.3); on the
+  green/fringe it IS the Stimpmeter μ·g. This is what stops a slow ball creeping
+  downhill forever.
+- **Headless harness** (vitest). `pnpm --filter @relay/ui test` drives the REAL
+  sims and prints per-club / per-layout dynamics tables with regression-failing
+  assertions. **Tune against this and against device telemetry — never guess.**
+  Current golf + `scene3d` coverage: **629 tests across 18 files** —
+  `courses.test.ts` 330, `courseSim` 67, `puttCourses` 35, `foliage` 30,
+  `terrain` 26, `puttSim` 22, `instancing` 16, `rangeSim` 15, `greenPhysics` 15,
+  `courseData` 14, `scene3d/quality` 12, `scene3d/env` 12, `clock` 10,
+  `golf/scene/quality` 8, `scene3d/budget` 5, `components/golf/budget` 4,
+  `scene3d/stats` 4, `env.irradiance` 4.
+- **In-app telemetry.** A last-shot debug panel plus a "Copy telemetry" button
+  (last 30 shots as JSON) so real device numbers can be diffed against the
+  harness.
 
-### Leaderboard / scoring
-- Shared, contact-scoped `game_scores` table; discriminators `golf` (putting)
-  and `golfrange` (range challenge). Worker: `packages/relay-worker/src/games.ts`
-  (`GAME_IDS`, `POST /game/score`, `GET /game/leaderboard`). Clamps: ≤8 rounds,
-  ≤2000 pts each. No migration needed to add a game id.
-- **Best-shot records (course).** A per-user `golf_records` table (migration
-  `0007_golf_records.sql`, in both `schema.sql` and the numbered file) backs
-  `GET`/`POST /game/golf-records` — upsert-on-improve (MAX longest drive, MAX
-  longest holed putt, MIN closest-to-pin). `CourseSim` computes the per-hole
-  metrics via a single `recordShot()` off `stop()` (shared by live fire,
-  `simulateShot`, `simulatePutt`): longest drive = the first full swing's total
-  (an OB/water opener doesn't lock it — the replay does); closest-to-pin = min
-  rest `distToPin` among non-holing, non-water/OB, NON-PUTT shots; longest putt =
-  a putt that holes out. `CourseGame.tsx` shows this hole's numbers plus
-  persisted bests with a "New best!" badge; the `api.ts` client
-  (`getGolfRecords`/`postGolfRecords`) is seeded on mount and refreshed from the
-  POST read-after-write (survives offline/401).
+### 1.7 Scores, records and the worker
 
-### Key files
+Golf's server surface lives in `packages/relay-worker/src/games.ts` and
+`economy.ts`, over these D1 tables (each in `schema.sql` AND a numbered
+migration):
+
+| Table | Migration | What |
+|---|---|---|
+| `game_scores` | `0006`, `0008` (`course`) | Shared contact-scoped leaderboard. `GAME_IDS` includes `golf` (mini-golf), `golfrange`, `golfcourse`. Clamps: ≤8 rounds, ≤2000 pts each. Adding a game id needs no migration. |
+| `golf_records` | `0007` | Per-user best shots: MAX longest drive, MAX longest holed putt, MIN closest-to-pin. `GET`/`POST /game/golf-records`, upsert-on-improve. |
+| `game_challenges` | `0009` | Async friend challenges. |
+| `daily_results`, `daily_streaks` | `0011` | Daily challenge + streak. |
+| `tournaments`, `tournament_entries`, `tournament_trophies`, `tournament_placements` | `0012` | Rapid events. |
+| `user_wallet`, `currency_ledger`, `user_cosmetics`, `user_equipped`, `season_progress` | `0013` | Coin economy, cosmetics, season track (`/economy/*`). |
+
+**Three boards, three submit paths.** Keep them straight — they do not share a
+code path:
+
+- **`golf`** (Mini-Golf) and **`golfrange`** (Range Target Challenge) submit from
+  `GolfScreen`'s own effects when the results screen appears, each behind an
+  exactly-once ref guard and each rejecting a 0-round game. Mini-Golf also sends
+  its to-par as board metadata.
+- **`golfcourse`** (Course full round) submits from `CourseGame`'s
+  `onRoundComplete`, which fires **when the FINAL hole is CARDED — not when a
+  button is pressed.** The card holds one entry per hole holed out, so
+  `card.length === course.holes.length` IS "the round is over", and reading it in
+  its own effect (rather than in the carding effect) guarantees the last hole's
+  strokes are already in the total. `revealScorecard()` is **purely
+  presentational**. ⚠ This matters: reporting used to fire from
+  `revealScorecard()`, so a player who tapped "Menu" instead of "See scorecard"
+  on the final hole silently discarded the whole round — and in a tournament,
+  destroyed their event entry. Do not re-couple reporting to a UI affordance.
+- **Single-hole play reports via `onHoleComplete`, never `onRoundComplete`** —
+  a separate effect, fired on hole-out, also exactly-once. The daily challenge
+  rides this path; the rapid tournament plays a full round and captures
+  `onRoundComplete` itself (so it posts to the event, NOT to `golfcourse`, and
+  there is no double-post).
+
+Best-shot metrics are computed by a single `CourseSim.recordShot()` off `stop()`
+(shared by live fire, `simulateShot` and `simulatePutt`): longest drive = the
+first full swing's total (an OB/water opener doesn't lock it — the replay does);
+closest-to-pin = min rest `distToPin` among non-holing, non-water/OB, NON-PUTT
+shots; longest putt = a putt that holes out. `CourseGame` shows this hole's
+numbers plus persisted bests with a "New best!" badge; the `api.ts` client
+(`getGolfRecords` / `postGolfRecords`) is seeded on mount and refreshed from the
+POST's read-after-write, so it survives offline/401.
+
+---
+
+## 2. Code map
+
+### 2.1 Layering rules
+
+Four rules decide where new code goes. Rules 1, 3 and 4 have mechanical checks
+(a build inspection and two budget tests); rule 2 is a review responsibility, as
+no test can see it.
+
+1. **`three` stays lazy.** The `*GL.tsx` scenes are `lazy()`-imported so `three`
+   never enters the app entry chunk. Anything a scene imports (`scenery.ts`,
+   `water.ts`, `scene/*`, `scene3d/*`) is therefore reachable ONLY from those
+   lazy modules. Verify with `pnpm --filter @relay/ui build`: `three` is its own
+   ~538 kB chunk and the entry chunk carries no `Three.js Authors` banner.
+   ⚠ **The three chunk is not named `three-*.js`** — Rollup names a shared chunk
+   after its first module, and it currently emits as **`clock-*.js`** because
+   `lib/scene3d/clock.ts` leads it. Grep the banner, not the filename.
+2. **One shared scene kit.** `lib/golf/scenery.ts` owns fog, the sky dome + sky
+   gradient + PMREM env map, the `SURFACE_RGB` per-lie palette, the mow-stripe /
+   fringe / roughness constants, and the turf textures — `makeFairwayTurf()`
+   (bold world-locked stripes), `makeTurfColor()` (plain mown fill),
+   `makeTurfNormalMap()`, `makeContactShadowTexture()`. The tree grove lives in
+   `components/golf/scene/foliage.ts` — it moved there when it was instanced,
+   because an `InstancedMesh` needs its count up front and so cannot be a pair of
+   `add…()` calls that each drop a `Group` into the scene. **Change the look
+   THERE, not per-scene.**
+   How the scenes consume it differs, and the difference is deliberate: the
+   RANGE is one fairway, so it lays `makeFairwayTurf()` over its whole ground.
+   The COURSE is multi-surface, so `CourseGL` BAKES a top-down albedo
+   (`makeSurfaceMap`, painted from `surfaceAt` + the shared `SURFACE_RGB`) for
+   the ground and gives green / fringe / tee / bunkers / water their own overlay
+   meshes; `makeTurfColor()` there only dresses the distant fill plane. Both
+   share the blade normal map and `TURF_ROUGHNESS` / `TURF_NORMAL_SCALE`, so
+   grass detail cannot diverge again.
+   ⚠ **`scenery.ts`'s own file header is stale on this point.** It describes a
+   two-mode `makeTurfColor('green' | 'neutral')` where `'neutral'` is a
+   near-white luminance detail multiplying the Course's per-vertex colours.
+   `makeTurfColor()` takes no arguments, and the Course does not vertex-colour
+   its ground — the baked surface map replaced that. Vertex colours survive only
+   on the fringe collar/apron mesh and the confetti points.
+3. **`lib/scene3d/` is game-neutral.** The shared multi-game kit (clock, env,
+   instancing, quality, stats), consumed by BOTH golf and baseball. Its
+   contract — game-neutral exported names and filenames, config in / no game
+   constants imported, unit-agnostic, no `lib/golf`/`lib/baseball` imports,
+   500-line cap, no barrel `index.ts`, per-game budget tables — is written in
+   `lib/scene3d/README.md` and the mechanical half is enforced by
+   `lib/scene3d/budget.test.ts`. Moving existing game code in is a pure move +
+   re-export, must be pixel-identical, and is **deferred entirely while baseball
+   is under construction in a parallel session**.
+4. **Size ratchet.** `components/golf/budget.test.ts` gives every NEW file a
+   500-line cap and grandfathers the legacy components at their current size,
+   **shrink-only**. It also fails on a stale entry and reports any file that has
+   shrunk by 25+ lines so the reclaimed lines get BANKED by lowering the number.
+   New scene work belongs in `components/golf/scene/` (real 500-line cap), not
+   bolted onto a component that is already too big. `lib/scene3d/budget.test.ts`
+   additionally pins `onBeforeCompile` to exactly one site (`lib/golf/water.ts`)
+   — it is the one pattern that does not survive a WebGPU node pipeline
+   (`/GRAPHICS.md` §2).
+
+Both budget tests are deliberately scoped away from baseball paths: an
+assertion here firing on their file would be a failure they cannot act on.
+
+### 2.2 Key files
+
+Every path below resolves on disk. Root for UI paths is
+`packages/relay-ui/`.
+
+**Hub, menus and economy** (all `three`-free — the non-lazy path)
+
 | Area | Path |
 |---|---|
-| Shared scene kit (turf/sky/fog) | `packages/relay-ui/src/lib/golf/scenery.ts` |
-| Instanced scatter primitive (shared kit; batcher + impostor quads) | `packages/relay-ui/src/lib/scene3d/instancing.ts` |
-| The tree grove — shared by Course + Range, 3 draw calls; per-hole blossom rides the same batch | `packages/relay-ui/src/components/golf/scene/foliage.ts` |
-| The understory drift's geometry — blobs inscribed in the sim's collider (`shrubR`/`shrubH`), with the containment proof | `packages/relay-ui/src/components/golf/scene/drift.ts` |
-| Shared WATER (level geometry, Gerstner waves, Fresnel + sky/planar reflection, foam, splash, wet bank, reeds, quality tiers) | `packages/relay-ui/src/lib/golf/water.ts` |
-| Headless screenshot harness | `packages/relay-ui/scripts/shoot-golf.mjs` + `golfpreview.html` + `src/golfpreview.tsx` |
-| Quality tier POLICY (shared kit) + GPU instrumentation | `packages/relay-ui/src/lib/scene3d/quality.ts`, `stats.ts` |
-| Procedural sky IBL (shared kit): equirect painter + PMREM | `packages/relay-ui/src/lib/scene3d/env.ts` |
-| Golf's sky palette + `scene.environment` wiring + the hemi cut | `packages/relay-ui/src/components/golf/scene/env.ts` |
-| Bunker sand: albedo + normal + roughness off one height field | `packages/relay-ui/src/components/golf/scene/sand.ts` |
-| Golf's per-scene budget table + `?quality=`/`?shadow=` | `packages/relay-ui/src/components/golf/scene/quality.ts` |
-| Committed GPU ceilings + the shared harness reporter | `packages/relay-ui/scripts/budgets.golf.json`, `scripts/lib/shoot-report.mjs` |
-| Range physics/sim (headless) | `packages/relay-ui/src/lib/golf/rangeSim.ts` |
-| Sim tests / harness | `packages/relay-ui/src/lib/golf/rangeSim.test.ts` |
-| Range 3D scene (Three.js) | `packages/relay-ui/src/components/golf/RangeGL.tsx` |
-| Range HUD + controls + telemetry + layout picker | `packages/relay-ui/src/components/golf/RangeGame.tsx` |
-| Layouts, pins, `surfaceAt` | `packages/relay-ui/src/lib/golf/rangeTargets.ts` |
-| Club ladder | `packages/relay-ui/src/lib/golf/clubs.ts` |
-| Course terrain data + "HOW TO AUTHOR A HOLE" contract (`heightAt`/`gradientAt`/`surfaceAt`; `TEE_R`/`corridorHalfAt`/`greenPadRadius`; organic edges `edgeNoise`/`edgeRadius`/`featureSeed` + `EDGE_WOBBLE`/`maxGreenPadRadius`; render-only `corridorEdgeDist` first-cut helper; optional `bloom` flowering canopy + `BloomForm` — `canopy` is render-only, `understory` also emits the drift collider `shrubR`/`shrubH`) | `packages/relay-ui/src/lib/golf/terrain.ts`, `courseData.ts` |
-| Course sim (terrain-aware; `snapshot`/`restore`/`predict`; putt power/speed; records) | `packages/relay-ui/src/lib/golf/courseSim.ts` |
-| Green + putting physics (Stimp → μ, roll-out, elliptic cup capture, BALL_R/CUP_R scale) | `packages/relay-ui/src/lib/golf/greenPhysics.ts` |
-| Course 3D scene (Three.js) — baked surface map, aim-holing pulse; `buildOrganicDisc`/`buildOrganicAnnulus` draw the green cap, fringe collar, bunkers and terrain-following water from the model's `edgeRadius`+`featureSeed`; long-grass rough, a crisp `corridorEdgeDist` first-cut band (uniform mown collar framed by dark mow lines), textured tee (`makeTeeTurf`); all textures seeded (`mulberry32`) | `packages/relay-ui/src/components/golf/CourseGL.tsx` |
-| Course HUD + records recap | `packages/relay-ui/src/components/golf/CourseGame.tsx` |
-| Putting sim / scene / round | `src/lib/golf/puttSim.ts`, `components/golf/PuttGL.tsx`, `GolfGame.tsx` |
-| Ball material (dimple normal map) | `packages/relay-ui/src/lib/golf/ballTexture.ts` |
-| Hub wiring | `packages/relay-ui/src/routes/Games.tsx`, `components/golf/GolfMenu.tsx` |
-| Worker leaderboard + best-shot records | `packages/relay-worker/src/games.ts` (migration `0007_golf_records.sql`) |
-| Best-shot records API client | `packages/relay-ui/src/lib/api.ts` (`getGolfRecords`/`postGolfRecords`) |
+| Hub shell: Play / Arena / Clubhouse tabs, flow wiring, immersive + music | `src/components/golf/GolfScreen.tsx` |
+| Play tab: course hero, Course + Mini-Golf pickers, range expansion, challenge CTA | `src/components/golf/GolfMenu.tsx` |
+| Arena: daily hole + streak / rapid events / boards | `src/components/golf/GolfDaily.tsx`, `GolfTournaments.tsx`, `GolfLeaderboard.tsx` |
+| Clubhouse: records + rank / cosmetics shop / season track / wallet | `src/components/golf/GolfProfile.tsx`, `GolfShop.tsx`, `GolfSeason.tsx`, `GolfWallet.tsx` |
+| Coin balance pill (shop bar, hub header, profile) | `src/components/golf/CoinBalance.tsx` |
+| Friend challenges: create+send sheet, live in-chat card | `src/components/golf/NewChallengeSheet.tsx`, `ChallengeCard.tsx` |
+| Economy store (wallet / cosmetics / season, fetch-once + graceful degrade) | `src/lib/golf/economy.ts` |
+| `three`-free cosmetics render seam (`GolfCosmetics`, `GolfFrame`) | `src/lib/golf/cosmetics.ts` |
+| Pure-SVG top-down hole map for the picker | `src/components/golf/HoleThumb.tsx` |
+| Shared HUD widgets (accuracy bar, club selector, power meter, spin puck, telemetry, wind chip, mute) | `src/components/golf/shared/` |
+| Local personal bests (localStorage), last-played course ids | `src/lib/golf/stats.ts` |
+| Hub wiring + `/games/golf` deep link | `src/routes/Games.tsx` |
+| Best-shot records API client | `src/lib/api.ts` (`getGolfRecords`/`postGolfRecords`) |
 
-### Commands
-- `pnpm --filter @relay/ui test` — the golf sim harness (dynamics tables).
-- `pnpm --filter @relay/ui shoot:golf` — headless screenshots of every scene AND
-  the numeric GPU gate (draw calls / triangles vs `scripts/budgets.golf.json`;
-  non-zero exit on a regression).
-- `pnpm typecheck` · `pnpm --filter @relay/ui build` (three stays a lazy chunk).
-- `pnpm --filter @relay/worker test` — worker suite (unaffected by golf UI).
+**Course mode**
 
----
+| Area | Path |
+|---|---|
+| Course registry (`GOLF_COURSES`, `getCourse`) | `src/lib/golf/courses/index.ts` |
+| Authored hole data — 45 holes | `src/lib/golf/courses/augusta.ts`, `listowel-vintage.ts`, `listowel-heritage.ts`, `listowel-millennium.ts` |
+| Authoring helpers + `validateCourse()` (the hard gate) | `src/lib/golf/courses/builder.ts`, `types.ts` |
+| Course validator suite (330 tests, every hole of every course) | `src/lib/golf/courses/courses.test.ts` |
+| Terrain + hole model + **"HOW TO AUTHOR A HOLE" contract header** | `src/lib/golf/terrain.ts` |
+| Course sim (terrain-aware; `snapshot`/`restore`/`predict`; putt power; records) | `src/lib/golf/courseSim.ts` |
+| Green + putting physics (Stimp → μ, roll-out, elliptic cup capture, `BALL_R`/`CUP_R`) | `src/lib/golf/greenPhysics.ts` |
+| Course 3D scene | `src/components/golf/CourseGL.tsx` |
+| Course HUD: round + scorecard, records recap, wind, telemetry | `src/components/golf/CourseGame.tsx` |
+| Rapid-tournament 3-hole course synthesis | `src/lib/golf/tournamentCourse.ts` |
+| Per-round wind model (shared by Course + Range) + `mulberry32` | `src/lib/golf/wind.ts` |
 
-## Assessment — closing the gap to the PGA app
+**Mini-Golf**
 
-**Bottom line: not an engine problem.** Keep our physics (small, correct,
-tested). Do **not** build a rendering engine — Three.js already is one and can
-reach the target look. The two real gaps are a proper **aim/trajectory control**
-(buildable on the sim we already have) and **art + shading** (textures,
-lighting, shadows, trees, sky). PGA Shootout is Unity, but a Unity rewrite is
-the wrong fit for a messenger mini-game.
+| Area | Path |
+|---|---|
+| Mini-golf registry (`PUTT_COURSES`, `getPuttCourse`) | `src/lib/golf/puttCourses/index.ts` |
+| Authored boards — 24 holes | `src/lib/golf/puttCourses/garden.ts`, `windmill-links.ts`, `pirate-cove.ts` |
+| Board authoring helpers (`puttHole`, `seg`, `windmill`, `pendulum`, `tunnel`) + `validatePuttHole`/`validatePuttCourse` | `src/lib/golf/puttCourses/builder.ts`, `types.ts` |
+| Mini-put sim (Coulomb, slope-coupled, shared cup capture) | `src/lib/golf/puttSim.ts` |
+| Per-hole slope FIELD (tilt planes, ramps, undulation) | `src/lib/golf/puttField.ts` |
+| Moving obstacles + tunnels (pure, `simTime`-driven) | `src/lib/golf/puttObstacles.ts` |
+| Mini-golf 3D scene (displaced green, obstacles drawn from the physics helpers) | `src/components/golf/PuttGL.tsx` |
+| Mini-golf HUD + round | `src/components/golf/GolfGame.tsx` |
 
-### 1. Shooting controls — replicate PGA (highest impact, no new tech)
-Touch **on the ball** → pull back to load a **power arc** hugging the ball →
-show a shot line to an adjustable **landing reticle**, plus a **second,
-wind-adjusted** path to the real landing point → release on the tap-timing beat.
-A **dispersion cone** shows the risk.
+**Driving Range**
 
-Why it's safe: the predicted arc is just `rangeSim` stepped forward with the
-current club/power/aim/spin/wind (no commit), drawn as a line + reticle. The
-harness verifies the prediction matches the real shot to the yard. Effort: days,
-not weeks.
+| Area | Path |
+|---|---|
+| Range physics/sim (headless) + the `TERRAIN` lie table | `src/lib/golf/rangeSim.ts` |
+| Sim harness (dynamics tables + regression assertions) | `src/lib/golf/rangeSim.test.ts` |
+| Layouts, pins, `surfaceAt` | `src/lib/golf/rangeTargets.ts` |
+| Club ladder | `src/lib/golf/clubs.ts` |
+| Range 3D scene | `src/components/golf/RangeGL.tsx` |
+| Range HUD + controls + telemetry + layout picker | `src/components/golf/RangeGame.tsx` |
+| Shared tuning constants (`FIXED_MS`, `PUTT_*`, `HOLES`, `RANGE_BALLS`) | `src/lib/golf/tuning.ts` |
 
-### 2. Graphics — the look gap is assets + shading, not the renderer
-Ranked by fit for an in-messenger PWA/Capacitor game:
+**Rendering, the shared kit and the visual gate**
 
-| Path | Fidelity | Effort | Fit | Verdict |
-|---|---|---|---|---|
-| **Push our Three.js** — PBR turf/sand, sun + soft shadows, ambient/hemisphere light, sky + haze, billboard tree sprites w/ shadows, light bloom/tone-mapping | ~80% | Medium | Excellent (stays in the lazy chunk) | **Do this first** |
-| Babylon.js or React-Three-Fiber + drei — batteries-included PBR/shadows/post | ~85% | Medium-High | OK (new dep / partial rewrite) | Only if #1 stalls |
-| Unity / Godot → WebGL — what PGA uses | ~100% | Very high | Poor (multi-MB, heavy load, separate embedded app) | Not for a mini-game |
-| Write our own renderer | Unbounded | Enormous | No | Don't |
+| Area | Path |
+|---|---|
+| Shared scene kit: turf colour + normal, sky dome, fog, `SURFACE_RGB` | `src/lib/golf/scenery.ts` |
+| Shared WATER: level geometry, Gerstner waves, Fresnel + sky/planar reflection, foam, splash, wet bank, reeds, quality tiers | `src/lib/golf/water.ts` |
+| The tree grove — shared by Course + Range, 3 draw calls; per-hole blossom rides the same batch | `src/components/golf/scene/foliage.ts` |
+| The understory drift's geometry — blobs inscribed in the sim's collider (`shrubR`/`shrubH`), with the containment proof | `src/components/golf/scene/drift.ts` |
+| Golf's sky palette + `scene.environment` wiring + the hemi cut | `src/components/golf/scene/env.ts` |
+| Bunker sand: albedo + normal + roughness off one height field | `src/components/golf/scene/sand.ts` |
+| Golf's per-scene budget table + `?quality=`/`?shadow=` resolution | `src/components/golf/scene/quality.ts` |
+| Golf size ratchet (500-line cap + shrink-only grandfathers) | `src/components/golf/budget.test.ts` |
+| Shared kit: freezable virtual clock, procedural sky IBL, instanced scatter, tier POLICY, GPU instrumentation | `src/lib/scene3d/clock.ts`, `env.ts`, `instancing.ts`, `quality.ts`, `stats.ts` |
+| Shared kit contract (prose) + its mechanical enforcement | `src/lib/scene3d/README.md`, `src/lib/scene3d/budget.test.ts` |
+| Ball material (dimple normal map, PMREM mirror ball) | `src/lib/golf/ballTexture.ts` |
+| Headless screenshot + GPU harness (29 scenes) | `scripts/shoot-golf.mjs`, `golfpreview.html`, `src/golfpreview.tsx` |
+| Committed GPU ceilings + the game-neutral harness reporter | `scripts/budgets.golf.json`, `scripts/lib/shoot-report.mjs` |
+| Metric course data layer — largely unreachable, see §4 | `src/lib/golf/courseData.ts` |
 
-**Real bottleneck: art content.** Agents can write the shaders, procedural
-textures, lighting rig, and asset integration — but the last mile of the PGA
-look is real art (turf/sand albedo+normal maps, tree sprites, a skybox). Either
-license/curate CC0 or asset-store packs (agents integrate; adds bundle weight,
-mitigated by lazy-load + compression), or a designer produces bespoke art.
+**Worker**
 
-### 3. Direct answers
-- **Own physics?** Already have it — keep it (deterministic, unit-tested).
-- **Own visual engine?** No — Three.js is our engine and can reach the look.
-- **Need agents?** Yes for the engineering (fleet + harness). Agents can't
-  manufacture licensed art — that's the one non-agent input.
-- **Range odd?** Agreed — retire the water-island idiom; aim the work at the
-  hole/course format (the destination).
+| Area | Path |
+|---|---|
+| Leaderboard, records, challenges, daily, tournaments | `packages/relay-worker/src/games.ts` |
+| Wallet, cosmetics, season | `packages/relay-worker/src/economy.ts` |
+| Tournament period/seed/award math | `packages/relay-worker/src/tournaments.ts` |
+| Migrations | `packages/relay-worker/migrations/0006–0013` (see §1.7) |
 
----
+### 2.3 Commands
 
-## Roadmap (recommended order)
-
-Gameplay clean first, then the look, then the course — each step reuses the last.
-
-1. **Nail the aim/shot control** — touch-the-ball → power arc → aim line +
-   landing reticle → wind-adjusted second path → tap-timing release. Prediction
-   from the sim; verified by the harness. Biggest felt improvement.
-   **→ Done:** `rangeSim.predict()` + the on-turf arc/reticles/dispersion cone
-   in `RangeGL` (see "Live aim prediction" above). Next felt improvements here
-   would be a draggable landing reticle (adjust aim by dragging the target) and
-   folding the power arc onto the ball itself; both build on `predict()`.
-2. **Level up visuals in Three.js** — PBR turf/sand, real sun + soft shadows +
-   ambient light, sky + distance haze, lit tree sprites, glossier ball, light
-   bloom/tone-mapping. The ~80% path, no new dep. Retire the odd range look here.
-   **→ Done (first pass):** ACES filmic tone mapping + exposure; a stronger warm
-   key sun with a soft-shadow map (ball/tree/flag contact shadows now read) over
-   a sky/ground hemisphere fill; deeper, crisper sky with defined puffy
-   cumulus; warmer, denser distance haze (fog); richer, glossier striped turf
-   with a subtler mow delta and stronger blade normals; the odd flat tee-mat
-   disc removed (tee peg + soft ball shadow ground the ball). All in `RangeGL`,
-   verified by headless Chromium screenshots of every layout. No new dep; `three`
-   stays a lazy chunk. **Not yet:** post-process bloom (rejected outright in
-   `/GRAPHICS.md` §3 — an `EffectComposer` render target is 46 MB at phone size),
-   billboard tree sprites. **→ Also done (second pass):** scene-wide IBL and real
-   sand — see "Scene-wide IBL, and real sand" below.
-   Tune light intensity/exposure against device screenshots next.
-   **Gotcha (learned the hard way):** a 2048² shadow map once crashed the
-   WebView GPU process on real Android (black screen, needs an app restart)
-   though it rendered fine in desktop/software GL, so it was reverted to 1024².
-   It was then **re-enabled to 2048² by request**, with a standing requirement to
-   re-verify on a low-end Android that never happened. **→ Now resolved by a
-   tier:** Course and Range run the 1536² this doc itself nominated as the first
-   dial to turn down, Putt keeps its 1024², and `?shadow=2048` reproduces the
-   crashing configuration on a handset without a rebuild. See "Quality tiers, GPU
-   numbers and the shadow map" below. Test GPU-cost changes on a low-end device,
-   not just the headless screenshot harness.
-3. **Hole engine → 9-hole par-5 course** — a hole = tee → fairway → green → cup
-   with per-hole terrain, par, distance-to-pin, wind. Same sim, same aim UI,
-   same shaders. Then it's mostly hole data + terrain art to build the nine.
-   (User's stated goal: a 9-hole course of par 5s, after gameplay is clean.)
-   **Decision (user):** slopes are **physics-coupled EVERYWHERE** — putts break,
-   the ball rolls downhill / checks uphill, sidehill lies push — not visual-only.
-   **→ Started:** `lib/golf/terrain.ts` — a hole is DATA (`CourseHole`): a
-   fairway CENTERLINE + half-width (doglegs are bent points), a raised, planar-
-   TILTED green, circular bunker/water features that DISH the heightfield, a cart
-   path ribbon, rough/OB falloff, and a tee→green grade + rolling value-noise
-   hills. `heightAt()`/`gradientAt()` give elevation + slope and `surfaceAt()`
-   the lie — ONE source of truth for both the (coming) terrain mesh and the ball
-   physics. `slopeAccel()` is the downhill roll term (a ≈ −g·gradient) the course
-   sim will add each grounded substep; greens are graded flat under the pad so
-   their own tilt (not the surrounding mounds) breaks a putt. Showcase `HOLE_1`
-   (dogleg-right par 5) + a headless harness (`terrain.test.ts`) proving break,
-   downhill-vs-uphill run and a flat-hole regression.
-   **→ Also done:** `lib/golf/courseSim.ts` — a terrain-aware full-shot sim that
-   REUSES the range's tuned ballistics + `TERRAIN` lie materials (constants
-   exported from `rangeSim`), but the ground is the hole's heightfield: flight
-   lands at `heightAt`, the grounded roll adds `slopeAccel` each substep, the lie
-   under the ball drives bounce/roll, and a cup captures a slow putt. Added a
-   `cartpath` lie material (firm/lively). `courseSim.test.ts` proves it on
-   `HOLE_1`: tee shots land on terrain with real lies, a putt BREAKS (vs a flat-
-   green control) and can be HOLED, a wedge finds the pond, a pull goes OB, and a
-   downhill putt outruns the same uphill one. 28/28 golf tests pass (range still
-   15, untouched).
-   **→ Also done (v1):** `components/golf/CourseGL.tsx` renders a hole in 3D from
-   the SAME data — a displaced ground mesh sampled from `heightAt`, vertex-
-   COLOURED per lie from `surfaceAt` (so the fairway/green/rough/bunker/water/
-   cart-path you see are the surfaces the ball plays), a big fill plane to the
-   horizon, translucent water discs, a flagstick, the ball on the tee, faceted
-   framing trees, and the range's tuned lighting rig (ACES + warm sun + 2048²
-   soft shadows + sky/haze). A golfer's-eye tee camera. Verified with a headless
-   swiftshader screenshot of `HOLE_1` (reads as a tree-lined fairway to a distant
-   flag).
-   **→ Also done — PLAYABLE v1:** `CourseGL` now drives a live `CourseSim` on the
-   fixed-step loop with the range's slingshot input (drag to aim — steering off
-   the bearing-to-pin so "straight" points at the flag on a dogleg — pull for
-   power, release to arm), a tap-timing accuracy bar, camera-follow, a ball
-   tracer and an aim line. `CourseSim` gained the interactive surface
-   (onPointerDown/Move/arm/fireArmed, club cycle, spin, getState, strokes,
-   water/OB replay-with-penalty, cup hole-out). `components/golf/CourseGame.tsx`
-   is the HUD wrapper (club selector, distance-to-pin/strokes/lie, accuracy bar,
-   hole-out banner) — lazy-loaded so `three` stays a chunk. Wired into the Games
-   hub: **Golf → "Course · Hole 1 (beta)"** plays the hole full-bleed. Verified
-   headless (a scripted driver flies with camera-follow; the HUD renders).
-   **→ Also done — range parity + polish (user feedback "the aim arc, the
-   power… so much is missing"):** `CourseSim.predict()` (non-committing
-   trajectory on the terrain, snapshot/restore, harness-asserted to match the
-   committed shot to the yard) drives a **predicted aim arc** in `CourseGL` — a
-   bright centre trajectory to a **landing reticle** + a **roll-out marker**, and
-   two faded **dispersion** edges (worst hook ↔ slice), refreshed on drag/arm.
-   Added a **vertical power meter** to the HUD (fills as you pull, reddens near
-   max), a putt-read break arrow on the green (fall line from `slopeUnder()` —
-   later REMOVED in the green overhaul below; the HUD break text stays),
-   and **textures**: a mow-stripe turf map on the ground, sand-grain caps on the
-   bunkers, and a drifting ripple normal on the water. The strike/accuracy bar
-   was kept (the user likes it); verified headless
-   (aiming shows the arc + dispersion + power meter).
-   **→ Also done — arc fix + shared-physics refactor:** the predicted aim arc was
-   invisible on the SECOND+ aim — the aim-aid BufferGeometry's cached
-   `boundingSphere` went stale and three.js frustum-culled the arc BEFORE drawing
-   (that's why the earlier dots-vs-lines, depthTest and renderOrder patches all
-   failed — they act AFTER culling). Fix: `frustumCulled = false` on all six
-   aim-aid objects in `CourseGL` (parity with `RangeGL`, which already did this —
-   why the Range never hit the bug), and `ARC_MAX` raised 700→2048 (long shots
-   were being truncated). Refactor: `CourseSim.predict()` no longer hand-copies 13
-   fields — it uses a `snapshot()`/`restore()` pair over a full `CourseSnapshot`
-   plain-data struct and dry-runs the REAL swing/substep pipeline, so prediction
-   and the live shot are one integrator over one state. A guard test dumps ALL own
-   data props independently of `snapshot()` and asserts byte-identical state after
-   `predict()`, so it fails loudly if a new field is forgotten.
-   **⚠ RULE:** any new MUTABLE `CourseSim` field MUST be added to `CourseSnapshot`
-   + `snapshot()` + `restore()`, or the guard test fails.
-   **→ Also done — green + putting engine (v1):** new shared pure-math module
-   `lib/golf/greenPhysics.ts` (no `three`, no sim state): Stimpmeter green speed →
-   friction (μ = 0.611/stimp, `GREEN_STIMP=10`), roll-out `d=v²/(2a)`, and
-   speed-dependent cup capture. `courseSim` green/fringe roll uses this Coulomb
-   model (constant decel → a putt BREAKS more as it slows, emergent); off-green
-   surfaces keep the tuned run-out so the club ladder is unchanged.
-   **⚠ GREEN DESIGN GUARD:** a resting putt can only hold where slope ≲ μ (~6.1%
-   at stimp 10) — keep future green tilt under that, or raise stimp/μ in lockstep.
-   **→ Also done — ONE static-friction rest rule (fixes "ball rolls slowly forever
-   on a hill"):** a slow ball on a slope used to sit on the KINETIC angle-of-repose
-   contour (where `slopeAccel == frictionFor(surf)`) and creep downhill forever,
-   re-accelerated each grounded substep, because the rest gate compared the slope
-   against the KINETIC hold (so a slope a hair steeper never let it settle — only
-   the 100000-step safety guard, ~833 s, ever stopped it). `courseSim.substep` now
-   rests on EVERY grounded surface (green/fringe/fairway/rough/bunker/tee/cartpath)
-   by ONE rule: `speed ≤ restSpeed(surf) AND |slopeAccel| ≤ staticHold(surf)`. The
-   hold is STATIC friction — `frictionFor(surf)·STATIC_HOLD_FACTOR` (1.3) off the
-   green — so a ball rolls to the kinetic-repose contour and STATIC friction then
-   HOLDS it (rest is set, play advances); only a genuinely steep slope (slopeAccel
-   above the static hold) keeps rolling. On the green/fringe the static hold IS the
-   Stimpmeter μ·g (`greenDecel`, static == kinetic BY the green design guard above),
-   so the putt-rest and the fairway/rough-rest are now the SAME rule — break/holing
-   unchanged. All module consts (no new mutable `CourseSim` field → snapshot guard
-   untouched); tuned/proved against the vitest harness (`courseSim.test.ts`).
-   **→ Also done — course/green OVERHAUL (3 phases; the earlier bold slope-read
-   overlay was REMOVED):**
-   • **Phase 1 — scalable surface model (`terrain.ts`).** A hole is now fully
-     data-driven via `CourseHole` with a documented "HOW TO AUTHOR A HOLE"
-     contract header IN `terrain.ts` (centerline, `fairwayHalf` + optional
-     `fairwayTaper`, `roughHalf`/OB, `green{r,raise,tiltPct,tiltDir,undulation}`,
-     `fringeW` collar, `hazards[]`, `cartPath`, `terrain`, `wind`). `surfaceAt()`
-     precedence is strict — green > fringe > bunker/water > cartpath > tee >
-     fairway > rough > ob — so a hazard never touches the putting surface;
-     `heightAt()` makes the green plateau span green+fringe (flush collar). New
-     exports `TEE_R`, `corridorHalfAt`, `greenPadRadius`. Invariants (pin inside
-     green; hazards outside `greenPadRadius`; green slope ≲ μ) are stated in the
-     header — treat THAT as the source of truth for authoring holes 2–9 / new
-     courses as pure data.
-   • **Phase 2 — putting physics + scale (`courseSim.ts`, `greenPhysics.ts`).**
-     Ball/cup scale is one source of truth: `BALL_R=0.2`, `CUP_R=0.5` (ratio 0.4,
-     a real ball/cup). Cup capture uses an ELLIPTIC effective-radius falloff
-     (`r_eff = cupR·√(1−(speed/limit)²)`) so an on-line putt at holing pace
-     reliably DROPS — the old "bounces off the pin" was actually capture failing
-     (there is NO pin collision). A putt-specific power model `puttSpeedForPower`
-     maps drag QUADRATICALLY (`speed = MIN + (MAX−MIN)·power²`) with a low
-     `PUTT_MIN_SPEED` so short putts are controllable (a dead tap rolls ~1.5 ft).
-     `predict()` reports `result==='holed'` for an on-line putt.
-   • **Phase 3 — rendering (`CourseGL.tsx`).** A baked top-down albedo surface map
-     (`makeSurfaceMap` via `surfaceAt`) drives distinct materials: bold-contrast
-     fairway mow stripes, darker/coarser rough at the edges, a cart path; a
-     distinct terrain-following FRINGE collar annulus (`green.r`→`greenPadRadius`)
-     so the green never abuts sand/water; a textured (seeded, deterministic grain)
-     green cap; and the ball SEATED at `b.h+BALL_R` with a contact-shadow disc (no
-     float). The on-green fall-line arrows + contour grid + slope heat tint were
-     REMOVED (clean green; the HUD "downhill · breaks left" text stays). New aim
-     cue: the predicted aim line + cup reticle PULSE gold/green when
-     `predict(0).result==='holed'` (replacing the arrows). The scene frame is
-     DERIVED from the hole (centerline + roughHalf + tee/pin extent) so ANY hole
-     renders fully — part of the scalability story.
-   **→ Also done — natural terrain (organic outlines + first cut + long-grass
-   rough + tee texture; 2 phases):**
-   • **Phase 1 — organic feature outlines (model, `terrain.ts`).** Bunkers,
-     ponds, the green and its fringe collar no longer have circular outlines: a
-     shared deterministic edge-noise `edgeNoise(seed, angle)` +
-     `edgeRadius(seed, angle, baseR)` (default ±`EDGE_WOBBLE`=15%) perturbs each
-     feature's radius by a smooth, seeded, 2π-periodic wobble, with a per-feature
-     `featureSeed(d, x)` (green + fringe SHARE the green's seed so the collar
-     nests). `surfaceAt()` and `heightAt()` both call it, so the classified/played
-     AND the baked-rendered outlines are organic for ANY hole — the green interior
-     (tilt/undulation → break) is unchanged; only the EDGES wobble. The authoring
-     invariants gained a matching `(1+EDGE_WOBBLE)` margin: the pin sits inside the
-     MIN (wobbled-in) green radius, and a hazard clears the green's MAX wobbled
-     fringe pad (`maxGreenPadRadius`; new export). The `terrain.ts` contract header
-     is the source of truth and now documents organic edges.
-   • **Phase 2 — rendering (`CourseGL.tsx`).** `buildOrganicDisc`/
-     `buildOrganicAnnulus` draw the green cap, fringe collar, bunkers and water
-     from the SAME `edgeRadius`+`featureSeed`+angle convention as the model, so
-     drawn == played == baked (see-what-you-play), all model-driven (scales to any
-     hole). Water is now a terrain-FOLLOWING organic disc (`heightAt` per vertex)
-     that covers its full footprint — fixing a dark-crescent/faceted-seam bug where
-     a flat water plane let the higher downrange basin rim poke through. Rough is
-     retextured to read as long grass (stretched/warped streak noise); a smooth
-     "first cut" is a crisp, narrow fairway↔rough band (a uniform mown collar
-     framed by dark mow lines at each seam) via the read-only `corridorEdgeDist`
-     helper (render-only — physics classification is UNCHANGED);
-     the tee box is textured (`makeTeeTurf`). All scene textures are seeded
-     (`mulberry32`, no `Math.random`) for deterministic screenshots.
-   • **Terminology:** the fairway↔rough intermediate is the "first cut"; the
-     "fringe" is the collar around the green.
-   **→ Also done — best-shot records:** `golf_records` D1 table (migration
-   `0007`) + `GET`/`POST /game/golf-records` in `games.ts`, tracked by
-   `CourseSim.recordShot()` and shown in the `CourseGame` recap. See "Best-shot
-   records (course)" above.
-   **→ Also done — regression harness:** a permanent `secondAim` scene in
-   `scripts/shoot-golf.mjs` drives TWO real rendered aims with a fire between them
-   — the only sequence that reproduces the frustum-cull class (the old single-aim
-   harness couldn't). Run: `pnpm --filter @relay/ui shoot:golf secondAim`.
-   80 UI golf tests pass across 5 files (range 15, courseData 14, courseSim 31,
-   terrain 13, greenPhysics 7); worker `games.test.ts` grew golf-records coverage.
-   **Next:** author the remaining holes 2–9 as pure data per the `terrain.ts`
-   contract header, and consolidate Mini-Golf (`puttSim`/`PuttGL`) onto a real
-   heightfield so it can share `greenPhysics` (today it stays a separate flat
-   engine) — pending on-device feel feedback.
-
-**Working principle going forward:** tune against the **harness** and **device
-telemetry**, not guesses — that's why both exist.
+- `pnpm --filter @relay/ui test` — the golf sim harness (dynamics tables, hole
+  validators, budget ratchets).
+- `pnpm --filter @relay/ui shoot:golf` — headless screenshots of all 29 scenes
+  AND the numeric GPU gate (draw calls / triangles vs
+  `scripts/budgets.golf.json`; non-zero exit on a regression). One scene:
+  `pnpm --filter @relay/ui shoot:golf secondAim`.
+- `pnpm typecheck` · `pnpm --filter @relay/ui build` (confirm `three` stays a
+  lazy chunk and the entry chunk is unchanged).
+- `pnpm --filter @relay/worker test` — worker suite, including golf-records,
+  challenge, daily, tournament and economy coverage.
 
 ---
 
-## Rendering, the shared scene kit, and visual QA
+## 3. Conventions that bite
 
-The Course and Range 3D scenes drifted — the Range grew rich lit turf, a cloud
-sky and a two-species tree grove while the Course stayed on flat paint. The
-shared ingredients now live in **`lib/golf/scenery.ts`** (turf colour + normal,
-sky dome, fog) and BOTH `CourseGL` and `RangeGL` import them, so a
-look change happens once. The **tree grove** is shared the same way but lives in
-**`components/golf/scene/foliage.ts`** — it moved there when it was instanced,
-because an `InstancedMesh` needs its count up front and so cannot be a pair of
-`add…()` calls that each drop a `Group` into the scene. Same rule applies: change
-the trees THERE, not per-scene. The Course terrain is multi-surface (per-vertex
-`SURFACE_RGB`), so it uses `makeTurfColor('neutral')` — a near-white luminance
-detail that MULTIPLIES the vertex colour (keeping each lie's hue while adding
-mown texture); the Range bakes `'green'`. `three` stays lazy: `scenery.ts` is
-only imported by the already `lazy()`-loaded `*GL.tsx`.
+- **Keep the physics.** It is small, deterministic and unit-tested. Tune against
+  the vitest harness and device telemetry. Don't replace the integrator.
+- **A hole is DATA.** Author against the **"HOW TO AUTHOR A HOLE"** contract
+  header in `terrain.ts` — that header, not this doc, is the source of truth. It
+  covers the corridor (`centerline`, `fairwayHalf`, `fairwayTaper`, `roughHalf`),
+  the green (`r`, `raise`, `tiltPct`, `tiltDir`, `undulation`) and its `fringeW`
+  collar, organic edges (`edgeNoise`/`edgeRadius`/`featureSeed`, `EDGE_WOBBLE`),
+  `hazards`, `cartPath`, `terrain`, and the optional `bloom` canopy. The engine,
+  shaders, HUD and scene frame are all hole-agnostic and derive from the
+  `CourseHole`, so a new hole or a whole new course is data only.
+  - `surfaceAt()` precedence is strict — green > fringe > bunker/water >
+    cartpath > tee > fairway > rough > ob — so a hazard can never touch the
+    putting surface.
+  - Invariants (pin inside the MIN wobbled green; hazards outside
+    `maxGreenPadRadius`; green tilt ≲ μ) are enforced by `validateCourse()`, so
+    a mis-authored hole fails a test rather than shipping.
+- **⚠ GREEN DESIGN GUARD.** A resting putt can only hold where slope ≲ μ (~6.1%
+  at stimp 10). Keep green tilt + undulation under that, or raise stimp/μ in
+  lockstep. `builder.ts` derives the cap from `greenPhysics` rather than
+  hardcoding it.
+- **⚠ CourseSnapshot rule.** Any new MUTABLE `CourseSim` field MUST be added to
+  `CourseSnapshot` + `snapshot()` + `restore()`. A guard test dumps all own data
+  props independently and asserts byte-identical state after `predict()`, so it
+  fails loudly if a field is forgotten. Prediction and the live shot are ONE
+  integrator over ONE state — keep it that way.
+- **⚠ Terrain winding.** The Course ground is a custom displaced
+  BufferGeometry; its triangles must be wound so the top surface FRONT-faces up.
+  A downward winding gets back-face culled and the whole textured ground
+  vanishes, leaving only the flat fill plane (the long-standing "flat grass"
+  look). Keep the fill plane a few yards BELOW the terrain minimum so it backs
+  only the far-horizon void.
+- **⚠ Frustum culling on aim aids.** All aim-aid objects set
+  `frustumCulled = false`. A cached `boundingSphere` goes stale between aims and
+  three culls the arc BEFORE drawing, which is why depth/renderOrder patches
+  can't fix it. `shoot:golf secondAim` is the only sequence that catches this
+  class — two real rendered aims with a fire between them.
+- **Dispose GPU resources.** Track every geometry / material / texture via the
+  scene's `track()` helper; scenes `forceContextLoss()` on unmount.
+- **Seeded, never `Math.random`.** Every texture, particle and placement
+  generator in a scene is `mulberry32`-seeded, and animated scenes take their
+  time from `lib/scene3d/clock.ts`, never `performance.now()`. This is what
+  makes the visual gate a gate (§5.5).
+- **Test GPU-cost changes on a low-end device**, not just the headless harness.
+  SwiftShader validates composition, geometry and materials; it says nothing
+  about fill rate, VRAM or shadow-map size — the class of cost that actually
+  killed a WebView GPU process (`/GRAPHICS.md` §4 rule 4).
+- **Authored art needs a harness frame in the same change.** A hole carrying
+  `bloom` (or any per-hole art) with no scene in `SCENES` is art that can ship
+  or regress unreviewed. Three Augusta holes did exactly that.
+- **Visual change workflow.** Any change to a scene, its materials, lighting or
+  geometry: `golf` implements → `code-reviewer` (diff) → `qa-verify`
+  (typecheck / tests / build) → **`golf-visual-qa`** (before/after screenshots,
+  Course vs Range parity) → human review. Typecheck and unit tests never catch a
+  broken render. Capture a **before** and an **after**; a "visual" change with no
+  visible delta is itself a finding.
 
-**Shared water (`lib/golf/water.ts`).** Water is single-sourced across all
-three scenes — Course, Range and Putt attach ONE material to their own geometry
-and never make look/behaviour decisions of their own. It replaced a
-`MeshStandardMaterial` with a mottled colour map that read as "a blue lid",
-for four compounding reasons worth remembering:
+---
 
-1. **The Course surface followed the dished terrain**, so it was a *bowl*.
-   Water is the one surface in the world that is exactly level, and a curved one
-   reads as tinted ground instantly.
-2. **Nothing reflected.** No env map, and `scene.environment` is deliberately
-   unset — yet at golf camera angles real water is mostly mirror.
-3. **One opacity and one colour edge to edge** — no Fresnel, no depth.
-4. **The ripple repeats were baked into the shared texture**, so the Range's
-   150 yd plane and the Course's ~26 yd pond got the same anisotropic tile,
-   which combed the wave trains into horizontal stripes.
+## 4. Known-dead and known-misleading code
 
-What it does now:
+Recorded so the next reader is not misled. None of it is a bug in play; all of
+it looks live and isn't.
+
+- **`CourseHole.wind` is DEAD.** The field exists, is documented in the
+  authoring header, is defaulted to `{along: 0, cross: 0}` by `hole()`, and is
+  read exactly once — in the `CourseSim` constructor. Every construction site in
+  `CourseGame` immediately calls `setWind()` with the ROUND wind
+  (`applyRoundState` on `nextHole`/`playAgain`, and explicitly in the
+  constructor path and `playRoundAgain`), so a per-hole value could never take
+  effect. No authored hole sets one. If per-hole wind is ever wanted, the change
+  is in `CourseGame`'s round-wind application, not in the data.
+- **`lib/golf/courseData.ts` is largely unreachable from the app.** It is an
+  18 kB metric (SI) data layer — `HeightField`, `SurfaceMask`, `CourseData`,
+  `buildTerrainMesh`, `buildCourseData`, its own `SURFACE_RGB` /
+  `decodeSurface`. `CourseGL` imports **five** things from it and nothing else:
+  `sampleHeightField`, `FLAGSTICK_HEIGHT_M`, `HOLE_DIAMETER_M`,
+  `BALL_DIAMETER_M`, `YD_PER_M`. The rest is exercised only by
+  `courseData.test.ts` (14 tests). The live model is `terrain.ts`, in yard
+  space. Note the name collision: the `SURFACE_RGB` the scene actually uses
+  comes from `scenery.ts`, not from here.
+- **`HOLE_1` / `COURSE_HOLES` in `terrain.ts` are QA fixtures, not shipping
+  content.** `COURSE_HOLES = [HOLE_1]` has no importer. `HOLE_1` is the
+  showcase dogleg-right par 5 the sim tests and the screenshot harness's default
+  `course`/`secondAim` scenes run on (`golfpreview.tsx`). No player can reach
+  it — Course mode plays `GOLF_COURSES`. Keep it: it is the stable baseline
+  frame for the visual gate.
+- **`water.ts`'s `pickWaterQuality` promotes on a capability sniff**
+  (`cores > 4 && maxTextureSize >= 8192`), which a typical mid-range Android
+  satisfies — so the tier meant to be gated behind headroom is what most phones
+  get. Called out as a **known defect** in `/GRAPHICS.md` §4 and in
+  `scene3d/README.md`'s extraction rule. Do NOT copy the pattern; the correct
+  one is `lib/scene3d/quality.ts` (default DOWN). Fixing it is its own gated
+  commit, never folded into a move.
+- **Open water makes a frame non-exact.** Everything else in the harness is
+  exact-pixel comparable; a frame with open water in it is not (§5.5).
+
+---
+
+## 5. Rendering, GPU cost and the visual gate
+
+Platform-level reasoning is in `/GRAPHICS.md` — this section is golf's
+implementation of it.
+
+### 5.1 Quality tiers
+
+- **The policy is shared, the numbers are not.** `lib/scene3d/quality.ts`
+  (`pickSceneQuality`) implements **default DOWN, promote only on measured
+  evidence**; golf's table lives in `components/golf/scene/quality.ts`. The only
+  automatic decisions step DOWN — a WebGL1 context, `maxTextureSize < 4096`, a
+  fragment precision below `highp`. `high` is unreachable without an explicit
+  `?quality=high`; it exists to be forced on a handset, not handed out.
+- **⚠ A tier may never RAISE a scene's cost, so sizes are PER SCENE.** "Default
+  1536² everywhere" reads as a step down because two of three scenes were at
+  2048² — but `PuttGL` was already at **1024²**, and a flat default would have
+  made a currently-safe scene 2.25× more expensive in shadow memory. **Course
+  and Range: 1536² (from a shipped 2048²). Putt: 1024², unchanged. `low` drops
+  the shadow pass entirely** (and Putt's map to 512²). `high` raises the map in
+  no scene — it buys `pixelRatioCap` only, and even that is 2 at `medium` and
+  `high` because that is what all three scenes cap at today.
+  `SHIPPED_SHADOW_MAP_SIZE` is written down rather than inferred, so a future
+  edit that raises a row has to change that line too — and changing it is a claim
+  that an on-device test was run. The four dials are `shadows`, `shadowMapSize`,
+  `pixelRatioCap` and `ibl`; `quality.test.ts` asserts no tier of any scene
+  exceeds what that scene ships, and that every dial is monotonic across tiers.
+- **Knobs, for the on-device bisect that is still owed:**
+  `?quality=low|medium|high` and `?shadow=1024|1536|2048` (an allowlist — a
+  fat-fingered value falls back to the tier), plus `?water=high|medium|low`.
+  `?shadow=` is deliberately allowed to go UP: reproducing the configuration
+  that crashed is half of bisecting it. The scenes themselves read them, so the
+  app and the preview take the identical code path, and
+  `shoot-golf.mjs --query=shadow=2048` shoots the whole matrix at a forced knob.
+  ⚠ `?shadow=` applies globally, so Putt is NOT a control in a forced run.
+- **The 1536² tier was visually verified and it is free.** The Course shadow
+  camera is 640 × 680 world units — 0.42 units/texel at 1536² against 0.31 at
+  2048² — and `BALL_R` is 0.2, so the ball's shadow is **sub-texel at both
+  sizes**. Ball seating never came from the shadow map (`CourseGL` draws an
+  explicit soft contact disc). Worst measured scene was `course-approach` at
+  `meanAbs 0.087`; frames are indistinguishable at 1:1. 2048² was paying 2.25×
+  the memory for detail the shadow frustum cannot resolve.
+  ⚠ That removes the *visual* objection only. Whether 1536² still trips the
+  WebView GPU process is untested on hardware.
+
+### 5.2 Numbers, printed and enforced
+
+Each scene calls an `onStats` prop every ~30 frames with `renderer.info` plus
+the resolved tier and its reason; `golfpreview.tsx` publishes it as
+`window.__golfStats` (readable straight off a handset console). `shoot-golf.mjs`
+prints a GPU line per scene and checks it against the committed
+`scripts/budgets.golf.json` (29 scene entries), exiting non-zero on a
+regression. The reporter is game-neutral (`scripts/lib/shoot-report.mjs`).
+Regenerate a baseline explicitly with `--update-budgets` — **never
+automatically**, or the gate rewrites its own thresholds when they fail.
+Tightening a ceiling after a measured win is the opposite thing and is correct.
+
+**Where the committed baseline sits.** Worst draw calls in the whole game:
+`range-water` **110**, `range` **89**, then every Course and Mini-Golf scene at
+**24–50**. Worst triangles: `augusta15` **128.5k**, `augusta8` **127.6k**,
+`augusta2` **121.2k**; `putt-water` is **30 calls / 94.1k triangles**, still ~9×
+every other putt scene and carrying a `_bug` note in the budget file so the
+ceiling is not mistaken for approval (see defect 2 below).
+
+**What these numbers cannot see.** They count what the CPU SUBMITTED. Fill rate,
+VRAM and shadow-map size are invisible to them and to SwiftShader. A green
+budget is not evidence of on-device safety. Worked example: turning on
+`scene.environment` measured identical draw calls and identical triangles on all
+six compared scenes (only `textures` moved, +2) while adding a **cubeUV sample
+to every lit fragment** — on a full-screen turf scene, most of the frame.
+
+**The frame-time probe exists but does not feed the tier.** `stats.ts`
+`makeFrameProbe` reports a MEDIAN (never a mean — a phone's outliers are free)
+and rides along in the stats payload. It is deliberately not wired into
+promotion: the median arrives after the scene is built, so promoting on it would
+mean persisting a verdict across sessions, and persisted cross-run state would
+make the harness's tier depend on a previous run. The bar a future promotion
+must clear is written in `quality.ts`'s header (≤20 ms median over ≥300 settled
+frames at `medium`, twice, same device + scene). The probe's value is kept OUT
+of the harness printout because it is wall-clock and would make an unchanged run
+print differently twice.
+
+### 5.3 Water, and the shoreline
+
+Water is single-sourced in `lib/golf/water.ts` across all three scenes — Course,
+Range and Putt attach ONE material to their own geometry and make no look
+decisions of their own.
 
 - **Level surfaces with per-vertex depth.** Geometry carries an `aDepth`
   attribute (yards of water above the bed); the shader discards where it is ≤ 0,
   so the visible waterline is where the level plane meets the rising bank — a
   terrain-derived shoreline that cannot disagree with the outline `surfaceAt`
-  classifies. The old painted shoreline annulus is gone.
+  classifies.
 - **`heightAt` grades a WATER PAD** (`terrain.ts`) exactly like the green pad:
   hills AND the tee→green grade are erased inside a water hazard's outline and
   ramped back over a skirt, so the basin rim is one height all the way round.
@@ -469,59 +642,43 @@ What it does now:
   ponds was 1.3–2.7 yd against a 2.2 yd basin. `waterLevelAt(hole, hz)` is the
   single source for the waterline. **Bunkers are excluded** — sand genuinely
   follows the ground it sits in.
-- **Gerstner waves** in the vertex shader with analytic normals, so crests
-  actually travel. Steepness is DERIVED from amplitude (`k·a`) — passing both
-  separately once left the surface geometrically calm but *shaded* as heavy
-  chop, which mottled the pond like static.
+- **Gerstner waves** in the vertex shader with analytic normals, steepness
+  DERIVED from amplitude (`k·a`); passing both separately once left the surface
+  geometrically calm but *shaded* as heavy chop.
 - **Fresnel + reflection**: the sky gradient always (the same
-  `makeSkyGradientTexture` that feeds the ball's PMREM, so the pond and the sky
-  dome can't drift), and on the `high` tier a true planar reflection.
+  `makeSkyGradientTexture` that feeds the ball's PMREM, so pond and sky dome
+  can't drift), and on the `high` tier a true planar reflection — a SECOND full
+  scene render per frame, which is why it is gated.
 - **Wind-driven**: wave direction, amplitude, wavelength and whitecaps come from
   the hole wind, via the same `windMph`/`windBearing` the HUD's WindChip reads.
-- **`makeWaterFX`**: the droplet crown + expanding ripple rings, seeded so
-  screenshots are stable. This existed only in the Range; the Course played a
-  splash SOUND and drew nothing, and Putt had neither.
-
-**Shoreline (`makeWetBankMaterial` / `makeReeds`).** Two features that live on
-the water's EDGE rather than its surface, and between them do as much for the
-illusion as the shader does:
-
-- **Wet bank** — a dark, low-roughness overlay revealed by per-vertex alpha
-  (`attachBankWetness`), straddling the waterline. It is what makes the water
-  look like it TOUCHES the land instead of sitting on top of it. Height above
-  the waterline alone is NOT enough to place it: the water pad grades the
-  surround level, so ground stays within inches of the waterline for yards
-  outward and a purely height-driven band floods the whole shoulder. Multiply
-  the shared height profile (`bankWetnessFromHeight`) by a horizontal falloff
-  from the shore — smoothstepped, or the band's outer edge reads as a drawn
-  outline.
-- **Reeds** — clumped tufts of cattails at the margin. A pond's outline is the
-  most artificial thing left in frame once the surface reads right; reeds break
-  that curve and, being tall, give the water something to be *behind*. Blades
-  and cattail heads bake into ONE merged geometry per belt (one draw call, both
-  coloured per vertex) and sway in the vertex shader — injected into a standard
-  material via `onBeforeCompile`, so they keep the scene's lighting, shadows and
-  fog — off the SAME wind that drives the waves. Placement clumps deliberately:
-  an evenly-spaced ring reads as landscaping and walls the pond off from the
-  player. The Course finds its shoreline by BISECTING the terrain (the basin
-  dishes, so height rises monotonically outward) rather than assuming a radius,
-  so any basin profile works; Putt uses the rectangular variants
-  (`makeWetBankRect` / `reedRectAnchors`). The Range lake's only shoreline is
-  the distant fence line, so it takes neither.
-
-**Quality tiers.** `pickWaterQuality(renderer)` returns `high | medium | low`,
-overridable with **`?water=high|medium|low`** on the preview page so the extra
-pass can be checked on a real handset without a rebuild. Only `high` adds the
-Tier 3 planar reflection — a SECOND full scene render per frame — so it is
-gated behind GPU/CPU headroom. Everything below it costs no more than an
-ordinary material and still gets level water, Fresnel, moving crests and foam.
+- **`makeWaterFX`**: droplet crown + expanding ripple rings, seeded.
+- **Wet bank** (`makeWetBankMaterial` / `attachBankWetness`) — a dark,
+  low-roughness overlay revealed by per-vertex alpha, straddling the waterline.
+  It is what makes water look like it TOUCHES the land. Height above the
+  waterline alone is NOT enough to place it: the water pad grades the surround
+  level, so ground stays within inches of the waterline for yards outward.
+  Multiply the shared height profile (`bankWetnessFromHeight`) by a smoothstepped
+  horizontal falloff from the shore.
+- **Reeds** (`makeReeds`) — clumped cattail tufts at the margin. A pond's
+  outline is the most artificial thing left in frame once the surface reads
+  right; reeds break that curve and give the water something to be *behind*.
+  Blades and heads bake into ONE merged geometry per belt (one draw call,
+  coloured per vertex) and sway in the vertex shader, injected into a standard
+  material via `onBeforeCompile` so they keep the scene's lighting, shadows and
+  fog. Placement clumps deliberately — an evenly spaced ring reads as
+  landscaping and walls the pond off. The Course finds its shoreline by
+  BISECTING the terrain (the basin dishes, so height rises monotonically
+  outward) rather than assuming a radius; Putt uses the rectangular variants
+  (`makeWetBankRect` / `reedRectAnchors`). The Range lake's only shoreline is the
+  distant fence line, so it takes neither.
 
 **Gotchas that cost real time here:**
+
 - Clipping the reflection at the waterline via `renderer.clippingPlanes` flips
   the renderer's plane COUNT every frame, and three rebuilds *every* material's
   program when that count changes — a full shader recompile per frame. Use an
-  **oblique near plane** on the reflection camera instead (it is inside the
-  projection matrix, and free).
+  **oblique near plane** on the reflection camera instead (inside the projection
+  matrix, and free).
 - Render the reflection pass with **tone mapping OFF into a LINEAR target**, or
   it is tone-mapped once into the target and again by the water shader and comes
   out visibly grey.
@@ -532,106 +689,321 @@ ordinary material and still gets level water, Fresnel, moving crests and foam.
   rim: dropping the waterline even a quarter-yard pulls the shore a long way
   inward and leaves a crater. `WATER_LIP` is 0.05 for a reason.
 - Three's `<fog_vertex>` chunk reads a varying named **`mvPosition`** — name the
-  view-space position that or the shader silently fails to compile, three logs to
-  `console.error` (NOT `pageerror`) and skips the mesh, so the scene renders
-  minus the water and looks plausibly fine. `shoot-golf.mjs` now captures
-  console errors for exactly this reason.
+  view-space position that, or the shader silently fails to compile, three logs
+  to `console.error` (NOT `pageerror`) and skips the mesh, so the scene renders
+  minus the water and looks plausibly fine. `shoot-golf.mjs` captures console
+  errors for exactly this reason.
 
-**Quality tiers, GPU numbers and the shadow map.** Golf had no quality tiering,
-no frame-time probe and no GPU instrumentation at all: `shoot-baseball.mjs`
-printed draw calls / triangles / programs / geometries / textures per scene while
-`shoot-golf.mjs` printed nothing numeric — and golf is the bigger, shipped scene.
-Everything on the fidelity roadmap adds GPU cost, so the measurement had to come
-first. Three pieces, all in `/GRAPHICS.md` §4's terms:
+### 5.4 Lighting, IBL, sand and the instanced grove
 
-- **The policy is shared, the numbers are not.** `lib/scene3d/quality.ts`
-  (`pickSceneQuality`) implements **default DOWN, promote only on measured
-  evidence**; golf's own table lives in `components/golf/scene/quality.ts`. The
-  only automatic decisions step DOWN — a WebGL1 context, `maxTextureSize < 4096`,
-  a fragment precision below `highp`. `high` is unreachable without an explicit
-  `?quality=high`; it exists to be forced on a handset, not handed out.
-  ⚠ Do **not** copy `water.ts`'s `pickWaterQuality`, which promotes on
-  `cores > 4 && maxTextureSize >= 8192` — a typical mid-range Android satisfies
-  that, so the tier meant to be gated behind headroom is what most phones get.
-- **⚠ A tier may never RAISE a scene's cost, so the sizes are PER SCENE.** The
-  obvious version of this change was "default 1536² everywhere". That reads as a
-  step down because two of the three scenes were at 2048² — but `PuttGL` was
-  already at **1024²**, and a flat default would have made a currently-safe scene
-  2.25× more expensive in shadow-map memory. **Course and Range: 2048² → 1536².
-  Putt: stays 1024². `low` drops the shadow pass entirely.** `high` does not
-  raise the map in any scene. `quality.test.ts` asserts no tier of any scene
-  exceeds what that scene ships, and that every dial is monotonic across tiers.
-- **The knobs, for the on-device bisect that is still owed:**
-  **`?quality=low|medium|high`** and **`?shadow=1024|1536|2048`** (an allowlist —
-  a fat-fingered value falls back to the tier). `?shadow=` is deliberately
-  allowed to go UP: reproducing the exact configuration that crashed is half of
-  bisecting it. Both are read by the scenes themselves, so the app and the
-  preview take the identical code path, and `shoot-golf.mjs --query=shadow=2048`
-  shoots the whole matrix at a forced knob.
-- **Numbers, printed and enforced.** Each scene calls an `onStats` prop every
-  ~30 frames with `renderer.info` plus the resolved tier and its reason;
-  `golfpreview.tsx` publishes it as `window.__golfStats` (readable straight off a
-  handset's console). `shoot-golf.mjs` prints a GPU line per scene and checks it
-  against the committed **`scripts/budgets.golf.json`**, exiting non-zero on a
-  regression; the reporter itself is game-neutral (`scripts/lib/shoot-report.mjs`)
-  so baseball can adopt it. Regenerate a baseline explicitly with
-  `--update-budgets` — never automatically, or the gate rewrites its own
-  thresholds when they fail. Baselines from the committed run: **Course scenes
-  24–50 draw calls / 59k–119k triangles, Range 89–110 / 15k–23k, Mini-Golf
-  27–38 / 11k (94k on `putt-water`)**.
-  ⚠ **1,034 draw calls on the tee view of Hole 1 WAS the standout finding** — an
-  order of magnitude above the whole baseball stadium. It is now **41**: the cause
-  was un-instanced foliage, see "Instanced foliage" below. The ceilings were
-  re-baselined DOWN in the same change. Tightening a ceiling after a measured win
-  is correct, and is the opposite of the rule against regenerating one because it
-  failed.
-- ⚠ **Worked example of the blind spot: scene IBL cost ZERO draw calls.** Turning
-  on `scene.environment` measured identical draw calls and identical triangles on
-  all six compared scenes — only `textures` moved, +2. That number is true and it
-  is misleading. Setting `scene.environment` adds a **cubeUV sample to every lit
-  fragment** at medium/high, which is pure fill rate and is invisible to
-  `renderer.info`. On a full-screen turf scene that is most of the frame, and it
-  is precisely the cost the original ball-only `envMap` decision was written to
-  avoid ("so turf/trees/water pay no per-frame env cost"). SwiftShader is software
-  GL and cannot speak to it. **Get a frame-time reading on a low-end Android
-  before trusting `medium` here** — same handset that lost its GPU process to the
-  2048² shadow map. `?quality=low` is the mitigation and is untouched by the IBL
-  change, which is the right shape if it turns out to be needed.
-- **What these numbers cannot see.** They count what the CPU SUBMITTED. Fill
-  rate, VRAM and shadow-map size — the class of cost that actually killed the
-  WebView GPU process — are invisible to them, and to SwiftShader. A green budget
-  is not evidence of on-device safety.
-- **The frame-time probe exists but does not feed the tier.** `stats.ts`
-  `makeFrameProbe` reports a median (never a mean — a phone's outliers are free)
-  and it rides along in the stats payload. It is deliberately NOT wired into
-  promotion: the median arrives after the scene is built, so promoting on it
-  would mean persisting a verdict across sessions, and persisted cross-run state
-  would make the screenshot harness's tier depend on a previous run. The bar a
-  future promotion must clear is written down in `quality.ts`'s header (≤20 ms
-  median over ≥300 settled frames at `medium`, twice, same device+scene). The
-  probe's value is also kept OUT of the harness printout, because it is
-  wall-clock and would make an unchanged run print differently twice.
+- **Lighting rig.** ACES filmic tone mapping + exposure, a warm key sun with a
+  soft-shadow map over a sky/ground hemisphere fill, a deep sky with defined
+  cumulus, warm dense distance fog, and richly striped turf with strong blade
+  normals. Shared by Course and Range.
+- **Scene-wide IBL at `medium`/`high`.** `lib/scene3d/env.ts` paints a real
+  equirect — a sun disc at a true 0.53° angular size (energy-conserved when it
+  falls below a texel), a circumsolar halo, a three-stop sky and a turf-green
+  ground bounce — in **half-float**, because an 8-bit canvas clamps at 1.0 and
+  would cap the sun at sky brightness. `components/golf/scene/env.ts` holds
+  golf's palette, every colour lifted from the sky dome so dome / water
+  reflection / env can't drift.
+  - **⚠ THE TRAP.** IBL added on TOP of the existing hemisphere fill
+    double-counts the ambient and flattens everything to grey — which looks
+    exactly like "the IBL didn't work" and sends you tuning the wrong knob. The
+    fill comes down IN THE SAME CALL: `hemiFill()` is the only way a golf scene
+    sets hemisphere intensity and it reads the same `quality.ibl` flag. Numbers
+    derived, not guessed: the painted sky's cosine-weighted irradiance on an
+    up-facing normal is `(0.44, 1.09, 2.18)` at intensity 1 against the
+    hemisphere light's `(0.64, 0.86, 1.05)`, so `ENV_INTENSITY = 0.5` with
+    `HEMI_IBL_FACTOR = 0.28` holds total ambient luminance within ~10% while
+    moving the colour. Measured mean signed delta per channel: **R −1.0,
+    G +0.9, B +10.8** — warm key, cool sky-lit shade.
+  - **`low` keeps the old behaviour exactly** — ball-only `envMap`, full
+    hemisphere fill, `scene.environment` untouched, and the 21 KB 2×2 PMREM
+    rather than 1.5 MiB. `quality.test.ts` asserts it.
+  - **Memory:** 512×256 equirect → a 128 cube → 1.5 MiB per scene, no mips
+    (cubeUV packs every roughness level into the one target). `skyEnvBytes()`
+    computes it without a GPU and a unit test pins it. Three's "ideal"
+    1024×512 would be 6 MiB — 4.5 MiB more for a gradient, on a fleet that lost
+    a WebView GPU process to a 16 MB shadow map.
+- **Real sand** (`components/golf/scene/sand.ts`). Albedo, normal and roughness
+  all come off ONE tileable seeded value-noise height field plus cosine rake
+  ridges, so the grain you see, the bumps the sun rakes and the packed/loose
+  sheen agree. Roughness tracks height *inversely* — a rake compresses what it
+  pushes down, so furrow floors are glossier than the crust standing proud. The
+  Course and Putt used to paint their own near-identical grain; it is now one
+  generator with a `repeat`/`base`/`rake` per scene.
+- **Instanced foliage** (`lib/scene3d/instancing.ts` +
+  `components/golf/scene/foliage.ts`). Collect a transform and an optional
+  per-instance tint per prop, commit **one `InstancedMesh` per distinct
+  geometry**. `buildGrove(scene, track, placements)` takes the whole list rather
+  than handing back an `add…()` pair, because a builder you must remember to
+  `commit()` is one somebody will forget, leaving a treeless course that
+  typechecks. Course and Range both call it, so the grove is ONE
+  implementation. **Three batches, not four** — trunk / leaf blob / pine tier;
+  both species' trunks are the same tapered cylinder at different scales. The 5
+  leaf materials became **one white material + `instanceColor`** (three
+  multiplies `instanceColor` into `diffuseColor`, so the material MUST be white
+  or the palette comes out as a tint of one colour). ⚠ **The trade: triangles go
+  UP** — an `InstancedMesh` is frustum-culled all-or-nothing, so the whole grove
+  is submitted in every view. Right way round on mobile: submission is the cost.
+- **Blossom.** `CourseHole.bloom { color, fraction, form? }` is authored in HOLE
+  DATA, never derived from the hole's name — parsing "Pink Dogwood" into a
+  colour at render time would couple the renderer to copy text. It rides the
+  EXISTING instanced leaf batch, so **draw calls are unchanged**. Which
+  broadleaves flower is `bloomRoll(tree.seed, hole.terrain.seed)`; the hole seed
+  is in the mix because tree seeds are a function of `d` alone, so without it
+  every flowering hole would bloom at the same downrange stations. `fraction` is
+  never 1 — pines never flower and a share of broadleaves stays green, so the
+  grove reads as accent trees rather than a repainted hedge. 13 Augusta holes
+  carry a bloom; 2 use `'understory'`.
+  - **⚠ `'canopy'` is a render tint. `'understory'` is a SOLID.** A canopy
+    bloom sets `CourseTree.bloom` and nothing else, so the tree list is
+    byte-identical to the same hole with the field stripped — unit-tested. An
+    understory bloom emits `shrubR`/`shrubH` and `courseSim.brushShrub` damps
+    horizontal velocity inside it, so it CHANGES PLAY. The narrower guarantee
+    that holds — "an understory bloom adds a drift and changes nothing else the
+    ball touches" — is what `courses.test.ts` asserts. **The general rule is
+    worth more: art at ball height is an obstacle, and a bloom field that moved
+    a ball without the sim knowing is exactly the silent see-what-you-play
+    break.**
+  - **⚠ The drift is INSCRIBED IN ITS COLLIDER by construction.**
+    `components/golf/scene/drift.ts` has no dimensions of its own; it reads
+    `shrubR`/`shrubH` and places blobs so that, in the space where the envelope
+    is the unit half-ball, each blob is a sphere of radius ρ with
+    |centre| ≤ 1−ρ. Two unit tests hold the two directions apart: every blob
+    inside the collider, and the drawn mass reaching ≥0.85 of its radius / ≥0.8
+    of its height. *A drift you can see but not feel and a collider you can feel
+    but not see are the same defect.*
+  - **⚠ A wider trunk is the obvious fix for a phantom obstacle and it is the
+    wrong one.** The trunk cylinder REFLECTS and runs from the ground to
+    `5.25·scale`, so widening it to cover a 3 yd shrub would carom balls off
+    invisible air for the 5–8 yd above it — the one height band a recovery shot
+    genuinely flies through. A shrub is short, wide and SOFT: it needs its own
+    volume, its own height and its own response. `brushShrub` never reflects and
+    never touches `vh` — a shrub catches a ball and drops it.
+- **Trees clear the corridor.** `courseTrees` slides each tree straight out
+  along ±x until its collidable trunk is entirely off playable ground
+  (perpendicular clearance ≥ `roughHalf + trunkR`), leaving it alone when it
+  already is. This exists because the grove is laid out at a lateral **x-offset**
+  from the centerline while `surfaceAt` classifies by **perpendicular** distance,
+  so on a dogleg the tree line cut the corner. Guarded over every hole of every
+  course by `courses.test.ts`. ⚠ **A canopy over the rough is not a defect — it
+  is what a tree-lined hole IS.** The line is: you may be under a tree, you may
+  be in its brush, you may not be inside its trunk. Clearing by CANOPY instead
+  of trunk deletes the `brushShrub` feature entirely (`shrubR` < `canopyR`), and
+  a sim test catches it.
 
-**The 1536² tier was visually verified, and it is free.** `golf-visual-qa` shot
-the six shadow-carrying scenes at 1536² and again at `--query=shadow=2048`, after
-first establishing a noise floor by shooting 1536² twice (`meanAbs 0.000`,
-`max 0` on five of six). Verdict: **no visible loss.** Worst scene is
-`course-approach` at `meanAbs 0.087` / 32 of 920 tiles; the frames are
-indistinguishable at 1:1 and need 3–4× zoom before the 1536² penumbra shows a
-fraction more dither.
+### 5.5 The visual gate, and its determinism
 
-The reason is structural and worth keeping: the Course shadow camera is
-**640 × 680 world units**, i.e. 0.42 units/texel at 1536² against 0.31 at 2048².
-`BALL_R` is **0.2** — the ball's shadow is **sub-texel at both sizes**. Ball
-seating never came from the shadow map; `CourseGL` draws an explicit soft contact
-disc for exactly that. So 2048² was paying 2.25× the memory for detail the shadow
-frustum cannot resolve.
+`pnpm --filter @relay/ui shoot:golf` boots Vite, drives the pre-installed
+Chromium with software GL (`--use-angle=swiftshader
+--enable-unsafe-swiftshader`), loads `golfpreview.html?scene=…` for each of 29
+scenes (no app shell, no auth), and writes PNGs to `.golf-shots/` (git-ignored).
+It is committed, it is what the **`golf-visual-qa`** agent runs, and it fails the
+run on any `console.error` — that is how three reports a shader compile failure
+before silently skipping a mesh.
 
-⚠ Two caveats. This is SwiftShader: it removes the *visual* objection to 1536²,
-it says nothing about whether 1536² still trips the WebView GPU process, so the
-on-device smoke test stays open. And `?shadow=` is applied **globally to every
-scene**, so Putt is NOT a control in a forced run — it gets pushed 1024² → 2048²
-too and will legitimately differ.
+Scene coverage, 29 in total: **6** Course views on `HOLE_1` (tee, green,
+approach, a dragged aim, a played-lie aim, hole-out celebration); **1**
+`secondAim` two-aim regression sequence; **10** named real-hole scenes across 9
+holes (Augusta 2, 8, 10, 12, 13, 15, 16 — plus a second `augusta16pond` wedge-in
+view — 17, and Listowel Heritage 3); **2** Range layouts; **10** Mini-Golf views
+spanning all three putt courses, including windmill, pendulum, tunnel, water,
+sand, ramp, banked rail, sidehill and a dragged aim.
+
+**The harness is DETERMINISTIC — keep it that way.** Two runs with no code
+change once differed on **23 of 25** scenes, which made the gate worthless: it
+could not tell a real regression from the machine having run a bit faster. The
+cause was never RNG — the generators were already seeded. It was **animation
+sampled at wall-clock time**. Two fixes, both load-bearing:
+
+- **`lib/scene3d/clock.ts` — a freezable virtual clock.** All three render loops
+  take `now` from `tickSceneClock(rafNow)` instead of the rAF timestamp, and
+  anything else needing a timestamp (`RangeGL`'s `divotStart`, `water.ts`'s
+  splash `ringStart`) uses `sceneNow()`. **Untouched it is a pass-through** —
+  `tickSceneClock` returns the rAF timestamp verbatim, so the shipped app is
+  bit-for-bit unaffected. `golfpreview.tsx` is the ONLY caller of
+  `engageVirtualClock()`; it freezes the clock at the instant it raises
+  `window.__golfReady`, after which `dt === 0`, no substep runs, and every later
+  frame is identical. **Loops must tolerate `dt === 0` — never divide by it.**
+- **Readiness counted in FRAMES, never milliseconds.** SwiftShader renders these
+  scenes at ~3 fps, so the beacon's old "45 frames" condition took ~15 s and its
+  4 s wall-clock safety net beat it to the flag on *every single scene* — the
+  frame path had never once run. The virtual step is **100 ms**, matching the dt
+  clamp all three loops apply and the real SwiftShader frame time; at 100 ms the
+  course camera easing (`1 − 0.001^dt`) converges 50% per frame, where a 16.7 ms
+  step would screenshot the `?at=` views mid-flight.
+
+Where a sequence genuinely needs motion, `shoot-golf.mjs` asks for it in VIRTUAL
+milliseconds (`advanceScene(page, ms)` → `window.__sceneClock.advance`), never
+`waitForTimeout`, then renders a few frozen frames before capturing (Chromium
+can hand back the frame *before* the last one rendered).
+
+**So screenshots ARE exact-pixel comparable — except where open water is in
+frame.** Water-free scenes are byte-identical run to run. A frame containing
+open water differs by 10–200 px (≤0.015%, per-pixel maxΔ up to ~44): a 1-px line
+on the water's silhouette, where `water.ts`'s `if (vDepth <= 0.0) discard;`
+shoreline leaves near-zero-alpha fragments whose 8-bit rounding flips. It is
+SwiftShader per-GL-context behaviour (implicit-LOD sampling next to discarded
+fragments); `?water=low` and disabling Chromium's program cache both reduce but
+do not remove it. It is NOT the clock and not fixable from scene state: virtual
+time at freeze is exactly 2300 ms on 6/6 consecutive loads, a water-free hole is
+6/6 byte-identical, and a water hole is 6/6 different while being stable
+*within* a page load. **Treat "has open water in frame" as the predicate, not a
+fixed scene list. A diff of that size on a water scene is noise; anything
+larger, or on a non-water scene, is a real regression.**
+
+---
+
+## 6. History — how it got here
+
+**Everything below is retained DECISION HISTORY, not a live plan.** It is kept
+because the reasoning is still useful and because several conclusions are
+load-bearing. The work items in it are done unless §4 or the defect list says
+otherwise.
+
+### 6.1 The original brief and the platform assessment
+
+The reference the user asked to match was **PGA TOUR Golf Shootout** (a Unity
+game) — its aiming (shot line + landing reticle + power arc + wind-adjusted
+landing) and its textured, lit 3D look.
+
+The assessment, which still stands: **not an engine problem.** Keep the physics
+(small, correct, tested). Do not build a rendering engine — Three.js already is
+one and can reach the target look. The two real gaps were **aim/trajectory
+control** (buildable on the existing sim) and **art + shading**. A Unity rewrite
+was rejected as the wrong fit for a messenger mini-game; the full argument,
+including Unreal, Unity-as-a-Library and native-only, is now
+`/GRAPHICS.md` §1 and that is the version to cite.
+
+**The real bottleneck was, and still is, art CONTENT.** Agents can write the
+shaders, procedural textures, lighting rig and integration; the last mile is
+real art. The sharpest single demonstration: Augusta names 13 holes after a
+flowering plant and the renderer drew a plain green tree line on every one of
+them. No engine change fixes that.
+
+### 6.2 The three roadmap steps (all delivered)
+
+1. **Aim/shot control** — `predict()` plus the on-turf arc, reticles and
+   dispersion cone in both scenes. Remaining ideas that were never built: a
+   draggable landing reticle, and folding the power arc onto the ball itself.
+   Both build on `predict()`.
+2. **Visuals in Three.js** — tone mapping, sun + soft shadows, hemisphere fill,
+   sky + haze, striped turf, then scene-wide IBL and real sand. Post-process
+   bloom was **rejected outright** (`/GRAPHICS.md` §3 — an `EffectComposer`
+   render target is 46 MB at phone size). Billboard tree sprites were never
+   built; `instancing.ts` ships `makeImpostorQuads` for a future far band.
+   - **Gotcha, learned the hard way:** a 2048² shadow map once crashed the
+     WebView GPU process on real Android (black screen, app restart needed)
+     though it rendered fine in software GL. It was reverted, then re-enabled by
+     request with a standing requirement to re-verify that never happened. It is
+     now resolved by a TIER (§5.1) with `?shadow=2048` to reproduce the crashing
+     configuration on a handset without a rebuild.
+3. **Hole engine → a real course** — the milestone that grew into four courses
+   and 45 holes. In order: `terrain.ts` (a hole is DATA) → `courseSim.ts`
+   (terrain-aware, reusing the Range's tuned ballistics and lie materials) →
+   `CourseGL.tsx` (the same data drives the mesh) → playable Hole 1 → range
+   parity (predicted arc, power meter, textures) → the frustum-cull fix and the
+   `snapshot`/`restore` refactor → `greenPhysics.ts` and the Coulomb green → the
+   one static-friction rest rule → the scalable surface model + elliptic cup
+   capture + the clean green (the bold on-turf slope-read overlay was built and
+   then REMOVED; the HUD break text stays) → organic feature outlines, the first
+   cut, long-grass rough and a textured tee → best-shot records → the course
+   registry, the four authored courses, and the hub around them.
+   - **Terminology:** the fairway↔rough intermediate is the "first cut"; the
+     "fringe" is the collar around the green.
+   - `buildOrganicDisc`/`buildOrganicAnnulus` in `CourseGL` draw the green cap,
+     fringe collar, bunkers and terrain-following water from the SAME
+     `edgeRadius` + `featureSeed` + angle convention as the model, so
+     drawn == played == baked. Water became a terrain-FOLLOWING organic disc to
+     fix a dark-crescent/faceted-seam bug where a flat plane let the higher
+     downrange basin rim poke through; it is now a level pad instead (§5.3).
+   - The scene frame is DERIVED from the hole (centerline + roughHalf + tee/pin
+     extent), which is why any of the 45 holes renders correctly with no
+     per-hole code.
+   - **Mini-Golf consolidation: RESOLVED, deliberately partial.** The old "port
+     `puttSim` onto a real heightfield so it can share `greenPhysics`" item is
+     done — Mini-Golf now reuses `greenPhysics`'s FUNCTIONS (roll-out decel +
+     elliptic cup capture) over a real slope field (`puttField.ts`). It keeps its
+     own mini-scale CONSTANTS (`tuning.ts` `PUTT_*`, roughly an 8× scale
+     difference from the yard-space Course values) **by design**; only the shared
+     functions port. Do not "finish" this by unifying the constants.
+
+### 6.3 Two graphics findings worth not re-deriving
+
+- **1,034 draw calls on the tee view of Hole 1** was the standout measurement —
+  an order of magnitude above the whole baseball stadium — and it was **559
+  individual meshes of tree**, not a batching failure. Three `InstancedMesh`es
+  took it to **41**, and the worst scene in the whole game to 110. Measured
+  worst-first: course 1034 → 41, augusta2 964 → 33, secondAim 895 → 49,
+  aim 790 → 50, augusta13 685 → 24, played 653 → 48, approach 593 → 32,
+  celebrate 583 → 30, green 581 → 28, augusta16 424 → 39, listowel3 419 → 37,
+  augusta12 365 → 39, augusta16pond 320 → 34, range-water 290 → 110,
+  range 269 → 89. The art is provably unchanged: the per-tree RNG DRAW ORDER is
+  byte-identical to the old builder's, and a throwaway parity harness compared
+  all 559 world matrices and leaf colours (558 identical, 1 differing by
+  0.001 yd from float32 `instanceMatrix` vs float64 `matrixWorld`). Variety was
+  never in the meshes or the materials — it is in the seeded jitter, and an
+  instance matrix expresses all of it.
+- **Warm-hued blossom reads as AUTUMN, and chroma is not the lever.** The gate
+  passed the pink/magenta holes emphatically and rejected every warm-hued hole
+  and no other. Two distinct mistakes: (a) the **wrong season's feature** —
+  Firethorn and Nandina were authored from pyracantha's orange and nandina's red
+  BERRIES, an autumn/winter feature, when Augusta's frame of reference is April
+  and both flower white; and (b) the **wrong FORM for the hue** — yellow, orange
+  and red ARE the autumn palette, so a tree-sized crown in one of them has no
+  signal left that says spring at any saturation. Green leaves standing OVER a
+  warm mass is a silhouette autumn cannot produce, and it is also simply true:
+  forsythia, pyracantha and nandina are 2–3 m shrubs and Carolina jessamine is a
+  vine. None is a canopy tree. `courses.test.ts` now carries an autumn guard — a
+  bloom in hue 0–65° at sat > 0.45 may not use the default `'canopy'` form — and
+  it caught a fourth hole nobody had looked at. **The magenta side (~300–355°) is
+  deliberately exempt and must stay exempt.**
+  - Related tuning finding: **contiguity, not area, is what reads as planting.**
+    Two holes spanning nearly the same horizontal extent read very differently
+    when one's colour is two unbroken ribbons and the other's is nine islands.
+    And **distance haze eats the colour before it can read** — far drifts
+    desaturate down the depth gradient (0.55 near → 0.14 far) until they fall
+    below a chroma gate entirely. The levers are drift SPAN and blossom fog
+    handling, not `fraction`.
+
+*Lesson worth keeping from the same era: the harness can ABLATE. Rendering a
+scene with one object removed costs one 30-second run and beats arithmetic about
+which mesh is expensive. It is how a 187k-triangle putt board was traced to a
+wet-bank plane that was passing one axis's segment count to both axes.*
+
+### 6.4 What is still genuinely open
+
+- **The on-device GPU measurement.** Every knob is now a URL parameter, so this
+  is a ten-minute job on a handset rather than a rebuild cycle: `?shadow=2048`
+  reproduces the configuration that killed the WebView GPU process, `?shadow=1536`
+  is the shipping default, `?shadow=1024` the known-survivable fallback — bisect
+  in that order. `?quality=low` drops the shadow pass entirely (if that is the
+  only survivor, the finding is much bigger than a map size). `?water=medium`
+  drops the planar reflection pass, `?water=low` also the detail normals. Read
+  `window.__golfStats` in the device console for live draw call / triangle /
+  tier numbers and a median frame time. **Until someone holds a low-end
+  Android, nothing here is evidence.**
+- **`pickWaterQuality`'s promoting capability sniff** (§4) — the thing most in
+  need of confirming on real hardware.
+- **The range's water-island idiom** still reads as un-golf-like to the user.
+- **A harness view composed for SAND** is still owed (defect 5 below), and a
+  second view of Augusta 10's corner (defect 19).
+- The numbered list below is the live tracker for render-level defects.
+
+---
+
+## Open defects — visual gate findings
+
+> ⚠ **This list is APPEND-ONLY and is owned by another session.** Do not
+> renumber, reword, reorder or tidy it, and do not move it from the end of this
+> file. Reference it from above instead. Entries carry their own status markers.
+>
+> Reading aid only (nothing below was altered): entries citing the quoted
+> section titles **"Instanced foliage"**, **"Blossom"** and **"Blossom, part 2"**
+> refer to material now in §5.4 and §6.3; `SCENES` is `shoot-golf.mjs`'s scene
+> matrix (§5.5).
 
 **Defects the visual gate found (open — none are regressions, all pre-date the
 tier work).** Recorded here because a subagent's report is not a tracker. Owner
@@ -986,447 +1358,3 @@ out to be wrong in an instructive way.
    view from the corner or landing zone; the harness already supports
    pin-relative `at=` lies (`golfpreview.tsx`), and `augusta16pond` is the
    precedent for a second view of one hole.
-
-**Instanced foliage — the single largest GPU win measured on this codebase.**
-The tee view's 1,034 draw calls were **559 individual meshes of tree**. There was
-no `InstancedMesh` anywhere in the golf render path; `scenery.ts` `createTreeKit`
-built a `Group` per tree — one trunk plus five-to-seven leaf blobs for a
-broadleaf, one trunk plus four-to-five cone tiers for a pine — and Hole 1 plants
-92 trees. With every caster submitted a second time for the shadow map that is
-1,118 submissions, which is the measured number minus frustum culling. It was not
-a batching failure; it was un-instanced foliage doing exactly what it was written
-to do.
-
-- **`lib/scene3d/instancing.ts` (shared kit).** Collect a transform and an
-  optional per-instance tint per prop, commit **one `InstancedMesh` per distinct
-  geometry**. Two-phase because an `InstancedMesh` needs its count up front. Also
-  ships `makeImpostorQuads` (N crossed quads, one indexed geometry, atlas-cell
-  UVs) for a future far band. No RNG in the module by design — placement jitter is
-  the caller's, and must stay seeded. Game-neutral: a stadium crowd is the same
-  primitive, and baseball can take it as-is.
-- **`components/golf/scene/foliage.ts` (golf's consumer).** `buildGrove(scene,
-  track, placements)` — it takes the whole list rather than handing back an
-  `add…()` pair, because a builder you have to remember to `commit()` is one
-  somebody will forget, leaving a treeless course that typechecks. Both `CourseGL`
-  and `RangeGL` call it, so the grove is still ONE implementation and cannot
-  drift; `scenery.ts` keeps a pointer where `createTreeKit` used to be.
-- **Three batches, not four.** Trunk / leaf blob / pine tier. The two species'
-  trunks are the same tapered cylinder at different sizes (0.45→0.85 over 5.5 vs
-  0.32→0.6 over 5.0, taper ratios 0.5294 and 0.5333), so ONE unit cylinder scaled
-  per instance serves both, reproducing the pine's top radius to within 0.0024 yd.
-  Three's instancing path divides the normal by each column's squared length
-  before applying the instance matrix, so a non-uniformly scaled cone still shades
-  with the correct slope.
-- **The 5 leaf materials became one white material + `instanceColor`.** Three
-  multiplies `instanceColor` into `diffuseColor`, so the material MUST be white or
-  the palette comes out as a tint of one colour. Same five hexes, one program.
-- **The art is provably unchanged.** The per-tree RNG **draw order** is
-  byte-identical to `createTreeKit`'s, so a seed produces the tree it always
-  produced. A throwaway parity harness rebuilt the old builder and compared all
-  559 world matrices and leaf colours: **558 identical, 1 differing by 0.001 yd**
-  (float32 `instanceMatrix` vs float64 `matrixWorld`). Canopy density, silhouette
-  variety and shadow contribution are indistinguishable at 2× zoom. Variety was
-  never in the meshes or the materials — it is in the seeded jitter, and an
-  instance matrix expresses all of it.
-- **The trade, stated: triangles go UP.** An `InstancedMesh` is frustum-culled
-  all-or-nothing, so the whole grove is submitted in every view including the
-  trees behind the camera. That is +1.6k to +9.9k triangles per course scene and
-  +4.7k on the range. Right way round on mobile — submission is the cost, the
-  shadow pass was drawing most of them anyway, and a grove is ~10k triangles
-  against a terrain mesh's 50k+.
-- **Measured, worst-first.** course **1034 → 41**, augusta2 964 → 33, secondAim
-  895 → 49, aim 790 → 50, augusta13 685 → 24, played 653 → 48, approach 593 → 32,
-  celebrate 583 → 30, green 581 → 28, augusta16 424 → 39, listowel3 419 → 37,
-  augusta12 365 → 39, augusta16pond 320 → 34, range-water 290 → 110, range
-  269 → 89. **The worst scene in the whole game is now 110.** `budgets.golf.json`
-  was re-baselined DOWN in the same change.
-- **Determinism held.** Two consecutive post-change runs differ on exactly the
-  five documented water scenes (`course-played-aim`, `putt-water`, `augusta-12`,
-  `listowel-heritage-3`, `augusta-16-redbud`) at ≤0.011% and max Δ 42. No new
-  scene entered that set; `course-hole1`, `course-celebrate` and both range scenes
-  are byte-identical run to run.
-- **Entry chunk: +0.03 kB** (844.54 → 844.57 kB, gzip 240.40 → 240.42). `three`
-  stays its own 537.75 kB chunk and `foliage` came out as its own 3.13 kB lazy
-  chunk — it is imported only by the `lazy()`-loaded `*GL.tsx`, so it never
-  reaches the app entry.
-
-**Blossom — the flowering holes, at zero draw calls.** Augusta names 13 of its
-18 holes after a flowering plant and every one of them rendered a plain green
-tree line (defect 6). Fixed as **content**, which is the whole point: the
-renderer needed one colour path it already had.
-
-- **Bloom is authored in HOLE DATA, never derived from the name.** `CourseHole`
-  gains an optional `bloom { color, fraction }` (documented under "THE CANOPY"
-  in `terrain.ts`'s authoring contract); `courses/augusta.ts` carries a `BLOOM`
-  table with the colour each namesake plant actually flowers. Parsing "Pink
-  Dogwood" into a colour at render time would couple the renderer to copy text.
-  The five holes named for non-flowering plants (1 Tea Olive, 6 Juniper,
-  7 Pampas, 14 Chinese Fir, 18 Holly) have no bloom and render unchanged.
-- **It rides the EXISTING instanced leaf batch.** A blooming broadleaf's crown
-  blobs are re-tinted toward the blossom colour and three small flower clusters
-  are appended — all the same unit icosahedron and the same white material, so
-  they are extra `instanceColor` entries in the batch that was already there.
-  **Draw calls are IDENTICAL on every scene**; the cost is +1.3k to +2.2k
-  triangles on a flowering hole. A mesh per blooming tree would have undone the
-  25× win, which is why the design started from that constraint.
-- **A `'canopy'` bloom is a RENDER TINT and provably nothing else.**
-  `courseTrees()` sets `CourseTree.bloom` and touches no other field, so a
-  canopy-flowering hole's tree list is byte-identical to the same hole with the
-  field stripped — same trunks, same collision radii, same ground. And the tint is
-  drawn from a SEPARATE generator seeded off the tree's own seed rather than from
-  the per-tree render RNG, so a blooming tree keeps the exact silhouette, crown
-  count and jitter it had plain. Both properties are unit-tested
-  (`terrain.test.ts`, `foliage.test.ts`, `courses.test.ts`).
-  **⚠ THIS NO LONGER COVERS `'understory'`, AND THE UNQUALIFIED CLAIM WAS WRONG
-  FOR TWO HOLES.** A drift is a solid-looking mass at ball height, so as of "The
-  drift, made honest" below it emits `shrubR`/`shrubH` and the sim brushes a ball
-  through it. The narrower guarantee that DOES hold — "an understory bloom adds a
-  drift and changes nothing else the ball touches" — is what `courses.test.ts`
-  now asserts, alongside the byte-identical one for every canopy hole. The
-  general rule is worth more than either: **a bloom field that moved a ball
-  without the sim knowing is exactly the silent see-what-you-play break, and
-  moving the blossom DOWN is what caused it. Art at ball height is an obstacle.**
-- **Seeded selection, and per hole.** Which broadleaves flower is
-  `bloomRoll(tree.seed, hole.terrain.seed)` — mulberry32, never `Math.random`.
-  The hole seed is in the mix because tree seeds are a function of `d` alone, so
-  without it every flowering hole would bloom at the same downrange stations.
-  `fraction` is 0.45–0.65, never 1: pines never flower and a share of the
-  broadleaves stays green, so the grove reads as accent trees in a canopy rather
-  than a repainted hedge.
-- **Measured:** pink pixels 0 → **13,926** (hole 2), 0 → **14,642** (13),
-  0 → **31,308** (16). Draw calls 33 / 24 / 39 — unchanged. Triangles
-  +2,160 / +1,920 / +1,320.
-
-**Blossom, part 2 — the warm holes read as AUTUMN, and why.** The visual gate
-reported after the above had merged. It passed 2, 13 and 16 emphatically (whole
-crown masses, mean 650–1,100 px per blob) and rejected **every warm-hued hole and
-no other**. Two separate mistakes were behind it, and the second is the one worth
-carrying forward:
-
-- **The finding, stated generally: pink survives because nothing in nature is a
-  pink tree in autumn.** Yellow, orange and red *are* the autumn palette, so a
-  tree-sized crown in one of them has no signal left that says spring — at any
-  saturation. Chroma is not the lever and neither is the mix floor; the
-  **silhouette** is. Hole 12 measured hue 51° sat **0.49** val 0.87 on its lit
-  facets and RGB `[106,110,23]` — olive khaki — in shade, against a blooming
-  forsythia's near-neon lemon at sat 0.9+. Raising saturation alone would have
-  produced a brighter autumn tree.
-- **Mistake 1 — the wrong season's feature.** 15 Firethorn and 17 Nandina were
-  authored from the colour those plants are famous for: pyracantha's orange
-  BERRIES and nandina's red ones. Both are an autumn/winter feature. Augusta's
-  frame of reference is April, when pyracantha carries white flower corymbs and
-  nandina white panicles with yellow anthers. Those two holes read as October
-  because they *were* October, correctly rendered. Fixed by authoring the April
-  colour (`0xf7f8f2` / `0xf6efd6`), which also moves them into the white/pink
-  family that demonstrably works.
-- **Mistake 2 — the wrong FORM for the hue,** and the reason a new mechanism was
-  needed. `HoleBloom.form` (`terrain.ts` `BloomForm`) is now `'canopy'` (default,
-  byte-identical to what shipped) or **`'understory'`**: the crowns stay GREEN
-  and the blossom becomes a low drift of flowering shrub at the foot of the tree
-  line. Green leaves standing over a warm mass is a silhouette autumn cannot
-  produce, because in autumn the canopy turns first. It is also simply true —
-  **forsythia, pyracantha and nandina are all 2–3 m shrubs**, and 8's Carolina
-  jessamine is a vine. None of them is a canopy tree; the original design had
-  been painting shrubs onto 19 yd hardwoods.
-- **Hole 8 was the same defect, found by a TEST rather than by eye.**
-  `courses.test.ts` now carries an autumn guard: a bloom in hue 0–65° at
-  sat > 0.45 may not use the default `'canopy'` form. It fired on 12, 15, 17 —
-  and on **8 Yellow Jasmine**, which nobody had looked at because it had no
-  harness scene either. The magenta side (~300–355°) is deliberately exempt and
-  must stay exempt: 2, 13 and 16 all sit there at sat 0.47–0.64 and all three
-  passed.
-- **Still zero draw calls.** A drift is 7 more leaf-blob instances on the same
-  unit icosahedron and the same white material — the same trick as the crown
-  tint. Cost is +2.2k triangles on hole 12 and +3.2k on 8. Draw calls unchanged
-  on all 28 scenes. *(Blob count and triangle cost superseded by "The drift, made
-  honest" below; draw calls are still zero.)*
-- **The three holes that passed did not move.** Holes 2, 13 and 16 are
-  **byte-identical** before and after, by construction: only a tree that really
-  carries a drift gains the extra placement keys, so a canopy hole's placements
-  are the same objects, with the same keys, they always were.
-- **Measured (share of frame, and connected components ≥40 px).** Hole 12
-  yellow 1.95% mean 5,545 px/blob → **0.76% mean 2,666**, hue 55.9°→**58.4°**,
-  sat 0.656→**0.661** (p90 0.81→**0.94**), val 0.661→**0.725**; the old ochre
-  mean RGB `[167,158,63]` becomes `[181,178,69]` chrome-lemon. Hole 15's orange
-  band goes to **zero** (the 5.5k px left in it are tree trunks) and 20,779 px of
-  white blossom appear; hole 17's red goes to **exactly zero** with 12,077 px of
-  cream. Hole 8 yellow 0.67% → 0.36% at the same chrome shift. Every one of those
-  is in the 0.77–1.76% / 913–2,732 px-per-blob band the three passing holes
-  occupy.
-- **⚠ The gap that let this ship: 8, 15 and 17 were not in `SCENES`.** Three
-  holes carried authored art no gate could see, which is how a berry colour
-  reached `main` unreviewed. They are now `augusta8`, `augusta15` and `augusta17`
-  in `shoot-golf.mjs` with committed budget entries. **The rule this earns: a
-  hole that carries `bloom` (or any authored per-hole art) needs a harness frame
-  in the same change.** Defect 5 below — no frame shows a Course bunker properly
-  — is the same class of gap and is still open, though `augusta17`'s tee view
-  does now catch a greenside bunker at the top of frame.
-
-**The drift, made honest — defects 9 and 10, and the sentence that had to
-change.** The understory form shipped with a real cost: a mass **7.5–9.9 yd
-across and 4.3–5.7 yd tall** drawn at ball height, against a **1.32–1.74 yd**
-trunk cylinder as the only thing the sim collided with down there. Drawn was
-**5.7× collidable**, and a ball rolled through eight yards of apparent flowering
-shrub and felt nothing.
-
-- **A WIDER TRUNK WAS THE OBVIOUS FIX AND IT IS THE WRONG ONE.** The trunk
-  cylinder REFLECTS (`TRUNK_RESTITUTION`), and it runs from the ground to
-  `5.25·scale` = **8.7–11.4 yd**. Widening it to cover a 3 yd drift would carom
-  balls off invisible air for the **5–8 yd above the shrub**, in the one height
-  band a recovery shot genuinely flies through — trading a phantom on the deck
-  for a bigger one in the air, and making a forsythia bounce like an oak. A drift
-  is short, wide and SOFT, so it needs its own volume with its own height and its
-  own response.
-- **`CourseTree` gains `shrubR`/`shrubH`** — a half-ellipsoid standing on the
-  ground at the trunk, `3.2·scale` by `1.6·scale` = **5.28–6.98 yd radius and
-  2.64–3.49 yd tall** — emitted ONLY for a tree that flowers on a hole whose
-  `bloom.form` is `'understory'`. `courseSim.brushShrub` damps the HORIZONTAL
-  velocity of anything inside it at `SHRUB_KEEP_PER_SEC = 0.02` — a decay 37× the
-  canopy's: clip the rim in 0.05 s and lose ~18%, plough the middle in 0.17 s and lose
-  ~49%, trickle in at rolling pace and stop. It never reflects and never touches
-  `vh` — a shrub catches a ball and drops it, it does not bounce it, and damping
-  the fall would make the ball hang in the bush.
-- **The art is now INSCRIBED IN THE COLLIDER, by construction.** `foliage.ts`
-  has no drift dimensions of its own any more; it reads `shrubR`/`shrubH` and
-  places blobs so that, in the space where the envelope is the unit half-ball,
-  each blob is a sphere of radius ρ with |centre| ≤ 1−ρ. Two unit tests hold the
-  two directions apart: every blob inside the collider, and the drawn mass
-  reaching **≥0.85 of its radius / ≥0.8 of its height** (measured across the
-  grove: **mean 0.95 and 0.92**, worst tree 0.88 and 0.83). *A drift you can see
-  but not feel and a collider you can feel but not see are the same defect.*
-- **Two trees of identical geometry can now carry different colliders**, because
-  only a seeded fraction of the broadleaves flower. That is deliberate and it is
-  written on the tree, not on the hole.
-- **Defect 10 fell out of the same change, and the cause was not what it looked
-  like.** Radius 5.28–6.98 yd is inside the canopy's 5.61–7.41 at every scale
-  (3.2 < 3.4, by arithmetic), and 2.64–3.49 yd is a real 2.4–3.2 m forsythia. But
-  the boulder read came from BLOB size, not mass size: individual blobs were
-  **3.6–7.6 yd across** — glacial erratics — and are now **2.5–4.7 yd**, flatter
-  than they are wide, mounded low at the rim. 16 blobs, not 7, so the smaller
-  mass still merges into one thing.
-- **⚠ THIS CHANGES PHYSICS ON HOLE 8, AND ONLY THERE.** Worth knowing exactly
-  where, because "trees line the OB edge" is nearly but not quite a get-out.
-  Trees stand at `roughHalf + 8`, so on a STRAIGHT hole a rolling ball is out of
-  bounds long before it reaches one. But the grove is laid out at a lateral
-  x-offset from the centerline rather than perpendicular to it, so on a dogleg the
-  tree line cuts the corner: **6 of hole 8's 17 drifts overhang playable ground
-  (by 0.03–5.3 yd) and one stands squarely IN THE ROUGH at d 332, x 0.2**, on the
-  inside of the 34° dogleg. Those six were *already drawn there* and overhung
-  further before (2.97–7.51 yd); they are simply felt now. A ball rolled into the
-  in-play one at 20 yd/s runs **3.1 yd instead of 4.6**. **Hole 12 is unaffected
-  on the ground**: its widest drift used to overhang the corridor by 0.37 yd and
-  now clears it by 2.57, so every hole-12 collider sits in territory a grounded
-  ball never reaches. Nothing else in the game has an `'understory'` bloom, so
-  nothing else moved.
-- **Cost.** Draw calls **unchanged on every scene**. Triangles +2,880 on hole 12
-  and +6,120 on hole 8 (16 blobs vs 7, doubled for the shadow pass, over 8 and 17
-  flowering trees). Yellow share of frame 0.728% → **0.376%** (hole 12) and
-  0.332% → **0.165%** (hole 8) — the drift is now shrub-sized, and comparing it to
-  the 0.77–1.76% band the CANOPY holes occupy is comparing a shrub to a tree.
-  Hue and value hold (58.7°→58.1°, val 0.728→0.732 on 12). If the gate wants more
-  presence, the lever is `fraction` (0.8 and 0.6 today) — deliberately NOT pulled
-  here, because more drifts means more colliders and that belongs in its own
-  judgement.
-
-**Scene-wide IBL, and real sand.** Two changes that deliberately move pixels.
-
-- **`scene.environment` is on at `medium`/`high`.** This REVERSES a considered
-  decision. `scenery.ts` `makeSkyEnvMap` attached its PMREM to the ball's
-  `envMap` alone, on the recorded grounds that "turf/trees/water pay no
-  per-frame env cost", and visual QA at the time found scene-wide IBL bought
-  nothing. That finding was true of *that texture* and not of IBL:
-  **`PMREMGenerator` sizes its cube as `image.width / 4`**, so an 8×128 gradient
-  is a **2×2 cube** — a flat wash with no direction in it at all. Three's own
-  documented minimum equirect is 64×32.
-  `lib/scene3d/env.ts` paints a real one — a sun disc at a true 0.53° angular
-  size (energy-conserved when it falls below a texel), a circumsolar halo, a
-  three-stop sky and a turf-green ground bounce — in **half-float**, because an
-  8-bit canvas clamps at 1.0 and would cap the sun at sky brightness.
-  `components/golf/scene/env.ts` holds golf's palette (every colour lifted from
-  the sky dome, so dome / water reflection / env can't drift).
-- **⚠ THE TRAP, and it is the whole change.** IBL added on top of the existing
-  hemisphere fill double-counts the ambient and flattens everything to grey —
-  which looks exactly like "the IBL didn't work" and sends you tuning the wrong
-  knob. The fill comes down IN THE SAME CALL: `hemiFill()` is now the only way a
-  golf scene sets its hemisphere intensity and it reads the same `quality.ibl`
-  flag. Numbers, derived rather than guessed: the painted sky's cosine-weighted
-  irradiance on an up-facing normal is `(0.44, 1.09, 2.18)` at intensity 1 and
-  the hemisphere light it replaces gave `(0.64, 0.86, 1.05)`, so
-  `ENV_INTENSITY = 0.5` with `HEMI_IBL_FACTOR = 0.28` holds total ambient
-  luminance within ~10% while moving the colour. Measured on the shots: mean
-  signed delta per channel is **R −1.0, G +0.9, B +10.8** — less red, much more
-  blue, luminance ~flat. Warm key, cool sky-lit shade.
-- **`low` keeps the old behaviour exactly** — ball-only `envMap`, full
-  hemisphere fill, `scene.environment` untouched, and the 21 KB 2×2 PMREM rather
-  than 1.5 MiB. The original reasoning still governs the hardware it was written
-  for. `quality.test.ts` asserts it.
-- **Memory.** 512×256 equirect → a 128 cube → `3 × max(128,112) × 4 × 128`
-  half-float RGBA, no mips (cubeUV packs every roughness level into the one
-  target) = **1,572,864 B / 1.5 MiB** per scene. `skyEnvBytes()` computes it
-  without a GPU and a unit test pins it. Three calls 1024×512 "ideal" (a 256
-  cube, 6 MiB); that is 4.5 MiB more for a gradient, on the fleet that lost a
-  WebView GPU process to a 16 MB shadow map.
-- **Cost, measured.** Draw calls and triangles are **unchanged on all 25 scenes**
-  — an env map is a sample, not a submission. Textures +2 on the scenes with
-  sand in frame (the new normal + roughness maps); the env texture replaces the
-  old one 1:1. What `renderer.info` cannot see is the per-fragment cubeUV sample
-  every lit material now pays, and that is exactly the cost the original
-  ball-only decision was protecting. It is tier-gated for that reason and the
-  on-device check is still owed.
-- **Real sand (`components/golf/scene/sand.ts`).** Bunkers were albedo-only at a
-  flat `roughness: 1` — a surface with no normal and no roughness variance
-  cannot respond to a moving light, so sand rendered as flat beige whatever the
-  sun did. Now albedo, normal and roughness all come off ONE tileable seeded
-  value-noise height field plus cosine rake ridges, so the grain you see, the
-  bumps the sun rakes and the packed/loose sheen agree. Roughness tracks height
-  *inversely* — a rake compresses what it pushes down, so furrow floors are
-  glossier than the crust that stands proud. The Course and Putt each painted
-  their own near-identical grain (256² and 128², 0.137 vs 0.134 dots/px); that
-  is now one generator with a `repeat`/`base`/`rake` per scene. Seeded
-  `mulberry32`, no `Math.random`, no `onBeforeCompile`.
-
-**Shared putting physics.** `lib/golf/greenPhysics.ts` is the pure-math
-counterpart for greens (Stimp → μ, roll-out, cup capture; no `three`, no sim
-state), used by `courseSim`'s green/fringe roll. **Consolidation status:**
-Mini-Golf now REUSES `greenPhysics`'s functions (roll-out decel + elliptic cup
-capture) at mini-scale through a slope FIELD (`puttField.ts`), so its putts break
-on a real heightfield instead of the old flat arcade engine. It keeps its own
-mini-scale CONSTANTS (`tuning.ts` `PUTT_*` — a ~8× scale difference from the
-yard-space Course values) by design; only the shared FUNCTIONS port.
-
-**Seeing the game (committed harness).** `pnpm --filter @relay/ui shoot:golf`
-renders each scene headlessly (Vite + pre-installed Chromium with
-`--use-angle=swiftshader --enable-unsafe-swiftshader`) and writes PNGs to
-`.golf-shots/` (git-ignored). It mounts one scene standalone via
-`golfpreview.html?scene=course|range` (no app shell/auth). This replaces the old
-throwaway preview and is what the **`golf-visual-qa`** agent runs.
-
-**The harness is DETERMINISTIC — keep it that way.** Two runs with no code change
-used to differ on **23 of 25** scenes (`course-celebrate` on 89% of its pixels),
-which made the visual gate worthless: it could not tell a real regression from
-the machine having run a bit faster. The cause was never RNG — the texture and
-particle generators were already seeded (`mulberry32`). It was **animation
-sampled at wall-clock time**. Two things fixed it, and both are load-bearing:
-
-- **`lib/scene3d/clock.ts` — a freezable virtual clock** (game-neutral; baseball
-  will want it too). All three render loops take `now` from `tickSceneClock(rafNow)`
-  instead of the rAF timestamp, and anything else needing a timestamp
-  (`RangeGL`'s `divotStart`, `water.ts`'s splash `ringStart`) uses `sceneNow()`.
-  **Untouched it is a pass-through**: `tickSceneClock` returns the rAF timestamp
-  verbatim, so the shipped app is bit-for-bit unaffected. `golfpreview.tsx` is the
-  ONLY caller of `engageVirtualClock()`; it freezes the clock at the instant it
-  raises `window.__golfReady`, after which `dt === 0`, no substep runs, and every
-  later frame is identical. Loops must therefore tolerate `dt === 0` — never
-  divide by it.
-- **Readiness counted in FRAMES, never milliseconds.** SwiftShader renders these
-  scenes at **~3 fps**, so the beacon's old "45 frames" condition took ~15 s and
-  its 4 s wall-clock safety net beat it to the flag on *every single scene* — the
-  frame path had never once run, and each shot froze wherever the machine happened
-  to be. The virtual step is **100 ms**, matching the dt clamp all three loops
-  already apply and the real SwiftShader frame time; at 100 ms the course camera
-  easing (`1 − 0.001^dt`) converges 50% per frame, where a 16.7 ms step converges
-  11% and would screenshot the `?at=` views mid-camera-flight.
-
-- **The beacon's 30 s "NOT deterministic" fallback now cancels itself.** It used
-  to be cleared only by the effect cleanup, i.e. on unmount, so any page that
-  outlived 30 s — `secondAim` drives two real aims, a fire and a roll-out at
-  SwiftShader's ~3 fps — logged the alarm long after a perfectly deterministic
-  ready. A false alarm on the one scene that exists to catch a regression is
-  worse than no alarm; it trains the reader to skip the line.
-
-Where a sequence genuinely needs motion, `shoot-golf.mjs` asks for it in VIRTUAL
-milliseconds (`advanceScene(page, ms)` → `window.__sceneClock.advance`), never
-`waitForTimeout`, then renders a few frozen frames before capturing (Chromium can
-hand back the frame *before* the last one rendered).
-
-**Known residual: 5 water scenes still differ by 10–200 pixels (≤0.015%).**
-`augusta-12`, `augusta-16-redbud`, `course-played-aim`, `listowel-heritage-3`,
-`putt-water` — plus, in one run pair out of three, `augusta-16-pond` at 5 px
-(maxΔ 1), so membership flickers at the very low end. Per-pixel magnitude reaches
-**maxΔ ≈ 44** on `listowel-heritage-3` and ~20–26 on the augusta holes, which is
-higher than the "4–10" first recorded here: that early figure came from a smaller
-sample, not from a since-introduced regression. Measured directly — two
-consecutive runs at the current 1536² and two more at `?shadow=2048` (the old
-configuration) produce the same scene set and the same magnitudes, so the shadow
-tier does not touch it. This is **not** the clock and is not fixable from scene
-state:
-virtual time at freeze is exactly `2300 ms` on 6/6 consecutive loads, a water-free
-hole is 6/6 byte-identical, and a water hole is 6/6 different while being stable
-*within* a page load. The differing pixels are a 1-px line on the water's
-silhouette — the `if (vDepth <= 0.0) discard;` shoreline in `water.ts`, where
-`alpha *= smoothstep(0.0, 0.09, vDepth)` leaves near-zero-alpha fragments whose
-8-bit rounding flips. It is SwiftShader per-GL-context behaviour (implicit-LOD
-sampling next to discarded fragments); `?water=low` and disabling Chromium's
-program cache both reduce but do not remove it. Treat a diff of this size on a
-water scene as noise; **anything larger, or on a non-water scene, is a real
-regression.**
-
-**Visual change workflow.** Any change to a golf scene, its materials, lighting
-or geometry: `golf` implements → `code-reviewer` (diff) → `qa-verify`
-(typecheck/tests/build) → **`golf-visual-qa`** (before/after screenshots, Course
-vs Range parity) → human review. Typecheck and unit tests never catch a broken
-or regressed render — capture a **before** (baseline) and **after**; a
-"visual" change that produces no visible delta is itself a finding.
-
-**Gotcha (learned the hard way):** the Course terrain is a custom displaced
-BufferGeometry — its triangles must be wound so the top surface FRONT-faces up.
-A downward winding gets back-face culled, so the whole textured ground vanishes
-and only the flat fill plane shows in the foreground (the long-standing "flat
-grass" look). Keep the fill plane a few yards BELOW the terrain minimum so it
-backs only the far-horizon void and never occludes the playable ground. The
-2048² shadow map is still an on-device GPU risk (see step 2) — swiftshader
-screenshots won't catch it.
-
----
-
-## Continuing in a new session
-Steps 1 (aim/shot control) and 2 (visual first pass) are **done**, and **step 3
-(hole engine)** has a PLAYABLE Hole 1 — terrain-aware sim, predicted aim arc
-(frustum-cull bug fixed), a real Coulomb putting green (elliptic cup capture that
-reliably holes an on-line putt), a clean textured green with an aim-holing pulse
-cue, a data-driven scalable surface model, and persisted best-shot records. See
-the roadmap markers above. Next up:
-
-1. **Author holes 2–9 as pure data** per the "HOW TO AUTHOR A HOLE" contract
-   header in `terrain.ts` (`terrain.ts`/`courseData.ts`) — the engine, shaders,
-   HUD and scene frame are all hole-agnostic and derive from the `CourseHole`, so
-   this is data only, no per-hole code (and every new hole gets organic feature
-   outlines for free). Respect the header invariants: pin inside the MIN wobbled
-   green, hazards outside `maxGreenPadRadius` (the wobble-safe clearance), and each
-   green's tilt ≲ μ (~6.1% at stimp 10) or a resting putt won't hold (green design
-   guard, step 3).
-2. **Consolidate Mini-Golf onto a real heightfield** so `puttSim`/`PuttGL` can
-   share `greenPhysics` instead of its own flat engine.
-3. **On-device GPU check** (swiftshader/headless won't catch it). The shadow map
-   is no longer a bare number to argue about — it is a tier, it defaults DOWN
-   (Course/Range 1536², Putt 1024²), and every knob is a URL parameter, so the
-   check is now a ten-minute job on a handset instead of a rebuild cycle:
-   - **`?shadow=2048`** reproduces the configuration that killed the WebView GPU
-     process; **`?shadow=1536`** is the shipping default; **`?shadow=1024`** is
-     the known-survivable fallback. Bisect in that order.
-   - **`?quality=low`** drops the shadow pass entirely — if that is the only tier
-     that survives, the finding is much bigger than a map size.
-   - **`?water=medium`** drops the Tier 3 planar reflection pass (a second full
-     scene render), **`?water=low`** also drops the detail normals.
-     `pickWaterQuality` still promotes on a capability sniff
-     (`cores > 4 && maxTextureSize >= 8192`) — a **known defect**, and the thing
-     most in need of confirming on a real handset.
-   - Read `window.__golfStats` in the device console for the live draw
-     call / triangle / tier numbers, including a median frame time.
-   The remaining open item is the measurement itself, on hardware. Until someone
-   holds a low-end Android, nothing here is evidence.
-
-**Regressions:** if you ever touch `CourseSim` state, remember any new mutable
-field MUST join `CourseSnapshot`/`snapshot()`/`restore()` (guard test enforces
-it), and re-run `pnpm --filter @relay/ui shoot:golf secondAim` — the two-aim
-sequence is the only thing that catches the aim-arc frustum-cull class.
-
-Tip for visual work: a throwaway `golfpreview.html` + `src/golfpreview.tsx` that
-mounts only `<RangeGL>` (no app shell/auth) lets you screenshot the range with
-the pre-installed headless Chromium (`--use-angle=swiftshader
---enable-unsafe-swiftshader`) for real before/after feedback. Recreate it when
-iterating on the scene; it's not committed.
-
-The user is gathering more reference screenshots of the PGA app's shooting and
-will share them. Full visual write-up of the assessment was also produced as an
-artifact during the session it was written.
