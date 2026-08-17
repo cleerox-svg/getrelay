@@ -23,7 +23,12 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MAX_POINTS_PER_ROUND, MAX_ROUNDS, MAX_SUBMITTABLE_SCORE } from './tuning';
+import {
+  DERBY_POINTS_PER_ROUND,
+  MAX_POINTS_PER_ROUND,
+  MAX_ROUNDS,
+  MAX_SUBMITTABLE_SCORE,
+} from './tuning';
 
 const SIM_DIR = dirname(fileURLToPath(import.meta.url));
 const WORKER_GAMES = join(SIM_DIR, '..', '..', '..', '..', 'relay-worker', 'src', 'games.ts');
@@ -40,6 +45,7 @@ describe('tuning — the worker mirror', () => {
     };
     const rounds = read('MAX_ROUNDS');
     const perRound = read('MAX_POINTS_PER_ROUND');
+    const derbyPerRound = read('DERBY_POINTS_PER_ROUND');
 
     // Guard the guard: a rename or a reformat on the worker side must fail HERE
     // as "the regex stopped matching", not pass as "nothing to compare".
@@ -48,19 +54,43 @@ describe('tuning — the worker mirror', () => {
       perRound,
       'MAX_POINTS_PER_ROUND not found in the worker source — regex stale?',
     ).not.toBeNull();
+    expect(
+      derbyPerRound,
+      'DERBY_POINTS_PER_ROUND not found in the worker source — regex stale?',
+    ).not.toBeNull();
     // …and prove the reader can fail, on a name that is definitely not there.
     expect(read('MAX_ROUNDS_THAT_DO_NOT_EXIST')).toBeNull();
 
     console.log(
-      `\n[MIRROR] worker games.ts   MAX_ROUNDS ${rounds}   MAX_POINTS_PER_ROUND ${perRound}\n` +
-        `         ui tuning.ts      MAX_ROUNDS ${MAX_ROUNDS}   MAX_POINTS_PER_ROUND ${MAX_POINTS_PER_ROUND}\n` +
-        `         product ${MAX_SUBMITTABLE_SCORE} — the score the worker will 400 above.\n` +
-        `         The worker REJECTS, it does not clamp. Change both in one PR.`,
+      `\n[MIRROR] worker games.ts   MAX_ROUNDS ${rounds}   MAX_POINTS_PER_ROUND ${perRound}` +
+        `   DERBY_POINTS_PER_ROUND ${derbyPerRound}\n` +
+        `         ui tuning.ts      MAX_ROUNDS ${MAX_ROUNDS}   MAX_POINTS_PER_ROUND ${MAX_POINTS_PER_ROUND}` +
+        `   DERBY_POINTS_PER_ROUND ${DERBY_POINTS_PER_ROUND}\n` +
+        `         arcade product ${MAX_SUBMITTABLE_SCORE}; derby ${MAX_ROUNDS * DERBY_POINTS_PER_ROUND}` +
+        ` — the scores the worker will 400 above.\n` +
+        `         The worker REJECTS, it does not clamp. Change both in one PR, WORKER FIRST.`,
     );
 
     expect(rounds).toBe(MAX_ROUNDS);
     expect(perRound).toBe(MAX_POINTS_PER_ROUND);
+    expect(derbyPerRound).toBe(DERBY_POINTS_PER_ROUND);
     // The derived one is derived, not typed a third time.
     expect(MAX_SUBMITTABLE_SCORE).toBe(MAX_ROUNDS * MAX_POINTS_PER_ROUND);
+
+    // ⚠ THE DERBY'S CEILING IS A SEPARATE, WIDER NUMBER — not a raised shared
+    // one. If somebody "simplifies" the worker by deleting the branch and
+    // setting MAX_POINTS_PER_ROUND = 4000, fog/tune/golf/golfrange silently get
+    // a doubled anti-cheat ceiling for nothing, and this is what says so.
+    expect(DERBY_POINTS_PER_ROUND).toBeGreaterThan(MAX_POINTS_PER_ROUND);
+    expect(MAX_POINTS_PER_ROUND).toBe(2000);
+
+    // ⚠ AND THE WORKER ACTUALLY BRANCHES ON IT. Reading the constant proves the
+    // two numbers agree; it does NOT prove the wider one is ever reached. The
+    // branch is the wiring, so its text is asserted too — with the `bbderby`
+    // literal in it, because `game === X ? DERBY_POINTS_PER_ROUND : …` for the
+    // wrong X is exactly the mutation a constant read cannot see.
+    expect(text).toMatch(
+      /game === 'bbderby' \? DERBY_POINTS_PER_ROUND : MAX_POINTS_PER_ROUND/,
+    );
   });
 });

@@ -30,7 +30,7 @@ import { HARBOURFRONT } from './parks';
 import type { Park } from './parks';
 import { PITCHES } from './pitches';
 import type { PitchId } from './pitches';
-import { MAX_POINTS_PER_ROUND, MAX_ROUNDS } from './tuning';
+import { DERBY_POINTS_PER_ROUND, MAX_ROUNDS } from './tuning';
 import { IN_TO_FT } from './units';
 import { PLATE_WIDTH_FT, armSideX } from './zone';
 import type { Handedness } from './zone';
@@ -62,16 +62,27 @@ export function derbyDraw(state: number): { value: number; next: number } {
 // The format — and the clamp arithmetic that fixes it
 // ---------------------------------------------------------------------------
 //
-// ⚠ THE SERVER CLAMP IS `rounds × MAX_POINTS_PER_ROUND`, NOT `MAX_ROUNDS × …`.
+// ⚠ THE SERVER CLAMP IS `rounds × DERBY_POINTS_PER_ROUND`, NOT `MAX_ROUNDS × …`.
 // `packages/relay-worker/src/games.ts` rejects (400, never truncates) a score
-// above `rounds × 2000` for the rounds actually submitted, and rejects `rounds`
+// above `rounds × 4000` for the rounds actually submitted, and rejects `rounds`
 // outside 1..MAX_ROUNDS. So `tuning.MAX_SUBMITTABLE_SCORE` (16000) describes the
-// EIGHT-round case only and is the wrong thing for a 3-round derby to check
-// itself against. The invariant this file holds is the real one: **2000 points
-// per derby round**, at every point in a session, partial rounds included.
+// ARCADE eight-round case only and is the wrong thing for a 3-round derby to
+// check itself against. The invariant this file holds is the real one: **4000
+// points per derby round**, at every point in a session, partial rounds
+// included.
+//
+// ⚠ 4000 AND NOT 2000, AND IT IS A PER-GAME NUMBER. The worker branches on the
+// game id (`game === 'bbderby' ? DERBY_POINTS_PER_ROUND : MAX_POINTS_PER_ROUND`)
+// exactly the way it branches the rounds ceiling for `golfcourse`, so the derby
+// getting a wider clamp did not widen anything for fog, tune or golf. The reason
+// it needed one is in `derbyScoring.ts`'s chain section: a multiplier has only
+// `cap − base` of room, and at 250/pitch against a ~190-point barrelled home run
+// there was 1.32× of it — measured, not enough to move the top of the skill
+// curve without cutting the base payout and undoing the M2 contact fix.
 //
 // One `rounds` unit is ONE DERBY ROUND, never one swing. Three rounds is well
-// inside MAX_ROUNDS = 8, so no `MAX_COURSE_ROUNDS`-style escape hatch is needed.
+// inside MAX_ROUNDS = 8, so no `MAX_COURSE_ROUNDS`-style rounds escape hatch is
+// needed — the points ceiling is the one that moved.
 
 /**
  * Rounds in a derby. FEEL KNOB, sized by session length: 3 × 8 = 24 pitches at
@@ -91,10 +102,11 @@ export const PITCHES_PER_ROUND = 8;
 /**
  * The per-swing payout ceiling. DERIVED, and it is what makes the round clamp
  * STRUCTURAL rather than checked: `PITCHES_PER_ROUND × this ≡
- * MAX_POINTS_PER_ROUND` exactly, so no reachable sequence of swings can put a
- * round over 2000 regardless of what the distance term does.
+ * DERBY_POINTS_PER_ROUND` exactly, so no reachable sequence of swings can put a
+ * round over 4000 regardless of what the distance term or the chain multiplier
+ * does.
  */
-export const MAX_POINTS_PER_PITCH = MAX_POINTS_PER_ROUND / PITCHES_PER_ROUND;
+export const MAX_POINTS_PER_PITCH = DERBY_POINTS_PER_ROUND / PITCHES_PER_ROUND;
 
 /**
  * The cap for a session whose format was overridden. DERIVED, and it is the ONE
@@ -103,7 +115,7 @@ export const MAX_POINTS_PER_PITCH = MAX_POINTS_PER_ROUND / PITCHES_PER_ROUND;
  * single implementation to mutate and a single one to assert.
  */
 export const perPitchCap = (pitchesPerRound: number): number =>
-  MAX_POINTS_PER_ROUND / pitchesPerRound;
+  DERBY_POINTS_PER_ROUND / pitchesPerRound;
 
 // ---------------------------------------------------------------------------
 // The serve — CONTENT AS DATA
@@ -327,14 +339,14 @@ export function validateDerbyFormat(rounds = DERBY_ROUNDS, perRound = PITCHES_PE
   if (rounds > MAX_ROUNDS) bad.push(`rounds ${rounds} exceeds the worker's MAX_ROUNDS ${MAX_ROUNDS}`);
   if (!Number.isInteger(perRound) || perRound < 1) bad.push(`pitchesPerRound ${perRound} < 1`);
   const perPitch = perPitchCap(perRound);
-  // ⚠ `perPitch * perRound === MAX_POINTS_PER_ROUND` CANNOT FIRE, and that is
+  // ⚠ `perPitch * perRound === DERBY_POINTS_PER_ROUND` CANNOT FIRE, and that is
   // not a style point: (2000/3)*3 is exactly 2000 in IEEE-754, so 3, 6, 7 and 9
   // pitches all passed this check while producing a FRACTIONAL per-pitch cap —
   // and `packages/relay-worker/src/games.ts` requires `Number.isInteger` on what
   // it is handed. Test the thing the worker tests.
   if (!Number.isInteger(perPitch)) {
     bad.push(
-      `${perRound} pitches do not divide MAX_POINTS_PER_ROUND ${MAX_POINTS_PER_ROUND} ` +
+      `${perRound} pitches do not divide DERBY_POINTS_PER_ROUND ${DERBY_POINTS_PER_ROUND} ` +
         `(per-pitch cap ${perPitch})`,
     );
   }
