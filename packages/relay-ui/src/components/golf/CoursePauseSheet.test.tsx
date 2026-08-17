@@ -331,15 +331,53 @@ describe('CourseGame — the pause sheet', () => {
     expect(endRoundNote({ banked: 0, inProgress: { hole: 1, par: 4, strokes: 1 } })).toBe(
       "Nothing to bank yet · hole 1 (1 stroke) won't count",
     );
-    expect(endRoundNote({ banked: 1, inProgress: { hole: 2, par: 5, strokes: 0 } })).toBe(
-      "Banks 1 hole · hole 2 (0 strokes) won't count",
-    );
     expect(endRoundNote({ banked: 6, inProgress: { hole: 7, par: 4, strokes: 3 } })).toBe(
       "Banks 6 holes · hole 7 (3 strokes) won't count",
     );
     // No hole in progress (paused on top of the hole-out card): the "won't count"
     // clause MUST go — hole 9 just did count.
     expect(endRoundNote({ banked: 9 })).toBe('Banks 9 holes');
+  });
+
+  // ⚠ THE CLAUSE IS ABOUT FORFEITING SOMETHING, so it must not appear when there
+  // is nothing to forfeit. Carding a hole and pausing on the next TEE read
+  // "Banks 1 hole · hole 2 (0 strokes) won't count", which invites the player to
+  // hunt for what they are about to lose on a hole they have not hit yet.
+  it('drops the "won\'t count" clause for an unplayed hole, and keeps "Banks 1 hole"', () => {
+    expect(endRoundNote({ banked: 1, inProgress: { hole: 2, par: 5, strokes: 0 } })).toBe(
+      'Banks 1 hole',
+    );
+    expect(endRoundNote({ banked: 8, inProgress: { hole: 9, par: 4, strokes: 0 } })).toBe(
+      'Banks 8 holes',
+    );
+    expect(endRoundNote({ banked: 0, inProgress: { hole: 1, par: 4, strokes: 0 } })).toBe(
+      'Nothing to bank yet',
+    );
+    // One stroke is a genuine forfeit and still reads as one — the boundary is
+    // 0 vs 1, not "an early hole".
+    expect(endRoundNote({ banked: 1, inProgress: { hole: 2, par: 5, strokes: 1 } })).toBe(
+      "Banks 1 hole · hole 2 (1 stroke) won't count",
+    );
+  });
+
+  // The same thing through the real components, so the sheet cannot be handing
+  // `endRoundNote` a strokes count that is wrong in the other direction (the HUD
+  // above it deliberately displays strokes-taken PLUS ONE, the stroke about to be
+  // played, and reading that here would show "(1 stroke)" on an untouched tee).
+  it('says only "Banks 1 hole" on a freshly teed hole', () => {
+    const course = courseOf(9);
+    const el = (paused: boolean) => <CourseGame course={course} seed={7} paused={paused} />;
+    const { rerender } = render(el(false));
+
+    // Hole 1 carded, advanced to hole 2, not a shot hit on it.
+    playHoles(course, 1, () => 4);
+    poll();
+    act(() => rerender(el(true)));
+
+    expect(screen.getByText('Banks 1 hole')).toBeTruthy();
+    expect(screen.queryByText(/won't count/)).toBeNull();
+    // The hole IS in progress in every other sense — it is still the dim row.
+    expect(screen.getByLabelText(`Hole ${course.holes[1]!.id} in progress`)).toBeTruthy();
   });
 
   it('claims nothing about a hole that is already carded', () => {

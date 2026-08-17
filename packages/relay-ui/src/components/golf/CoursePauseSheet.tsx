@@ -38,17 +38,26 @@ export type { HoleInProgress };
  * away, so "your six holes are safe" is news, and a player three strokes into
  * hole 7 will otherwise assume those three count.
  *
- * `inProgress` is OMITTED when the current hole has already been holed out and
- * carded (pausing on the hole-out card). Nothing is in the balance then, and a
- * "hole 9 won't count" line would be a plain lie about a hole that just did.
+ * The clause is DROPPED in two cases, both of which forfeit nothing:
+ *   • `inProgress` omitted — the current hole is already holed out and carded
+ *     (pausing on the hole-out card). "Hole 9 won't count" would be a plain lie
+ *     about a hole that just did.
+ *   • ZERO strokes on it — the player carded a hole and paused on the next tee
+ *     without hitting a shot. "Hole 2 (0 strokes) won't count" reads as a
+ *     forfeit, and the thing being forfeited is nothing. Note that a hole is in
+ *     progress here in every other sense (it is the dim row on the card, and
+ *     `CourseGame` still passes it), so the omission belongs HERE and not at the
+ *     call site.
+ * The banked half always stays — "Banks 1 hole" is the whole message then, and
+ * it is the half a player cannot guess.
  *
  * Exported and pure so it can be asserted directly, without rendering a sheet.
  */
 export function endRoundNote(a: { banked: number; inProgress?: HoleInProgress }): string {
   const banked =
     a.banked === 0 ? 'Nothing to bank yet' : `Banks ${a.banked} hole${a.banked === 1 ? '' : 's'}`;
-  if (!a.inProgress) return banked;
-  const n = a.inProgress.strokes;
+  const n = a.inProgress?.strokes ?? 0;
+  if (!a.inProgress || n === 0) return banked;
   return `${banked} · hole ${a.inProgress.hole} (${n} stroke${n === 1 ? '' : 's'}) won't count`;
 }
 
