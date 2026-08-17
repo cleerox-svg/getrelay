@@ -18,6 +18,33 @@ import {
 export const MAX_ROUNDS = 8;
 export const MAX_POINTS_PER_ROUND = 2000;
 
+// The Home Run Derby's OWN per-round points ceiling, for exactly the reason
+// MAX_COURSE_ROUNDS below is the Course's own rounds ceiling: one game's format
+// outgrew a clamp that is otherwise right for every arcade mini game, and the
+// answer is a per-game number rather than a raised shared one. Raising
+// MAX_POINTS_PER_ROUND itself would have doubled the accepted ceiling for fog,
+// tune, golf and golfrange as well — four games that come nowhere near it and
+// whose anti-cheat bound would have been weakened for nothing.
+//
+// WHY the derby needs it: a derby round is 8 pitches and a home run inside a
+// run of consecutive home runs pays a CHAIN MULTIPLIER (up to x2). The old
+// 2000/round put the per-pitch ceiling at 250 against a ~190-point barrelled
+// home run, i.e. 1.32x of headroom — not enough for a multiplier to express
+// anything before the clamp ate it. 4000 puts the per-pitch ceiling at 500.
+//
+// ⚠ THIS IS A WIDENING, AND THE DEPLOY ORDER MATTERS. The worker and the UI
+// deploy independently. A wider ceiling accepts everything the old client sent,
+// so worker-then-UI is safe in both windows; UI-then-worker is NOT — a chained
+// session would exceed rounds x 2000, and `DerbyGame.bank()` swallows the 400
+// with `.catch(() => undefined)`, so the score would vanish with no UI signal.
+// Deploy the worker first.
+//
+// ⚠ AND IT MIRRORS `DERBY_POINTS_PER_ROUND` IN
+// `packages/relay-ui/src/lib/baseball/tuning.ts`, which mirrors it back and
+// asserts the equality by reading THIS FILE's source text
+// (`tuning.test.ts`). The two must be changed together.
+export const DERBY_POINTS_PER_ROUND = 4000;
+
 // Economy anti-farm: a client can submit arbitrarily many arcade rounds, so the
 // per-round coin/XP reward is capped to this many credited rounds per UTC day.
 // Rounds past the cap still record their score — they just stop minting coins.
@@ -479,6 +506,15 @@ export function gamesRoutes() {
         ? (rounds as number) * DERBY_PITCHES_PER_ROUND
         : (rounds as number);
 
+    // The points ceiling is per-game for the same reason the two above are: the
+    // derby pays a chain multiplier on consecutive home runs and its round
+    // ceiling is DERBY_POINTS_PER_ROUND. Everything else keeps
+    // MAX_POINTS_PER_ROUND, so this widening has no blast radius outside the
+    // derby. Read BEFORE `rounds` is proven an integer, so it is only ever used
+    // inside the score clamp below, which runs after `roundsAndStreakValid`.
+    const maxPointsPerRound =
+      game === 'bbderby' ? DERBY_POINTS_PER_ROUND : MAX_POINTS_PER_ROUND;
+
     // rounds 1..maxRounds, bestStreak 0..maxStreak. `rounds` is proven an
     // integer by the first conjunct before either bound is read, so a
     // non-numeric `rounds` can never launder itself through maxStreak.
@@ -507,7 +543,7 @@ export function gamesRoutes() {
     }
 
     // Score: for arcade games the client sends it and we clamp
-    // 0..rounds*MAX_POINTS_PER_ROUND. For golfcourse the client score is
+    // 0..rounds*maxPointsPerRound. For golfcourse the client score is
     // meaningless (a full round is scored by strokes), so we IGNORE it and
     // derive a leaderboard-friendly points value from to-par instead:
     //   score = max(0, round(1000 - toPar*10))
@@ -524,7 +560,7 @@ export function gamesRoutes() {
       if (
         !Number.isInteger(raw) ||
         (raw as number) < 0 ||
-        (raw as number) > (rounds as number) * MAX_POINTS_PER_ROUND
+        (raw as number) > (rounds as number) * maxPointsPerRound
       ) {
         return c.json({ error: 'invalid_score' }, 400);
       }

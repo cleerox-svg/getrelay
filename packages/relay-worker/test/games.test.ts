@@ -882,6 +882,164 @@ describe('POST /game/score', () => {
     expect(ok.status).toBe(200);
   });
 
+  // ---- Per-game POINTS ceiling -------------------------------------------
+  //
+  // The derby pays a chain multiplier (up to x2) on runs of consecutive home
+  // runs, so its per-round total outgrew the arcade clamp. It got its own
+  // ceiling — DERBY_POINTS_PER_ROUND — the same way golfcourse got its own
+  // rounds ceiling, rather than MAX_POINTS_PER_ROUND being raised for
+  // everybody.
+  //
+  // ⚠ THE NUMBERS BELOW ARE WRITTEN OUT (4000, 12000, 2001) RATHER THAN
+  // DERIVED FROM THE WORKER'S CONSTANTS, for the reason the bestStreak block
+  // states: an expectation computed from the implementation constant passes for
+  // every value of it.
+  describe('points ceiling', () => {
+    it('accepts a derby score above the arcade ceiling, up to rounds x 4000', async () => {
+      // 2001 in a single round is over the ARCADE clamp and inside the derby's.
+      // This is the exact submission that would have silently 400'd, because
+      // DerbyGame.bank() swallows the rejection.
+      const overArcade = await postScore(cookies.A, {
+        score: 2001,
+        rounds: 1,
+        bestStreak: 8,
+        game: 'bbderby',
+      });
+      expect(overArcade.status).toBe(200);
+
+      // The boundary: a 3-round derby may submit exactly 12000.
+      const boundary = await postScore(cookies.A, {
+        score: 12000,
+        rounds: 3,
+        bestStreak: 24,
+        game: 'bbderby',
+      });
+      expect(boundary.status).toBe(200);
+
+      const row = await testEnv.DB.prepare(
+        `SELECT score, rounds FROM game_scores
+          WHERE user_id = ? AND game = 'bbderby' ORDER BY created_at DESC LIMIT 1`,
+      )
+        .bind(USERS.A.id)
+        .first<{ score: number; rounds: number }>();
+      // Stored as sent, not truncated to the arcade ceiling.
+      expect(row).toEqual({ score: 12000, rounds: 3 });
+    });
+
+    it('still rejects a derby score past rounds x 4000', async () => {
+      const over = await postScore(cookies.A, {
+        score: 12001,
+        rounds: 3,
+        bestStreak: 24,
+        game: 'bbderby',
+      });
+      expect(over.status).toBe(400);
+      expect(await over.json()).toEqual({ error: 'invalid_score' });
+
+      // One round is 4000, so 4001 is out of reach even though 12000 is fine
+      // for three. The ceiling scales with the rounds submitted, like the
+      // arcade one.
+      const oneRound = await postScore(cookies.A, {
+        score: 4000,
+        rounds: 1,
+        bestStreak: 8,
+        game: 'bbderby',
+      });
+      expect(oneRound.status).toBe(200);
+      const oneRoundOver = await postScore(cookies.A, {
+        score: 4001,
+        rounds: 1,
+        bestStreak: 8,
+        game: 'bbderby',
+      });
+      expect(oneRoundOver.status).toBe(400);
+
+      // A negative score is still rejected, derby or not.
+      const negative = await postScore(cookies.A, {
+        score: -1,
+        rounds: 3,
+        bestStreak: 0,
+        game: 'bbderby',
+      });
+      expect(negative.status).toBe(400);
+      // …and a non-integer, which is what a NaN payout would arrive as.
+      const fractional = await postScore(cookies.A, {
+        score: 2500.5,
+        rounds: 3,
+        bestStreak: 0,
+        game: 'bbderby',
+      });
+      expect(fractional.status).toBe(400);
+    });
+
+    it('leaves every non-derby game on the arcade ceiling', async () => {
+      // The widening must NOT leak. Each game is checked twice: exactly
+      // rounds x 2000 accepted (so the 400 below is about the points clamp and
+      // nothing else), one past it rejected — including at a value the DERBY
+      // would have accepted, which is the leak this test exists for.
+      const others = ['fog', 'tune', 'golf', 'golfrange'] as const;
+      for (const game of others) {
+        const atLimit = await postScore(cookies.A, {
+          score: 6000,
+          rounds: 3,
+          bestStreak: 3,
+          game,
+        });
+        expect(atLimit.status, `${game} at rounds x 2000`).toBe(200);
+
+        const overByOne = await postScore(cookies.A, {
+          score: 6001,
+          rounds: 3,
+          bestStreak: 3,
+          game,
+        });
+        expect(overByOne.status, `${game} one past rounds x 2000`).toBe(400);
+        expect(await overByOne.json()).toEqual({ error: 'invalid_score' });
+
+        const derbySized = await postScore(cookies.A, {
+          score: 12000,
+          rounds: 3,
+          bestStreak: 3,
+          game,
+        });
+        expect(derbySized.status, `${game} at the derby ceiling`).toBe(400);
+      }
+    });
+
+    it('does not widen the points ceiling for an unknown game id', async () => {
+      // normalizeGame() maps anything unrecognised to 'fog', so a spoofed id
+      // cannot buy the derby's ceiling — the same guard the streak block has.
+      const res = await postScore(cookies.A, {
+        score: 12000,
+        rounds: 3,
+        bestStreak: 3,
+        game: 'bbderby-but-not-really',
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid_score' });
+    });
+
+    it('golfcourse still ignores the client score entirely', async () => {
+      // golfcourse derives its score from toPar, so the points ceiling must not
+      // start mattering for it — an absurd client score is dropped, not a 400.
+      const res = await postScore(cookies.A, {
+        score: 999999,
+        rounds: 18,
+        bestStreak: 0,
+        game: 'golfcourse',
+        toPar: -2,
+      });
+      expect(res.status).toBe(200);
+      const row = await testEnv.DB.prepare(
+        `SELECT score FROM game_scores
+          WHERE user_id = ? AND game = 'golfcourse' ORDER BY created_at DESC LIMIT 1`,
+      )
+        .bind(USERS.A.id)
+        .first<{ score: number }>();
+      expect(row).toEqual({ score: 1020 });
+    });
+  });
+
   // ---- Per-game bestStreak ceiling ---------------------------------------
   //
   // For fog / tune / golf a "round" IS one attempt, so a streak can never
