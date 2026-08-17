@@ -1,240 +1,191 @@
-// The videoboard's SIX SCREENS — the layouts themselves.
+// The MAIN PANEL's six screens — the big central video panel of the array.
 //
 // ⚠ EXTRACTED FROM `boardPaint.ts` AT THE 500-LINE BUILDER CAP — extraction, not
-// a raised cap, the discipline `budget.test.ts` states and `swingCopy.ts` was
-// split under. The seam is the one the brief named: `boardPaint.ts` is the KIT
-// (the op vocabulary, the palette, the type scale, the legibility floor, the
-// time quantisation and the rasteriser) and this file is what is DRAWN WITH IT.
-// A seventh screen lands here and touches nothing else; a change to the type
-// scale lands there and every screen follows it.
+// a raised cap. The seam: `boardPaint.ts` is the KIT, this file is what is drawn
+// with it in the CENTRE panel, `boardPanels.ts` is what is drawn in the narrow
+// columns and the strip, and `boardAtlas.ts` places all four.
 //
-// Every function is pure `(screen, frame, aspect) => BoardOp[]`. No canvas, no
-// `three`, no clock, no gameplay — see `boardPaint.ts`'s header for all four.
+// ⚠ EVERY LAYOUT HERE WAS RE-DERIVED FOR THE PANEL, NOT INHERITED FROM THE
+// RECTANGLE. The old board was one 100 × 50 ft screen; the main panel is
+// 60 × 29.5 ft, so it is **40 % narrower and 41 % shorter**, and a fraction that
+// used to be a title is now nearly a hero. The type scale is in FEET
+// (`TYPE_FT`) and the panel divides by its own height, which is what makes that
+// re-derivation automatic instead of a hand-tuned second table.
+//
+// ⚠ AND THE ROW BUDGET IS NOW A MEASURED NUMBER, WHICH CHANGED THE CARD. At the
+// legibility floor a 60 ft-wide panel carries **16 characters**, so
+// `PITCH 7/27` and `LONG 428 FT` cannot share a row — 21 characters plus a
+// gutter is simply wider than the panel. The batter card's bottom band is
+// therefore a CAPTION-OVER-VALUE pair per column (`PITCH`/`7/27`,
+// `LONG`/`428 FT`), which is the same `stack()` idiom the narrow columns use and
+// fits inside the budget with 0.19 of the width to spare. This is what the
+// array bought: the facts that no longer fit here have their own surfaces —
+// the score, the round's homers and the ball's numbers all moved to columns.
+//
+// Every function is pure `(screen, frame, pt) => BoardOp[]`. No canvas, no
+// `three`, no clock, no gameplay.
 
-import type { BoardOp, BoardScreen } from './boardPaint';
+import type { BoardOp } from './boardPaint';
 import {
   BOARD_ANIM_FPS,
   DIM,
   GOLD,
+  GUTTER,
   INK,
   PANEL,
   RED,
   RULE,
   TONE_COLOR,
-  T_BODY,
-  T_HEAD,
-  T_HERO,
-  T_LABEL,
-  T_TITLE,
   WHITE,
   backdrop,
-  fit,
+  fitRun,
   int,
-  runH,
+  runW,
+  stack,
 } from './boardPaint';
+import type { PanelType } from './boardPaint';
+import type { BoardScreen } from './boardState';
 
 /** How long the home-run strobe alternates for, s. Feel knob. */
-const FLASH_S = 0.9;
+export const FLASH_S = 0.9;
 /** Strobe half-period, s. 2.5 Hz — an alternation, deliberately not a flicker. */
-const STROBE_S = 0.2;
+export const STROBE_S = 0.2;
 /** How long the distance counts up, s. Feel knob. */
 const COUNT_S = 0.8;
 /** Chevron sweeps per second. Feel knob. */
-const CHEVRON_HZ = 0.9;
+export const CHEVRON_HZ = 0.9;
 
-/** Gap between two columns of a row, as a fraction of board WIDTH. */
-const GUTTER = 0.035;
 /** Padding inside the chain badge — width units and height units. */
 const BADGE_PAD_X = 0.016;
-const BADGE_PAD_Y = 0.028;
-/** Right edge of the duel's runs column, clear of the count panel at 0.66. */
-const RUNS_X = 0.62;
+const BADGE_PAD_Y = 0.024;
+
+/** Left and right text margins, fractions of panel width. */
+const L = 0.045;
+const R = 0.955;
+const SPAN = R - L;
 
 /**
- * Split a `describeSwing` line into board rows on its own ` · ` separator.
- * Exported because the test asserts, against `swingCopy` itself, that every
- * outcome's line survives the split at or above `MIN_LEGIBLE_H`.
+ * Split a `describeSwing` line into board rows on ITS OWN separators.
+ *
+ * ⚠ THE EM DASH IS A BREAK TOO, AND A RENDER IS WHAT PROVED IT. Splitting on
+ * ` · ` alone left `Off the wall — 395 ft` as one 21-character row, which a
+ * 60 ft panel cannot set above the floor: it truncated to `OFF THE WALL…` and
+ * threw away the distance — the one number the player is looking for. Both
+ * separators are `describeSwing`'s own punctuation, so this is a re-WRAP of the
+ * HUD's line and not a second vocabulary; the words are still verbatim.
  */
 export function boardResultRows(line: string): string[] {
   return line
-    .split(' · ')
+    .split(/ · | — /)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 }
 
-function idleOps(label: string, aspect: number): BoardOp[] {
+/** True when a chain multiplier is EARNING and therefore worth showing. */
+export const chainLive = (x: number | null): x is number => x !== null && x > 1;
+
+function idleOps(label: string, pt: PanelType): BoardOp[] {
+  const run = fitRun(label, 0.86, 'title', pt);
   return [
     ...backdrop(INK),
     { kind: 'panel', x: 0, y: 0.06, w: 1, h: 0.02, color: RULE },
-    {
-      kind: 'text',
-      text: label,
-      x: 0.5,
-      y: 0.42,
-      size: fit(label, 0.86, T_TITLE, aspect),
-      align: 'centre',
-      color: DIM,
-    },
+    { kind: 'text', text: run.text, x: 0.5, y: 0.42, size: run.size, align: 'centre', color: DIM },
   ];
 }
 
-function derbyBatterOps(
-  s: Extract<BoardScreen, { kind: 'derbyBatter' }>,
-  aspect: number,
-): BoardOp[] {
+function derbyBatterOps(s: Extract<BoardScreen, { kind: 'derbyBatter' }>, pt: PanelType): BoardOp[] {
   const ops = backdrop(INK);
   ops.push({ kind: 'panel', x: 0, y: 0.055, w: 1, h: 0.018, color: RULE });
 
-  // ⚠ THE NAME'S WIDTH ALLOWANCE IS COMPUTED FROM THE SCORE THAT IS ACTUALLY ON
-  // THE BOARD, not hard-coded. It was hard-coded — 0.56, then 0.66 — and both
-  // were wrong for a different reason: 0.56 shrank a 12-character name BELOW the
-  // round line it is supposed to dominate, and 0.66 held only while the score
-  // had four digits. A five-digit score set at `T_TITLE` reaches back to 0.659,
-  // which a 0.66 name runs straight into. So the right column measures itself
-  // (the wider of the value and its `SCORE` label) and the name gets what is
-  // left, less a gutter. `fit` then shrinks a long card name rather than
-  // clipping it, which is the right failure: a squeezed name is still a name.
-  const scoreText = int(s.score);
-  const rightColW =
-    Math.max(runH(scoreText.length) * T_TITLE, runH('SCORE'.length) * T_LABEL) / aspect;
-  ops.push({
-    kind: 'text',
-    text: s.batter,
-    x: 0.045,
-    y: 0.105,
-    size: fit(s.batter, 0.955 - rightColW - GUTTER - 0.045, T_TITLE, aspect),
-    align: 'left',
-    color: WHITE,
-  });
-  ops.push({
-    kind: 'text',
-    text: `ROUND ${int(s.round)}/${int(s.rounds)}`,
-    x: 0.045,
-    y: 0.32,
-    size: T_BODY,
-    align: 'left',
-    color: DIM,
-  });
-  ops.push({
-    kind: 'text',
-    text: 'SCORE',
-    x: 0.955,
-    y: 0.1,
-    size: T_LABEL,
-    align: 'right',
-    color: DIM,
-  });
-  ops.push({
-    kind: 'text',
-    text: scoreText,
-    x: 0.955,
-    y: 0.215,
-    size: T_TITLE,
-    align: 'right',
-    color: WHITE,
-  });
+  // The name gets the whole width — the score moved to the left column, which is
+  // what a stats column is FOR, and what the reference photograph shows.
+  const name = fitRun(s.batter, SPAN, 'title', pt);
+  ops.push({ kind: 'text', text: name.text, x: L, y: 0.1, size: name.size, align: 'left', color: WHITE });
 
-  // ⚠ THE BOTTOM BAND IS TWO COLUMNS, AND IT USED TO BE THREE — which did not
-  // fit and was only visible in a render. `PITCH 7/27`, `LONG 428 FT` and a
-  // `×1.50` badge total 1.24 board widths at `T_BODY`: the badge was painted
-  // straight over the word LONG and through the pitch count. Rows 4 and 5 of
-  // the legibility derivation say this board carries four or five rows, so the
-  // fix is not smaller type, it is FEWER THINGS — and when a chain is live it
-  // is the more urgent of the two, so it TAKES the right column rather than
-  // sharing it. (`swingCopy`'s rule that the multiplier shows only while it is
-  // earning is what makes that swap safe: off-chain, the long ball is back.)
-  ops.push({ kind: 'panel', x: 0, y: 0.66, w: 1, h: 0.34, color: PANEL });
-  const colW = (0.955 - 0.045 - GUTTER) / 2;
-  const pitchText = `PITCH ${int(s.pitch)}/${int(s.pitches)}`;
-  ops.push({
-    kind: 'text',
-    text: pitchText,
-    x: 0.045,
-    y: 0.735,
-    size: fit(pitchText, colW, T_BODY, aspect),
-    align: 'left',
-    color: WHITE,
-  });
-  if (s.chainX !== null && s.chainX > 1) {
-    const chainText = `×${s.chainX.toFixed(2)}`;
-    const size = fit(chainText, colW - 2 * BADGE_PAD_X, T_BODY, aspect);
-    const w = (runH(chainText.length) * size) / aspect;
+  const round = fitRun(`ROUND ${int(s.round)}/${int(s.rounds)}`, SPAN, 'body', pt);
+  ops.push({ kind: 'text', text: round.text, x: L, y: 0.4, size: round.size, align: 'left', color: DIM });
+
+  // ⚠ THE BAND IS TWO CAPTION/VALUE STACKS, AND IT USED TO BE THREE PLAIN ROWS
+  // that did not fit — `PITCH 7/27`, `LONG 428 FT` and a `×1.50` badge total
+  // 1.24 panel widths, and a render showed the badge painted straight over the
+  // word LONG. When a chain is live it is the more urgent of the two facts, so
+  // it TAKES the right column rather than sharing it. (`swingCopy`'s rule that
+  // the multiplier shows only while it is earning is what makes that swap safe.)
+  ops.push({ kind: 'panel', x: 0, y: 0.6, w: 1, h: 0.4, color: PANEL });
+  const colW = (SPAN - GUTTER) / 2;
+  ops.push(
+    ...stack({ label: 'PITCH', value: `${int(s.pitch)}/${int(s.pitches)}`, x: L, y: 0.66, w: colW, align: 'left', pt }).ops,
+  );
+
+  if (chainLive(s.chainX)) {
+    const badge = stack({
+      label: 'CHAIN',
+      value: `×${s.chainX.toFixed(2)}`,
+      x: R - BADGE_PAD_X,
+      y: 0.66,
+      w: colW - 2 * BADGE_PAD_X,
+      align: 'right',
+      pt,
+      labelColor: WHITE,
+    });
+    const w = Math.max(...badge.ops.map((o) => (o.kind === 'text' ? runW(o.text, o.size, pt.aspect) : 0)));
     ops.push({
       kind: 'panel',
-      x: 0.955 - w - 2 * BADGE_PAD_X,
-      y: 0.735 - BADGE_PAD_Y,
+      x: R - w - 2 * BADGE_PAD_X,
+      y: 0.66 - BADGE_PAD_Y,
       w: w + 2 * BADGE_PAD_X,
-      h: size + 2 * BADGE_PAD_Y,
+      h: badge.h + 2 * BADGE_PAD_Y,
       color: RED,
     });
-    ops.push({
-      kind: 'text',
-      text: chainText,
-      x: 0.955 - BADGE_PAD_X,
-      y: 0.735,
-      size,
-      align: 'right',
-      color: WHITE,
-    });
+    ops.push(...badge.ops);
   } else if (s.bestFt !== null) {
-    const longText = `LONG ${int(s.bestFt)} FT`;
-    ops.push({
-      kind: 'text',
-      text: longText,
-      x: 0.955,
-      y: 0.735,
-      size: fit(longText, colW, T_BODY, aspect),
-      align: 'right',
-      color: DIM,
-    });
+    ops.push(
+      ...stack({ label: 'LONG', value: `${int(s.bestFt)} FT`, x: R, y: 0.66, w: colW, align: 'right', pt, color: GOLD }).ops,
+    );
   }
   return ops;
 }
 
-function resultOps(s: Extract<BoardScreen, { kind: 'result' }>, aspect: number): BoardOp[] {
+function resultOps(s: Extract<BoardScreen, { kind: 'result' }>, pt: PanelType): BoardOp[] {
   const ops = backdrop(INK);
-  const accent = TONE_COLOR[s.tone];
+  const accent = TONE_COLOR[s.tone] ?? RULE;
   ops.push({ kind: 'panel', x: 0, y: 0.1, w: 1, h: 0.035, color: accent });
-  const rows = boardResultRows(s.line);
   // ⚠ EACH ROW IS SIZED ON ITS OWN, and the first version sized them all to the
   // SMALLEST. That is what a text engine does and it is wrong for a scoreboard:
   // "Off the wall — 395 ft · +40" set that way drew the payout — three
-  // characters with a whole board to live in — at the 21-character line's size,
-  // which is a third of what it could be. The rows are independent facts, so
-  // they get independent sizes and the short one gets to shout.
-  const sizes = rows.map((r) => fit(r, 0.9, T_TITLE, aspect));
+  // characters with a whole panel to live in — at the 21-character line's size.
+  // The rows are independent facts, so the short one gets to shout.
+  // 0.98, not 0.9: a result row is the ONLY thing on this panel, so it gets the
+  // whole panel. At 0.9 the sixteen-character whiff line lost a character.
+  const runs = boardResultRows(s.line).map((r) => fitRun(r, 0.98, 'title', pt));
   const gap = 0.05;
-  const total = sizes.reduce((a, b) => a + b, 0) + gap * (rows.length - 1);
+  const total = runs.reduce((a, b) => a + b.size, 0) + gap * (runs.length - 1);
   let y = 0.5 - total / 2;
-  rows.forEach((row, i) => {
+  runs.forEach((run, i) => {
     ops.push({
       kind: 'text',
-      text: row,
+      text: run.text,
       x: 0.5,
       y,
-      size: sizes[i]!,
+      size: run.size,
       align: 'centre',
       color: i === 0 ? WHITE : accent,
     });
-    y += sizes[i]! + gap;
+    y += run.size + gap;
   });
   return ops;
 }
 
-/** A sweeping chevron band — the only moving furniture on the home-run screen. */
-function chevrons(frame: number, y: number, h: number, color: string): BoardOp[] {
+/** A sweeping chevron band — the moving furniture of the home-run moment. */
+export function chevrons(frame: number, y: number, h: number, color: string, pitch = 0.16): BoardOp[] {
   const t = frame / BOARD_ANIM_FPS;
   const phase = (t * CHEVRON_HZ) % 1;
   const ops: BoardOp[] = [];
-  const pitch = 0.16;
-  const wide = 0.06;
-  for (let i = -1; i < 8; i++) {
+  const wide = pitch * 0.375;
+  const skew = pitch * 0.1875;
+  for (let i = -1; i < Math.ceil(1 / pitch) + 1; i++) {
     const x = (i + phase) * pitch;
-    ops.push({
-      kind: 'poly',
-      pts: [x, y, x + wide, y, x + wide - 0.03, y + h, x - 0.03, y + h],
-      color,
-    });
+    ops.push({ kind: 'poly', pts: [x, y, x + wide, y, x + wide - skew, y + h, x - skew, y + h], color });
   }
   return ops;
 }
@@ -242,205 +193,148 @@ function chevrons(frame: number, y: number, h: number, color: string): BoardOp[]
 /**
  * The word the home-run screen leads with.
  *
- * ⚠ IT IS ASSERTED AGAINST `swingCopy.describeSwing`'s OWN OUTPUT, not merely
- * copied from it — see `scoreboard.test.ts`. Two surfaces saying different
- * things about the same event is the "second vocabulary" the charter forbids,
- * and the only way to keep them together is a test that reads both.
+ * ⚠ IT IS ASSERTED AGAINST `swingCopy.describeSwing`'s OWN OUTPUT — by EQUALITY
+ * with its first word, not by `startsWith`. `startsWith` let `GONE!` → `GONE!!`
+ * pass all 34 tests, which is two surfaces saying different things about one
+ * event: exactly the "second vocabulary" the charter forbids.
  */
 export const HOME_RUN_WORD = 'GONE!';
 
-function homeRunOps(s: Extract<BoardScreen, { kind: 'homeRun' }>, frame: number, aspect: number): BoardOp[] {
+/** The count-up's eased fraction at a frame. `ease(1) === 1`, exactly. */
+export function countUp(frame: number): number {
+  const u = Math.min(1, Math.max(0, frame / BOARD_ANIM_FPS / COUNT_S));
+  return u * u * (3 - 2 * u);
+}
+
+/** True while the home-run strobe is inverting the backdrop. */
+export const strobeOn = (frame: number) => {
   const t = frame / BOARD_ANIM_FPS;
-  const strobe = t < FLASH_S && Math.floor(t / STROBE_S) % 2 === 0;
+  return t < FLASH_S && Math.floor(t / STROBE_S) % 2 === 0;
+};
+
+function homeRunOps(s: Extract<BoardScreen, { kind: 'homeRun' }>, frame: number, pt: PanelType): BoardOp[] {
+  const strobe = strobeOn(frame);
   const ops = backdrop(strobe ? RED : INK);
-  ops.push(...chevrons(frame, 0.0, 0.05, strobe ? WHITE : RULE));
-  ops.push(...chevrons(frame, 0.95, 0.05, strobe ? WHITE : RULE));
+  ops.push(...chevrons(frame, 0.0, 0.06, strobe ? WHITE : RULE));
+  ops.push(...chevrons(frame, 0.94, 0.06, strobe ? WHITE : RULE));
 
-  ops.push({
-    kind: 'text',
-    text: HOME_RUN_WORD,
-    x: 0.5,
-    y: 0.035,
-    size: T_HEAD,
-    align: 'centre',
-    color: WHITE,
-  });
+  // ⚠ 0.09 / 0.48, AND A RENDER MOVED BOTH. At 0.12 / 0.45 the `!`'s lower dot
+  // sat on the top of the `0` — clear of the overlap check's box by 0.013 of the
+  // panel and visibly touching, because the check measures a rectangle and a
+  // glyph is not one. The two biggest things on the array need air, not tolerance.
+  ops.push({ kind: 'text', text: HOME_RUN_WORD, x: 0.5, y: 0.09, size: pt.t('head'), align: 'centre', color: WHITE });
 
-  // ⚠ THE COUNT-UP LANDS EXACTLY ON THE SIM'S NUMBER. `ease(1) === 1`, so the
-  // final frame prints `distFt` rounded and nothing else — the board must never
-  // be the reason a player reads a different distance than the HUD.
-  const u = Math.min(1, Math.max(0, t / COUNT_S));
-  const ease = u * u * (3 - 2 * u);
-  const shown = Math.round(s.distFt * ease);
-  const dist = `${int(shown)} FT`;
-  ops.push({
-    kind: 'text',
-    text: dist,
-    x: 0.5,
-    // ⚠ 0.30 AT `T_HEAD` = 0.22 PUT THE HEADLINE'S STROKE THROUGH THE TOP OF
-    // THE DISTANCE — a glyph's stroke extends half a `lineWidth` past its cell,
-    // which a purely cell-based layout does not account for. Rendered and
-    // measured: 13 px of overlap at 1024×512. The headline came down to 0.19 and
-    // moved up to 0.035; the hero came down to 0.32.
-    y: 0.285,
-    size: fit(dist, 0.82, T_HERO, aspect),
-    align: 'centre',
-    color: GOLD,
-  });
+  // ⚠ THE COUNT-UP LANDS EXACTLY ON THE SIM'S NUMBER. `countUp(last) === 1`, so
+  // the final frame prints `distFt` rounded and nothing else — the board must
+  // never be the reason a player reads a different distance than the HUD.
+  const dist = fitRun(`${int(s.distFt * countUp(frame))} FT`, 0.82, 'hero', pt);
+  ops.push({ kind: 'text', text: dist.text, x: 0.5, y: 0.48, size: dist.size, align: 'centre', color: GOLD });
 
-  const detail = `${s.evMph.toFixed(0)} MPH · ${s.laDeg.toFixed(0)}°`;
-  ops.push({
-    kind: 'text',
-    text: detail,
-    x: 0.5,
-    y: 0.69,
-    size: fit(detail, 0.8, T_BODY, aspect),
-    align: 'centre',
-    color: WHITE,
-  });
-  const pts =
-    s.chainX !== null && s.chainX > 1
-      ? `+${int(s.points)} ×${s.chainX.toFixed(2)}`
-      : `+${int(s.points)}`;
-  ops.push({
-    kind: 'text',
-    text: pts,
-    x: 0.5,
-    y: 0.845,
-    size: fit(pts, 0.8, T_BODY, aspect),
-    align: 'centre',
-    color: GOLD,
-  });
+  // ⚠ THE EXIT VELOCITY, THE LAUNCH ANGLE AND THE PAYOUT ARE NOT HERE ANY MORE,
+  // and that is the array doing its job rather than an omission. Four rows do
+  // not fit in 29.5 ft at this type scale; `boardPanels.celebrationSides()`
+  // paints them on the two columns either side, at the same instant, from the
+  // same `frame`. See `boardAtlas.boardArrayOps`.
   return ops;
 }
 
-function roundSummaryOps(
-  s: Extract<BoardScreen, { kind: 'roundSummary' }>,
-  aspect: number,
-): BoardOp[] {
+function roundSummaryOps(s: Extract<BoardScreen, { kind: 'roundSummary' }>, pt: PanelType): BoardOp[] {
   const ops = backdrop(INK);
   ops.push({ kind: 'panel', x: 0, y: 0.055, w: 1, h: 0.018, color: RULE });
-  const title = `ROUND ${int(s.round)}/${int(s.rounds)} DONE`;
-  ops.push({
-    kind: 'text',
-    text: title,
-    x: 0.5,
-    y: 0.11,
-    size: fit(title, 0.88, T_TITLE, aspect),
-    align: 'centre',
-    color: WHITE,
-  });
-  const rows: Array<[string, string]> = [
-    [`ROUND +${int(s.roundScore)}`, `HOMERS ${int(s.homeRuns)}`],
-    [`LONG ${int(s.bestFt)} FT`, `TOTAL ${int(s.total)}`],
-  ];
-  // ⚠ TWO COLUMNS WITH A GUTTER BETWEEN THEM, and the first version had none:
-  // 0.45 + 0.45 from a 0.05 margin meets at 0.50, so `LONG 428 FT` and
-  // `TOTAL 3980` were drawn touching. Rendered, measured, and now the same
-  // `colW` the batter card's band uses.
-  const colW = (0.955 - 0.045 - GUTTER) / 2;
-  rows.forEach(([left, right], i) => {
-    const y = 0.42 + i * 0.26;
-    ops.push({
-      kind: 'text',
-      text: left,
-      x: 0.045,
-      y,
-      size: fit(left, colW, T_BODY, aspect),
-      align: 'left',
-      color: DIM,
-    });
-    ops.push({
-      kind: 'text',
-      text: right,
-      x: 0.955,
-      y,
-      size: fit(right, colW, T_BODY, aspect),
-      align: 'right',
-      color: WHITE,
-    });
-  });
+  const title = fitRun(`ROUND ${int(s.round)}/${int(s.rounds)} DONE`, 0.88, 'title', pt);
+  ops.push({ kind: 'text', text: title.text, x: 0.5, y: 0.11, size: title.size, align: 'centre', color: WHITE });
+
+  // ⚠ TWO STACKS, NOT FOUR, AND THE OTHER TWO MOVED TO THE COLUMNS. Four
+  // caption/value stacks in two rows is 28.0 ft of type in a 29.5 ft panel
+  // before a single gap, and the overlap walk caught their ink touching. The
+  // round's own two numbers stay in the middle; `HOMERS` and `LONG` are exactly
+  // the single figures a narrow column exists for, and `defaultSides` puts them
+  // there — which is the same trade the home-run moment makes, for the same
+  // measured reason. (The gutter itself is still derived from the span: an
+  // earlier version had 0.45 + 0.45 from a 0.05 margin, meeting at 0.50, and
+  // drew two runs touching.)
+  const colW = (SPAN - GUTTER) / 2;
+  ops.push(
+    ...stack({ label: 'ROUND', value: `+${int(s.roundScore)}`, x: L, y: 0.45, w: colW, align: 'left', pt, color: GOLD })
+      .ops,
+  );
+  ops.push(...stack({ label: 'TOTAL', value: int(s.total), x: R, y: 0.45, w: colW, align: 'right', pt }).ops);
   return ops;
 }
 
-function duelScoreOps(s: Extract<BoardScreen, { kind: 'duelScore' }>, aspect: number): BoardOp[] {
+function duelScoreOps(s: Extract<BoardScreen, { kind: 'duelScore' }>, pt: PanelType): BoardOp[] {
   const ops = backdrop(INK);
   ops.push({ kind: 'panel', x: 0, y: 0.055, w: 1, h: 0.018, color: RULE });
+
+  // ⚠ THE COUNT PANEL'S WIDTH IS MEASURED FROM WHAT IS IN IT. It was a
+  // hard-coded 0.30 at x 0.66 with the runs column pinned to `runH(2)` — a
+  // two-digit allowance in a comment that claimed the column measured itself.
+  // With `runs: 123` the name ran straight into the number. Both are derived
+  // now, from the widest string each actually carries.
+  const countW =
+    Math.max(
+      runW(`${s.half === 'top' ? 'T' : 'B'}${int(s.inning)}`, pt.t('title'), pt.aspect),
+      runW(`${int(s.balls)}-${int(s.strikes)}`, pt.t('body'), pt.aspect),
+      3 * 0.05,
+    ) + 2 * GUTTER;
+  const countX = 1 - countW;
+  const runsX = countX - GUTTER;
   const sides = [s.away, s.home];
-  // The runs column measures itself, exactly as the derby score does, so a
-  // two-digit inning total cannot be run into by a long city name.
-  const runsW = (runH(2) * T_TITLE) / aspect;
-  const nameMax = RUNS_X - runsW - GUTTER - 0.045;
+  const runsW = Math.max(...sides.map((t) => runW(int(t.runs), pt.t('title'), pt.aspect)));
+  const nameMax = runsX - runsW - GUTTER - L;
+
   sides.forEach((team, i) => {
-    const y = 0.14 + i * 0.36;
-    ops.push({
-      kind: 'text',
-      text: team.name,
-      x: 0.045,
-      y,
-      size: fit(team.name, nameMax, T_TITLE, aspect),
-      align: 'left',
-      color: WHITE,
-    });
-    ops.push({
-      kind: 'text',
-      text: int(team.runs),
-      x: RUNS_X,
-      y,
-      size: T_TITLE,
-      align: 'right',
-      color: GOLD,
-    });
+    const y = 0.16 + i * 0.38;
+    const name = fitRun(team.name, nameMax, 'title', pt);
+    ops.push({ kind: 'text', text: name.text, x: L, y, size: name.size, align: 'left', color: WHITE });
+    ops.push({ kind: 'text', text: int(team.runs), x: runsX, y, size: pt.t('title'), align: 'right', color: GOLD });
   });
 
-  ops.push({ kind: 'panel', x: 0.66, y: 0.06, w: 0.3, h: 0.88, color: PANEL });
+  ops.push({ kind: 'panel', x: countX, y: 0.06, w: countW, h: 0.88, color: PANEL });
+  const cx = countX + countW / 2;
   ops.push({
     kind: 'text',
     text: `${s.half === 'top' ? 'T' : 'B'}${int(s.inning)}`,
-    x: 0.81,
-    y: 0.14,
-    size: T_TITLE,
+    x: cx,
+    y: 0.16,
+    size: pt.t('title'),
     align: 'centre',
     color: WHITE,
   });
   ops.push({
     kind: 'text',
     text: `${int(s.balls)}-${int(s.strikes)}`,
-    x: 0.81,
-    y: 0.44,
-    size: T_BODY,
+    x: cx,
+    y: 0.48,
+    size: pt.t('body'),
     align: 'centre',
     color: DIM,
   });
   // Outs as three lamps: lit ones are red, the rest are the panel's own shade.
   for (let i = 0; i < 3; i++) {
-    const x = 0.735 + i * 0.05;
-    ops.push({
-      kind: 'poly',
-      pts: [x, 0.74, x + 0.035, 0.74, x + 0.035, 0.83, x, 0.83],
-      color: i < s.outs ? RED : INK,
-    });
+    const x = cx - 0.075 + i * 0.05;
+    ops.push({ kind: 'poly', pts: [x, 0.76, x + 0.035, 0.76, x + 0.035, 0.86, x, 0.86], color: i < s.outs ? RED : INK });
   }
   return ops;
 }
 
 /**
- * THE PICTURE, as data. Pure: same `(screen, frame, aspect)` ⇒ deep-equal ops,
- * always, on any machine.
+ * THE MAIN PANEL'S PICTURE, as data. Pure: same `(screen, frame, pt)` ⇒
+ * deep-equal ops, always, on any machine.
  */
-export function boardOps(screen: BoardScreen, frame: number, aspect: number): BoardOp[] {
+export function boardMainOps(screen: BoardScreen, frame: number, pt: PanelType): BoardOp[] {
   switch (screen.kind) {
     case 'idle':
-      return idleOps(screen.label, aspect);
+      return idleOps(screen.label, pt);
     case 'derbyBatter':
-      return derbyBatterOps(screen, aspect);
+      return derbyBatterOps(screen, pt);
     case 'result':
-      return resultOps(screen, aspect);
+      return resultOps(screen, pt);
     case 'homeRun':
-      return homeRunOps(screen, frame, aspect);
+      return homeRunOps(screen, frame, pt);
     case 'roundSummary':
-      return roundSummaryOps(screen, aspect);
+      return roundSummaryOps(screen, pt);
     case 'duelScore':
-      return duelScoreOps(screen, aspect);
+      return duelScoreOps(screen, pt);
   }
 }
