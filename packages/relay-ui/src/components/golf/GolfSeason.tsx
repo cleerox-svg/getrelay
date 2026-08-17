@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useEconomy, economyErrorCode } from '../../lib/golf/economy';
+import { isFirstLoad } from '../../lib/golf/loadState';
 import type { Cosmetic, SeasonReward, SeasonTier } from '../../lib/types';
 import { CoinBalance } from './CoinBalance';
+import { LoadFailure } from './shared/LoadFailure';
 
 // Live "ends in …" label from an absolute ms timestamp. Coarse (d/h/m) — a
 // season runs for days, so no seconds churn.
@@ -57,7 +59,7 @@ function RewardChip({ reward, catalog }: { reward: SeasonReward; catalog: Cosmet
 // stay in sync.
 export function GolfSeason() {
   const season = useEconomy((s) => s.season);
-  const loaded = useEconomy((s) => s.seasonLoaded);
+  const seasonState = useEconomy((s) => s.seasonState);
   const catalog = useEconomy((s) => s.catalog);
   const balance = useEconomy((s) => s.balance);
   const ensureSeason = useEconomy((s) => s.ensureSeason);
@@ -101,10 +103,21 @@ export function GolfSeason() {
     }
   }
 
-  if (!loaded && !season) {
-    return <div className="golf-empty">Loading the season…</div>;
-  }
   if (!season) {
+    if (isFirstLoad(seasonState)) {
+      return <div className="golf-empty">Loading the season…</div>;
+    }
+    // A failed fetch is not "no season" — it hid a live track the player has
+    // claimable tiers on, with no way to try again.
+    if (seasonState === 'error') {
+      return (
+        <LoadFailure
+          title="The season track needs a connection."
+          detail="Couldn’t load your progress."
+          onRetry={() => void ensureSeason(true)}
+        />
+      );
+    }
     return <div className="golf-empty">No active season — reconnect to see the track.</div>;
   }
 

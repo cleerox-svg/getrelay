@@ -1,7 +1,9 @@
 import { useEffect } from 'react';
 import { useEconomy } from '../../lib/golf/economy';
+import { isFirstLoad } from '../../lib/golf/loadState';
 import type { WalletLedgerEntry } from '../../lib/types';
 import { CoinBalance } from './CoinBalance';
+import { LoadFailure, LoadFailureLine } from './shared/LoadFailure';
 
 // Compact relative time for a ledger row.
 function relTime(ms: number): string {
@@ -35,7 +37,7 @@ function reasonLabel(e: WalletLedgerEntry): string {
 export function GolfWallet() {
   const balance = useEconomy((s) => s.balance);
   const ledger = useEconomy((s) => s.ledger);
-  const loaded = useEconomy((s) => s.walletLoaded);
+  const walletState = useEconomy((s) => s.walletState);
   const ensureWallet = useEconomy((s) => s.ensureWallet);
 
   useEffect(() => {
@@ -49,8 +51,20 @@ export function GolfWallet() {
         <CoinBalance balance={balance} />
       </div>
 
-      {!loaded && ledger.length === 0 ? (
+      {/* An unreachable wallet is its OWN state — never "no coin activity yet",
+          which reads as "you have earned nothing". */}
+      {walletState === 'error' && ledger.length > 0 ? (
+        <LoadFailureLine text="Couldn’t refresh your wallet." onRetry={() => void ensureWallet(true)} />
+      ) : null}
+
+      {isFirstLoad(walletState) && ledger.length === 0 ? (
         <div className="golf-empty">Loading your wallet…</div>
+      ) : walletState === 'error' && ledger.length === 0 ? (
+        <LoadFailure
+          title="Couldn’t reach your wallet."
+          detail="Your coins are safe on the server — this is a connection problem."
+          onRetry={() => void ensureWallet(true)}
+        />
       ) : ledger.length === 0 ? (
         <div className="golf-empty">No coin activity yet — play rounds to earn.</div>
       ) : (
