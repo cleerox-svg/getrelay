@@ -123,9 +123,13 @@ export function AccuracyBar({
               background: 'rgba(255,255,255,0.55)',
             }}
           />
-          {/* Sweeping marker (left set each frame by the rAF above). */}
+          {/* Sweeping marker (left set each frame by the rAF above). The data
+              attribute is inert styling-wise and is how a test gets a handle on
+              the sweep — "is the marker still moving under a pause?" is the only
+              way to prove a resumed shot can't fire at a random time. */}
           <div
             ref={markerRef}
+            data-accuracy-marker=""
             style={{
               position: 'absolute',
               top: -2,

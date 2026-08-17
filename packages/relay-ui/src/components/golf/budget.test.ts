@@ -41,7 +41,10 @@ const GRANDFATHERED: Record<string, number> = {
   'CourseGL.tsx': 2664,
   'RangeGL.tsx': 1461,
   'PuttGL.tsx': 1226,
-  'CourseGame.tsx': 1002,
+  // 1002 → 874: the scorecard rendering moved out to CourseScorecard.tsx (shared
+  // with the new CoursePauseSheet), which is what paid for the pause + partial
+  // -round-banking wiring. Banked per this file's own rule, NOT raised.
+  'CourseGame.tsx': 874,
   'RangeGame.tsx': 894,
   'GolfScreen.tsx': 796,
   'GolfMenu.tsx': 621,
