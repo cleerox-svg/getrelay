@@ -104,7 +104,7 @@ const SKIRT_PAD_FT = 8;
  * row is the front rail and carries no band.
  *
  * ⚠ THE LAST ROW IS PINNED TO `DECK_DEPTH_FT` / `DECK_TOP_FT` ON PURPOSE. The
- * roof ring hangs on `outerRadiusFt` and the sun's shadow volume is sized from
+ * roof stack hangs on `outerRadiusFt` and the sun's shadow volume is sized from
  * it, so the profile may gain or lose rows freely as long as it ends where the
  * old single rake ended — otherwise an art edit silently re-frames the roof and
  * re-sizes a 1024² shadow map.
@@ -168,7 +168,7 @@ const U_PHASE_SECTIONS = 0.8;
 const RIBBON = [0xeef3ff, 0xeef3ff, 0xeef3ff, 0xdfe8ff, 0xffbe5c, 0x4d86ff];
 
 export interface StandsPart extends StadiumPart {
-  /** Inner edge of the bowl at a bearing, ft. Also the roof ring's inner edge. */
+  /** Inner edge of the bowl at a bearing, ft. */
   innerRadiusFt(bearingDeg: number): number;
   /** Outer edge of the bowl at a bearing, ft. */
   outerRadiusFt(bearingDeg: number): number;
@@ -360,7 +360,12 @@ export function buildStands({ scene, track, park, quality, daylight }: StadiumCt
 
   const shellGeo = track(mergeGeometries(lit));
   for (const g of lit) g.dispose();
-  const crowd = buildCrowdTexture(quality.seatTexturePx, rng, daylight.crowdBase);
+  const crowd = buildCrowdTexture(
+    quality.seatTexturePx,
+    rng,
+    daylight.crowdBase,
+    daylight.crowdSpeckle,
+  );
   if (crowd) track(crowd);
   const shell = new Mesh(
     shellGeo,

@@ -34,7 +34,7 @@ export interface StadiumQuality {
   shadowMapSize: number;
   /** Angular sampling of the outfield wall, deg. A knob, never a dimension. */
   fenceStepDeg: number;
-  /** Angular sampling of the seating bowl and roof ring, deg. */
+  /** Angular sampling of the seating bowl and the roof panels, deg. */
   bowlStepDeg: number;
   /**
    * Edge of the procedurally-generated crowd/seat texture, px. 0 ⇒ no map at

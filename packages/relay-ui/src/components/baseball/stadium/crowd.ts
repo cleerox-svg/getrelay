@@ -40,6 +40,31 @@
 // draw calls. It cannot be done with `Texture.repeat`, which is exactly why the
 // tile had to grow rather than the sampling change.
 //
+// ⚠⚠ AND THE NIGHT CROWD IS A SECOND, OPPOSITE PROBLEM — MEASURED IN A FRAME
+// THE OWNER LOOKED AT. The first night pass ran the DAY texture at
+// `crowdBase = 0.26`, and `night-homerun.png` came out a dense field of
+// high-frequency BLUE noise: luminance mean **27.81**, sd **29.18**, range
+// 0.1–132.8 over the outfield deck at ~400 ft. That is television static, not a
+// dark bowl with points scattered through it, and the points were BLUE because
+// a multiply cannot make a navy seat white.
+//
+// Both faults are `daylight.ts` rows now — `crowdSpeckle` (16 % by day, 3 % at
+// night: a phone is not a person) and `seatsHex` becoming a pale cool white so
+// the map is a MASK rather than a tint. Measured on the same patch after:
+//
+//     patch                      before               after
+//     night deck @ ~400 ft       mean 27.81  sd 29.18  →  mean 17.31  sd 27.40
+//                                range 0.1–132.8       →  range 0.0–189.5
+//     day deck @ ~115 ft         mean 20.43  sd  3.65  →  mean 19.78  sd  3.66
+//     day deck @ ~400 ft         mean 20.81  sd  6.01  →  mean 19.58  sd  5.86
+//
+// i.e. at night the GROUND fell by 38 % while the peak rose by 43 % — sd/mean
+// went 1.05 → 1.58, which is the difference between a field of similar values
+// and bright points on dark — and the DAY crowd, which was signed off, did not
+// move. `crowdBase` was taken to 0.10 first and that was too far: the
+// vomitories and the coarse octave crushed to the same black and the deck read
+// as noise rather than texture. 0.16 is where both survive.
+//
 // ⚠ EVERY RANDOM NUMBER COMES FROM THE CALLER'S SEEDED `mulberry32`. Two runs of
 // the screenshot harness must produce byte-identical PNGs; one `Math.random`
 // here breaks that silently, and `determinism.test.ts` reads this file.
@@ -84,9 +109,6 @@ const CLUMP_PX = 12;
 /** Clump amplitude, as a fraction of white. FEEL KNOB, and it is the contrast dial. */
 const CLUMP_AMP = 0.34;
 
-/** Per-texel speckle density, fraction of texels touched. FEEL KNOB. */
-const SPECKLE_DENSITY = 0.16;
-
 /**
  * The crowd, as ONE procedural texture.
  *
@@ -94,6 +116,13 @@ const SPECKLE_DENSITY = 0.16;
  * seating section is `px` square and the speckle stays square on the ground.
  * Everything is a `fillRect` or an `ImageData` write, and every random number
  * comes from `rng`.
+ *
+ * `base` is what the seating lane is painted at before anything is drawn on it,
+ * and `speckle` is the fraction of texels that become a bright point. BOTH ARE
+ * ROWS OF `daylight.ts`, not constants here, and the argument for that is in
+ * `Daylight.crowdBase`: by day the bright points are people and there are tens
+ * of thousands of them; by night they are lit phone screens and there are far
+ * fewer. Same texture, same cost, different population.
  *
  * Returns `null` when there is no DOM (a unit test, an SSR pass) or when the
  * tier has switched the crowd off — the caller then ships a flat navy material,
@@ -103,6 +132,7 @@ export function buildCrowdTexture(
   px: number,
   rng: () => number,
   base = 1,
+  speckle = 0.16,
 ): CanvasTexture | null {
   if (px <= 0 || typeof document === 'undefined') return null;
   const w = px * SECTIONS_PER_TILE;
@@ -131,30 +161,49 @@ export function buildCrowdTexture(
   // shell is still one geometry and one material. (`mergeGeometries` takes the
   // INTERSECTION of attributes — one band without UVs would silently drop the
   // texture off all nine.)
-  // ⚠ `base` IS 1 IN DAYLIGHT AND ~0.26 AT NIGHT, AND IT IS THE WHOLE NIGHT
-  // CROWD. This map MULTIPLIES the seat colour, so a texel can only ever DARKEN
-  // — "bright points on dark" is therefore authored by dropping the GROUND and
-  // raising the seat colour to match (`daylight.seatsHex`), never by brightening
-  // the dots. The speckle below already writes near-1.0 texels; against a 0.26
-  // ground they become the dense field of phone screens the night photographs
-  // actually show, out of the same texels the day crowd was already paying for.
+  // ⚠ THE FASCIA LANE IS WHITE AND THE SEATING LANE IS `base`, AND SPLITTING
+  // THEM IS A BUG FIX. The whole canvas used to be filled at `base`, fascia lane
+  // included — so the moment `base` stopped being 1 (i.e. the moment night
+  // existed) every fascia band in the park was multiplied by it, and
+  // `daylight.fasciaHex`'s "at night the bowl is read by BLUE LINES" was being
+  // rendered at 26 % of the colour that comment argues for. The lane's own
+  // header says it is "untouched white so a fascia band can share the one
+  // texture"; now it is.
+  band(FASCIA_V0, 1, '#ffffff', 0, SECTIONS_PER_TILE);
+  // ⚠ `base` IS 1 IN DAYLIGHT AND 0.13 AT NIGHT. This map MULTIPLIES the seat
+  // colour, so a texel can only ever DARKEN — "bright points on dark" is
+  // therefore authored by dropping the GROUND and raising the seat colour to
+  // match (`daylight.seatsHex`), never by brightening the dots. At night that
+  // seat colour IS a pale white and this map is therefore a MASK rather than a
+  // tint — which is how a multiply manages to OVERRIDE. See `daylight.crowdBase`.
   const lvl = Math.round(255 * Math.max(0, Math.min(1, base)));
-  band(0, 1, `rgb(${lvl},${lvl},${lvl})`, 0, SECTIONS_PER_TILE);
+  band(0, FASCIA_V0, `rgb(${lvl},${lvl},${lvl})`, 0, SECTIONS_PER_TILE);
+
+  // ⚠ WHERE THE SEATING ACTUALLY IS ON THE CANVAS, AND THE OLD ANSWER WAS
+  // UPSIDE DOWN. `v` runs UP the deck and canvas `y` runs DOWN the image, so the
+  // seating lane `v ∈ [0, FASCIA_V0]` is canvas rows `(1 − FASCIA_V0)·px … px`.
+  // Every octave below used to run `y ∈ [0, FASCIA_V0·px]` instead — the
+  // MIRROR of that — which speckled the 4 % FASCIA lane the whole
+  // shared-texture design exists to keep clean and left the front rows AT THE
+  // RAIL, the nearest seating any camera ever sees, with no speckle at all.
+  // It was invisible because both regions are seating-coloured; it is the same
+  // v-vs-y flip this file's header warns about, one function further down.
+  const seatY0 = Math.ceil((1 - FASCIA_V0) * px);
+  const seatRows = px - seatY0;
 
   // --- OCTAVE 1: crowd CLUMPS, the octave that survives minification. Blocks of
   // `CLUMP_PX` texels, brighter low in the bowl because that is where a real
   // house fills first. This is what raises `sd` at 115 ft.
-  const seatRows = Math.floor(px * FASCIA_V0);
   const cols = Math.ceil(w / CLUMP_PX);
   const rows = Math.ceil(seatRows / CLUMP_PX);
   const img = ctx.getImageData(0, 0, w, px);
   for (let by = 0; by < rows; by++) {
     for (let bx = 0; bx < cols; bx++) {
       // v of this block's centre, 0 at the rail.
-      const v = 1 - ((by + 0.5) * CLUMP_PX) / px;
+      const v = 1 - (seatY0 + (by + 0.5) * CLUMP_PX) / px;
       const fill = 0.45 + 0.55 * Math.max(0, Math.min(1, 1 - v)); // fuller down low
       const k = 1 + (rng() * 2 - 1) * CLUMP_AMP * fill;
-      for (let y = by * CLUMP_PX; y < Math.min(seatRows, (by + 1) * CLUMP_PX); y++) {
+      for (let y = seatY0 + by * CLUMP_PX; y < Math.min(px, seatY0 + (by + 1) * CLUMP_PX); y++) {
         for (let x = bx * CLUMP_PX; x < Math.min(w, (bx + 1) * CLUMP_PX); x++) {
           const i = (y * w + x) * 4;
           const c = Math.max(0, Math.min(255, 255 * base * k));
@@ -167,19 +216,25 @@ export function buildCrowdTexture(
   }
   // --- OCTAVE 2: per-texel speckle, which carries the close view. Never
   // individuals — one or two texels each, which is also all a seat is worth.
-  const dots = Math.round(w * seatRows * SPECKLE_DENSITY);
+  const dots = Math.round(w * seatRows * Math.max(0, Math.min(1, speckle)));
   for (let n = 0; n < dots; n++) {
     const x = Math.floor(rng() * w);
-    const y = Math.floor(rng() * seatRows);
+    const y = seatY0 + Math.floor(rng() * seatRows);
     const warm = rng();
     const i = (y * w + x) * 4;
-    // Warm/cool clothing, as a MULTIPLIER on the navy — the seats stay navy and
-    // the people on them do not, which is the whole reason this is a map.
+    // Warm / cool / neutral — clothing by day, screen tint by night.
     const rgb =
       warm < 0.5 ? [255, 255, 255] : warm < 0.8 ? [255, 226, 196] : [198, 214, 255];
-    for (let c = 0; c < 3; c++) {
-      img.data[i + c] = Math.min(255, (img.data[i + c] ?? 0) * 0.35 + (rgb[c] ?? 255) * 0.9);
-    }
+    // ⚠ AN OVERRIDE, NOT A BLEND, AND THE BLEND IT REPLACES WAS DEAD CODE.
+    // This used to be `texel × 0.35 + rgb × 0.9`, which is a bright-side blend
+    // — and arithmetic says it SATURATED: for every palette entry and every
+    // clump level above k = 0.29 all three channels clipped at 255, so the day
+    // crowd's warm/cool clothing variation had never once appeared on screen.
+    // Writing the palette straight in is both simpler and the first time that
+    // variation is visible; it changes the day texture by at most the tint it
+    // was always supposed to have. At night it is what makes a point a POINT
+    // rather than a slightly-less-dark clump.
+    for (let c = 0; c < 3; c++) img.data[i + c] = rgb[c] ?? 255;
   }
   ctx.putImageData(img, 0, 0);
 
@@ -187,8 +242,8 @@ export function buildCrowdTexture(
   // deck read as tiered rather than as a painted ramp. Drawn AFTER the octaves
   // so the row lines survive the speckle.
   const rowPx = Math.max(2, Math.round(px / 48));
-  for (let y = 0; y < seatRows; y += rowPx) {
-    ctx.fillStyle = (y / rowPx) % 2 === 0 ? 'rgba(0,0,0,0.10)' : 'rgba(255,255,255,0.10)';
+  for (let y = seatY0; y < px; y += rowPx) {
+    ctx.fillStyle = ((y - seatY0) / rowPx) % 2 === 0 ? 'rgba(0,0,0,0.10)' : 'rgba(255,255,255,0.10)';
     ctx.fillRect(0, y, w, 1);
   }
 

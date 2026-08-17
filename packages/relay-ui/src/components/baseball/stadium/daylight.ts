@@ -105,21 +105,49 @@ export interface Daylight {
    * the people.
    *
    * ⚠⚠ THE NIGHT CROWD IS AN INVERTED CONTRAST PROBLEM, NOT A BRIGHTER ONE, and
-   * this pair is the whole mechanism. `crowd.ts`'s map MULTIPLIES the seat
+   * this pair is half the mechanism. `crowd.ts`'s map MULTIPLIES the seat
    * colour, so a texel can only ever darken — which means "bright points on
    * dark" cannot be authored by making the dots brighter. It is authored by
    * making the GROUND darker (`crowdBase` ≪ 1) and raising the seat colour to
    * compensate, so the speckle's own ×1.0 texels land bright and everything
    * between them falls away.
    *
-   * The measured problem this fixes: the day crowd runs sd 1.94 → 3.40, i.e. it
-   * barely reads for a texture the scene is already paying for. At night the
-   * same texels are a dense field of bright points against black — which is what
-   * the interior photograph shows, because what is actually being photographed
-   * is thirty thousand phone screens.
+   * ⚠ THE FIRST ATTEMPT AT THAT OVERSHOT, AND THE OWNER LOOKED AT THE FRAME.
+   * `crowdBase = 0.26` with the day's 16 % speckle density made
+   * `night-homerun.png` a dense field of high-frequency BLUE noise — television
+   * static, not a dark bowl with scattered bright points. Two separate faults,
+   * and both are fixed by rows of this table rather than by a knob in
+   * `crowd.ts`:
+   *
+   *   • DENSITY. 16 % of texels is right for DAY, where the bright points are
+   *     thirty thousand people in seats and the deck really is wall-to-wall
+   *     crowd. It is wrong for NIGHT, where the bright points are the fraction
+   *     of that crowd holding a lit phone. `crowdSpeckle` is therefore a row,
+   *     not a constant — same population, different thing being photographed.
+   *   • COLOUR. The map multiplies, so a ×1.0 texel over a NAVY seat is a
+   *     bright NAVY point, and the reference shows white-ish phone screens.
+   *     The speckle has to OVERRIDE, and the only way a multiply overrides is
+   *     if the thing being multiplied is already the colour you want: so at
+   *     night `seatsHex` becomes a pale cool WHITE and the map becomes a MASK
+   *     — ×1.0 gives the screen, ×`crowdBase` gives near-black. The seating's
+   *     navy is genuinely gone at night, and that is not a loss being hidden:
+   *     between the points the deck is ~0.01 in linear light, where no hue
+   *     survives anyway, and `fasciaHex` below already says in as many words
+   *     that at night the bowl is read by BLUE LINES rather than by seat
+   *     colour.
+   *
+   * ⚠ AND IT IS STILL ONE TEXTURE, ONE MATERIAL, ZERO DRAW CALLS. An
+   * `emissiveMap` was the obvious alternative and it does not work here: the
+   * fascia bands share this map and sample its white lane, so a white lane that
+   * drives an emissive turns every deck-edge LED line into a blown-out white
+   * stripe, and separating them needs a second canvas that both modes would
+   * then have to build to keep `checkDayNightPairs`'s texture count equal.
+   * Measured against, not assumed away.
    */
   seatsHex: number;
   crowdBase: number;
+  /** Fraction of crowd texels that are a bright point. See `crowdBase`. */
+  crowdSpeckle: number;
 }
 
 /**
@@ -127,7 +155,7 @@ export interface Daylight {
  * behind home on purpose so that the inward face of the outfield wall — the
  * surface `batter`, `flight` and `wide` all look at — is lit. Night puts the
  * same light almost straight overhead and slightly behind, which is what a real
- * light rig does: banks on the roof ring pointing down at the field. The aim
+ * light rig does: banks on the roof structure pointing down at the field. The aim
  * point is unchanged so the shadow volume, which `StadiumGL` sizes from the
  * bowl's own radius, frames the identical ground either way.
  */
@@ -153,6 +181,7 @@ export const DAYLIGHT: Record<DaylightId, Daylight> = {
     // The values `stands.ts` derived and the visual gate signed off in daylight.
     seatsHex: 0x243356,
     crowdBase: 1,
+    crowdSpeckle: 0.16,
   },
   night: {
     id: 'night',
@@ -189,10 +218,30 @@ export const DAYLIGHT: Record<DaylightId, Daylight> = {
     // A lit line, not a glow — bright enough to draw the deck edge, dark enough
     // that four of them do not become the brightest thing in the bowl.
     fasciaHex: 0x2a5fe0,
-    // Raised so the map's ×1.0 speckle texels land BRIGHT; `crowdBase` then
-    // takes everything between them back down past where they started.
-    seatsHex: 0x7d97e8,
-    crowdBase: 0.26,
+    // ⚠ A PALE COOL WHITE, NOT A RAISED NAVY — the map can only darken, so this
+    // IS the colour of a bright point. 0x7d97e8 was the first attempt and it is
+    // why the owner saw blue static: a periwinkle multiplied by 1.0 is a
+    // periwinkle. A phone screen is white with the barest blue in it.
+    seatsHex: 0xd6e0f4,
+    // 0.26 → 0.16. The map is sampled in sRGB, so this is ~0.024 in the LINEAR
+    // light the renderer works in — the deck between the points is very dark,
+    // which is what "a dark bowl with scattered points" means.
+    //
+    // ⚠ AND 0.10 WAS TOO FAR, WHICH IS A SECOND MEASUREMENT AND NOT A WOBBLE.
+    // At 0.10 the bowl came out at luminance 11.5 with a 0–190 range: a pure
+    // starfield, with the vomitories, the clumps and the seat-row banding all
+    // crushed to the same black. That is "noise", and the brief asks for
+    // "texture rather than noise at 400 ft". 0.16 is 2.4× brighter in linear
+    // light — enough for the coarse octave and the tunnel mouths to read as
+    // structure — while still 6.6× below the 0.26 the owner saw as static.
+    crowdBase: 0.16,
+    // 16 % → 3 %. A phone is not a person: roughly one seat in thirty is holding
+    // a lit screen, and 16 % of texels at this tile size is television static.
+    // At the 4:1 minification the `pitcher` camera sees, the two together take
+    // the deck's mean from 0.207 to 0.040 in linear light — a 5.2× drop with
+    // the individual points UNCHANGED at full brightness, which is exactly the
+    // "sparse, not dim" the reference asks for.
+    crowdSpeckle: 0.03,
   },
 };
 

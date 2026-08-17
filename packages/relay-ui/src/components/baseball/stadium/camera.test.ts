@@ -17,6 +17,12 @@ import {
   FOLLOW_TAU_S,
   smootherstep,
 } from './camera';
+import {
+  BUILDING_HALF_FT,
+  CENTREFIELD_BOARD,
+  RECESS_BACK_R_FT,
+} from './centrefieldSpec';
+import { towerAnchor } from './towerSpec';
 
 /** The harness's portrait viewport — the aspect every framing claim is made at. */
 const ASPECT = 900 / 1600;
@@ -240,6 +246,56 @@ describe('camera rig', () => {
         expect(inFrame(stat, ball), `static camera should MISS ${spray}°`).toBe(false);
       }
     }
+  });
+
+  it('the STATIC flight frame composes the board LEFT and the landmark RIGHT', () => {
+    // ⚠ THE OWNER'S THIRD DEFECT, AS NUMBERS. "You measured the tower at 89 % of
+    // the frame's half-width, hard against the right edge… The owner asked for
+    // that landmark and it is effectively invisible." Nothing asserted the
+    // composition of this frame at all, so the tower's placement was adjudicated
+    // by looking at PNGs — five rounds running, and the render has beaten the
+    // suite every time it was allowed to.
+    //
+    // ⚠ IT READS THE TOWER'S AND THE BOARD'S OWN MODULES. A test that typed
+    // `[459.6, 400, −1843.5]` would pass forever after somebody moved the
+    // landmark, which is the exact failure it exists to prevent.
+    const cam = makeCamera();
+    const rig = buildCameraRig();
+    rig.snap(cam, 'flight', null); // no batted ball ⇒ the STATIC anchor
+    const { tx, tz, topFt, halfWidthFt } = towerAnchor();
+    const u = (p: readonly [number, number, number]) => screenOf(cam, p).u;
+
+    // (1) THE WHOLE LANDMARK IS IN THE PICTURE, both flanks and the mast tip.
+    const uL = u([tx - halfWidthFt, 628, tz]);
+    const uR = u([tx + halfWidthFt, 628, tz]);
+    expect(uL).toBeGreaterThan(0);
+    expect(uR).toBeLessThan(1);
+    expect(screenOf(cam, [tx, topFt, tz]).v).toBeGreaterThan(0);
+
+    // (2) AND IT IS COMFORTABLY IN, NOT AT THE EDGE — the defect restated as a
+    // bound. `u = 0.945` is 89 % of the half-width, which is what shipped.
+    const uAxis = u([tx, 400, tz]);
+    expect(uAxis).toBeGreaterThan(0.5); // …on the RIGHT, which is the owner's correction
+    expect(uAxis).toBeLessThan(0.85); // …and inside 70 % of the half-width
+
+    // (3) THE BOARD IS STILL WELL COMPOSED: the whole array in frame, on the
+    // other side of centre, and NOT overlapping the landmark. Ordering, not
+    // position — a frame that put the tower behind the building would satisfy
+    // every bound above.
+    const half = CENTREFIELD_BOARD.widthFt / 2;
+    const d = CENTREFIELD_BOARD.faceDistFt;
+    const bL = u([-half, CENTREFIELD_BOARD.sillFt, -d]);
+    const bR = u([half, CENTREFIELD_BOARD.sillFt, -d]);
+    // Not merely "on screen" — a board crushed against the left edge is what an
+    // over-generous yaw toward the tower buys, and it passes every other bound
+    // here (measured: `look.x = 90` puts the array at u 0.058…0.28 and the tower
+    // at 0.55, i.e. a landmark in the middle and a board falling off the side).
+    expect(bL).toBeGreaterThan(0.1);
+    expect(bR).toBeLessThan(1);
+    expect(bR).toBeLessThan(0.5); // left of centre, leaving the right to the tower
+    // The BUILDING's right edge, which is what the tower has to clear — wider
+    // than the array itself, and the thing the old bearing was fighting.
+    expect(u([BUILDING_HALF_FT, 60, -RECESS_BACK_R_FT])).toBeLessThan(uL);
   });
 
   it('the BATTER frame holds the zone AND keeps the near dirt off the bottom third', () => {

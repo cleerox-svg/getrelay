@@ -125,13 +125,22 @@ const SCENES = {
   // about a FIXED axis, so a ball to either corner simply left the picture.
   // At 105 mph / 26.5° / bt = 2.6 s, the ball is drawn at (∓164.65, 93.30,
   // −196.22) scene ft; projected through the PRE-FOLLOW `flight` camera
-  // (pos [−40, 120, 90], look [−40, 60, −380], fov 55, near 4, aspect 900/1600):
+  // (pos [−12, 120, 90], look [34, 60, −380], fov 55, near 4, aspect 900/1600):
   //
-  //     spray   ball on screen (0…1, y down)   what the PNG showed
-  //     −40°    (−0.241, 0.467)                217 px off the LEFT edge; a
-  //                                            sliver of tracer at the border
-  //     +40°    (+1.716, 0.467)                645 px past the RIGHT edge —
-  //                                            no ball, no arc, nothing
+  //     spray   ball on screen (0…1, y down)   what a fixed axis gives
+  //     −40°    (−0.632, 0.473)                569 px off the LEFT edge
+  //     +40°    (+1.334, 0.463)                300 px past the RIGHT edge
+  //
+  // ⚠ THOSE TWO ROWS MOVED WHEN THE CAMERA DID, and the pair below is what they
+  // were measured at BEFORE (pos [−40, 120, 90], look [−40, 60, −380]):
+  // −40° → (−0.241, 0.467), 217 px off the left; +40° → (+1.716, 0.467), 645 px
+  // past the right. The camera has since been re-centred and its static aim
+  // yawed toward the landmark (`camera.ts`, `flight`), which moves BOTH numbers
+  // — the oppo corner is no longer ~3× worse than the pull one, it is now the
+  // BETTER of the two, and the yaw shifts the whole pair left. The defect these
+  // scenes exist for is unchanged in kind and worse in one direction: a fixed
+  // axis loses both corners either way, which is why `expectBallInFrame` is
+  // asserted rather than eyeballed.
   //
   // ⚠ THE PAIR THIS COMMENT USED TO QUOTE — (−0.083, 0.470) and (1.098, 0.470) —
   // DID NOT REPRODUCE, and it understated the defect in two independent ways.
@@ -139,12 +148,12 @@ const SCENES = {
   // arithmetic is not:
   //
   //   (i) IT WAS SYMMETRIC ABOUT u ≈ 0.5075, WHICH ONLY A CAMERA AT x = 0 CAN
-  //       PRODUCE. `CAMERAS.flight` stands at x = −40, so it is nearer the pull
-  //       corner and further from the oppo one, and the true pair is symmetric
+  //       PRODUCE. `CAMERAS.flight` stood at x = −40, so it was nearer the pull
+  //       corner and further from the oppo one, and the true pair was symmetric
   //       about u = 0.738. That asymmetry IS the explanation for the thing the
-  //       old figures made look like a coincidence: the oppo corner is ~3× worse
-  //       than the pull corner (645 px against 217 px). A symmetric pair from an
-  //       asymmetric rig is the tell, and it is cheaper to spot than to
+  //       old figures made look like a coincidence: the oppo corner was ~3× worse
+  //       than the pull corner (645 px against 217 px). A symmetric pair
+  //       from an asymmetric rig is the tell, and it is cheaper to spot than to
   //       re-measure. (From x = 0 the same two balls give −0.479 / +1.479.)
   //  (ii) ITS SPAN WAS 1.181 FRAME WIDTHS AGAINST A TRUE 1.957 — 40 % short —
   //       so it understated BOTH corners regardless of where it was centred. The
@@ -155,9 +164,13 @@ const SCENES = {
   // ⚠ AND HOW TO KEEP A FIGURE LIKE THIS HONEST: validate the method against
   // this harness's OWN PRINTED CONTROL before trusting it on a counterfactual.
   // The `flight` scene has no swing, so its camera never follows and it still
-  // prints the fixed-axis projection every run — `ball on screen (1.074, 1.333)`
-  // for the pitch at t = 0.30 s. The recomputation above reproduces that as
-  // (1.0738, 1.3333) with the same code path that produced the two rows.
+  // prints the fixed-axis projection every run — `ball on screen (0.521, 1.329)`
+  // for the pitch at t = 0.30 s, from the re-centred stand. The recomputation
+  // above reproduces the printed control to four decimals with the same code
+  // path that produced the two rows. (At the old stand the same control read
+  // (1.074, 1.333) and was reproduced as (1.0738, 1.3333); the METHOD is the
+  // reusable part, and validating it against a number this run prints is what
+  // keeps a counterfactual honest.)
   //
   // `expectBallInFrame` turns all of this from a picture a human has to squint
   // at into a number the run exits non-zero on. Both corners, because a follow
@@ -252,6 +265,67 @@ const READY_TIMEOUT_MS = 30000;
 // Harbourfront and an OFF-KNOT pchip evaluation in Alpine (whose knots are
 // ±20), which is exactly the case a knots-only renderer would get wrong.
 const FENCE_BEARINGS = [-45, -22, 0, 22, 45];
+
+/**
+ * Bearings the ROOF profile is walked at — its own list, and it is finer than
+ * the fence's on purpose.
+ *
+ * The open roof is a STACK OF PARKED PANELS over centre field (`stadium/roof.ts`),
+ * so the thing to measure is a PROFILE — thick behind centre, thinning outward,
+ * gone well before the foul lines — and five bearings cannot see a profile.
+ * ±3/±7/±9/±10 each land inside a DIFFERENT number of panels, which is what
+ * makes the STEP measurable at all; ±12 straddles the outermost panel's edge,
+ * so "it ends" is a measurement rather than an inference from two points either
+ * side of a 90° gap; ±14 is the LANDMARK's own bearing, which must be open sky
+ * or its observation pod goes behind the overhang.
+ */
+const ROOF_BEARINGS = [-45, -22, -14, -12, -10, -9, -7, -3, 0, 3, 7, 9, 10, 12, 14, 22, 45];
+
+/**
+ * The band the stack must have at dead centre, ft — "deeper than the closed
+ * roof was there", as a number.
+ *
+ * ⚠ IT IS THE OLD RING'S OWN DEPTH, NOT A TASTE. The superseded symmetric ring
+ * ran `ROOF_BAND_FT = 120` at every bearing; the whole point of the collapse is
+ * that four panels are piled where one used to lie, so behind centre field the
+ * mass must be materially deeper than that. 200 ft is 1.7× the ring, and the
+ * stack's own table lands at 250 — so this is a floor with 50 ft of headroom,
+ * which is what stops it becoming a golden value that has to be edited every
+ * time a panel row moves by a foot.
+ */
+const ROOF_STACK_MIN_DEPTH_FT = 200;
+
+/**
+ * The fewest panels the stack must have at dead centre.
+ *
+ * "Several arcs nested, with visible steps where panels stack" is the owner's
+ * description, and 3 is the smallest number of arcs that can show a step and
+ * still read as a stack rather than as a lip. `stadium/roof.ts` ships 4.
+ */
+const ROOF_MIN_LAYERS = 3;
+
+/**
+ * How far two readings of the stack's DEPTH may differ before it is a defect, ft.
+ *
+ * ⚠ IT IS NOT `ROOF_TOL_FT`, AND THE FIRST DRAFT USED THAT AND WAS WRONG. Two
+ * things make a constant-depth panel read as a varying one, and neither is slop:
+ *
+ *   • CHORD SAGITTA. Both edges of a panel are polylines through
+ *     `quality.bowlStepDeg` = 3°, and sagitta goes as the radius —
+ *     530·(1 − cos 1.5°) = 0.18 ft on the outer edge against 0.09 ft on the
+ *     inner. Measured worst step within one panel: 0.33 ft.
+ *   • THE PARK IS NOT SYMMETRIC. The stack hangs on the top of the bowl and the
+ *     bowl follows the wall, and Harbourfront's published profile runs
+ *     328/368/381/400/372/359/328 — 375.4 ft at −22° against 365.9 at +22°.
+ *     The panel table is mirrored; the building it is bolted to is not.
+ *     Measured worst |Δdepth| across ±b where the layer counts agree: 0.159 ft.
+ *
+ * 0.5 ft is 1.5× the larger of those and 80× under the 40 ft step between one
+ * panel and the next, which is the signal these two legs measure. `ROOF_TOL_FT`
+ * still governs the HEIGHT, where neither effect exists — a deck is a polyline
+ * through a constant `y`, so there is no sagitta in it at all.
+ */
+const ROOF_PROFILE_TOL_FT = 0.5;
 
 /**
  * How far the DRAWN wall may sit from `parks.ts`, ft — distance and height.
@@ -753,52 +827,180 @@ function checkBoard(report) {
 }
 
 /**
- * THE ROOF, MEASURED OUT OF THE GEOMETRY RATHER THAN PRINTED FROM `parks.ts`.
+ * THE ROOF PROFILE, MEASURED OUT OF THE GEOMETRY RATHER THAN PRINTED FROM
+ * `parks.ts`.
  *
- * ⚠ THIS CLOSES A HOLE THE GATE NAMED IN ITS OWN OUTPUT. `roofPeak 282 ft` was
- * read from the park DATA and printed beside numbers that had been measured off
- * the vertex buffer, which reads as a measurement and is not one — the same
- * tautology `checkBall`'s note describes for `ballScene()`. And it matters more
- * than a cosmetic dimension: `resolveFence` rules a ball that reaches
- * `roofPeakFt` `'roof'` and never a home run, so the ceiling is a GAMEPLAY
- * boundary. A roof drawn at 240 ft over a 282 ft rule would have printed a clean
- * run.
+ * ⚠ THE ORIGINAL CHECK CLOSED A HOLE THE GATE NAMED IN ITS OWN OUTPUT.
+ * `roofPeak 282 ft` was read from the park DATA and printed beside numbers that
+ * had been measured off the vertex buffer, which reads as a measurement and is
+ * not one — the same tautology `checkBall`'s note describes for `ballScene()`.
+ * And it matters more than a cosmetic dimension: `resolveFence` rules a ball
+ * that reaches `roofPeakFt` `'roof'` and never a home run, so the ceiling is a
+ * GAMEPLAY boundary. A roof drawn at 240 ft over a 282 ft rule would have
+ * printed a clean run. That leg is unchanged and is assertion (5) below.
+ *
+ * ⚠⚠ AND IT WAS RE-AUTHORED, BECAUSE IT ASSERTED THE DEFECT. The check demanded
+ * *a measurable roof at every one of the five fence bearings* — which is exactly
+ * the symmetric ring that turned out to be the wrong model. The open roof is a
+ * stack of panels parked over centre field; the foul lines have NO roof, by
+ * design, and the old check would have failed a correct collapse while passing
+ * the incorrect ring it was written against. "Roof is measurable here" was never
+ * the property worth asserting: it is a constant, and a constant tells a gate
+ * nothing, which is the same reason `fence.sample` asserts a VARYING wall.
+ *
+ * So it asserts the PROFILE the scene intends, and every leg fails on a
+ * different way of getting the collapse wrong:
+ *
+ *   (1) DEAD CENTRE IS THE MASS — covered, by at least `ROOF_MIN_LAYERS`
+ *       panels, and by the MOST panels of any bearing measured. Kills a stack
+ *       parked over the wrong side of the park, and a one-panel "collapse" that
+ *       is really just a narrower ring.
+ *   (2) IT IS DEEP THERE — band ≥ `ROOF_STACK_MIN_DEPTH_FT`, i.e. materially
+ *       deeper than the 120 ft ring it replaced. Kills a stack that nests its
+ *       panels into the same footprint instead of piling them.
+ *   (3) BOTH FOUL LINES ARE OPEN SKY — `null`, not "thin". This is the leg the
+ *       owner's note is about: `follow-pull` and `follow-oppo` had roof where
+ *       the reference has city.
+ *   (4) IT IS MONOTONE AND SYMMETRIC — layers and depth never increase as
+ *       |bearing| grows, and ±b agree. Kills a stack with a hole in it, a
+ *       panel table sorted the wrong way, and a mirrored bearing sign.
+ *   (5) THE TOP OF THE STACK IS THE PARK'S CEILING — `peakFt` within
+ *       `ROOF_TOL_FT` of `roofPeakFt` wherever there is any roof at all.
  *
  * `ROOF_TOL_FT` is the same class of number as `FENCE_TOL_FT` and is derived the
- * same way: the deck is a chord polyline through a CONSTANT height, so unlike
- * the wall there is no sagitta at all in `y` — the only error is float32 at
- * ~282 ft, i.e. 282·2⁻²³ = 3.4e-5 ft. 0.05 ft is ~1,500× that and 0.6 in on a
- * 282 ft ceiling, and it is 200× smaller than the smallest error anybody would
- * author by hand.
+ * same way: a deck is a chord polyline through a CONSTANT height, so unlike the
+ * wall there is no sagitta at all in `y` — the only error is float32 at ~282 ft,
+ * i.e. 282·2⁻²³ = 3.4e-5 ft. 0.05 ft is ~1,500× that and 0.6 in on a 282 ft
+ * ceiling, and it is 200× smaller than the smallest error anybody would author
+ * by hand. The DEPTH comparisons in (4) do NOT use it — see
+ * `ROOF_PROFILE_TOL_FT`, which is a different residual for two stated reasons.
  */
 function checkRoof(report) {
   const rows = report.roof ?? [];
+  const at = (deg) => rows.find((r) => r.deg === deg)?.geo ?? null;
   const measured = rows.filter((r) => r.geo);
   if (report.roofPeakFt > 0 && measured.length === 0) {
     console.error('    ✗ the park has a roof and none of it could be measured');
     return ['roof unmeasurable in a park that has one'];
   }
-  if (measured.length === 0) {
+  if (report.roofPeakFt <= 0) {
     console.log('  ROOF   none (park has no roof) — nothing to measure');
-    return [];
+    return measured.length
+      ? [`a roofless park drew roof geometry at ${measured.length} bearing(s)`]
+      : [];
   }
-  let worst = 0;
-  const parts = [];
-  for (const r of measured) {
-    worst = Math.max(worst, Math.abs(r.geo.peakFt - report.roofPeakFt));
-    parts.push(
-      `${String(r.deg).padStart(4)}° ${r.geo.peakFt.toFixed(2)} ft (band ${r.geo.innerFt.toFixed(
-        0,
-      )}→${r.geo.outerFt.toFixed(0)} ft)`,
+
+  const violations = [];
+  const depth = (g) => g.outerFt - g.innerFt;
+  console.log(`  ROOF   parked stack — parks.ts ceiling ${report.roofPeakFt} ft`);
+  console.log('    bearing   layers   band_in→out_ft    depth   peak_ft     Δpeak');
+  let worstPeak = 0;
+  for (const r of rows) {
+    if (!r.geo) {
+      console.log(`      ${String(r.deg).padStart(4)}°        0   — open sky —`);
+      continue;
+    }
+    const dPeak = r.geo.peakFt - report.roofPeakFt;
+    worstPeak = Math.max(worstPeak, Math.abs(dPeak));
+    console.log(
+      `      ${String(r.deg).padStart(4)}°   ${String(r.geo.layers).padStart(6)}` +
+        `   ${r.geo.innerFt.toFixed(1).padStart(6)}→${r.geo.outerFt.toFixed(1).padStart(6)}` +
+        `  ${depth(r.geo).toFixed(1).padStart(7)}  ${r.geo.peakFt.toFixed(2).padStart(8)}` +
+        `  ${dPeak.toFixed(3).padStart(8)}`,
     );
   }
-  console.log(`  ROOF   geometry vs parks.ts ${report.roofPeakFt} ft — worst |Δ| ${worst.toFixed(
-    3,
-  )} ft (tol ${ROOF_TOL_FT} ft)`);
-  console.log(`         ${parts.join('   ')}`);
-  return worst > ROOF_TOL_FT
-    ? [`roof height off by ${worst.toFixed(3)} ft > tol ${ROOF_TOL_FT} ft`]
-    : [];
+
+  // (1) DEAD CENTRE IS THE MASS.
+  const centre = at(0);
+  if (!centre) {
+    violations.push('no roof at all behind dead centre field — the stack is parked somewhere else');
+  } else {
+    if (centre.layers < ROOF_MIN_LAYERS) {
+      violations.push(
+        `the stack is ${centre.layers} panel(s) deep at 0° (want ≥ ${ROOF_MIN_LAYERS}) — ` +
+          `that is a narrower ring, not a collapse`,
+      );
+    }
+    const deepest = Math.max(...measured.map((r) => r.geo.layers));
+    if (centre.layers < deepest) {
+      violations.push(
+        `the stack is deepest at some bearing other than 0° (${deepest} layers vs ` +
+          `${centre.layers} at dead centre)`,
+      );
+    }
+    // (2) IT IS DEEP THERE.
+    if (depth(centre) < ROOF_STACK_MIN_DEPTH_FT) {
+      violations.push(
+        `the stack is only ${depth(centre).toFixed(1)} ft deep at 0° (want ≥ ` +
+          `${ROOF_STACK_MIN_DEPTH_FT}) — the parked panels are not piled, they are laid out`,
+      );
+    }
+  }
+
+  // (3) BOTH FOUL LINES ARE OPEN SKY.
+  for (const deg of [-45, 45]) {
+    if (at(deg)) {
+      violations.push(
+        `there is roof at the ${deg}° foul line — the corner cameras must look at sky and ` +
+          `skyline there, which is the whole point of the collapse`,
+      );
+    }
+  }
+
+  // (4) MONOTONE OUTWARD, AND SYMMETRIC ABOUT DEAD CENTRE.
+  const degs = rows.map((r) => r.deg).filter((d) => d >= 0).sort((a, b) => a - b);
+  for (let i = 1; i < degs.length; i++) {
+    for (const sign of [1, -1]) {
+      const a = at(sign * degs[i - 1]);
+      const b = at(sign * degs[i]);
+      const la = a?.layers ?? 0;
+      const lb = b?.layers ?? 0;
+      if (lb > la) {
+        violations.push(
+          `the stack GAINS a layer going outward, ${sign * degs[i - 1]}° → ${sign * degs[i]}° ` +
+            `(${la} → ${lb}) — a parked stack thins outward`,
+        );
+      }
+      const da = a ? depth(a) : 0;
+      const db = b ? depth(b) : 0;
+      if (db > da + ROOF_PROFILE_TOL_FT) {
+        violations.push(
+          `the stack gets DEEPER going outward, ${sign * degs[i - 1]}° → ${sign * degs[i]}° ` +
+            `(${da.toFixed(1)} → ${db.toFixed(1)} ft)`,
+        );
+      }
+    }
+  }
+  for (const deg of degs) {
+    if (deg === 0) continue;
+    const l = at(-deg);
+    const r = at(deg);
+    if (!!l !== !!r) {
+      violations.push(`the stack covers ${l ? -deg : deg}° and not ${l ? deg : -deg}°`);
+      continue;
+    }
+    if (!l || !r) continue;
+    if (l.layers !== r.layers) {
+      violations.push(`±${deg}° carry ${l.layers} and ${r.layers} layers — the stack is not symmetric`);
+    }
+    if (Math.abs(depth(l) - depth(r)) > ROOF_PROFILE_TOL_FT) {
+      violations.push(
+        `±${deg}° are ${depth(l).toFixed(2)} and ${depth(r).toFixed(2)} ft deep — ` +
+          `the stack is not symmetric about dead centre`,
+      );
+    }
+  }
+
+  // (5) THE TOP OF THE STACK IS THE PARK'S CEILING.
+  console.log(
+    `    worst |Δpeak| ${worstPeak.toFixed(3)} ft (tol ${ROOF_TOL_FT} ft)` +
+      `   covered at ${measured.length}/${rows.length} bearings` +
+      `   deepest ${centre ? depth(centre).toFixed(1) : '—'} ft over ${centre?.layers ?? 0} panels`,
+  );
+  if (worstPeak > ROOF_TOL_FT) {
+    violations.push(`roof height off by ${worstPeak.toFixed(3)} ft > tol ${ROOF_TOL_FT} ft`);
+  }
+  return violations;
 }
 
 /**
@@ -1519,7 +1721,7 @@ async function main() {
         // steady-state frame rather than the first one.
         await page.waitForTimeout(200);
 
-        const report = await page.evaluate((bearings) => {
+        const report = await page.evaluate(({ fence: bearings, roof: roofBearings }) => {
           const bb = window.__baseball;
           if (!bb || !bb.stadium) return { err: 'window.__baseball incomplete' };
           const { sim, stadium } = bb;
@@ -1536,7 +1738,7 @@ async function main() {
               geo: stadium.measureFence(deg),
               park: sim.fenceAt(deg),
             })),
-            roof: bearings.map((deg) => ({ deg, geo: stadium.measureRoof(deg) })),
+            roof: roofBearings.map((deg) => ({ deg, geo: stadium.measureRoof(deg) })),
             pitch: sim.pitch,
             batted: sim.batted,
             ballTimeS: sim.ballTimeS,
@@ -1559,7 +1761,7 @@ async function main() {
             cameraAim: stadium.cameraAim(),
             clockNow: window.__sceneClockNow ? window.__sceneClockNow() : null,
           };
-        }, FENCE_BEARINGS);
+        }, { fence: FENCE_BEARINGS, roof: ROOF_BEARINGS });
 
         // The scene's own claim about itself, carried into the checks. Guarded
         // because `report` is `{ err }` when the handle is broken.

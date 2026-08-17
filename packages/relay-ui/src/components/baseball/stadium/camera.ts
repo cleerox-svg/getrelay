@@ -20,10 +20,10 @@
 // ⚠ IT IS NOT A SMALL MOVE, AND CALLING IT ONE WAS WRONG. This work has been
 // described as a "yaw-only pull-back" and as "aiming at the ball", both of which
 // read as a stationary camera turning its head. It is not. `batter` → `flight`
-// TRANSLATES the camera 141.5 ft — [0, 4, 19.5] to [−40, 120, 90] — while the fov
+// TRANSLATES the camera 136.3 ft — [0, 4, 19.5] to [−12, 120, 90] — while the fov
 // goes 20° → 55° and the near plane 1 → 4 ft, all inside `CAMERA_EASE_S` = 0.8 s;
 // see that constant for what that is in ft/s. And the FOLLOW alone is not a yaw
-// either: aiming at the −40° ball swings the axis 23.5° in BEARING and 2.4° in
+// either: aiming at the −40° ball swings the axis ~29° in BEARING and 2.4° in
 // ELEVATION. Nothing about the behaviour is wrong — the description was, and an
 // understated one is how a future reader decides this is safe to touch without
 // ever looking at it in motion.
@@ -184,20 +184,75 @@ export const CAMERAS: Record<CameraMode, CameraSpec> = {
   // ⚠ THIS IS THE MODE THE OWNER'S SECOND DEFECT LIVED IN. Its horizontal field
   // of view at 900×1600 portrait is 2·atan(tan(27.5°)·0.5625) = 32.6°, i.e.
   // ±16.3° about a fixed axis — so a ball pulled to either corner (±45° of
-  // spray) left the frame and was never seen again. Measured before the fix, at
-  // 105 mph / 26.5° / 2.6 s: at −40° of spray the ball projects to u = −0.241,
-  // 217 px off the left edge with a sliver of tracer showing; at +40° to
-  // u = +1.716, 645 px past the right edge, with the ball AND the whole arc
-  // absent from the picture entirely. (⚠ An earlier version of this note quoted
-  // −0.083 / +1.098, a pair symmetric about u ≈ 0.5075 — which only a camera at
-  // x = 0 can produce, and this one stands at x = −40. The asymmetry is exactly
-  // why the oppo corner is ~3× worse than the pull corner. See the SCENES table
-  // in `scripts/shoot-baseball.mjs` for the full correction.) Widening the FOV
-  // cannot fix that — it needs 90°+, which throws the ball away to a handful of
-  // pixels — whereas aiming at the ball can, at no cost in angular resolution.
-  // It is NOT free in motion, though: see `CAMERA_EASE_S` for the size of the
-  // move this mode is the destination of.
-  flight: { pos: [-40, 120, 90], look: [-40, 60, -380], fov: 55, near: 4, follow: true },
+  // spray) left the frame and was never seen again. Measured on the SHIPPED
+  // placement, at 105 mph / 26.5° / 2.6 s: at −40° of spray the ball projects to
+  // u = −0.632 and at +40° to u = +1.334, i.e. 569 px off the left edge and
+  // 300 px past the right one. Widening the FOV cannot fix that — it needs 90°+,
+  // which throws the ball away to a handful of pixels — whereas aiming at the
+  // ball can, at no cost in angular resolution. It is NOT free in motion,
+  // though: see `CAMERA_EASE_S` for the size of the move this mode is the
+  // destination of.
+  //
+  // ⚠⚠ **THE STAND MOVED, x = −40 → −12, AND THE AIM WAS DECOUPLED FROM IT.**
+  // −40 was chosen to favour the PULL corner back when the landmark stood on the
+  // left; the landmark is now on the right (`tower.ts`, an owner correction) and
+  // −40 was costing twice over. Both halves are measured:
+  //
+  //   (1) THE CORNERS. `follow-pull` and `follow-oppo` take their asymmetry from
+  //       this `x` alone. Standoff to the ±40° ball at bt = 2.6 s:
+  //
+  //           x = −40   pull 313.3 ft   oppo 352.9 ft   asymmetry 11.9 %
+  //           x = −12   pull 325.5 ft   oppo 337.4 ft   asymmetry  3.6 %
+  //           x =   0   pull 331.3 ft   oppo 331.3 ft   asymmetry  0.0 %
+  //
+  //       The oppo corner was the far one and is now nearly the near one; the
+  //       pull corner pays 12 ft of standoff (3.9 %) for it.
+  //   (2) THE LANDMARK. `x` is a WEAK lever on a 1,900 ft tower (it moves its
+  //       bearing by 1.1° over the whole 40 ft) and a STRONG one on the 530 ft
+  //       centre-field structure (4.2°). What re-centring actually buys is
+  //       therefore not the tower's angle but the WINDOW it has to live in: the
+  //       structure's own right edge falls from 12.6° to 9.5° off the centre
+  //       line, so the usable band between "behind the building" and "off the
+  //       frame" widens from 3.7° to 6.8°.
+  //
+  // ⚠ AND `look.x` IS NO LONGER `pos.x`. It is +34, a **5.55° yaw** toward the
+  // landmark side, and it is the thing that actually composes the shot. This is
+  // free to do because for a FOLLOWING mode `look` is only ever used when there
+  // is no batted ball — it cannot move `follow-pull`, `follow-oppo`,
+  // `follow-ease`, `homerun` or `night-homerun` by a pixel. Measured, static
+  // frame, before → after:
+  //
+  //       tower axis            u 0.953 → 0.750   (90.6 % → 50.0 % of half-width)
+  //       tower pod, both edges u 0.917…1.004 → 0.712…0.795   (was CROPPED)
+  //       mast tip              v 0.023 → 0.031   (still inside the top)
+  //       board array           u 0.523…0.737 → 0.266…0.481   (same width)
+  //       structure right edge  u 0.881 → 0.622
+  //
+  //   i.e. the board sits left of centre, the tower stands to its right in open
+  //   sky with 0.09 frame widths of gap, and the frame finally is the owner's
+  //   photograph rather than a picture with a sliver of concrete in the corner.
+  //
+  // ⚠⚠ **WHAT THIS DOES NOT FIX, STATED RATHER THAN LEFT TO BE DISCOVERED.** In
+  // the four scenes where the camera FOLLOWS, the landmark's position in frame
+  // is set by the BALL, not by this row, and moving `x` toward 0 moves it the
+  // WRONG way there — because the celebration ball is pulled (−12° of spray) and
+  // a camera further to the right yaws the axis further left. `homerun` /
+  // `night-homerun` measured: the tower's pod ran u 0.977…1.063 at x = −40, i.e.
+  // a 15 px sliver of its left flank at the frame edge; at x = −12 it is
+  // 1.16…1.21, gone. That sliver is the whole cost and it is paid knowingly: 15
+  // px of flank is not a landmark being visible, and nothing recovers it —
+  //
+  //     • a smaller tower bearing is gated by the structure's edge, and the
+  //       feasible set of (x, bearing) with the tower BOTH fully inside the
+  //       homerun frame AND clear of the building is measurably EMPTY over
+  //       x ∈ [−60, +8], bearing ∈ [7°, 15°];
+  //     • a PARTIAL follow (aim = anchor + k·(ball − anchor)) was measured too:
+  //       at k = 0.7 the tower is still at u = 1.00 in `homerun` while the pull
+  //       corner's ball has already fallen to u = 0.11, and at k = 0.6 the ball
+  //       is off frame at u = −0.01. There is no k that holds both.
+  //
+  //   The ball is the subject of those four frames. It keeps the frame.
+  flight: { pos: [-12, 120, 90], look: [34, 60, -380], fov: 55, near: 4, follow: true },
   // The whole park. High enough to clear the back of the bowl behind home
   // (deck top 130 ft at r ≈ 160 ft), which the first framing did not and so
   // photographed the outside of the backstop instead of the field. Nearest
@@ -218,10 +273,11 @@ export const CAMERAS: Record<CameraMode, CameraSpec> = {
  * timer, so there is one piece of state and not two.
  *
  * ⚠ AND WHAT IT IS EASING IS BIG. `batter` → `flight` interpolates POSITION over
- * 141.5 ft (|[−40, 120, 90] − [0, 4, 19.5]|), plus fov 20° → 55°, near 1 → 4 ft,
+ * 136.3 ft (|[−12, 120, 90] − [0, 4, 19.5]|), plus fov 20° → 55°, near 1 → 4 ft,
  * and a look point slewing onto a moving ball. Over 0.8 s that averages
- * 177 ft/s, and a quintic's peak rate is 30u²(1−u)² at u = ½ = **1.875×** its
- * mean — so mid-move the camera is travelling ~332 ft/s. That is the honest size
+ * 170 ft/s, and a quintic's peak rate is 30u²(1−u)² at u = ½ = **1.875×** its
+ * mean — so mid-move the camera is travelling ~319 ft/s. (It was 141.5 ft /
+ * 177 / 332 from x = −40; re-centring the stand took 5.2 ft off the move.) That is the honest size
  * of the move, and it is recorded here because the same curve that gives the
  * 190 ms hold at the START is what concentrates the speed in the MIDDLE.
  *

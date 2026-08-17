@@ -1284,6 +1284,17 @@ the render layer; contact resolves at the true physical state.
     sliver behind home and along the sides (clamped by `MIN_BAND_FT`), which from
     above projects as a 2 px dark wire across the field and reads as an artifact.
     Proven to be the roof: the roofless Alpine shot has no such lines.
+    ⚠ **SUPERSEDED — THE RING ITSELF WAS THE DEFECT, not its degenerate ends.**
+    An owner note off the open-roof references (*"you can see how the dome
+    collapses behind the outfield; then to the left and right you see the
+    skyline"*) says a retractable roof has no OPEN state that is a band of even
+    depth at every bearing — it nests its moving panels into a stack over one
+    side. `stadium/roof.ts` now builds that stack (four panels, ±11°, 250 ft deep
+    behind centre, nothing at the lines) and `MIN_BAND_FT`, `ROOF_BAND_FT` and
+    `ROOF_SPLIT_DEG` are deleted with it. That file and `roof.test.ts` carry the
+    derivation; the harness's `checkRoof` — which used to demand a measurable
+    roof at all five fence bearings, i.e. **asserted the ring** and would have
+    failed a correct collapse by design — now asserts the intended PROFILE.
   - **A ~1.5 in green fringe outside the foul lines**, from parallax on
     `field.ts`'s anti-z-fighting layer stack (0.18 ft of height offset displaces
     the edge ~0.1 ft laterally at batter-eye height). Cosmetic now, worse once
@@ -1548,6 +1559,16 @@ the render layer; contact resolves at the true physical state.
   the fixed-axis projection every run — `ball on screen (1.074, 1.333)`. The
   recomputation above reproduces that as **(1.0738, 1.3333)** through the same
   code path that produced the two corrected rows.
+  ⚠ **EVERY NUMBER IN (2) IS MEASURED AT `CAMERAS.flight.pos.x = −40`, AND THAT
+  STAND HAS SINCE MOVED TO −12** with its static `look` decoupled and yawed
+  5.55° toward the landmark. The corner pair is now (−0.632, 0.473) /
+  (+1.334, 0.463) and the printed control is (0.521, 1.329); the corner standoff
+  asymmetry falls 11.9 % → 3.6 %, and the oppo corner is no longer the worse of
+  the two. The REASONING above — a symmetric pair out of an asymmetric rig is a
+  tell, and a counterfactual is checked against a printed control — is what
+  survives, and it is what caught the arithmetic both times. `stadium/camera.ts`
+  carries the current derivation and the trade it costs in the four scenes where
+  the camera follows the ball.
   **(3) THE CAMERA NOW FOLLOWS, through the machinery that already existed.**
   `CAMERAS` had four modes and nothing switched between them during play except
   one hard CUT to `flight` at contact. The placements moved to

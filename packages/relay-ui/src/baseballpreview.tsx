@@ -140,7 +140,8 @@ interface BaseballHandle {
     board(): ReturnType<StadiumApi['board']>;
     /** What the BUILT GEOMETRY says the wall is at a bearing. */
     measureFence(bearingDeg: number): { distFt: number; heightFt: number } | null;
-    measureRoof(bearingDeg: number): { peakFt: number; innerFt: number; outerFt: number } | null;
+    /** The drawn roof's profile at a bearing — `null` where there is none. */
+    measureRoof(bearingDeg: number): ReturnType<StadiumApi['measureRoof']>;
     /** The tracer's vertices AS DRAWN — how far the trail has been revealed. */
     tracer(which: 'pitch' | 'batted'): number[];
     /** The WHOLE built path, revealed or not — the geometry seam. */

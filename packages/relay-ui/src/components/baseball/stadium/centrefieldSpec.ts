@@ -176,7 +176,7 @@ export const COLORS = {
   frame: 0x5d646f,
   // ⚠ THE RECESS'S BACK WALL IS NOT THE DARKEST THING HERE, AND THE TWO EARLIER
   // DRAFTS THAT MADE IT SO WERE BOTH WRONG ON THE RENDER. It is in the ROOF's
-  // shadow — the sun is behind the plate, the roof ring is 282 ft up, and the
+  // shadow — the sun is behind the plate, the parked roof is 282 ft up, and the
   // whole centre-field elevation sits in it — so a colour chosen to "read deep"
   // arrives at the eye ~2.5× darker again. Measured in `batter.png`, where at
   // the 20° lens this one surface is 30 % of the frame: 0x1a1d22 gave luminance

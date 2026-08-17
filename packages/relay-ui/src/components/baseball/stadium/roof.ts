@@ -1,68 +1,159 @@
-// The roof — a RING at `park.roofPeakFt`, with the SPACE-FRAME TRUSS under it.
+// The roof — the OPEN state, which is a STACK OF PARKED PANELS over centre
+// field, not a symmetric ring.
 //
-// ⚠ THE HEIGHT IS THE POINT AND THE HEIGHT IS DATA. `roofPeakFt` is a real
-// mechanic: `resolveFence` rules a ball that reaches it `'roof'`, so it can
-// never be a home run. BASEBALL.md measures that it essentially never bites — a
-// 125 mph ball at a home-run launch angle apexes 200.3 ft against a 282 ft
-// ceiling — which is exactly why the scene has to show how high 282 ft is. A
-// player who cannot see the ceiling cannot understand why the one pop-up a
-// season that reaches it is not a home run.
+// ⚠⚠ THE RING WAS THE BUG, AND IT WAS A MODEL ERROR RATHER THAN A LOOK ERROR.
+// Every previous version of this file drew a band of even depth at every
+// bearing: `innerR(b) = outer(b) − ROOF_BAND_FT`, swept −180 → +180. That is
+// what a roof looks like when it is HALF closed everywhere at once, which is not
+// a state a retractable roof has. A real retractable roof parks its moving
+// panels by nesting them into a stack over ONE side of the building, and the
+// owner's open-roof references say exactly where: *"You can see how the dome
+// collapses behind the outfield. Then to the left and right you see the
+// skyline."*
 //
-// ⚠ AND THE UNDERSIDE IS THE PARK'S WHOLE IDENTITY. A dome's underside is a
-// visible triangulated lattice, not a flat plate, and this scene drew a flat
-// plate. The truss below is one merged geometry — two ring chords plus a zigzag
-// web between them — so a hundred-odd cells cost ONE draw call and ~1,700
-// triangles, which is nothing against a 120,000 ceiling and everything against a
-// ~18-call budget. The exterior reads light grey, the underside dark with the
-// truss picked out; at night the same geometry takes an emissive material and
-// lights up, which is why it is a separate mesh rather than a texture.
+// So the open roof is:
+//
+//   • BEHIND CENTRE FIELD — a thick, layered mass. Several arcs nested, each
+//     deeper and lower than the one above it, with the steps visible from
+//     inside the bowl. It is DEEPER (250 ft against the ring's 120) and TALLER
+//     (a 51 ft stack against a 15 ft plate-and-lip) than the closed roof was at
+//     that bearing, because four panels are piled where one used to lie.
+//   • TOWARD THE FOUL LINES — nothing at all. Open sky, which is where the city
+//     shows through, and which is what `follow-pull` and `follow-oppo` look at.
+//     Both of those frames used to carry a band of roof across the top where the
+//     reference photographs have skyline.
+//
+// ⚠ AND THAT IS WHY THE BRIGHT BLUE LEADING EDGE READS AS ONE ARC. It is the
+// edge of the STACK — the innermost, lowest panel's lip — not a rim running the
+// whole way round. `daylight.roofEdgeHex` did not move; where it is drawn did.
+//
+// ⚠ THE HEIGHT IS STILL THE POINT AND STILL DATA. `roofPeakFt` is a real
+// mechanic: `resolveFence` rules a ball that reaches it `'roof'` under a CLOSED
+// roof, so it can never be a home run. The stack's TOP surface is at exactly
+// `park.roofPeakFt` — the parked panels sit where the closed roof sat — which is
+// what keeps the read-back below a measurement of a gameplay dimension rather
+// than of an art choice.
 //
 // ⚠ AND A PARK WITH NO ROOF GETS NO GEOMETRY. `Alpine Heights` has
 // `roof: 'none'` and `roofPeakFt: 0`; this builder returns an empty group for
 // it. That is the "content is data, not a branch" rule doing its job — the
-// alpine screenshot proves it by having open sky where the home park has a ring.
+// alpine screenshot proves it by having open sky where the home park has a roof.
+//
+// ⚠ DELETED WITH THE RING (rule 10, delete on supersede): `ROOF_BAND_FT`,
+// `MIN_BAND_FT` and `ROOF_SPLIT_DEG`. `MIN_BAND_FT` existed because a 5 ft ring
+// degenerated behind the plate into a 2 px dark wire across the `wide` frame;
+// there is no longer any roof behind the plate to degenerate. `ROOF_SPLIT_DEG`
+// painted two darker columns where "a retractable roof's moving panels part" —
+// the panels are now modelled, so a painted seam standing in for them is a
+// second implementation of the same concept.
 
 import { Color, DoubleSide, FrontSide, Group, Mesh, MeshLambertMaterial } from 'three';
 import type { BufferGeometry } from 'three';
-import { fenceAt, FOUL_LINE_DEG } from '../../../lib/baseball/parks';
 import { at, bearingOf, loft, mergeGeometries, quad, ring } from './geom';
-import type { StadiumCtx, StadiumPart } from './geom';
+import type { Ring, StadiumCtx, StadiumPart } from './geom';
 import type { StandsPart } from './stands';
 
-/** Depth of the roof's inner lip, ft. SCENE-ONLY: it makes the height READ. */
+/**
+ * THE PARKED STACK, AS DATA — one row per moving panel, outermost first.
+ *
+ * ⚠ SCENE-ONLY, EVERY COLUMN, and none of it is published. A retractable roof's
+ * panel count, travel and parked depth are engineering data this repo does not
+ * have; what IS observed, off the owner's photographs, is the SHAPE — a mass
+ * behind centre field that is layered, that steps, and that stops well short of
+ * the foul lines. These four rows are that shape written down, and the read-back
+ * at the bottom of this file plus `checkRoof` in the screenshot harness assert
+ * the shape rather than the rows.
+ *
+ *   `halfDeg`  how far either side of dead centre this panel reaches. It
+ *              NARROWS down the stack, so the four leading edges are four
+ *              nested arcs and the steps are visible from inside the bowl
+ *              rather than hidden behind each other.
+ *   `dropFt`   how far below `park.roofPeakFt` this panel's TOP surface sits.
+ *              Row 0 is 0 — the top of the stack is the ceiling the physics
+ *              enforces, and the read-back measures that.
+ *   `depthFt`  radial run in from the top of the bowl. It GROWS down the stack,
+ *              so the lowest panel reaches furthest over the field and its lip
+ *              is the leading edge the celebration is composed against.
+ *
+ * ⚠⚠ THE OUTERMOST ROW'S `halfDeg` IS THE ONE NUMBER WITH A FRAMING CONSEQUENCE,
+ * AND IT WAS MEASURED TWICE. The first version shipped 26°, on the argument that
+ * the `flight` camera following a ball to a corner puts roof-plane bearings
+ * −55°…−18° (pull) and +18°…+58° (oppo) across the top of frame, so anything
+ * past ~26° puts roof back into the two shots this whole change exists to open
+ * onto sky. That reasoning was right and INCOMPLETE, and the render said so: at
+ * 26° the stack reaches camera-bearing 23.2° in the STATIC `flight` frame, the
+ * landmark stands at 14.0°, and the roof's outer edge crosses that column at
+ * 15.0° of elevation against the observation pod's 14.7° — so the collapse
+ * that put the tower in frame horizontally **decapitated it vertically**. The
+ * pod and the mast were behind the overhang; only the shaft showed.
+ *
+ * 11° is what clears it. The stack's right edge then reaches camera-bearing
+ * 10.4° against the tower's left flank at 12.6° — 2.2° of open sky between
+ * them, at every radius the panels occupy (the mapping from plate bearing to
+ * camera bearing tightens as the radius falls, so the edge never swings out).
+ * That is the owner's sentence made geometric: *"The tower is then seen in open
+ * sky, not through a gap in a ring."*
+ *
+ * The depths came in with it so the mass stays a MASS rather than a finger: a
+ * ±11° wedge running 250 ft deep is 204 ft across the back, 108 across the
+ * front and 250 long, which is a parked stack in plan. At 26° with the old
+ * 280 ft depths it was a fan; at 11° with those depths it would have been a
+ * spike pointed at the plate.
+ */
+interface RoofPanel {
+  halfDeg: number;
+  dropFt: number;
+  depthFt: number;
+}
+const STACK: readonly RoofPanel[] = [
+  { halfDeg: 11, dropFt: 0, depthFt: 130 },
+  { halfDeg: 9.5, dropFt: 11, depthFt: 170 },
+  { halfDeg: 8, dropFt: 22, depthFt: 210 },
+  { halfDeg: 6.5, dropFt: 33, depthFt: 250 },
+];
+
+/** Thickness of one panel slab, ft. SCENE-ONLY: it gives every step an edge. */
+const PANEL_THICK_FT = 4;
+
+/**
+ * Drop of the LEADING panel's lip, ft. SCENE-ONLY.
+ *
+ * ⚠ THIS IS THE BUILDING'S NIGHT SIGNATURE AND IT IS ONE ARC, NOT A RING. See
+ * `daylight.roofEdgeHex`: in every night photograph the leading edge of the
+ * parked stack is a thick bright BLUE band, and it is the arc `homerun`,
+ * `flight` and the three `follow-*` scenes compose the celebration against. Only
+ * the innermost, lowest panel carries it — the ones above it show a plain
+ * `PANEL_THICK_FT` step face instead, which is what makes the mass read as
+ * stacked rather than as four blue rings.
+ */
 const LIP_DROP_FT = 14;
 
-/** How far in from the top of the bowl the roof reaches, ft. SCENE-ONLY. */
-const ROOF_BAND_FT = 120;
+/**
+ * Nearest the stack may reach the plate, ft. SCENE-ONLY, and it is a GUARD.
+ *
+ * `depthFt` is measured in from the top of the bowl, which in a shallow park
+ * could put a panel over the infield — the defect the ring version hit when it
+ * followed the bowl's inner edge and hung roof at 282 ft directly over home
+ * plate, hiding the field from every elevated camera. Harbourfront's deepest
+ * panel lands at 281 ft, so this never binds here; it binds for the next park.
+ */
+const MIN_INNER_FT = 200;
 
 /**
- * Minimum band width, ft. SCENE-ONLY.
+ * How far the space frame hangs below each panel, ft. SCENE-ONLY.
  *
- * ⚠ RAISED FROM 5 TO 30, AND IT CLOSES AN M2 FINDING. At 5 ft the ring
- * degenerated behind the plate and along the sides into a sliver that projected
- * from the `wide` camera (1000 ft up) as a 2 px dark wire across the field and
- * read as a rendering artifact rather than as a roof — the M2 list records it,
- * and the roofless Alpine shot having no such line is what proved it was the
- * roof. 30 ft at 282 ft up subtends enough of that frame to read as a rim. It is
- * a floor on a MINIMUM, so it cannot make the band over the outfield any wider.
+ * ⚠ NOT ZERO, AND NOT BECAUSE IT LOOKS BETTER. A lattice drawn IN the slab is
+ * coplanar with it and z-fights; hung below it reads as structure from the
+ * cameras that can see the underside at all. 3 ft under a 4 ft slab leaves 4 ft
+ * of clear air above the next panel's top surface at an 11 ft step.
  */
-const MIN_BAND_FT = 30;
-
-/** Thickness of the roof plate itself, ft. SCENE-ONLY: it gives the rim an edge. */
-const ROOF_THICK_FT = 1.2;
-
-/**
- * How far the space frame hangs below the roof plate, ft. SCENE-ONLY.
- *
- * ⚠ NOT ZERO, AND NOT BECAUSE IT LOOKS BETTER. A lattice drawn IN the plate is
- * coplanar with it and z-fights; hung 9 ft below it reads as structure from the
- * two cameras that can see the underside at all (`flight` and the three follow
- * scenes, where the roof is the dark band across the top of frame).
- */
-const TRUSS_DEPTH_FT = 9;
+const TRUSS_HANG_FT = 3;
 
 /** Width of a truss member as drawn, ft. SCENE-ONLY. */
 const TRUSS_MEMBER_FT = 2.2;
+
+/** Panel-bay pitch on a deck's top surface, deg. SCENE-ONLY. */
+const ROOF_PANEL_DEG = 7.5;
 
 /**
  * ⚠ THE UNDERSIDE IS DARK, NOT BLACK, AND THE FIRST RENDER WAS BLACK. It faces
@@ -74,23 +165,39 @@ const TRUSS_MEMBER_FT = 2.2;
  */
 const COLORS = { deck: 0x969ba2, under: 0x6b727c };
 
+/** What the read-back says about the drawn roof at one bearing. */
+export interface RoofSample {
+  /** Top of the stack, ft — `park.roofPeakFt` wherever the stack covers. */
+  peakFt: number;
+  /** Innermost and outermost radius of the whole mass at this bearing, ft. */
+  innerFt: number;
+  outerFt: number;
+  /** How many panels cover this bearing. The stack's depth, as a count. */
+  layers: number;
+}
+
 export interface RoofPart extends StadiumPart {
   /**
-   * Peak height and the two radii of the DRAWN roof at a bearing, read back out
-   * of the built geometry. `null` for a park with no roof.
+   * The drawn roof at a bearing, read back out of the built vertex buffer.
+   * `null` where there is no roof — a park without one, and every bearing
+   * outside the stack.
    *
    * ⚠ THIS IS THE OTHER HALF OF `fence.sample`, AND ITS ABSENCE WAS A HOLE THE
    * VISUAL GATE NAMED. The fence's distance AND height are measured out of the
    * drawn vertex buffer and differenced against `parks.ts`, so a wall drawn from
    * the five knots instead of the pchip shows up as a delta and a non-zero exit
    * code. The ROOF had no equivalent: the harness printed `roofPeak 282 ft`
-   * straight out of `parks.ts`, i.e. it printed its own input, which is exactly
-   * the tautology `checkBall`'s note warns about. `roofPeakFt` is a real
-   * MECHANIC — `resolveFence` rules a ball that reaches it `'roof'` — so a roof
-   * drawn at the wrong height is a gameplay dimension the player cannot see is
-   * wrong. It is now measured the same way the wall is.
+   * straight out of `parks.ts`, i.e. it printed its own input.
+   *
+   * ⚠ AND IT NOW REPORTS A PROFILE, NOT A HEIGHT. The old shape could only say
+   * "the roof is 282 ft up here", which every bearing answered identically —
+   * so the check built on it asserted a measurable roof at all five bearings and
+   * a correct collapse would have failed it BY DESIGN. `layers` and the band are
+   * what let `checkRoof` assert the profile this file intends: deep behind
+   * centre, absent at the lines, symmetric about dead centre — the same way
+   * `fence.sample` asserts a VARYING wall rather than a constant one.
    */
-  sample(bearingDeg: number): { peakFt: number; innerFt: number; outerFt: number } | null;
+  sample(bearingDeg: number): RoofSample | null;
 }
 
 export function buildRoof(
@@ -105,50 +212,80 @@ export function buildRoof(
   if (!(park.roofPeakFt > 0)) return { group, sample: () => null };
 
   const step = quality.bowlStepDeg;
-  const y = park.roofPeakFt;
-
-  // ⚠ THE RING HANGS ON THE TOP OF THE BOWL AND NEVER REACHES THE INFIELD, and
-  // the first render is why. Following the bowl's INNER edge put roof panels at
-  // 282 ft directly over home plate — geometrically defensible (the bowl's inner
-  // edge behind home is the backstop, 60 ft) and useless, because it hid the
-  // field from every elevated camera and made the `wide` shot a photograph of a
-  // lid. The inner edge is therefore the OUTFIELD WALL (`fenceAt`, clamped
-  // outside the foul lines, so a park's own dimensions still set it), pulled no
-  // further in than `ROOF_BAND_FT` from the top of the bowl and never past it.
-  // The result is widest over the outfield seats and a rim behind home — which
-  // is both what a retractable roof's parked panels look like and what leaves a
-  // 400 ft opening for a ball to be watched through.
+  const peak = park.roofPeakFt;
+  // The stack sits on the top of the bowl, exactly as the ring did, so a park's
+  // own dimensions still set where the roof begins.
   const outerR = (b: number) => stands.outerRadiusFt(b);
-  const innerR = (b: number) => {
-    const o = outerR(b);
-    const wall = fenceAt(park, Math.max(-FOUL_LINE_DEG, Math.min(FOUL_LINE_DEG, b))).distFt;
-    return Math.min(o - MIN_BAND_FT, Math.max(wall, o - ROOF_BAND_FT));
-  };
 
-  const inner = ring(-180, 180, step, (b) => ({ r: innerR(b), y }));
-  const outer = ring(-180, 180, step, (b) => ({ r: outerR(b), y }));
-  const lip = ring(-180, 180, step, (b) => ({ r: innerR(b), y: y - LIP_DROP_FT }));
-  const innerLow = ring(-180, 180, step, (b) => ({ r: innerR(b), y: y - ROOF_THICK_FT }));
-  const outerLow = ring(-180, 180, step, (b) => ({ r: outerR(b), y: y - ROOF_THICK_FT }));
+  const decks: BufferGeometry[] = [];
+  const unders: BufferGeometry[] = [];
+  const trusses: BufferGeometry[] = [];
+  let lipGeo: BufferGeometry | null = null;
+  /**
+   * Where each panel's deck loft lands in the MERGED buffer, so `sampleStack`
+   * can walk one panel at a time. `loft` writes its inner ring first and its
+   * outer ring second, so a panel occupies `2 × count` vertices from `start`.
+   */
+  const spans: Array<{ start: number; count: number }> = [];
+  let base = 0;
 
-  // ⚠ TWO SINGLE-SIDED SHEETS, NOT ONE DOUBLE-SIDED ONE. A `DoubleSide` ring
-  // shows the SAME colour from above and below; the whole point is that the
-  // exterior is pale and the underside is dark, so the extra draw call buys the
-  // contrast the reference photography is entirely about.
-  //
-  // ⚠ AND THE TOP HAS PANEL LINES NOW. Measured before: 0.06 levels of detail
-  // over a 400×80 px patch of the roof's upper surface — the 18-level range in
-  // it was ENTIRELY Lambert curvature, i.e. the shape of the ring and nothing
-  // else. A whole space frame was authored on the underside while `wide`, the
-  // only camera that sees the top, got a flat sheet. `deckColors` costs no draw
-  // call and no triangle: it is a per-column vertex colour on a loft that was
-  // already there.
-  const deckGeo = track(loft(inner, outer, { colors: deckColors(inner.length / 3) }));
+  // A plain index loop, not `forEach`: `lipGeo` is assigned in exactly one
+  // iteration and read after the loop, and a callback body puts that assignment
+  // outside the compiler's flow analysis.
+  for (let i = 0; i < STACK.length; i++) {
+    const panel = STACK[i]!;
+    const y = peak - panel.dropFt;
+    const low = y - PANEL_THICK_FT;
+    const innerR = (b: number) => Math.max(MIN_INNER_FT, outerR(b) - panel.depthFt);
+    const arc = (r: (b: number) => number, h: number): Ring =>
+      ring(-panel.halfDeg, panel.halfDeg, step, (b) => ({ r: r(b), y: h }));
+    const inner = arc(innerR, y);
+    const outer = arc(outerR, y);
+    const innerLow = arc(innerR, low);
+    const outerLow = arc(outerR, low);
+    const cols = inner.length / 3;
+
+    // ⚠ TWO SINGLE-SIDED SHEETS PER PANEL, NOT ONE DOUBLE-SIDED ONE. A
+    // `DoubleSide` slab shows the SAME colour from above and below; the whole
+    // point is that the exterior is pale and the underside is dark, which is
+    // what the reference photography is entirely about. The extra draw call is
+    // paid once for the stack, not once per panel — everything merges.
+    //
+    // ⚠ AND THE TOP HAS PANEL LINES. Measured on the ring version: 0.06 levels
+    // of detail over a 400×80 px patch of the roof's upper surface, i.e. the
+    // 18-level range in it was ENTIRELY Lambert curvature. `deckColors` costs no
+    // draw call and no triangle: it is a per-column vertex colour on a loft that
+    // was already there, plus one step of tint per panel so the stack reads as
+    // stacked from the only camera that sees the top (`wide`).
+    decks.push(loft(inner, outer, { colors: deckColors(cols, i, panel.halfDeg) }));
+    spans.push({ start: base, count: cols });
+    base += cols * 2;
+
+    unders.push(loft(outerLow, innerLow));
+    // The step face at this panel's leading edge. The LOWEST panel gets the blue
+    // lip instead — see `LIP_DROP_FT`.
+    if (i < STACK.length - 1) unders.push(loft(innerLow, inner));
+    else lipGeo = loft(arc(innerR, y - LIP_DROP_FT), inner);
+
+    const truss = buildTruss(
+      innerR,
+      outerR,
+      panel.halfDeg,
+      low - TRUSS_HANG_FT,
+      // Cells in proportion to the arc, so a member is the same physical size
+      // under every panel rather than four times denser under the narrowest.
+      Math.round((quality.trussCells * 2 * panel.halfDeg) / 360),
+    );
+    if (truss) trusses.push(truss);
+  }
+
+  const deckGeo = track(mergeGeometries(decks));
+  for (const g of decks) g.dispose();
   const deck = new Mesh(
     deckGeo,
     track(new MeshLambertMaterial({ vertexColors: true, side: FrontSide })),
   );
-  deck.name = 'roofRing';
+  deck.name = 'roofStack';
   deck.castShadow = true;
   group.add(deck);
 
@@ -158,8 +295,10 @@ export function buildRoof(
   // the one shot `homerun` and `flight` are composing. The alternative is a
   // second light pointing up, which the shadow budget refuses. See
   // `daylight.trussHex`.
+  const underGeo = track(mergeGeometries(unders));
+  for (const g of unders) g.dispose();
   const under = new Mesh(
-    track(loft(outerLow, innerLow)),
+    underGeo,
     track(
       new MeshLambertMaterial({
         color: COLORS.under,
@@ -171,29 +310,26 @@ export function buildRoof(
   under.name = 'roofUnderside';
   group.add(under);
 
-  // ⚠ THE LEADING EDGE IS THE BUILDING'S NIGHT SIGNATURE. See
-  // `daylight.roofEdgeHex`: in every night photograph this arc is a thick bright
-  // BLUE band and it is the most identifiable thing about the roof from outside.
-  // It is also the arc `homerun`, `flight` and the three `follow-*` scenes
-  // compose the celebration against, so it is the highest-value surface in the
-  // night palette. In daylight it keeps the dark rim it always had.
-  const fascia = new Mesh(
-    track(loft(lip, inner)),
-    track(
-      new MeshLambertMaterial({
-        color: daylight.roofEdgeHex,
-        emissive: daylight.roofEdgeEmissiveHex,
-        side: DoubleSide,
-      }),
-    ),
-  );
-  fascia.name = 'roofLip';
-  group.add(fascia);
+  if (lipGeo) {
+    const fascia = new Mesh(
+      track(lipGeo),
+      track(
+        new MeshLambertMaterial({
+          color: daylight.roofEdgeHex,
+          emissive: daylight.roofEdgeEmissiveHex,
+          side: DoubleSide,
+        }),
+      ),
+    );
+    fascia.name = 'roofLip';
+    group.add(fascia);
+  }
 
-  const truss = buildTruss(innerR, outerR, y - TRUSS_DEPTH_FT, quality.trussCells);
-  if (truss) {
+  if (trusses.length) {
+    const trussGeo = track(mergeGeometries(trusses));
+    for (const g of trusses) g.dispose();
     const mesh = new Mesh(
-      track(truss),
+      trussGeo,
       track(
         new MeshLambertMaterial({
           color: daylight.trussHex,
@@ -206,71 +342,65 @@ export function buildRoof(
     group.add(mesh);
   }
 
-  return { group, sample: (deg) => sampleDeck(deckGeo, deg) };
+  return { group, sample: (deg) => sampleStack(deckGeo, spans, deg) };
 }
 
 /**
- * Read the roof deck back out of its own vertex buffer.
+ * Read the stack back out of its own merged vertex buffer.
  *
- * `loft` lays the INNER ring down first and the outer ring second, so vertex `i`
- * and `i + count` are the inner and outer edge of the same panel. Bearings run
- * monotonically −180 → +180, which the closing sample repeats, so a bracket scan
- * is enough. The height is read from the buffer rather than from `park`, which
- * is the whole point.
+ * Every panel is scanned; the ones whose arc brackets the bearing contribute a
+ * layer, and the aggregate is the mass a player sees at that bearing — the
+ * highest top surface, the innermost leading edge and the outermost back edge.
+ * Heights and radii come from the buffer, never from `STACK`, which is what
+ * makes this a measurement rather than an echo of the table above it.
  */
-function sampleDeck(
+function sampleStack(
   geo: BufferGeometry,
+  spans: Array<{ start: number; count: number }>,
   bearingDeg: number,
-): { peakFt: number; innerFt: number; outerFt: number } | null {
+): RoofSample | null {
   const pos = geo.getAttribute('position');
-  const count = pos.count / 2;
-  for (let i = 0; i + 1 < count; i++) {
-    const b0 = bearingOf(pos.getX(i), pos.getZ(i));
-    const b1 = bearingOf(pos.getX(i + 1), pos.getZ(i + 1));
-    // The closing segment wraps −180 → +180 and cannot bracket anything.
-    if (Math.abs(b1 - b0) > 180) continue;
-    if (bearingDeg < Math.min(b0, b1) - 1e-9 || bearingDeg > Math.max(b0, b1) + 1e-9) continue;
-    const t = b1 === b0 ? 0 : (bearingDeg - b0) / (b1 - b0);
-    const lerp = (a: number, b: number) => a + (b - a) * t;
-    return {
-      peakFt: lerp(pos.getY(i), pos.getY(i + 1)),
-      innerFt: lerp(
-        Math.hypot(pos.getX(i), pos.getZ(i)),
-        Math.hypot(pos.getX(i + 1), pos.getZ(i + 1)),
-      ),
-      outerFt: lerp(
-        Math.hypot(pos.getX(count + i), pos.getZ(count + i)),
-        Math.hypot(pos.getX(count + i + 1), pos.getZ(count + i + 1)),
-      ),
-    };
+  const radius = (i: number) => Math.hypot(pos.getX(i), pos.getZ(i));
+  let peakFt = -Infinity;
+  let innerFt = Infinity;
+  let outerFt = -Infinity;
+  let layers = 0;
+  for (const s of spans) {
+    for (let k = 0; k + 1 < s.count; k++) {
+      const i = s.start + k;
+      const b0 = bearingOf(pos.getX(i), pos.getZ(i));
+      const b1 = bearingOf(pos.getX(i + 1), pos.getZ(i + 1));
+      if (bearingDeg < Math.min(b0, b1) - 1e-9 || bearingDeg > Math.max(b0, b1) + 1e-9) continue;
+      const t = b1 === b0 ? 0 : (bearingDeg - b0) / (b1 - b0);
+      const lerp = (a: number, b: number) => a + (b - a) * t;
+      const o = s.start + s.count + k;
+      peakFt = Math.max(peakFt, lerp(pos.getY(i), pos.getY(i + 1)));
+      innerFt = Math.min(innerFt, lerp(radius(i), radius(i + 1)));
+      outerFt = Math.max(outerFt, lerp(radius(o), radius(o + 1)));
+      layers++;
+      break;
+    }
   }
-  return null;
+  return layers > 0 ? { peakFt, innerFt, outerFt, layers } : null;
 }
 
 /**
- * Per-column colours for the roof's TOP surface: alternating panel bays, plus
- * two darker columns where a retractable roof's moving panels part.
+ * Per-column colours for one panel's TOP surface: alternating bays, and one
+ * step of tint per panel so the stack reads as stacked from above.
  *
- * ⚠ THE SPLIT IS AT ±`ROOF_SPLIT_DEG`, WHICH IS DATA-SHAPED BUT NOT DATA. A
- * retractable roof parts somewhere, and where is an authoring choice, not a
- * published dimension — so it is a SCENE-ONLY constant and is labelled one. It
- * is placed over the outfield rather than over the plate because the only camera
- * that sees the top is `wide`, whose subject is the field.
+ * The `wide` camera is the only one that sees the top at all, and from 1000 ft
+ * up four coplanar-looking arcs of identical grey are one arc. The step is
+ * small — a parked stack is four of the same panel, not four different
+ * buildings — and it is the shading, not the colour, that carries it.
  */
-const ROOF_PANEL_DEG = 7.5;
-const ROOF_SPLIT_DEG = 55;
-const ROOF_SEAM_HALF_DEG = 1.6;
-
-function deckColors(count: number): Float32Array {
+function deckColors(count: number, panelIndex: number, halfDeg: number): Float32Array {
   const arr = new Float32Array(count * 2 * 3);
   const c = new Color();
+  const stack = 1 - panelIndex * 0.06;
   for (let i = 0; i < count; i++) {
-    const b = -180 + (360 * i) / (count - 1 || 1);
+    const b = -halfDeg + (2 * halfDeg * i) / (count - 1 || 1);
     const bay = Math.floor((b + 180) / ROOF_PANEL_DEG) % 2 === 0 ? 1 : 0.955;
-    const onSeam = [-ROOF_SPLIT_DEG, ROOF_SPLIT_DEG].some(
-      (s) => Math.abs(b - s) < ROOF_SEAM_HALF_DEG,
-    );
-    c.set(COLORS.deck).multiplyScalar(onSeam ? 0.72 : bay);
+    c.set(COLORS.deck).multiplyScalar(bay * stack);
     for (const v of [i, count + i]) {
       arr[v * 3] = c.r;
       arr[v * 3 + 1] = c.g;
@@ -281,18 +411,20 @@ function deckColors(count: number): Float32Array {
 }
 
 /**
- * The space frame, as flat ribbons just under the roof plane: an inner chord, an
- * outer chord and a zigzag web that alternates inner→outer→inner between them.
- * That zigzag is what makes it read as TRIANGULATED rather than as a grid, and
- * it is the one thing the eye actually picks out of a dome underside.
+ * The space frame under one panel, as flat ribbons: an inner chord, an outer
+ * chord and a zigzag web that alternates inner→outer→inner between them. That
+ * zigzag is what makes it read as TRIANGULATED rather than as a grid, and it is
+ * the one thing the eye actually picks out of a dome underside.
  *
- * Merged into one geometry, so `cells` is free up to the triangle ceiling and
- * costs exactly one draw call. `cells = 0` (the low tier) returns null and the
- * roof is simply a dark plate — the cheap tier loses detail, never structure.
+ * Every panel's frame merges into ONE geometry, so `cells` is free up to the
+ * triangle ceiling and the whole stack costs exactly one draw call. `cells <= 0`
+ * (the low tier) returns null and the panel is simply a dark plate — the cheap
+ * tier loses detail, never structure.
  */
 function buildTruss(
   innerR: (b: number) => number,
   outerR: (b: number) => number,
+  halfDeg: number,
   y: number,
   cells: number,
 ): BufferGeometry | null {
@@ -320,8 +452,8 @@ function buildTruss(
     );
   };
   for (let i = 0; i < cells; i++) {
-    const b0 = -180 + (360 * i) / cells;
-    const b1 = -180 + (360 * (i + 1)) / cells;
+    const b0 = -halfDeg + (2 * halfDeg * i) / cells;
+    const b1 = -halfDeg + (2 * halfDeg * (i + 1)) / cells;
     member(b0, innerR(b0), b1, innerR(b1)); // inner chord
     member(b0, outerR(b0), b1, outerR(b1)); // outer chord
     // The web: alternate the diagonal's sense so consecutive cells share a

@@ -28,7 +28,8 @@ import { BoxGeometry, BufferAttribute, BufferGeometry, Color, FrontSide, Group, 
 import { mulberry32 } from '../../../lib/golf/wind';
 import { DEG, mergeGeometries, tintGeometry } from './geom';
 import type { StadiumCtx, StadiumPart } from './geom';
-import { buildTowerLights, towerAnchor, towerShells } from './tower';
+import { buildTowerLights, towerShells } from './tower';
+import { towerAnchor } from './towerSpec';
 import { buildWindowTexture } from './windows';
 
 /** Fixed seed. Determinism is a hard gate — see the header. */

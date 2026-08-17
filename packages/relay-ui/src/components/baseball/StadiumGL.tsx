@@ -66,6 +66,7 @@ import type { FlightPaths } from './stadium/flight';
 import { buildMound } from './stadium/mound';
 import { buildReticle } from './stadium/reticle';
 import { buildRoof } from './stadium/roof';
+import type { RoofSample } from './stadium/roof';
 import { buildScaleReference } from './stadium/scale';
 import { buildSky } from './stadium/sky';
 import { buildSkyline } from './stadium/skyline';
@@ -170,11 +171,13 @@ export interface StadiumApi {
   /** Distance and height of the DRAWN wall at a bearing, read out of geometry. */
   measureFence(bearingDeg: number): { distFt: number; heightFt: number } | null;
   /**
-   * Peak height and the two radii of the DRAWN roof at a bearing. `null` for a
-   * park with no roof. See `stadium/roof.ts`'s `RoofPart.sample` for why this
-   * exists beside `measureFence` rather than the harness trusting `parks.ts`.
+   * The DRAWN roof at a bearing — its top, its band and HOW MANY parked panels
+   * cover it. `null` for a park with no roof AND for every bearing outside the
+   * parked stack, which is most of the ring. See `stadium/roof.ts`'s
+   * `RoofPart.sample` for why this exists beside `measureFence` rather than the
+   * harness trusting `parks.ts`, and why it reports a profile and not a height.
    */
-  measureRoof(bearingDeg: number): { peakFt: number; innerFt: number; outerFt: number } | null;
+  measureRoof(bearingDeg: number): RoofSample | null;
   /**
    * Change camera mode. EASES, it does not cut — see `stadium/camera.ts`. The
    * transition is driven by the scene clock, so a frozen clock holds it exactly

@@ -191,7 +191,7 @@ export function fan(apex: [number, number, number], r: Ring): BufferGeometry {
  * Loft a quad strip between two corresponding rings — the ONE primitive behind
  * the warning track (inner ring → outer ring, flat), the outfield wall (base
  * ring → top ring, vertical), the seating rake (wall top → deck top) and the
- * roof ring. Three surfaces that look unrelated are one function, which is the
+ * roof panels. Three surfaces that look unrelated are one function, which is the
  * anti-bloat rule applied to geometry rather than to files.
  *
  * `a` is the inner/lower ring and `b` the outer/upper one; with that ordering
