@@ -161,11 +161,14 @@ const HOLES = [
       terrain: { seed: 307, hilliness: 1.7, hillScale: 33, teeElev: 7, greenElev: 7 },
     }))({ d: 283, x: -123, r: 13, raise: 2.2, tiltPct: 0.04, tiltDir: Math.PI, undulation: 0.01 }),
   // 8 · P3 180 (CONFIRMED) — near-straight, angled RIGHT ~4.4°.
-  // ⚠ A par 3's centerline must be COLLINEAR tee→pin: the tee shot aims down
+  // ⚠ A par 3's centerline must point at the FLAG: the tee shot aims down
   // centerline[0] → centerline[1] (driveHeading), so a mid-vertex off the pin line
   // aims the default shot off the green — this one was at x 2, pointing 3.2° and
-  // 10 yd left of the flag. On the ray: 90 · (14/181) = 6.96. Pinned by a test in
-  // courseSim.test.ts over every par 3 of every course.
+  // 10 yd left of the flag. On the ray: 90 · (14/181) = 6.96, i.e. 0.001°. The
+  // guard in courseSim.test.ts runs over every par 3 of every course and enforces
+  // a 1° TOLERANCE, not exact collinearity — hole 2 above is a straight 190 yd with
+  // an `x: 0` mid-vertex and a −2 yd pin offset, so it sits at 0.60° (2 yd at the
+  // pin) and passes as authored. New par 3s should go on the ray anyway.
   ((g: GreenDef) =>
     hole({
       id: 8,

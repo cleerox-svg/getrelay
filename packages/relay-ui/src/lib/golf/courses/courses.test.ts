@@ -15,6 +15,7 @@ import { CourseSim, type CourseResult } from '../courseSim';
 import {
   surfaceAt,
   heightAt,
+  waterLevelAt,
   greenPadRadius,
   courseTrees,
   EDGE_WOBBLE,
@@ -176,16 +177,33 @@ describe('golf courses — per-hole invariants + playability', () => {
           // OVERSHOOT: its full-power total lands at or short of the pin, so a
           // player who pulls full power doesn't automatically fly the green.
           //
-          // ⚠ …EXCEPT WHERE THE HOLE DEMANDS A FORCED CARRY, and the exception is
-          // the whole reason this assertion is split. On a hole whose tee→pin line
-          // crosses water the two goals genuinely conflict: the club that stays
-          // short of the pin is often the club that comes up wet, and on six of the
-          // ten par 3s NO power setting of the never-overshoot pick reached dry
-          // land. The carry wins there, because the player can always ease off a
-          // long club but cannot power a short one over a creek — so a forced-carry
-          // hole gets a BOUNDED overshoot (never more than a green's diameter past
-          // the flag) instead of a hard ceiling. Everywhere else, the original
-          // ceiling stands untouched.
+          // ⚠ …EXCEPT WHERE THE PICK IS ACTUALLY CARRYING SOMETHING, and the
+          // exception is the whole reason this assertion is split. On a hole whose
+          // tee→pin line crosses water the two goals genuinely conflict: the club
+          // that stays short of the pin is often the club that comes up wet, and on
+          // six of the ten par 3s NO power setting of the never-overshoot pick
+          // reached dry land. The carry wins there, because the player can always
+          // ease off a long club but cannot power a short one over a creek.
+          //
+          // ⚠ THE RELAXATION IS GATED ON THE SHOT, NOT ON THE HOLE. "Is there a
+          // hazard on the line" is the WRONG gate and a measurably weak one: 17 of
+          // the 46 holes have a bunker or pond somewhere on the tee→pin line, but on
+          // 9 of them (Augusta 7/9/15/17, Vintage 4, Heritage 5, Millennium 3/8,
+          // the HOLE_1 fixture) it sits 346–505 yd out, further than any club
+          // carries, so the recommendation is byte-identical to the strict-branch
+          // pick — and relaxing the ceiling by 30 yd for those would let a future
+          // regression fly Augusta 9's green by 30 yd unnoticed. So the gate is
+          // whether this shot's measured CARRY actually cleared the hazard. Today
+          // that selects exactly the 8 par 3s that up-club and leaves 38 holes on
+          // the strict ceiling.
+          //
+          // And the relaxed bound is stated against the GREEN, not the flag, because
+          // that is the claim worth making: the ball may run through the back of the
+          // green, but not onto a different part of the hole. Measured, only ONE of
+          // the 8 finishes past the back edge at all (Vintage 2, by 5.0 yd); the
+          // other seven stop 1–24 yd INSIDE it. The 8 yd of slack is a little over
+          // the worst case and still fails the two-club over-correction this rule
+          // exists to avoid (a hybrid on Augusta 4 finishes 14 yd through the back).
           it('the recommended tee club does not overshoot the hole at full power', () => {
             // Does the tee→pin line cross a hazard SHORT of the pin, and how far
             // out is its far edge? Written longhand from the hole's own circles
@@ -208,11 +226,15 @@ describe('golf courses — per-hole invariants + playability', () => {
             const s = new CourseSim(h);
             const club = s.getState().clubId;
             const full = new CourseSim(h).simulateShot({ clubId: club, power: 1 });
-            if (forcedCarry > 0) {
-              // The clearing club may run past the flag — but a pick that flies the
-              // green by more than its own diameter is not a recommendation, it is
-              // the two-club over-correction this rule is written to avoid.
-              expect(full.total).toBeLessThanOrEqual(teeToPin + 2 * h.green.r);
+            // The gate: did this shot actually carry the hazard? A hole whose
+            // hazard is out of every club's reach gets no relaxation at all.
+            if (forcedCarry > 0 && full.carry > forcedCarry) {
+              // It cleared, so it is allowed to run past the flag — as far as the
+              // green's back edge plus 8 yd, and no further. Measured from the GREEN
+              // centre, since "past the pin" would silently permit finishing 15–20 yd
+              // BEHIND the green on a hole whose pin sits short of centre.
+              const teeToGreen = Math.hypot(h.green.d - h.tee.d, h.green.x - h.tee.x);
+              expect(full.total).toBeLessThanOrEqual(teeToGreen + h.green.r + 8);
             } else {
               // Straight-line tee→pin (what the recommendation targets). The played
               // total must not exceed it (the pin sits inside the green, so ≤ tee→pin
@@ -239,6 +261,51 @@ describe('golf courses — per-hole invariants + playability', () => {
       }
     });
   }
+});
+
+// --- How WIDE the forced-carry relaxation is, counted ------------------------
+//
+// The per-hole overshoot guard above has two branches, and the whole risk in
+// having two is that the loose one quietly swallows holes it was never meant to
+// cover. It is gated on the recommended shot's measured carry actually clearing a
+// hazard — but "gated correctly" is a claim about a number, so here is the number,
+// asserted, with the holes named. The first version of that guard keyed off "does
+// this hole have a hazard on the tee→pin line" and took the loose branch on 17 of
+// the 46, of which 9 had a hazard no club can reach and a pick identical to the
+// strict one.
+describe('golf courses — the overshoot relaxation is narrow, and stays narrow', () => {
+  it('relaxes the tee-shot ceiling on exactly the 8 holes whose pick carries a hazard', () => {
+    const relaxed: string[] = [];
+    let holes = 0;
+    for (const course of GATED) {
+      for (const h of course.holes) {
+        holes++;
+        const teeToPin = Math.hypot(h.pin.d - h.tee.d, h.pin.x - h.tee.x);
+        const ud = (h.pin.d - h.tee.d) / teeToPin;
+        const ux = (h.pin.x - h.tee.x) / teeToPin;
+        let forcedCarry = 0;
+        for (const hz of h.hazards) {
+          const rd = hz.d - h.tee.d;
+          const rx = hz.x - h.tee.x;
+          const along = rd * ud + rx * ux;
+          const perp = Math.sqrt(Math.max(0, rd * rd + rx * rx - along * along));
+          if (perp >= hz.r) continue;
+          const far = along + Math.sqrt(hz.r * hz.r - perp * perp);
+          if (far > 0 && far < teeToPin) forcedCarry = Math.max(forcedCarry, far);
+        }
+        const club = new CourseSim(h).getState().clubId;
+        const full = new CourseSim(h).simulateShot({ clubId: club, power: 1 });
+        if (forcedCarry > 0 && full.carry > forcedCarry) {
+          relaxed.push(`${course.id} h${h.id} (${club}, carries ${full.carry} over ${forcedCarry.toFixed(0)})`);
+        }
+      }
+    }
+    console.log('\n[FORCED-CARRY RELAXATION APPLIES TO]\n  ' + relaxed.join('\n  '));
+    // Every one is a par 3 — the hole type where the tee shot IS the approach and
+    // a hazard short of the green is therefore inside a club's reach.
+    expect(relaxed.length, 'the loose branch widened — check WHY before updating this').toBe(8);
+    expect(holes).toBe(46); // 45 authored + the HOLE_1 fixture
+  });
 });
 
 // --- A pond may not reach the putting surface, in HEIGHT as well as in LIE ---
@@ -295,6 +362,119 @@ describe('greenside water — the green pad outranks the water pad', () => {
     // sampler stops landing on green.
     expect(holesWithWater).toBeGreaterThanOrEqual(17);
     expect(checked).toBeGreaterThan(10000);
+  });
+
+  // ⚠ THE POND RIM IS LEVEL, AND UNTIL NOW NOTHING SAID SO.
+  //
+  // `heightAt`'s water pad exists for exactly one reason: a pond's surface is a
+  // single LEVEL plane, so its rim has to be one height all the way round or the
+  // plane either floats over the low bank or leaves the high bank towering. That
+  // is the whole feature — and there was no assertion on it anywhere in
+  // `lib/golf`. `terrain.test.ts` checked that one point classifies as `water`
+  // and nothing else.
+  //
+  // That absence is why the green/water precedence fix could be landed with the
+  // mask taken off the wrong radius and still look green: masking the water pad
+  // by `1 - gBlend` (the green pad PLUS its 14–26 yd skirt, which the placement
+  // invariant does not clear a hazard of) tilts the pad ACROSS the pond and
+  // undoes the levelling. Measured on that version: rim spread 0.287–1.011 yd and
+  // the HOLE_1 waterline receding to 68% of its basin radius — the "crater with a
+  // puddle in it" `WATER_LIP`'s comment warns about. Every green-design assertion
+  // stayed green throughout, because none of them looks at a pond.
+  //
+  // Written to the same standard as the green guard: the outline is derived HERE
+  // from the wobble primitives rather than by calling the production
+  // `edgeRadius`/`featureSeed`, so the ring being sampled is an independent
+  // statement of the same geometry and a sign error in either would not cancel;
+  // nothing that computes the pad mask is imported (`greenPadPriority` is module
+  // -private to terrain.ts and stays that way); and both the ponds and the angle
+  // samples are counted with a floor so a filter that matched nothing could not
+  // pass. `waterLevelAt` IS imported — it is the value under test, the one number
+  // the renderer draws the plane at, not a helper that would make this agree by
+  // construction.
+  it('keeps every pond rim level and its waterline out at the basin edge', () => {
+    // The wobble, longhand. Mirrors terrain.ts's hash2 → edgeNoise → edgeRadius
+    // and featureSeed, stated independently on purpose (see above).
+    const hash2 = (ix: number, iy: number, seed: number): number => {
+      let h = (ix * 374761393 + iy * 668265263 + seed * 362437) | 0;
+      h = (h ^ (h >>> 13)) * 1274126177;
+      h = h ^ (h >>> 16);
+      return (h >>> 0) / 4294967296;
+    };
+    const outlineR = (cd: number, cx: number, angle: number, baseR: number): number => {
+      const seed = (Math.round(cd * 16) * 73856093 + Math.round(cx * 16) * 19349663) | 0;
+      const freqs = [2, 3, 5];
+      const weights = [0.55, 0.3, 0.15];
+      let v = 0;
+      for (let i = 0; i < freqs.length; i++) {
+        const phase = hash2(seed, i + 1, 0x9e3779b9 | 0) * Math.PI * 2;
+        v += weights[i]! * Math.sin(freqs[i]! * angle + phase);
+      }
+      return baseR * (1 + EDGE_WOBBLE * v);
+    };
+
+    // BOUNDS, and why these numbers.
+    //  • SPREAD. A correct water pad sets every outline point to the SAME plateau,
+    //    so the shipped and fixed measurement is 0.000 yd exactly — the bound is
+    //    not tight to that, because a future refinement is allowed to introduce a
+    //    little variation. 0.25 yd is comfortably under the SMALLEST regression
+    //    the broken mask produced (0.287) and ~30× the largest legitimate value
+    //    ever measured, so it catches this class without policing noise.
+    //  • WATERLINE. `WATER_LIP` is documented against a shoreline at ~94% of the
+    //    basin radius; today every pond measures 0.933–0.940. The broken mask
+    //    measured 0.68–0.83. 0.90 sits between them with room on both sides.
+    const MAX_RIM_SPREAD = 0.25;
+    const MIN_SHORE_FRACTION = 0.9;
+    const N = 144;
+
+    const bad: string[] = [];
+    let ponds = 0;
+    let samples = 0;
+    for (const course of GATED) {
+      for (const h of course.holes) {
+        for (const hz of h.hazards) {
+          if (hz.kind !== 'water') continue;
+          ponds++;
+          const level = waterLevelAt(h, hz);
+          let lo = Infinity;
+          let hi = -Infinity;
+          let minShore = 1;
+          for (let i = 0; i < N; i++) {
+            const a = (i / N) * Math.PI * 2;
+            const R = outlineR(hz.d, hz.x, a, hz.r);
+            const rimY = heightAt(h, hz.d + Math.sin(a) * R, hz.x + Math.cos(a) * R);
+            lo = Math.min(lo, rimY);
+            hi = Math.max(hi, rimY);
+            // Walk in from the outline to the first point at or below the drawn
+            // waterline — the shore the renderer's depth discard produces.
+            let cross = 0;
+            for (let r = R; r >= 0; r -= R / 200) {
+              if (heightAt(h, hz.d + Math.sin(a) * r, hz.x + Math.cos(a) * r) <= level) {
+                cross = r;
+                break;
+              }
+            }
+            minShore = Math.min(minShore, cross / R);
+            samples++;
+          }
+          const tag = `${course.id} h${h.id} pond @${hz.d},${hz.x} r${hz.r}`;
+          if (hi - lo > MAX_RIM_SPREAD) {
+            bad.push(`${tag}: rim spread ${(hi - lo).toFixed(3)} yd > ${MAX_RIM_SPREAD}`);
+          }
+          if (minShore < MIN_SHORE_FRACTION) {
+            bad.push(
+              `${tag}: waterline recedes to ${(minShore * 100).toFixed(1)}% of basin radius < ${MIN_SHORE_FRACTION * 100}%`,
+            );
+          }
+        }
+      }
+    }
+    expect(bad, 'a pond stopped being level / its shore receded — see terrain.ts water pad').toEqual(
+      [],
+    );
+    // Vacuity: 18 authored ponds across the four courses + the HOLE_1 fixture.
+    expect(ponds).toBeGreaterThanOrEqual(18);
+    expect(samples).toBeGreaterThan(2000);
   });
 });
 

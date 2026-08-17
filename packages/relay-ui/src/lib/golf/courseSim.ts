@@ -708,6 +708,17 @@ export class CourseSim {
   // BEYOND the pin (far ≥ R) is not a carry at all — it is a hazard wrapping the
   // green, and "carry it" would mean flying the flag. Those stay a shot-shape
   // problem for the player, not a club recommendation.
+  //
+  // ⚠ THE LINE HAS NO WIDTH, so this is DISCONTINUOUS at perp == r: a ball whose
+  // line grazes a 10-yd pond at 9.99 yd off centre asks for the full carry, and one
+  // at 10.01 asks for none — a centimetre of lateral movement can flip the
+  // recommended club. That is inherent to modelling the shot as a zero-width ray
+  // and it is left in rather than smoothed, because the alternatives are worse:
+  // inflating the radius makes the sim demand a carry over water the shot visibly
+  // misses, and fading the requirement in would hand back a club that half-clears a
+  // pond. The player sees it only as the auto-club changing when they re-address
+  // from a hair further left, and can cycle clubs freely. The test copy of this
+  // geometry shares the same edge by construction.
   private frontalCarry(): number {
     const b = this.ball;
     const p = this.hole.pin;
@@ -754,6 +765,18 @@ export class CourseSim {
   // never fires and the never-overshoot property is exactly as it was. If not even
   // the driver can carry the hazard the step-1 club stands: up-clubbing to a club
   // that ALSO comes up wet would give up the one property that still holds.
+  //
+  // ⚠ THIS RUNS ON EVERY LIE, NOT JUST THE TEE, and the par 3s are only where it
+  // was most visible. An APPROACH over water is up-clubbed by the same rule and
+  // gives up the same distance control: measured on the HOLE_1 fixture, whose pond
+  // ends 25 yd short of the pin, a 240-yd approach goes 7-iron (18 yd short of the
+  // flag, and wet) → hybrid (16 past, dry), and a 300-yd one 5-iron (47 short, wet)
+  // → driver (23 past, dry). That is the intended trade and not a side effect: the
+  // ball is dry and puttable instead of re-teed for a penalty, and easing off is
+  // the player's to do. What bounds it is that step 2 stops at the FIRST club that
+  // clears, so the overshoot is only ever as much as the carry itself forces —
+  // courseSim.test.ts pins that on approach lies by measuring the shortest club
+  // whose real carry clears and asserting the pick is that club or one longer.
   //
   // A wedge out of sand regardless; green → putter (putt mode handles the stroke).
   // Used to auto-set the club each new shot.

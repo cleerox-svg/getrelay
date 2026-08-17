@@ -22,10 +22,18 @@
 // flag, and a decorative mid-vertex a few yards off the pin line silently aims the
 // default tee shot off the green: holes 4, 6, 12 and 16 each carried one, worth
 // 3.0–6.4° and 9–20 yd of miss at the pin, and on 6 Juniper NO club at aim 0 could
-// reach the green at all. Every par-3 mid-vertex below therefore sits exactly on
-// the tee→pin ray (x = d · pin.x / pin.d) and is kept there by a test in
-// courseSim.test.ts. Give a par 3 SHAPE with its green, its hazards and its
-// terrain, never with a kink in the line the player is aimed down.
+// reach the green at all. Every par-3 mid-vertex below therefore sits on the
+// tee→pin ray (x = d · pin.x / pin.d).
+//
+// What is ENFORCED, over every par 3 of every course, is the tolerance rather than
+// exact collinearity: courseSim.test.ts requires the address heading within 1° of
+// the bearing to the flag. The four holes here measure 0.003° — they are on the
+// ray — but five par 3s elsewhere in the registry still carry `x: 0` mid-vertices
+// against a −2 yd pin offset and sit at 0.57–0.65° (under a yard at the pin), which
+// is inside the guard and not worth a data churn. Author new ones on the ray; do
+// not read the guard as a promise that every existing one already is.
+// Give a par 3 SHAPE with its green, its hazards and its terrain, never with a kink
+// in the line the player is aimed down.
 //
 // Green tilt is authored within the engine's μ cap (≈stimp 10), below true
 // Augusta green speeds (each green here reuses a known-good tilt/undulation and is

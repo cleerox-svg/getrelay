@@ -873,6 +873,91 @@ describe('course sim — auto club recommendation', () => {
     expect(cleared).toBeGreaterThanOrEqual(6);
     expect(cleared + unreachable).toBeGreaterThanOrEqual(11);
   });
+
+  it('…and it up-clubs by ONE club, never two: the pick is the shortest that clears', () => {
+    // What bounds the overshoot on an APPROACH. The par-3 guards bound it against
+    // the green, but an approach has no such landmark — a 300-yd shot over water
+    // ending 25 yd short of the flag goes 5-iron → driver and finishes 23 yd past,
+    // and no fixed yardage says whether that is the rule working or the rule
+    // over-correcting. The invariant that does say it: step 2 stops at the FIRST
+    // club that clears, so the pick must be the SHORTEST club whose carry beats the
+    // hazard — the least distance the water forces the player to give up.
+    //
+    // "Shortest" is established by MEASURING every club's real carry from that lie,
+    // not by consulting the table the rule uses, so the check cannot agree with the
+    // rule by construction. One club of slack is allowed and no more: the rule
+    // compares against the flat-lie ladder while this compares against the carry
+    // actually flown, and where an uphill lie puts those on opposite sides of the
+    // requirement the pick lands one club long (measured: 2 of the 8 forced lies).
+    // Two clubs long would be the over-correction, and fails here.
+    const g = HOLE_1.green;
+    const pond = HOLE_1.hazards.find((h) => h.kind === 'water')!;
+    const pondFar = g.d - (pond.d + pond.r);
+    const rank = (id: string) => CLUBS.findIndex((c) => c.id === id); // longest → shortest
+    const rows: string[] = [];
+    let forced = 0;
+    let exact = 0;
+    for (let R = 120; R <= 300; R += 20) {
+      const from = { d: g.d - R, x: g.x };
+      const s = sim();
+      s.ball.d = from.d;
+      s.ball.x = from.x;
+      if (s.getState().lie === 'bunker') continue; // sand has its own wedge rule
+      const club = s.recommendedClub();
+      const need = R - pondFar;
+      // The shortest club in the bag whose MEASURED full-power carry clears.
+      let shortest: string | null = null;
+      for (let i = CLUBS.length - 1; i >= 0; i--) {
+        if (sim().simulateShot({ clubId: CLUBS[i]!.id, power: 1, from }).carry > need) {
+          shortest = CLUBS[i]!.id;
+          break;
+        }
+      }
+      if (shortest == null) continue; // nothing carries it — the fallback case below
+      forced++;
+      const delta = rank(shortest) - rank(club); // 0 = exactly it, 1 = one club long
+      rows.push(
+        `  ${pad(R, 4)} yd | needs ${pad(need.toFixed(0), 4)} | picks ${pad(club, 6)} | shortest that clears ${pad(shortest, 6)} | ${delta} club(s) long`,
+      );
+      expect(delta, `R=${R}: picked ${club}, but ${shortest} already clears`).toBeGreaterThanOrEqual(0);
+      expect(delta, `R=${R}: picked ${club} where ${shortest} clears — a two-club over-correction`).toBeLessThanOrEqual(1);
+      if (delta === 0) exact++;
+    }
+    console.log('\n[APPROACH OVER WATER — HOW FAR THE CARRY FORCES YOU UP]\n' + rows.join('\n'));
+    expect(forced).toBe(8); // every non-bunker lie in the sweep is a forced carry
+    expect(exact).toBeGreaterThanOrEqual(5); // most land on the minimal club exactly
+  });
+
+  it('where NOTHING carries the water, the pick is EXACTLY the hazard-free pick', () => {
+    // The other half of the approach story, and the guarantee that the carry rule
+    // cannot make a hopeless lie worse: past the longest club's reach the pond is
+    // simply not carryable, and step 2 must then leave the never-overshoot club
+    // alone rather than handing over a driver that comes up wet too. Asserted as
+    // EQUALITY against the same sweep run on a hazard-free clone — a bound would
+    // not catch a rule that shuffled the club for no gain.
+    const g = HOLE_1.green;
+    const clean: CourseHole = { ...HOLE_1, hazards: [] };
+    const pond = HOLE_1.hazards.find((h) => h.kind === 'water')!;
+    const pondFar = g.d - (pond.d + pond.r);
+    let checked = 0;
+    for (let R = 330; R <= 480; R += 30) {
+      const from = { d: g.d - R, x: g.x };
+      const need = R - pondFar;
+      // Confirm this lie really is beyond every club, by measurement.
+      for (const c of CLUBS) {
+        expect(sim().simulateShot({ clubId: c.id, power: 1, from }).carry).toBeLessThan(need);
+      }
+      const s = sim();
+      s.ball.d = from.d;
+      s.ball.x = from.x;
+      const c2 = new CourseSim(clean);
+      c2.ball.d = from.d;
+      c2.ball.x = from.x;
+      expect(s.recommendedClub(), `R=${R}`).toBe(c2.recommendedClub());
+      checked++;
+    }
+    expect(checked).toBe(6);
+  });
 });
 
 describe('course sim — wedge finesse (controllable short game)', () => {

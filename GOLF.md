@@ -534,9 +534,26 @@ Every path below resolves on disk. Root for UI paths is
   missed the real defect underneath: `heightAt` applied every pond's levelling
   pad with no green mask while `surfaceAt` gives the green strict precedence over
   water, and 14 of 17 authored ponds graded 3.5–5.9 yd ONTO their own green,
-  leaving slopes to 0.262 — ground a dead ball rolls off on its own. Height
-  precedence must match lie precedence; the pads compose multiplicatively
-  (`waterPad *= 1 - gBlend`).
+  leaving slopes to 0.262 — ground a dead ball rolls off on its own.
+- **⚠ HEIGHT PRECEDENCE MUST MATCH LIE PRECEDENCE, AND THE MASK RADIUS IS THE
+  WHOLE FIGHT.** A pond's pad is scaled by `greenPadPriority` (`terrain.ts`),
+  which ramps from the wobbled mown-pad edge out to **that pond's own nearest
+  possible outline** (`dist − r·(1+EDGE_WOBBLE)`). Two obvious shortcuts are both
+  wrong, and each was measured:
+  - `1 - gBlend` — `gBlend` is the pad **plus** its 14–26 yd raise-derived skirt,
+    which the placement invariant does not clear a hazard of, so it is ~0.54 at a
+    pond's near rim and 0 at its far rim: it tilts the pad **across the pond** and
+    undoes the levelling. Rim spread 0.000 → 0.287–1.011 yd, `HOLE_1`'s waterline
+    receding to 68% of basin radius — `WATER_LIP`'s "crater with a puddle in it".
+  - ramping to `maxGreenPadRadius` — correct at both endpoints, but it crushes the
+    green pad's whole raise into the 0–2.4 yd of wobble slack: surround gradient
+    0.63 → **1.67**, a 59° wall in the rough.
+  Ramping to the pond spends the real gap (7.5 yd on `HOLE_1`) and measures 0.70.
+  The two exact endpoints are load-bearing and both are tested: `waterPad ≡ 0`
+  across green + fringe (deleting a hole's ponds moves its putting surface by zero
+  bits) and untouched on the pond (rim spread + waterline fraction over all 18
+  ponds), both in `courses.test.ts`. Before this there was **no pond-levelness
+  assertion anywhere in `lib/golf`**, which is exactly why the class shipped.
 - **⚠ ONE intent for Course play, and never a flag per flow.** What a Course
   round IS (normal / daily / tournament) lives in a single discriminated union in
   `GolfScreen`, switched on once. Adding a new flow means a new `kind` — NOT

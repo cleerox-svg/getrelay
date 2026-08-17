@@ -167,6 +167,12 @@ export function maxGreenGradient(h: CourseHole): {
   checked: number;
 } {
   const g = h.green;
+  // ⚠ BAIL BEFORE DIVIDING BY THE RADIUS. The step below is g.r/N, so the exact
+  // degenerate green MIN_GREEN_SAMPLES exists to catch — r ≤ 0 — is the one that
+  // makes the step zero and the loop never terminate. A guard that HANGS the
+  // suite instead of failing it is not a guard, so return the empty measurement
+  // and let the caller report `checked = 0`.
+  if (!(g.r > 0)) return { slope: 0, at: { d: g.d, x: g.x }, checked: 0 };
   // The green edge is organic, so sweep the bounding box of its WORST-case
   // outward bulge and let the classifier decide what is green.
   const reach = g.r * (1 + EDGE_WOBBLE);
