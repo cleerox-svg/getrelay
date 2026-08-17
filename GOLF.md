@@ -264,6 +264,35 @@ code path:
   `onRoundComplete` itself (so it posts to the event, NOT to `golfcourse`, and
   there is no double-post).
 
+**Which of those three a Course round is wired to comes from ONE discriminated
+union** — `CourseIntent` in `GolfScreen` (`normal` | `daily` | `tournament`),
+switched on once by `coursePlan()` to produce the course, the starting hole, the
+seed AND the reporting channel together. It replaced five independent state slots
+(`dailyActive`, `dailySeed`, `tourneyActive`, `tourneyCourse`, `tourneySeed`)
+that were cleared in exactly one place — `CourseGame`'s `onExit`, which neither a
+back GESTURE nor `useGameFlow`'s guarded LEAVE arm calls. The flag survived and
+corrupted a LATER, unrelated round: a practice hole POSTed as the day's daily
+(burning the entry), a picked hole silently replaced by the synthesized
+tournament course, and a full 18 posting nowhere because `onRoundComplete` was
+`undefined` while a daily was "active". `startGolf()` now resets the intent
+unconditionally, and each special flow carries its OWN course/hole/seed so it
+cannot touch the player's Course-mode selection. `GolfScreen.test.tsx` drives the
+real screen out of a daily/tournament round with `nav(-1)` and pins all three.
+
+**A finished daily/tournament result is PERSISTED before it is POSTed**
+(`lib/golf/pendingResult.ts`, localStorage, same idiom as `stats.ts`). It used to
+be plain component state, so holing out and then tapping another tab lost the
+score silently — no request, no error, nothing shown, day's entry spent. The
+record is written on hole-out, `GolfScreen` opens on the tab that owns it
+(`GolfDaily` / `GolfTournaments` are what POST), and it is cleared **only once
+the POST resolves**, so a failure is retried on the next mount. Exactly-once
+survives a remount because the record carries a monotonic `id` (from a persisted
+counter — never `Date.now()`/`Math.random()`): `submitPendingResult` hands a
+second caller for the same id the FIRST in-flight promise instead of issuing a
+second request, and releases the claim on failure. The per-mount `submittingRef`
+identity guards in both components are NOT sufficient on their own — a record
+read back off localStorage is a different object.
+
 Best-shot metrics are computed by a single `CourseSim.recordShot()` off `stop()`
 (shared by live fire, `simulateShot` and `simulatePutt`): longest drive = the
 first full swing's total (an OB/water opener doesn't lock it — the replay does);
@@ -345,7 +374,8 @@ Every path below resolves on disk. Root for UI paths is
 
 | Area | Path |
 |---|---|
-| Hub shell: Play / Arena / Clubhouse tabs, flow wiring, immersive + music | `src/components/golf/GolfScreen.tsx` |
+| Hub shell: Play / Arena / Clubhouse tabs, flow wiring, immersive + music, the `CourseIntent` union | `src/components/golf/GolfScreen.tsx` |
+| Persisted, submit-once pending Daily / Tournament result (`readPending` / `writePending` / `clearPending` / `submitPendingResult`) | `src/lib/golf/pendingResult.ts` |
 | Play tab: course hero, Course + Mini-Golf pickers, range expansion, challenge CTA | `src/components/golf/GolfMenu.tsx` |
 | Arena: daily hole + streak / rapid events / boards | `src/components/golf/GolfDaily.tsx`, `GolfTournaments.tsx`, `GolfLeaderboard.tsx` |
 | Clubhouse: records + rank / cosmetics shop / season track / wallet | `src/components/golf/GolfProfile.tsx`, `GolfShop.tsx`, `GolfSeason.tsx`, `GolfWallet.tsx` |
@@ -465,6 +495,14 @@ Every path below resolves on disk. Root for UI paths is
   at stimp 10). Keep green tilt + undulation under that, or raise stimp/μ in
   lockstep. `builder.ts` derives the cap from `greenPhysics` rather than
   hardcoding it.
+- **⚠ ONE intent for Course play, and never a flag per flow.** What a Course
+  round IS (normal / daily / tournament) lives in a single discriminated union in
+  `GolfScreen`, switched on once. Adding a new flow means a new `kind` — NOT
+  another boolean, because a boolean has to be cleared by every exit path and two
+  of golf's exit paths (the back gesture, and the guarded free screen's leave arm)
+  call nothing at all — so the reset belongs on the ENTRY side. Same rule for the
+  finished score: persist it via `lib/golf/pendingResult.ts` and clear it only
+  after the POST resolves. See §1.7.
 - **⚠ CourseSnapshot rule.** Any new MUTABLE `CourseSim` field MUST be added to
   `CourseSnapshot` + `snapshot()` + `restore()`. A guard test dumps all own data
   props independently and asserts byte-identical state after `predict()`, so it

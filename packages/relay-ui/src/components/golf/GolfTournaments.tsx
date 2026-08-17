@@ -6,6 +6,7 @@ import { resolveFrameById } from '../../lib/golf/cosmetics';
 import { getCourse } from '../../lib/golf/courses';
 import type { GolfCourse } from '../../lib/golf/courses';
 import { synthTournamentCourse } from '../../lib/golf/tournamentCourse';
+import { submitPendingResult, type PendingResult } from '../../lib/golf/pendingResult';
 import type {
   Tournament,
   TournamentLeaderboardEntry,
@@ -63,10 +64,10 @@ interface Props {
   // course as a full round (NO startHole) through its existing Course free-screen
   // path, and reports the finished ROUND total back via pendingResult below.
   onPlay: (course: GolfCourse, seed: number) => void;
-  // Set by GolfScreen when a tournament round finishes (the round's to-par +
-  // total strokes). We POST it here, show the updated rank / "improved!" state,
-  // then call onResultConsumed so it isn't submitted twice.
-  pendingResult: { toPar: number; strokes: number } | null;
+  // The PERSISTED pending result (lib/golf/pendingResult): the round's to-par +
+  // total strokes, set by GolfScreen or read back on a later mount if the POST
+  // never landed. POSTed here; then onResultConsumed clears GolfScreen's slot.
+  pendingResult: PendingResult | null;
   onResultConsumed: () => void;
 }
 
@@ -151,10 +152,11 @@ export function GolfTournaments({ onPlay, pendingResult, onResultConsumed }: Pro
   // Submit a finished round total. Keeps the server's read-after-write standing
   // and badges "improved!"; refreshes the leaderboard. Retryable on failure.
   const submitPending = useCallback(
-    (res: { toPar: number; strokes: number }) => {
+    (res: PendingResult) => {
       setSubmitState('saving');
-      api
-        .postTournamentResult(res)
+      // Via pendingResult's once-only guard, NOT api directly — submittingRef
+      // below dies with this mount, so a remount mid-flight would re-POST.
+      submitPendingResult(res, (b) => api.postTournamentResult(b))
         .then((r) => {
           setTourney((prev) =>
             prev ? { ...prev, entry: r.entry, entrants: r.entrants } : prev,
@@ -172,7 +174,7 @@ export function GolfTournaments({ onPlay, pendingResult, onResultConsumed }: Pro
   // Fire the submit exactly once per pending result object (identity-guarded so a
   // re-render doesn't re-POST). GolfScreen clears pendingResult via
   // onResultConsumed on success, so a failed submit leaves it for the Retry.
-  const submittingRef = useRef<{ toPar: number; strokes: number } | null>(null);
+  const submittingRef = useRef<PendingResult | null>(null);
   useEffect(() => {
     if (pendingResult && submittingRef.current !== pendingResult) {
       submittingRef.current = pendingResult;

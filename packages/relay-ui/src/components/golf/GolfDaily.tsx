@@ -4,6 +4,7 @@ import { api } from '../../lib/api';
 import { useEconomy } from '../../lib/golf/economy';
 import { resolveFrameById } from '../../lib/golf/cosmetics';
 import { getCourse } from '../../lib/golf/courses';
+import { submitPendingResult, type PendingResult } from '../../lib/golf/pendingResult';
 import type {
   DailyChallenge,
   DailyLeaderboardEntry,
@@ -26,10 +27,11 @@ interface Props {
   // challenge uses: CourseGame gets course + startHole + seed). holeIdx is the
   // 0-based index into course.holes.
   onPlay: (courseId: string, holeIdx: number, seed: number) => void;
-  // Set by GolfScreen when a daily round finishes (the finishing strokes +
-  // to-par). We POST it here, show the updated streak / "improved!" state, then
-  // call onResultConsumed so it isn't submitted twice.
-  pendingResult: { strokes: number; toPar: number } | null;
+  // The PERSISTED pending result (lib/golf/pendingResult): set by GolfScreen when
+  // a daily round finishes, or read back off localStorage on a later mount if the
+  // POST never landed. We POST it here, show the updated streak / "improved!"
+  // state, then call onResultConsumed so it isn't submitted twice.
+  pendingResult: PendingResult | null;
   onResultConsumed: () => void;
 }
 
@@ -94,10 +96,11 @@ export function GolfDaily({ onPlay, pendingResult, onResultConsumed }: Props) {
   // Submit a finished round. Keeps the server's read-after-write today + streak
   // and badges "improved!"; refreshes the leaderboard. Retryable on failure.
   const submitPending = useCallback(
-    (res: { strokes: number; toPar: number }) => {
+    (res: PendingResult) => {
       setSubmitState('saving');
-      api
-        .postDailyResult(res)
+      // Via pendingResult's once-only guard, NOT api directly: the submittingRef
+      // below dies with this mount, so a remount mid-flight would re-POST.
+      submitPendingResult(res, (b) => api.postDailyResult(b))
         .then((r) => {
           setDaily((prev) =>
             prev ? { ...prev, today: r.today, streak: r.streak } : prev,
@@ -115,7 +118,7 @@ export function GolfDaily({ onPlay, pendingResult, onResultConsumed }: Props) {
   // Fire the submit exactly once per pending result object (identity-guarded so
   // a re-render doesn't re-POST). GolfScreen clears pendingResult via
   // onResultConsumed on success, so a failed submit leaves it for the Retry.
-  const submittingRef = useRef<{ strokes: number; toPar: number } | null>(null);
+  const submittingRef = useRef<PendingResult | null>(null);
   useEffect(() => {
     if (pendingResult && submittingRef.current !== pendingResult) {
       submittingRef.current = pendingResult;
