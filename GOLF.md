@@ -904,19 +904,47 @@ out to be wrong in an instructive way.
    Ground contact, hazards, cart path and blossom all verified unchanged — hole
    8's drift visibly moved WITH its tree, so #261's brushShrub premise is
    preserved in pixels and not just in argument.
-17. **Cleared trees settle on a common offset line.** A consequence of the defect
-   14 fix, cosmetic, not blocking. Pushing every violator out to the *same*
-   clearance boundary lands them on one offset curve, so on the sharpest doglegs
-   the gaps go from irregular to near-uniform — on hole 13, σ 15 px → 2.5 px,
-   with two pairs now standing 17–23 px apart against ~8 px trunks (adjacent,
-   never interpenetrating). Fix is a small SEEDED jitter on the post-clear x, so
-   cleared trees scatter around the boundary instead of lining up on it. Must be
-   seeded — an unseeded jitter makes every screenshot a false regression.
-18. **The tee peg renders above the ball, not below it.** A white cylindrical
-   stub protrudes from the TOP of the ball on every Course tee scene. Pre-existing
-   and byte-identical across the defect 14 before/after, so it is not a
-   regression from that change — but it is in every tee frame the harness shoots,
-   which is most of them, and nobody had named it.
+   **Augusta 10, the worst hole, came through BETTER than its proxy.** It had no
+   harness frame, so `augusta10` was added and shot either side of the fix. On
+   the same crown-blob method used on 13, hole 10 held all 6 mid-band crowns
+   (13 went 6 → 4), **gained** 1.2% of crown silhouette (13 lost 2.5%), gained
+   0.6 pt of column coverage (13 lost 7.3), and its corner-side inner edge moved
+   3 px where 13's went back 32. Where 13 thinned without opening, 10 did not
+   thin — it redistributed. Camellia is unchanged at mean rose (192,109,113)
+   either side, with the dominant right-hand group pixel-identical.
+
+   ⚠ **CORRECTION to `af3f068`'s commit message**, which read hole 10's smaller
+   raw delta (1.212% vs 13's 1.300%) as proof that 13 was a fair proxy. That
+   inference is wrong. Hole 10 has **13% less tree in shot to begin with** — it
+   plays from an elevated tee (`teeElev 14 → greenElev 4`, against 13's level
+   9 → 8) down a falling corridor, so its skyline sits 21 px lower and its
+   flanking crowns are ~30 px shorter. Normalised per visible crown pixel, hole
+   10 moved **more**: 0.456 against 13's 0.427, which is exactly what the sharper
+   turn predicts. The proxy was fair in kind, not in magnitude, and the raw pixel
+   comparison flattered it.
+
+   **The fix is visible doing its job.** In the before frame a trunk at
+   x[242–246] stood with bunker sand directly beneath its base — the inside-corner
+   fairway bunker (`{ kind: 'bunker', d: 268, x: -60, r: 9 }`). After, no trunk in
+   frame has sand or cart path within 4 px of its base, and that bunker's legible
+   sand went **81 → 193 px**, more than doubling, because the trunk and its shadow
+   came off it. The nearest trunks now sit behind the sand's top edge in depth:
+   crowding the corridor, not standing in it.
+15. **Hole 8 is under-planted for a hole called Yellow Jasmine.** After the drift
+   was resized to its collider, yellow fell to 0.165% of frame and only the near
+   right-hand cluster reads as deliberate planting; on the before frame you would
+   name yellow as a feature of the hole, on the after you probably would not.
+   Not a defect but a tuning value: `yellowJasmine.fraction` 0.6 → ~0.85, with
+   hole 12 at 0.8 / 0.376% as the reference for "enough". Deliberately left out
+   of the collider change so the physics delta stayed reviewable on its own.
+   → **FIXED at 0.85, and the gate passed it — but only the near half improved.**
+   Yellow went 0.173% → 0.259% of frame (+49%) at 34 draw calls unchanged,
+   +5,760 triangles, riding the existing instanced leaf batch. Only 1,676 px
+   differ, in five clusters at x 98–761: the left tree-line foot went from one
+   lonely 15 px clump to a continuous 67 px drift, so the corridor is now framed
+   on **both** sides rather than reading lopsided. Split by depth the gain is
+   +57% near (y > 552) against +21% far — see defect 16 for why the far half did
+   not move, and why raising `fraction` again is the wrong lever.
 16. **Hole 8's FAR tree line still reads as scattered specks**, and raising
    `fraction` again will not fix it — 0.85 is already near saturation there
    (4 of ~5 broadleaf crowns between x 230–680 carry a drift). Two findings from
@@ -935,21 +963,29 @@ out to be wrong in an instructive way.
      close to camera.
    Levers are drift *span* (world radius / instances per shrub, so one far drift
    covers more trunk spacing) and blossom fog handling — not `fraction`.
-15. **Hole 8 is under-planted for a hole called Yellow Jasmine.** After the drift
-   was resized to its collider, yellow fell to 0.165% of frame and only the near
-   right-hand cluster reads as deliberate planting; on the before frame you would
-   name yellow as a feature of the hole, on the after you probably would not.
-   Not a defect but a tuning value: `yellowJasmine.fraction` 0.6 → ~0.85, with
-   hole 12 at 0.8 / 0.376% as the reference for "enough". Deliberately left out
-   of the collider change so the physics delta stayed reviewable on its own.
-   → **FIXED at 0.85, and the gate passed it — but only the near half improved.**
-   Yellow went 0.173% → 0.259% of frame (+49%) at 34 draw calls unchanged,
-   +5,760 triangles, riding the existing instanced leaf batch. Only 1,676 px
-   differ, in five clusters at x 98–761: the left tree-line foot went from one
-   lonely 15 px clump to a continuous 67 px drift, so the corridor is now framed
-   on **both** sides rather than reading lopsided. Split by depth the gain is
-   +57% near (y > 552) against +21% far — see defect 16 for why the far half did
-   not move, and why raising `fraction` again is the wrong lever.
+17. **Cleared trees settle on a common offset line.** A consequence of the defect
+   14 fix, cosmetic, not blocking. Pushing every violator out to the *same*
+   clearance boundary lands them on one offset curve, so on the sharpest doglegs
+   the gaps go from irregular to near-uniform — on hole 13, σ 15 px → 2.5 px,
+   with two pairs now standing 17–23 px apart against ~8 px trunks (adjacent,
+   never interpenetrating). Fix is a small SEEDED jitter on the post-clear x, so
+   cleared trees scatter around the boundary instead of lining up on it. Must be
+   seeded — an unseeded jitter makes every screenshot a false regression.
+18. **The tee peg renders above the ball, not below it.** A white cylindrical
+   stub protrudes from the TOP of the ball on every Course tee scene. Pre-existing
+   and byte-identical across the defect 14 before/after, so it is not a
+   regression from that change — but it is in every tee frame the harness shoots,
+   which is most of them, and nobody had named it.
+19. **Augusta 10's frame reviews the approach to the corner, not the corner.**
+   The new `augusta10` tee view carries the whole diff and every trunk with a
+   ground contact, so it will catch a grove regression — but hole 10's corner
+   apex, its entire second leg and its green (`d 402, x −204`) sit behind the
+   crest and off-frame left, with the corner bunker reduced to a ~60×6 px sliver
+   at the horizon. Any of that hole's illegally-placed trunks that sat on the
+   **second leg** are therefore still unreviewed. A 51° dogleg needs a second
+   view from the corner or landing zone; the harness already supports
+   pin-relative `at=` lies (`golfpreview.tsx`), and `augusta16pond` is the
+   precedent for a second view of one hole.
 
 **Instanced foliage — the single largest GPU win measured on this codebase.**
 The tee view's 1,034 draw calls were **559 individual meshes of tree**. There was
