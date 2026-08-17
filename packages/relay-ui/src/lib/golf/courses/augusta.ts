@@ -15,6 +15,18 @@
 // tee aim (bearing-to-pin) cuts the corner over OB, so keeping the drive in the
 // fairway means steering down the first leg — the dogleg matters in play.
 //
+// ⚠ A PAR 3'S CENTERLINE IS COLLINEAR TEE→PIN, AND THAT IS LOAD-BEARING. The tee
+// shot aims down `driveHeading()` — centerline[0] → centerline[1] — precisely so
+// "straight" points down the fairway on a dogleg instead of around the corner.
+// A par 3 has no corner and no drive leg, so its first segment IS the shot at the
+// flag, and a decorative mid-vertex a few yards off the pin line silently aims the
+// default tee shot off the green: holes 4, 6, 12 and 16 each carried one, worth
+// 3.0–6.4° and 9–20 yd of miss at the pin, and on 6 Juniper NO club at aim 0 could
+// reach the green at all. Every par-3 mid-vertex below therefore sits exactly on
+// the tee→pin ray (x = d · pin.x / pin.d) and is kept there by a test in
+// courseSim.test.ts. Give a par 3 SHAPE with its green, its hazards and its
+// terrain, never with a kink in the line the player is aimed down.
+//
 // Green tilt is authored within the engine's μ cap (≈stimp 10), below true
 // Augusta green speeds (each green here reuses a known-good tilt/undulation and is
 // only RELOCATED to the new centerline end). Greenside hazards use
@@ -136,19 +148,25 @@ const HOLES = [
       hazards: [{ kind: 'bunker', d: 255, x: 30, r: 10, depth: -1.6 }],
       terrain: { seed: 201, hilliness: 2.2, hillScale: 34, teeElev: 6, greenElev: 11 },
     }))({ d: 417, x: 107, r: 16, raise: 2.6, tiltPct: 0.04, tiltDir: Math.PI, undulation: 0.01 }),
-  // 2 · Pink Dogwood — P5 585, dogleg LEFT ~33°, downhill; fairway + greenside bunkers.
+  // 2 · Pink Dogwood — P5 575, dogleg LEFT ~33°, downhill; fairway + greenside bunkers.
+  // ⚠ The card says 575 and this hole was authored 585 — the only hole on the
+  // property that did not match, and the 10 yd that made the advertised total
+  // 7,555 against Augusta National's 7,545. Fixed by SHORTENING THE SECOND LEG
+  // rather than by editing the label: leg 2 keeps its bearing (the dogleg is still
+  // 32.7°) and is scaled 300.4 → 289.6 yd, which walks the green in along the same
+  // line to (523, −175) and the pin with it. Centerline path length 574.8 yd.
   ((g: GreenDef) =>
     hole({
       id: 2,
       name: 'Pink Dogwood',
       bloom: BLOOM.pinkDogwood,
       par: 5,
-      yards: 585,
+      yards: 575,
       pin: { d: g.d + 2, x: g.x - 2 },
       centerline: [
         { d: 0, x: 0 },
         { d: 285, x: -10 },
-        { d: 532, x: -181 },
+        { d: 523, x: -175 },
       ],
       fairwayHalf: 18,
       fairwayTaper: -3,
@@ -159,7 +177,7 @@ const HOLES = [
         greensideHazard(g, 4, { kind: 'bunker', r: 8, depth: -1.8, bearingDeg: -135 }),
       ],
       terrain: { seed: 202, hilliness: 2.6, hillScale: 36, teeElev: 12, greenElev: 5 },
-    }))({ d: 532, x: -181, r: 17, raise: 2.4, tiltPct: 0.038, tiltDir: Math.PI, undulation: 0.01 }),
+    }))({ d: 523, x: -175, r: 17, raise: 2.4, tiltPct: 0.038, tiltDir: Math.PI, undulation: 0.01 }),
   // 3 · Flowering Peach — P4 350, short dogleg LEFT ~26°; bunkers left.
   ((g: GreenDef) =>
     hole({
@@ -184,7 +202,9 @@ const HOLES = [
       ],
       terrain: { seed: 203, hilliness: 2.0, hillScale: 33, teeElev: 8, greenElev: 9 },
     }))({ d: 331, x: -83, r: 15, raise: 2.4, tiltPct: 0.042, tiltDir: Math.PI, undulation: 0.012 }),
-  // 4 · Flowering Crab Apple — P3 240, long par 3, gently angled LEFT ~9°; bunker.
+  // 4 · Flowering Crab Apple — P3 240, long par 3, gently angled LEFT ~6.4°; bunker.
+  // Mid-vertex on the tee→pin ray: 115 · (−27/240) = −12.94 (was −6, aiming 3.4°
+  // and 14 yd right of the flag).
   ((g: GreenDef) =>
     hole({
       id: 4,
@@ -195,7 +215,7 @@ const HOLES = [
       pin: { d: g.d + 2, x: g.x - 2 },
       centerline: [
         { d: 0, x: 0 },
-        { d: 115, x: -6 },
+        { d: 115, x: -12.94 },
         { d: 238, x: -25 },
       ],
       fairwayHalf: 14,
@@ -232,7 +252,13 @@ const HOLES = [
       ],
       terrain: { seed: 205, hilliness: 2.4, hillScale: 35, teeElev: 7, greenElev: 12 },
     }))({ d: 428, x: -176, r: 16, raise: 2.6, tiltPct: 0.04, tiltDir: Math.PI, undulation: 0.01 }),
-  // 6 · Juniper — P3 180, downhill, angled RIGHT ~15°; tiered green.
+  // 6 · Juniper — P3 180, downhill, angled RIGHT ~9°; tiered green.
+  // Mid-vertex on the tee→pin ray: 90 · (28/178) = 14.16 (was 4 — the worst of the
+  // four at 6.4° / 20 yd left of the flag, which is why a dead-straight, perfectly
+  // clubbed tee shot could not find this green with any club). Straightening it
+  // takes the centerline path length to 178.6 against the card's 180; the played
+  // yardage is the tee→pin distance (180.2) and is untouched, and a kink big enough
+  // to make up the 1.4 yd is exactly what broke the hole.
   ((g: GreenDef) =>
     hole({
       id: 6,
@@ -242,7 +268,7 @@ const HOLES = [
       pin: { d: g.d + 2, x: g.x - 2 },
       centerline: [
         { d: 0, x: 0 },
-        { d: 90, x: 4 },
+        { d: 90, x: 14.16 },
         { d: 176, x: 30 },
       ],
       fairwayHalf: 14,
@@ -374,6 +400,8 @@ const HOLES = [
       terrain: { seed: 211, hilliness: 2.4, hillScale: 35, teeElev: 12, greenElev: 5 },
     }))({ d: 483, x: -139, r: 16, raise: 2.2, tiltPct: 0.038, tiltDir: Math.PI, undulation: 0.01 }),
   // 12 · Golden Bell — P3 155, Rae's Creek WATER fronts a shallow, wide green; near-straight.
+  // Mid-vertex on the tee→pin ray: 80 · (−11/157) = −5.61 (was 0, aiming 4.0° and
+  // 11 yd right of the flag — over the creek's widest point).
   ((g: GreenDef) =>
     hole({
       id: 12,
@@ -384,7 +412,7 @@ const HOLES = [
       pin: { d: g.d + 2, x: g.x - 2 },
       centerline: [
         { d: 0, x: 0 },
-        { d: 80, x: 0 },
+        { d: 80, x: -5.61 },
         { d: 155, x: -9 },
       ],
       fairwayHalf: 13,
@@ -458,7 +486,9 @@ const HOLES = [
       hazards: [greensideHazard(g, 4, { kind: 'water', r: 14, depth: -2.4, bearingDeg: -125 })],
       terrain: { seed: 215, hilliness: 2.4, hillScale: 36, teeElev: 10, greenElev: 9 },
     }))({ d: 517, x: 138, r: 16, raise: 2.0, tiltPct: 0.038, tiltDir: Math.PI, undulation: 0.01 }),
-  // 16 · Redbud — P3 170, played over a POND (water carry), angled RIGHT ~8°.
+  // 16 · Redbud — P3 170, played over a POND (water carry), angled RIGHT ~3°.
+  // Mid-vertex on the tee→pin ray: 90 · (9/171) = 4.74 (was 0, aiming 3.0° and 9 yd
+  // left of the flag — into the pond).
   ((g: GreenDef) =>
     hole({
       id: 16,
@@ -469,7 +499,7 @@ const HOLES = [
       pin: { d: g.d + 2, x: g.x - 2 },
       centerline: [
         { d: 0, x: 0 },
-        { d: 90, x: 0 },
+        { d: 90, x: 4.74 },
         { d: 169, x: 11 },
       ],
       fairwayHalf: 13,

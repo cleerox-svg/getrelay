@@ -8,7 +8,8 @@
 import { describe, it, expect } from 'vitest';
 import { CourseSim } from './courseSim';
 import { HOLE_1, courseTrees, heightAt, surfaceAt, type CourseHole } from './terrain';
-import { getCourse } from './courses';
+import { GOLF_COURSES, getCourse } from './courses';
+import { validateHole } from './courses/builder';
 import { CLUBS } from './clubs';
 import { GRAVITY } from './rangeSim';
 import { BALL_R, CUP_R, greenRollDecel, rollOutDistance } from './greenPhysics';
@@ -280,6 +281,169 @@ describe('course sim — tee-shot aim base is the drive line (first leg)', () =>
   });
 });
 
+// --- The authored par 3s, end to end ----------------------------------------
+// A par 3 is the one hole type where the default address IS the hole: the player
+// is handed a club and a heading, and one swing is meant to be able to find the
+// green. Two independent defects each broke that on their own — a decorative
+// mid-vertex that aimed "straight" 3.0–6.4° off the flag, and a club rule that
+// picked on RUN-OUT (CLUB_FULL_TOTAL, the max total over every hole) for a shot
+// whose whole job is CARRY, leaving six of the ten par 3s with no power setting
+// of the recommended club that reached dry land at all.
+//
+// So these guards are stated over EVERY par 3 of EVERY authored course, they
+// measure the hole's own geometry longhand (never by calling the sim helper they
+// are checking — `frontalCarry` and `driveHeading` are both private, and copying
+// them in would make the fix and the assertion agree by construction), and each
+// COUNTS what it checked, because the way a sweep like this rots is by silently
+// selecting nothing.
+describe('course sim — the authored par 3s (aim, club, and reaching the green)', () => {
+  const PAR3: { course: string; h: CourseHole }[] = [];
+  for (const c of GOLF_COURSES) for (const h of c.holes) if (h.par === 3) PAR3.push({ course: c.id, h });
+
+  // Distance from the tee, along the tee→pin line, to the FAR edge of the last
+  // hazard that line crosses short of the pin — i.e. the yardage a tee shot has
+  // to CARRY. 0 when the line is clean. Stated here as plain segment/circle
+  // geometry: project the centre onto the line, and if the perpendicular miss is
+  // inside the radius the line cuts the circle and leaves it at `along + half`.
+  const carryNeeded = (h: CourseHole): { need: number; kind: string } => {
+    const R = Math.hypot(h.pin.d - h.tee.d, h.pin.x - h.tee.x);
+    const ud = (h.pin.d - h.tee.d) / R;
+    const ux = (h.pin.x - h.tee.x) / R;
+    let need = 0;
+    let kind = 'none';
+    for (const hz of h.hazards) {
+      const rd = hz.d - h.tee.d;
+      const rx = hz.x - h.tee.x;
+      const along = rd * ud + rx * ux;
+      const perp = Math.sqrt(Math.max(0, rd * rd + rx * rx - along * along));
+      if (perp >= hz.r) continue;
+      const far = along + Math.sqrt(hz.r * hz.r - perp * perp);
+      if (far <= 0 || far >= R) continue; // behind the tee / not short of the pin
+      if (far > need) {
+        need = far;
+        kind = hz.kind;
+      }
+    }
+    return { need, kind };
+  };
+
+  it('there are ten authored par 3s, and every one is checked below', () => {
+    // The sweeps in this block all iterate PAR3; if the filter ever selects
+    // nothing (a renamed field, a course dropped from the registry) they would
+    // pass green while testing zero holes. This is the count that stops that.
+    expect(PAR3.length).toBe(10);
+    expect(PAR3.filter(({ h }) => carryNeeded(h).need > 0).length).toBe(8);
+  });
+
+  it('"straight" points at the FLAG on every par 3 (< 1° off the pin bearing)', () => {
+    // driveHeading() aims the tee shot down centerline[0] → centerline[1] so that
+    // "straight" runs down the fairway on a dogleg. A par 3 has no dogleg, so its
+    // first segment must BE the shot at the flag — the invariant the code comment
+    // claimed and five holes broke (Augusta 6 by 6.4° / 20 yd, and no club at aim
+    // 0 could reach that green). aimHeading() at address (strokes 0, aimRad 0) is
+    // the sim's real answer; the bearing it is compared against is computed here
+    // from the hole data alone.
+    const rows: string[] = [];
+    let checked = 0;
+    for (const { course, h } of PAR3) {
+      const bearing = Math.atan2(h.pin.x - h.tee.x, h.pin.d - h.tee.d);
+      const aim = new CourseSim(h).aimHeading();
+      const errDeg = ((aim - bearing) * 180) / Math.PI;
+      const R = Math.hypot(h.pin.d - h.tee.d, h.pin.x - h.tee.x);
+      rows.push(
+        `  ${pad(`${course} h${h.id}`, 24)} | ${pad(errDeg.toFixed(3), 7)}° | ${pad(
+          (Math.abs(Math.sin(aim - bearing)) * R).toFixed(2),
+          6,
+        )} yd off at the pin`,
+      );
+      expect(Math.abs(errDeg), `${course} hole ${h.id}: "straight" misses the flag`).toBeLessThan(1);
+      checked++;
+    }
+    console.log('\n[PAR 3 — AIM AT ADDRESS]\n' + rows.join('\n'));
+    expect(checked).toBe(10);
+  });
+
+  it('the recommended tee club CARRIES the last frontal hazard, on every par 3', () => {
+    // The counterpart to the never-overshoot guard, and the half that was missing:
+    // a par 3 lands on a receptive green that CHECKS, so a rule tuned on maximum
+    // TOTAL picked one to three clubs short of the water. Measure the REAL carry
+    // of the REAL recommendation, down the line the player is actually addressing.
+    const rows: string[] = [];
+    let withHazard = 0;
+    for (const { course, h } of PAR3) {
+      const { need, kind } = carryNeeded(h);
+      const s = new CourseSim(h);
+      const club = s.getState().clubId;
+      const aimDeg = (s.aimHeading() * 180) / Math.PI;
+      const shot = new CourseSim(h).simulateShot({ clubId: club, power: 1, aimDeg });
+      rows.push(
+        `  ${pad(`${course} h${h.id}`, 24)} | ${pad(h.yards, 4)} | ${pad(club, 6)} | carry ${pad(
+          shot.carry,
+          4,
+        )} | needs ${pad(need.toFixed(1), 6)} ${pad(kind, 7)} | clears ${pad(
+          (shot.carry - need).toFixed(1),
+          6,
+        )} | ${shot.result}`,
+      );
+      if (need <= 0) continue;
+      withHazard++;
+      expect(
+        shot.carry,
+        `${course} hole ${h.id}: the recommended ${club} carries ${shot.carry} yd, ` +
+          `${need.toFixed(1)} yd of ${kind} to clear — it cannot reach dry land at ANY power`,
+      ).toBeGreaterThan(need);
+      expect(shot.result, `${course} hole ${h.id}: full power finds ${shot.result}`).not.toBe('water');
+    }
+    console.log('\n[PAR 3 — RECOMMENDED CLUB vs THE FORCED CARRY]\n' + rows.join('\n'));
+    expect(withHazard).toBe(8); // 8 of the 10 have a hazard on the tee→pin line
+  });
+
+  it('a dead-straight swing with the recommended club can reach DRY LAND', () => {
+    // The blocker exactly as it was reported: sweep power 0.40→1.00 with the
+    // recommended club at aim 0 and count the settings that finish out of the
+    // water. Six holes measured ZERO. Anything above zero means the hole is
+    // playable as dealt; the assertion is on the count, per hole.
+    let checked = 0;
+    for (const { course, h } of PAR3) {
+      const aimDeg = (new CourseSim(h).aimHeading() * 180) / Math.PI;
+      const club = new CourseSim(h).getState().clubId;
+      let dry = 0;
+      for (let p = 0.4; p <= 1.0001; p += 0.02) {
+        const shot = new CourseSim(h).simulateShot({ clubId: club, power: p, aimDeg });
+        if (shot.result !== 'water' && shot.result !== 'ob') dry++;
+      }
+      expect(dry, `${course} hole ${h.id}: no power of the recommended ${club} stays dry`).toBeGreaterThan(0);
+      checked++;
+    }
+    expect(checked).toBe(10);
+  });
+
+  it('a dead-straight, perfectly clubbed swing can HIT THE GREEN on every par 3', () => {
+    // The end-to-end statement of the aim fix. On Augusta 6 Juniper every club ×
+    // every power at aim 0 missed the green, because the aim line itself pointed
+    // 20 yd left of it — no club selection could rescue that. This sweeps the
+    // whole bag and asserts each hole has at least one club/power that finishes on
+    // the putting surface, and prints how many do.
+    const rows: string[] = [];
+    let checked = 0;
+    for (const { course, h } of PAR3) {
+      const aimDeg = (new CourseSim(h).aimHeading() * 180) / Math.PI;
+      let hits = 0;
+      for (const c of CLUBS) {
+        for (let p = 0.4; p <= 1.0001; p += 0.05) {
+          const shot = new CourseSim(h).simulateShot({ clubId: c.id, power: p, aimDeg });
+          if (shot.result === 'green' || shot.result === 'holed') hits++;
+        }
+      }
+      rows.push(`  ${pad(`${course} h${h.id}`, 24)} | ${pad(hits, 3)} of 104 club×power lines find the green`);
+      expect(hits, `${course} hole ${h.id}: NO club at any power hits this green dead straight`).toBeGreaterThan(0);
+      checked++;
+    }
+    console.log('\n[PAR 3 — GREEN REACHABLE DEAD STRAIGHT]\n' + rows.join('\n'));
+    expect(checked).toBe(10);
+  });
+});
+
 // --- Wind on the course (setWind + predict includeWind) ----------------------
 // The Course gains the Range's wind: setWind() mutates the EXISTING
 // windAlong/windCross fields (already in the CourseSnapshot), the airborne-only
@@ -368,19 +532,62 @@ describe('course sim — putting on the tilted green', () => {
     expect(downDist).toBeGreaterThan(upDist);
   });
 
-  it('a well-judged putt straight at the cup is HOLED', () => {
+  it('a well-judged putt straight at the cup is HOLED — on ANY legal green', () => {
     // From just below the hole, up the fall line at a well-judged (dead-weight)
     // pace, it drops. Too soft leaves it short; too firm lips out — only the
     // right band holes, which is the point of speed-dependent capture.
-    let holed = false;
-    for (const speed of [4.0, 4.4, 4.8, 5.2, 5.6]) {
-      const m = sim().simulatePutt({ d: g.d - 7, x: g.x }, speed, 0);
-      if (m.result === 'holed') {
-        holed = true;
-        break;
+    //
+    // ⚠ THIS USED TO BE A ONE-POINT TEST, AND IT PASSED ON A COINCIDENCE. It ran
+    // five paces on the shipped HOLE_1 green and nothing else. HOLE_1's pin sits
+    // at the green centre, so the putt runs the pure slope line, and at the old
+    // fixture values `undulation 0.08` turned out to be the ONLY amplitude in
+    // 0.01–0.08 whose noise field bent the roll back into the cup — every other
+    // value missed at every pace. A test called "the hole is reliably makeable"
+    // was in fact pinned to one value of a noise amplitude: green for the wrong
+    // reason, and red the moment the fixture was retuned for something unrelated.
+    //
+    // So it now asserts what its name claims — that an on-line putt at holing
+    // pace drops on ANY green the authoring contract accepts, not at one point in
+    // the space. The grid spans the whole authored range of tilt (0.030–0.044,
+    // against 0.037–0.045 on the shipped holes) × undulation (0.01–0.06), every
+    // cell is put through the SHIPPED `validateHole` so the claim is scoped to
+    // legal greens rather than to a hand-picked list, and each cell must show a
+    // real holing WINDOW: at least one pace in a plausible band drops, a dead tap
+    // finishes short, and a blasted putt does not drop. Without those last two a
+    // sim that simply swallowed every ball would pass.
+    const rows: string[] = [];
+    let cells = 0;
+    for (const tiltPct of [0.03, 0.034, 0.037, 0.04, 0.044]) {
+      const line: string[] = [];
+      for (const undulation of [0.01, 0.02, 0.03, 0.04, 0.05, 0.06]) {
+        const h: CourseHole = { ...HOLE_1, green: { ...g, tiltPct, undulation } };
+        // Scope: only greens the shipped authoring gate would accept.
+        expect(validateHole(h), `tilt ${tiltPct} undulation ${undulation}`).toEqual([]);
+        const paces: number[] = [];
+        for (let sp = 3.6; sp <= 6.001; sp += 0.1) {
+          if (new CourseSim(h).simulatePutt({ d: g.d - 7, x: g.x }, sp, 0).result === 'holed') {
+            paces.push(Math.round(sp * 10) / 10);
+          }
+        }
+        const soft = new CourseSim(h).simulatePutt({ d: g.d - 7, x: g.x }, 2, 0);
+        const hard = new CourseSim(h).simulatePutt({ d: g.d - 7, x: g.x }, 10, 0);
+        expect(
+          paces.length,
+          `tilt ${tiltPct} undulation ${undulation}: a 7 yd on-line putt holes at NO pace in 3.6–6.0`,
+        ).toBeGreaterThan(0);
+        expect(soft.result, `tilt ${tiltPct} undulation ${undulation}: a dead tap holed`).not.toBe('holed');
+        expect(hard.result, `tilt ${tiltPct} undulation ${undulation}: a blasted putt holed`).not.toBe(
+          'holed',
+        );
+        line.push(`u ${undulation.toFixed(2)} → ${pad(paces.length, 2)} paces from ${paces[0]!.toFixed(1)}`);
+        cells++;
       }
+      rows.push(`  tilt ${tiltPct.toFixed(3)} | ${line.join(' | ')}`);
     }
-    expect(holed).toBe(true);
+    console.log('\n[HOLING WINDOW ACROSS LEGAL GREENS]\n' + rows.join('\n'));
+    // 5 tilts × 6 undulations. A filter or a fixture change that collapsed this
+    // grid would otherwise leave the sweep passing on nothing at all.
+    expect(cells).toBe(30);
   });
 
   it('a putt hit much too hard LIPS OUT / rolls over the cup (speed-capture)', () => {
@@ -595,25 +802,76 @@ describe('course sim — auto club recommendation', () => {
     expect(order.indexOf(far)).toBeGreaterThan(order.indexOf(near));
   });
 
-  it('the auto club never OVERSHOOTS: its full-power total lands at/short of the pin', () => {
+  it('the auto club never OVERSHOOTS on a CLEAN line: full total lands at/short of the pin', () => {
     // The old rule picked the shortest club that "reaches", so a full-power 3-wood
-    // bombed a short par 4's green. The new rule picks the LONGEST club that won't
+    // bombed a short par 4's green. The rule picks the LONGEST club that won't
     // overshoot — so full power lands at or short of the pin. Sweep a range of
     // approach distances and assert the recommended club's full-power total is
     // ≤ the distance to the pin (with a wedge-length grace for very short pitches,
     // where even the shortest club needs the power dialled down).
+    //
+    // ⚠ SWEPT ON A HAZARD-FREE CLONE OF HOLE_1, and that is the point rather than a
+    // convenience: HOLE_1's pond ends 25 yd short of its pin, so EVERY lie on the
+    // pin line is a forced carry and the never-overshoot rule deliberately yields
+    // to the carry rule there (see the next test). Stripping the hazards isolates
+    // the property this test is about; the assertion that the line really is clean
+    // is made below rather than assumed, so the sweep can't quietly become the
+    // other case.
     const g = HOLE_1.green;
+    const clean: CourseHole = { ...HOLE_1, hazards: [] };
+    let checked = 0;
     for (let R = 90; R <= 480; R += 30) {
-      const s = sim();
-      s.ball.d = g.d - R; // straight up the pin line
-      s.ball.x = g.x;
+      const from = { d: g.d - R, x: g.x }; // straight up the pin line
+      expect(clean.hazards.length).toBe(0); // the line cannot be a forced carry
+      const s = new CourseSim(clean);
+      s.ball.d = from.d;
+      s.ball.x = from.x;
       const club = s.recommendedClub();
-      const full = sim().simulateShot({ clubId: club, power: 1, from: { d: g.d - R, x: g.x } });
+      const full = new CourseSim(clean).simulateShot({ clubId: club, power: 1, from });
       // ≤ R for anything a club can be dialled to; the sole exception is a shot
       // shorter than a full sand wedge, where SW is the only choice and the
       // finesse curve dials it down.
-      expect(full.total).toBeLessThanOrEqual(Math.max(R, 131));
+      expect(full.total, `R=${R} club=${club}`).toBeLessThanOrEqual(Math.max(R, 131));
+      checked++;
     }
+    expect(checked).toBe(14);
+  });
+
+  it('…but a forced carry OUTRANKS it: the pick clears the water when a club can', () => {
+    // HOLE_1's pond sits across the pin line, its far edge ~25 yd short of the cup.
+    // Landing short of that is a stroke and a replay, which no power setting
+    // avoids; running past the pin is a chip back, which the player can avoid by
+    // easing off. So where the two rules disagree the CARRY wins — and where no
+    // club in the bag can carry it, the never-overshoot club stands rather than
+    // handing the player a driver that also comes up wet.
+    const g = HOLE_1.green;
+    // The pond's far edge, measured from the green centre along the pin line, from
+    // the hole data alone.
+    const pond = HOLE_1.hazards.find((h) => h.kind === 'water')!;
+    const pondFar = g.d - (pond.d + pond.r); // yd short of the green centre
+    expect(pondFar).toBeGreaterThan(0); // it really does front the green
+    let cleared = 0;
+    let unreachable = 0;
+    for (let R = 90; R <= 480; R += 30) {
+      const from = { d: g.d - R, x: g.x };
+      const s = sim();
+      s.ball.d = from.d;
+      s.ball.x = from.x;
+      if (s.getState().lie === 'bunker') continue; // sand has its own wedge rule
+      const club = s.recommendedClub();
+      const full = sim().simulateShot({ clubId: club, power: 1, from });
+      const need = R - pondFar; // carry required from HERE
+      // The longest club in the bag carries 291 yd flat; past that the pond is
+      // simply not carryable and the pick falls back to the lay-up-safe club.
+      if (need > 291) {
+        unreachable++;
+        continue;
+      }
+      expect(full.carry, `R=${R} club=${club} needs ${need.toFixed(0)} yd of carry`).toBeGreaterThan(need);
+      cleared++;
+    }
+    expect(cleared).toBeGreaterThanOrEqual(6);
+    expect(cleared + unreachable).toBeGreaterThanOrEqual(11);
   });
 });
 
