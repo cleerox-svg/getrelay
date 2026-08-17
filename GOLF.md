@@ -889,6 +889,34 @@ out to be wrong in an instructive way.
    cannot pass vacuously. The rows still sample the centerline at the unshifted
    `d` while planting at `ld`/`rd` (±3 yd, ~2 yd of drift on a 34° dogleg); left
    alone deliberately, since `clearOfCorridor` measures at the tree's own `d`.
+
+   **The visual gate passed it, and measured what it costs.** Only 4 of 28
+   frames moved, all in the tree-line band, all doglegs: augusta13 (50°) 1.300%,
+   augusta2 (35°) 0.460%, augusta8 (34°) 0.386%, augusta15 (28°) 0.041%. Five
+   more differ by ≤91 px of known defect-13 pond noise; 19 are byte-identical,
+   including `course-hole1` and `range-fairway` — HOLE_1's grove already stood 8
+   yd outside the OB edge and correctly did not move. On hole 13 the flanking
+   band lost 2 of its 6 free-standing crowns and the left grove's inner edge
+   pulled back 37 px, but the horizon stays tree-lined edge to edge, the largest
+   gap is ~1.5 crown widths, and the grove's inner edge is still well outside the
+   fairway's. **The tree pixels that left the corner are exactly the trunks that
+   were standing on ground the hole invites you to play; you cannot keep both.**
+   Ground contact, hazards, cart path and blossom all verified unchanged — hole
+   8's drift visibly moved WITH its tree, so #261's brushShrub premise is
+   preserved in pixels and not just in argument.
+17. **Cleared trees settle on a common offset line.** A consequence of the defect
+   14 fix, cosmetic, not blocking. Pushing every violator out to the *same*
+   clearance boundary lands them on one offset curve, so on the sharpest doglegs
+   the gaps go from irregular to near-uniform — on hole 13, σ 15 px → 2.5 px,
+   with two pairs now standing 17–23 px apart against ~8 px trunks (adjacent,
+   never interpenetrating). Fix is a small SEEDED jitter on the post-clear x, so
+   cleared trees scatter around the boundary instead of lining up on it. Must be
+   seeded — an unseeded jitter makes every screenshot a false regression.
+18. **The tee peg renders above the ball, not below it.** A white cylindrical
+   stub protrudes from the TOP of the ball on every Course tee scene. Pre-existing
+   and byte-identical across the defect 14 before/after, so it is not a
+   regression from that change — but it is in every tee frame the harness shoots,
+   which is most of them, and nobody had named it.
 16. **Hole 8's FAR tree line still reads as scattered specks**, and raising
    `fraction` again will not fix it — 0.85 is already near saturation there
    (4 of ~5 broadleaf crowns between x 230–680 carry a drift). Two findings from

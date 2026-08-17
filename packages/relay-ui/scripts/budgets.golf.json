@@ -137,6 +137,19 @@
         "shadowMapSize": 1536
       }
     },
+    "augusta10": {
+      "maxDrawCalls": 36,
+      "maxTriangles": 140000,
+      "measured": {
+        "drawCalls": 24,
+        "triangles": 96864,
+        "programs": 16,
+        "geometries": 16,
+        "textures": 16,
+        "tier": "medium",
+        "shadowMapSize": 1536
+      }
+    },
     "celebrate": {
       "maxDrawCalls": 45,
       "maxTriangles": 105000,

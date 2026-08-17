@@ -135,6 +135,15 @@ const SCENES = {
   // 8 (Yellow Jasmine) is the OTHER warm-hued bloom, found by the data guard in
   // courses.test.ts rather than by eye — and equally unreviewable until now.
   augusta8: { query: 'scene=course&course=augusta&hole=7', label: 'augusta-8-yellow-jasmine' },
+  // 10 (Camellia) is here for a different reason than the blooms above: it is
+  // Augusta's SHARPEST DOGLEG at 51°, and dogleg angle is the variable that
+  // drives how far the corridor fix (GOLF.md defect 14) has to move a tree line.
+  // 10 carried 12–14 of the 246 illegally-placed trunks — the most of any hole —
+  // and had no frame, so the largest relayout on the property was reviewed only
+  // by proxy through 13 (50°). "The worst case has no frame" is the same gap
+  // that let 15 and 17 ship autumn-hued: whichever hole is the extreme of a
+  // measured axis needs its own frame, not a neighbour's.
+  augusta10: { query: 'scene=course&course=augusta&hole=9', label: 'augusta-10-camellia' },
   listowelHeritage3: {
     query: 'scene=course&course=listowel-heritage&hole=2',
     label: 'listowel-heritage-3',
