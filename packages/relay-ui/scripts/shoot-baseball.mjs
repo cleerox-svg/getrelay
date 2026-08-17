@@ -121,16 +121,45 @@ const SCENES = {
   // AND SAID "it's odd that I can't see the ball if it's hit to left or right
   // field". The `flight` camera's horizontal FOV at this viewport is ±16.3°
   // about a FIXED axis, so a ball to either corner simply left the picture.
-  // Measured before the follow landed, at 105 mph / 26.5° / bt = 2.6 s:
+  // At 105 mph / 26.5° / bt = 2.6 s, the ball is drawn at (∓164.65, 93.30,
+  // −196.22) scene ft; projected through the PRE-FOLLOW `flight` camera
+  // (pos [−40, 120, 90], look [−40, 60, −380], fov 55, near 4, aspect 900/1600):
   //
   //     spray   ball on screen (0…1, y down)   what the PNG showed
-  //     −40°    (−0.083, 0.470)                off the LEFT edge; a sliver of
-  //                                            tracer at the frame border
-  //     +40°    ( 1.098, 0.470)                nothing at all — no ball, no arc
+  //     −40°    (−0.241, 0.467)                217 px off the LEFT edge; a
+  //                                            sliver of tracer at the border
+  //     +40°    (+1.716, 0.467)                645 px past the RIGHT edge —
+  //                                            no ball, no arc, nothing
   //
-  // `expectBallInFrame` turns that from a picture a human has to squint at into
-  // a number the run exits non-zero on. Both corners, because a follow that
-  // yaws the wrong way fixes one and doubles the other.
+  // ⚠ THE PAIR THIS COMMENT USED TO QUOTE — (−0.083, 0.470) and (1.098, 0.470) —
+  // DID NOT REPRODUCE, and it understated the defect in two independent ways.
+  // Both are worth recording, because the reasoning is the reusable part and the
+  // arithmetic is not:
+  //
+  //   (i) IT WAS SYMMETRIC ABOUT u ≈ 0.5075, WHICH ONLY A CAMERA AT x = 0 CAN
+  //       PRODUCE. `CAMERAS.flight` stands at x = −40, so it is nearer the pull
+  //       corner and further from the oppo one, and the true pair is symmetric
+  //       about u = 0.738. That asymmetry IS the explanation for the thing the
+  //       old figures made look like a coincidence: the oppo corner is ~3× worse
+  //       than the pull corner (645 px against 217 px). A symmetric pair from an
+  //       asymmetric rig is the tell, and it is cheaper to spot than to
+  //       re-measure. (From x = 0 the same two balls give −0.479 / +1.479.)
+  //  (ii) ITS SPAN WAS 1.181 FRAME WIDTHS AGAINST A TRUE 1.957 — 40 % short —
+  //       so it understated BOTH corners regardless of where it was centred. The
+  //       span is a property of the FOV and the ball positions alone (it is
+  //       identical from x = 0 and from x = −40), which is what makes it a
+  //       second, independent error rather than a consequence of (i).
+  //
+  // ⚠ AND HOW TO KEEP A FIGURE LIKE THIS HONEST: validate the method against
+  // this harness's OWN PRINTED CONTROL before trusting it on a counterfactual.
+  // The `flight` scene has no swing, so its camera never follows and it still
+  // prints the fixed-axis projection every run — `ball on screen (1.074, 1.333)`
+  // for the pitch at t = 0.30 s. The recomputation above reproduces that as
+  // (1.0738, 1.3333) with the same code path that produced the two rows.
+  //
+  // `expectBallInFrame` turns all of this from a picture a human has to squint
+  // at into a number the run exits non-zero on. Both corners, because a follow
+  // that re-aims the wrong way fixes one and doubles the other.
   'follow-pull': {
     query: 'scene=flight&pitch=ff&hit=1&spray=-40&bt=2.6',
     label: 'follow-pull',
@@ -374,6 +403,41 @@ const reportFromSceneFlat = (flat) => {
 const reportFromTrack = (track) =>
   track.d.map((d, i) => ({ d, x: track.x[i], h: track.h[i] }));
 
+/**
+ * THE FORWARD FRAME MAPS — the sim's own samples as the flat SCENE-space floats
+ * a tracer's `BufferAttribute` would hold if it were built from them, ROUNDED TO
+ * FLOAT32.
+ *
+ * ⚠ THE `Math.fround` IS WHAT MAKES AN EXACT COMPARISON LEGITIMATE. A
+ * `BufferAttribute` stores float32 (that is what the GPU draws), so reading one
+ * back yields the float64 nearest a float32. `Math.fround` is the same rounding,
+ * so `drawn[i] === fround(sim[i])` is an EQUALITY, not a tolerance — and a
+ * tolerance is exactly what a "the buffer is the sim's samples and nothing else"
+ * claim must not have.
+ *
+ * Written out here from `zone.ts`'s REPORT definition, `battedBallSim`'s WORLD
+ * definition and `stadium/geom.ts`'s scene frame — the same discipline as
+ * `reportFromSceneFlat`, and for the same reason: a gate that imports the
+ * renderer's own converter cannot fail on it.
+ */
+const sceneFlatFromPitchTrack = (tr) => {
+  const out = [];
+  for (let i = 0; i < tr.d.length; i++) {
+    // REPORT (d, x, h) → scene (x, h, −d).
+    out.push(Math.fround(tr.x[i]), Math.fround(tr.h[i]), Math.fround(-tr.d[i]));
+  }
+  return out;
+};
+
+const sceneFlatFromBattedTrack = (tr) => {
+  const out = [];
+  for (let i = 0; i < tr.x.length; i++) {
+    // WORLD (x, y, z) → scene (y, z, x).
+    out.push(Math.fround(tr.y[i]), Math.fround(tr.z[i]), Math.fround(tr.x[i]));
+  }
+  return out;
+};
+
 /** Linear interpolation of a d-ordered (descending) path at a given `d`. */
 function atDistance(path, d) {
   if (path.length === 0) return null;
@@ -538,13 +602,93 @@ function checkReport(report) {
  *       lead, a reveal stuck at zero, and a reveal keyed off the wrong clock.
  *       It is arithmetic on `report.pitch.track.t`, not a read of anything the
  *       renderer computed, so it cannot become a tautology.
- *   (b) THE PREFIX, bit for bit. Every drawn float must be the corresponding
- *       float of the FULL buffer. This is the "the geometry must not change"
- *       claim, mechanically: an implementation that rewrote the vertex data per
- *       frame to end at the ball would pass (a) and (c) and fail here — and it
- *       would also have quietly invalidated the 0.002 ft drawn-vs-sim
- *       comparison, which now reads the full buffer and would be comparing
- *       something that is re-authored every frame.
+ *   (b) THE BUFFER, AGAINST THE SIM, BIT FOR BIT — in two halves, both of which
+ *       read data the renderer did not produce.
+ *
+ *       ⚠ **AND ITS FIRST VERSION WAS A TAUTOLOGY THAT COULD NOT FAIL.** It
+ *       compared `tracer()` against `tracerFull()` — "every drawn float must be
+ *       the corresponding float of the FULL buffer" — and `stadium/tracer.ts`
+ *       subarrays THE SAME BACKING `Float32Array` for both readers
+ *       (`positions.subarray(0, drawRange.count * 3)` and
+ *       `positions.subarray(0, written * 3)`), so the comparison was
+ *       `positions[i] !== positions[i]`. Its own note claimed "an implementation
+ *       that rewrote the vertex data per frame to end at the ball would pass (a)
+ *       and (c) and fail here"; it would NOT, because such an implementation
+ *       rewrites `positions` IN PLACE and both readers return the rewritten
+ *       prefix identically. A dead assertion inside a file whose charter is "IT
+ *       ASSERTS NUMBERS, IT DOES NOT MERELY PRINT THEM" is worse than no
+ *       assertion, because it is read as cover.
+ *
+ *       (b1) THE DRAWN PREFIX IS THE SIM'S LEADING SAMPLES, INDEX FOR INDEX.
+ *            `drawn[i] === fround(simScene[i])` for every drawn float. (a) has
+ *            already fixed HOW MANY vertices are drawn; this fixes WHICH POINTS
+ *            they are, so the two together say "the first n samples of the sim,
+ *            in order". It is strictly stronger than either Hausdorff direction
+ *            in `checkPitchTracer`: a polyline re-parameterised by arc length
+ *            has its vertices ON the same curve (chord sagitta over one substep
+ *            of a pitch is ~5e-4 ft, comfortably under `TRACER_TOL_FT`) and
+ *            passes both, while failing this.
+ *       (b2) THE BUILT BUFFER IS THE WHOLE FLIGHT. `tracerFull()` must be
+ *            exactly as long as the sim's track and equal it float for float.
+ *            This is the leg that kills the rewrite: an implementation that
+ *            re-authors the buffer each frame to end at the ball has
+ *            `written === drawn`, so the buffer STOPS AT THE BALL and the
+ *            hidden tail — which is the whole descending limb on `homerun`, and
+ *            precisely what the 0.002 ft drawn-vs-sim comparison exists to
+ *            measure — is simply not there.
+ *
+ *       Note that (b1) ∧ (b2) ⇒ `drawn[i] === all[i]`, i.e. the original prefix
+ *       claim is recovered — but as a CONSEQUENCE of two measurements against
+ *       the sim rather than as an identity between two views of one array.
+ *
+ *       ⚠ (b2) is not the only thing that can see a truncated buffer:
+ *       `checkPitchTracer`'s REVERSE Hausdorff also fires, because
+ *       `atDistance` clamps and every missing sim sample then differences
+ *       against the drawn path's last vertex. That is the check the property
+ *       was actually resting on while (b) was dead. (b2) is kept beside it
+ *       because it is exact, carries no tolerance, and names the failure
+ *       ("the geometry is being rewritten") instead of guessing at it ("chord?").
+ *
+ *       ⚠ TWO MUTATIONS WERE WATCHED, AND THE OLD (b) WAS WATCHED TO SAY
+ *       NOTHING ON BOTH. Both were written into `stadium/flight.ts` as real
+ *       behaviour and run through this harness:
+ *
+ *       M1 — "rewrite the vertices every frame so the trail ends EXACTLY at the
+ *       ball": `applyReveal` calls `set()` with the revealed prefix, last vertex
+ *       replaced by the interpolated ball position, instead of `reveal()`.
+ *       This is the implementation the old comment named.
+ *
+ *           check                                   scenes failed / 15
+ *           OLD (b)  drawn-vs-all prefix                    0     ← silent
+ *           (a)      the reveal count                       0     ← passes
+ *           (c)      the tip vs the ball             skipped, always
+ *           (b1)     drawn ≡ sim, index for index          12
+ *           (b2)     built ≡ sim, index for index          12
+ *           (b2)     built length = the sim's track        15
+ *
+ *       (a) passes because the count is still right; (c) is skipped on every
+ *       scene, because it only runs while `drawnN < allN` and this mutation
+ *       makes them equal by construction. (b1)/(b2) miss the three scenes whose
+ *       frozen instant lands exactly on a substep, where the re-authored tip
+ *       coincides with the sample it replaced — the LENGTH leg catches those.
+ *
+ *       M2 — "resample the built polyline uniformly by ARC LENGTH", same vertex
+ *       count, built once, revealed normally. Geometrically the same curve; only
+ *       the index-to-time correspondence is destroyed. This is the mutation that
+ *       justifies (b1) EXISTING beside the Hausdorff pair, because they cannot
+ *       see it at all:
+ *
+ *           check                        `batter`        vs tolerance
+ *           forward Hausdorff (1)        1.06e-7 ft      19,000× under
+ *           reverse Hausdorff (1r)       2.18e-4 ft           9× under
+ *           deflection, horizontal       4.99e-2 in      UNDER 5.00e-2 — passed
+ *           deflection, vertical         7.95e-2 in      fired, by 1.6×
+ *           OLD (b)                      no difference   silent
+ *           (b1)/(b2)                    differ @float 3 fired
+ *
+ *       i.e. the geometric checks are blind or on a knife edge — the horizontal
+ *       deflection came in at 99.8 % of its own tolerance and PASSED — while the
+ *       index comparison fires on the fourth float of the buffer.
  *   (c) THE TIP, geometrically. The last drawn vertex must lie BEHIND the drawn
  *       ball along the path, by no more than the one sim substep the reveal
  *       granularity allows. "Behind" is a dot product against the next (hidden)
@@ -563,6 +707,9 @@ function checkReveal(report) {
       which: 'pitch',
       drawn: report.pitchTracer,
       all: report.pitchTracerAll,
+      // The sim's own samples in the tracer's own frame — the reference (b1)
+      // and (b2) are measured against. Not read from the renderer.
+      sim: sceneFlatFromPitchTrack(report.pitch.track),
       // Once the ball is struck the pitch is HISTORY and stays fully drawn —
       // that trail is what makes the contact seam legible.
       want: struck ? report.pitch.track.t.length : countAtOrBefore(report.pitch.track.t, t),
@@ -572,6 +719,7 @@ function checkReveal(report) {
       which: 'batted',
       drawn: report.battedTracer,
       all: report.battedTracerAll,
+      sim: report.batted ? sceneFlatFromBattedTrack(report.batted.track) : [],
       want: report.batted ? countAtOrBefore(report.batted.track.t, t - report.contactTS) : 0,
       live: struck,
     },
@@ -592,19 +740,45 @@ function checkReveal(report) {
           (drawnN > r.want ? 'the arc is drawn AHEAD of the ball' : 'the trail lags the ball'),
       );
     }
-    // (b) the drawn vertices are the leading ones of the built path, exactly.
-    let firstDiff = -1;
-    for (let i = 0; i < r.drawn.length; i++) {
-      if (r.drawn[i] !== r.all[i]) {
-        firstDiff = i;
-        break;
-      }
-    }
-    if (firstDiff >= 0) {
+    // (b1) the drawn vertices ARE the sim's leading samples, index for index.
+    // (b2) the built buffer IS the whole sim track, index for index.
+    //
+    // ⚠ BOTH SIDES OF EACH COMPARISON MUST NOT BE THE SAME ARRAY. The version
+    // this replaces compared `r.drawn[i]` against `r.all[i]`, which `tracer.ts`
+    // serves from one backing `Float32Array` — see the (b) note above.
+    const firstDiffAgainst = (buf, n) => {
+      for (let i = 0; i < n; i++) if (buf[i] !== r.sim[i]) return i;
+      return -1;
+    };
+    const drawnDiff = firstDiffAgainst(r.drawn, r.drawn.length);
+    const builtDiff = firstDiffAgainst(r.all, Math.min(r.all.length, r.sim.length));
+    const builtVerdict =
+      r.all.length !== r.sim.length ? 'TRUNCATED' : builtDiff < 0 ? 'yes' : `NO @${builtDiff}`;
+    console.log(
+      `         built ${String(allN).padStart(4)} of the sim's ${String(
+        r.sim.length / 3,
+      ).padStart(4)} samples` +
+        `   drawn≡sim ${drawnDiff < 0 ? 'yes' : `NO @${drawnDiff}`}` +
+        `   built≡sim ${builtVerdict}`,
+    );
+    if (drawnDiff >= 0) {
       violations.push(
-        `the ${r.which} tracer's drawn vertices are not a PREFIX of the built path ` +
-          `(float ${firstDiff}: ${r.drawn[firstDiff]} vs ${r.all[firstDiff]}) — ` +
-          `the geometry is being rewritten, not revealed`,
+        `the ${r.which} tracer's drawn vertices are not the sim's leading samples ` +
+          `(float ${drawnDiff}: drew ${r.drawn[drawnDiff]}, sim says ${r.sim[drawnDiff]}) — ` +
+          `the geometry is being re-authored, not revealed`,
+      );
+    }
+    if (builtDiff >= 0) {
+      violations.push(
+        `the ${r.which} tracer's BUILT path is not the sim's track ` +
+          `(float ${builtDiff}: built ${r.all[builtDiff]}, sim says ${r.sim[builtDiff]})`,
+      );
+    }
+    if (r.all.length !== r.sim.length) {
+      violations.push(
+        `the ${r.which} tracer's BUILT path holds ${allN} vertices, not the sim's ` +
+          `${r.sim.length / 3} — the buffer stops at the ball, so the hidden tail the ` +
+          `0.002 ft drawn-vs-sim comparison measures is not in it`,
       );
     }
     // (c) the tip, against the drawn ball.

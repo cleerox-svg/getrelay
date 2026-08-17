@@ -68,6 +68,18 @@ export interface TracerHandle extends StadiumPart {
    * the second question at `read()` and it silently becomes a check on a
    * prefix — every hidden vertex stops being compared, and a tracer that is
    * wrong past the ball passes forever.
+   *
+   * ⚠ BUT THEY ARE TWO WINDOWS ONTO ONE `Float32Array`, SO NEVER COMPARE THEM
+   * AGAINST EACH OTHER. Both readers `subarray` the same `positions` buffer,
+   * which makes `read()[i] !== readAll()[i]` the expression `positions[i] !==
+   * positions[i]` — identically false, for every implementation, including one
+   * that re-authors the buffer in place every frame. The visual gate shipped
+   * exactly that comparison as its "the geometry must not change" assertion and
+   * it could not fail; it now measures BOTH readers against the sim's own track
+   * instead, and the prefix property falls out as a consequence. See
+   * `checkReveal`'s (b) note in `scripts/shoot-baseball.mjs`. The general rule
+   * is the one this file already states about `read()`: a read-back is only
+   * evidence against something the renderer did not produce.
    */
   readAll(): number[];
   /** Is the line actually being rendered? Position without this proves nothing. */
