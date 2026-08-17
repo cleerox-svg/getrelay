@@ -128,9 +128,16 @@ describe('derby copy — the coaching line is contextual and self-extinguishing'
   it('fires only on an in-play ball that had home-run carry to the gaps', () => {
     const { deepFt, gapFt, clearFt } = parkCopyNumbers(HARBOURFRONT);
     // The numbers the copy quotes, against the park's own data block.
+    // ⚠ RE-RECORDED FOR THE PUBLISHED FENCE PROFILE, AND THE SHAPE OF THE
+    // NUMBERS CHANGED WITH IT. The wall used to be symmetric with a uniform
+    // 10 ft, so the shallowest fair sample was 375 ft either side and the
+    // clearance a tidy 385. It is now asymmetric: right-centre at 359 ft is the
+    // shallowest fair sample and it carries the tallest wall of the five
+    // (14 ft 4 in), which is why the clearance datum is 373.33 and not a round
+    // number. That is the point of computing it rather than typing it.
     expect(deepFt).toBe(400);
-    expect(gapFt).toBe(375);
-    expect(clearFt).toBe(385);
+    expect(gapFt).toBe(359);
+    expect(clearFt).toBeCloseTo(359 + 14 + 4 / 12, 9);
     // ⚠ AND THE GAPS ARE NOT THE FOUL LINES. Harbourfront's line samples are
     // 328 ft, and a copy that quoted them would be coaching a hook into the
     // seats down the line — which `PULL_INTENT_MAX_IN` makes reachable and
@@ -139,7 +146,7 @@ describe('derby copy — the coaching line is contextual and self-extinguishing'
     expect(gapFt).toBeGreaterThan(328);
 
     // Fires: a ball with the carry to clear the gaps that stayed in the park.
-    expect(coachSwing(swing({ outcome: 'inPlay', distFt: 405 }), gapFt, clearFt)).toContain('375');
+    expect(coachSwing(swing({ outcome: 'inPlay', distFt: 405 }), gapFt, clearFt)).toContain('359');
     // Silent: not enough carry — the aim was not the problem.
     expect(coachSwing(swing({ outcome: 'inPlay', distFt: 300 }), gapFt, clearFt)).toBeNull();
     expect(coachSwing(swing({ outcome: 'inPlay', distFt: clearFt - 0.1 }), gapFt, clearFt)).toBeNull();
@@ -156,12 +163,13 @@ describe('derby copy — the coaching line is contextual and self-extinguishing'
     const h = parkCopyNumbers(HARBOURFRONT);
     const a = parkCopyNumbers(ALPINE_HEIGHTS);
     expect(a.deepFt).not.toBe(h.deepFt);
-    // ⚠ THE GAP DISTANCE HAPPENS TO MATCH (both parks sample a 375 ft gap), and
-    // that is why the CLEARANCE is the assertion with teeth: Alpine's 16 ft wall
-    // in left-centre makes it 383 against Harbourfront's uniform-10 ft 385, so a
-    // copy that read the height from the wrong park would be caught here and
-    // nowhere else.
-    expect(a.gapFt).toBe(h.gapFt);
+    // ⚠ THE GAP DISTANCES USED TO COINCIDE — both parks sampled a 375 ft gap —
+    // which is why the CLEARANCE was written as the assertion with teeth. The
+    // published profile has separated them (359 against Alpine's 375), so BOTH
+    // columns now differ and both are asserted; the clearance is kept as the
+    // one that reads the HEIGHT, which is the field a copy pulling from the
+    // wrong park would get wrong while the distance still looked right.
+    expect(a.gapFt).not.toBe(h.gapFt);
     expect(a.clearFt).not.toBe(h.clearFt);
     // The clearance datum tracks the WALL HEIGHT, not just the distance — the
     // whole reason it is `dist + height` and not `dist`.

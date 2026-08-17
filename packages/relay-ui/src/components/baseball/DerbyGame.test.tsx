@@ -103,6 +103,8 @@ import { vLen } from '../../lib/baseball/airPhysics';
 import { DerbySim } from '../../lib/baseball/derbySim';
 import { DERBY_ROUNDS, PITCHES_PER_ROUND } from '../../lib/baseball/derbyRules';
 import { contactWindowS } from '../../lib/baseball/contactWindow';
+import { HARBOURFRONT } from '../../lib/baseball/parks';
+import { parkCopyNumbers } from './shared/swingCopy';
 
 /** Mirrors `DerbyGame`'s own lead-in. Not exported by it; kept in step by hand. */
 const PITCH_LEAD_MS = 380;
@@ -434,7 +436,19 @@ describe('DerbyGame — the fixture seam', () => {
 
     // (a) THE FIRST-RUN TIP is up before a pitch is thrown, and it quotes the
     //     PARK's own two numbers rather than a hard-coded pair.
-    expect(screen.getByText(/400 ft to dead centre and 375 to the gaps/)).toBeTruthy();
+    //
+    // ⚠ THE EXPECTED NUMBERS ARE DERIVED FROM THE PARK, NOT TYPED, AND THAT IS
+    // A REPAIR. This read `/400 ft to dead centre and 375 to the gaps/` — two
+    // literals off the old symmetric wall — so the published fence profile
+    // (gaps 359 ft, not 375) broke it, which is the RIGHT failure but for a
+    // test that could only ever be re-typed. Reading `parkCopyNumbers` here
+    // asserts the thing that matters: whatever the park data says, that is what
+    // reaches the screen. A HUD with the pair hard-coded still fails it the
+    // moment the data moves, which is the mutation this exists for.
+    const tip = parkCopyNumbers(HARBOURFRONT);
+    expect(tip.gapFt).not.toBe(375); // the profile really did move; see above
+    const tipRe = new RegExp(`${tip.deepFt} ft to dead centre and ${tip.gapFt} to the gaps`);
+    expect(screen.getByText(tipRe)).toBeTruthy();
 
     // (b) THE CONTEXTUAL LINE fires on a deep out during the session, and
     // (c) THE FIRST-RUN TIP RETIRES ITSELF once the player has hit one out —
@@ -452,7 +466,7 @@ describe('DerbyGame — the fixture seam', () => {
       // The aim stage: is the first-run tip up? That is the question (c) asks,
       // and it has to be asked HERE because the tip is not rendered anywhere
       // else in the loop.
-      if (screen.queryByText(/400 ft to dead centre/)) {
+      if (screen.queryByText(new RegExp(`${tip.deepFt} ft to dead centre`))) {
         if (homeRuns === 0) tipBeforeFirstHr++;
         else tipAfterFirstHr++;
       }

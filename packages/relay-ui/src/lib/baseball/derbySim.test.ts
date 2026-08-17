@@ -782,7 +782,25 @@ describe('derby — the chain multiplier', () => {
     // nothing needs.
     expect(ratio(flatMed, 'perfect', 'good')).toBeLessThan(1.06);
     // …and with it, there is something at the top to chase.
-    expect(ratio(chainMed, 'perfect', 'good')).toBeGreaterThan(1.1);
+    //
+    // ⚠ THE PUBLISHED FENCE PROFILE COMPRESSED THIS FURTHER, AND THE NUMBER IS
+    // REPORTED RATHER THAN RESTORED. The park now plays SMALLER — 372 ft and
+    // 359 ft in right-centre against a flat 375, and an 8 ft wall at dead centre
+    // against a uniform 10 — so every skill level scores more and the top of the
+    // curve squashes: good 4630 → 5745, perfect 5254 → 6171, good→perfect
+    // 1.135× → 1.074×. NOTHING IN THE MECHANIC MOVED; a fence did. The bound is
+    // re-recorded at 1.05 rather than the mechanic being re-tuned inside an art
+    // pass, because tuning the chain to hide a park change is exactly the
+    // "fix the symptom" move this file exists to prevent.
+    expect(ratio(chainMed, 'perfect', 'good')).toBeGreaterThan(1.05);
+    // ⚠ AND THE STRUCTURAL VERSION OF THE SAME CLAIM, WHICH IS WHAT THE
+    // MECHANIC IS ACTUALLY RESPONSIBLE FOR. An absolute threshold on a ratio of
+    // medians moves whenever the park does; what must not move is that the
+    // chain OPENS the good→perfect gap the flat payout leaves. Measured:
+    // 0.074 against 0.041, i.e. 1.79× the separation, where the flat column
+    // alone is under the 1.06 asserted above.
+    const gap = (a: Record<string, number>) => ratio(a, 'perfect', 'good') - 1;
+    expect(gap(chainMed)).toBeGreaterThan(1.5 * gap(flatMed));
     // The rung below moved too — this is a ladder, not one raised step.
     expect(ratio(chainMed, 'good', 'decent')).toBeGreaterThan(1.3);
 
@@ -1745,26 +1763,68 @@ describe('derby — outcomes', () => {
     );
 
     // (1) THE TRAP IS REAL. Dead centre is beaten by a shade in EITHER
-    //     direction, which is park geometry (400 ft to centre, 375 to the gaps)
-    //     and not a modelling accident — so the HUD's coaching line has
-    //     something true to say.
+    //     direction, which is park geometry and not a modelling accident — so
+    //     the HUD's coaching line has something true to say.
+    //
+    // ⚠ THE PULL-SIDE REPRESENTATIVE MOVED FROM −0.3 TO −0.2, AND THAT IS THE
+    // PUBLISHED FENCE ARRIVING IN GAMEPLAY. Under the old symmetric wall the
+    // whole pull shoulder beat the middle (−0.3 gave 69.1 % against 54.9 %).
+    // The published profile puts 14 ft 4 in of wall down the left line and
+    // 11–12 ft through left-centre against dead centre's 8 ft, so the FAR pull
+    // shade is now no better than the middle — −0.3 and 0.0 both give 67.7 %,
+    // to the sample — while −0.2 gives 80.6 %. The shoulder is narrower on the
+    // pull side and wider on the oppo side, which is what an asymmetric park
+    // means. Written as `-0.2` rather than loosened, so the shape is still
+    // asserted rather than shrugged at.
     expect(hrByX.get(0)!).toBeLessThan(hrByX.get(0.2)!);
-    expect(hrByX.get(0)!).toBeLessThan(hrByX.get(-0.3)!);
+    expect(hrByX.get(0)!).toBeLessThan(hrByX.get(-0.2)!);
 
-    // (2) ⚠ AND THE SWEEP IS ASYMMETRIC AT A SYMMETRIC PARK, which is a MODEL
-    //     DEFECT and not a lesson. Harbourfront's ±22° samples are both 375 ft,
-    //     so a symmetric mechanic would give symmetric rows; the + side wins,
-    //     and it wins on CARRY. That is `eA` climbing toward the handle in a
-    //     rigid bat with no `e(z)` — BASEBALL.md § "The collision", "the model
-    //     has no jamming at all". Asserted so it cannot be quietly closed with a
-    //     knob, and so the coaching copy keeps saying "off the middle" rather
-    //     than "to the opposite field".
+    // (1b) ⚠ THE TROUGH IS SHALLOWER THAN IT WAS, AND THE REASON IS THE HEIGHT
+    //      COLUMN. Dead centre is still the deepest wall in the park at 400 ft
+    //      — but it is now also the LOWEST at 8 ft, where it used to be a
+    //      uniform 10, so a ball to centre needs 2 ft less height than before
+    //      and the corners need 4½ ft more. Measured, same seeds, same swings,
+    //      nothing in the physics touched (the carry column below is IDENTICAL
+    //      to the old one row for row): dead centre 54.9 % → 67.7 %, peak
+    //      97.2 % → 100 %, trough/peak 0.565 → 0.677.
+    //
+    //      GOLDEN, not published: this is model output pinned so that the next
+    //      fence edit is a visible diff rather than a silent re-balance. The
+    //      trap survives — the middle is still the worst viable aim — but it is
+    //      a shallower trap and the HUD's coaching line is worth proportionally
+    //      less than it was.
+    expect(hrByX.get(0)!).toBeCloseTo(0.677, 2);
+    expect(Math.max(...hrByX.values())).toBeCloseTo(1.0, 2);
+    expect(hrByX.get(0)! / Math.max(...hrByX.values())).toBeGreaterThan(0.6);
+    expect(hrByX.get(0)! / Math.max(...hrByX.values())).toBeLessThan(0.72);
+
+    // (2) ⚠ THE SWEEP IS ASYMMETRIC FOR A REASON THAT IS NOT THE PARK, and
+    //     THAT is the MODEL DEFECT this clause exists to pin. It used to be
+    //     argued from a symmetric park — "the ±22° samples are both 375 ft, so
+    //     symmetric rows are the null hypothesis" — and the published profile
+    //     has taken that argument away: the park itself is now 9 ft deeper in
+    //     left-centre than in right-centre, so the HOME-RUN column is a
+    //     confounded measurement and no longer evidence of anything about the
+    //     bat.
+    //
+    //     What survives is the column the fence cannot reach. CARRY is decided
+    //     before the ball is anywhere near a wall, and it is byte-for-byte the
+    //     same as it was under the old symmetric wall (401.7 against 400.4 ft
+    //     at ±0.2 ft, both rows unchanged) — because nothing in the physics
+    //     moved, only the fence data. So the assertion stays on carry, and the
+    //     defect stays visible: `eA` climbing toward the handle in a rigid bat
+    //     with no `e(z)`, BASEBALL.md § "The collision", "the model has no
+    //     jamming at all". Asserted so it cannot be quietly closed with a knob,
+    //     and so the coaching copy keeps saying "off the middle" rather than
+    //     "to the opposite field".
     expect(carryByX.get(0.2)!).toBeGreaterThan(carryByX.get(-0.2)!);
     console.log(
-      `\n  ⚠ ASYMMETRY, and it is the missing e(z): ±0.2 ft at a park whose ±22° ` +
-        `samples\n    are both 375 ft gives HR ${(100 * hrByX.get(-0.2)!).toFixed(1)} % / ` +
-        `${(100 * hrByX.get(0.2)!).toFixed(1)} % and carry ` +
-        `${carryByX.get(-0.2)!.toFixed(1)} / ${carryByX.get(0.2)!.toFixed(1)} ft.\n` +
+      `\n  ⚠ ASYMMETRY, and it is the missing e(z) — read the CARRY column, not ` +
+        `the HR one:\n    ±0.2 ft gives carry ${carryByX.get(-0.2)!.toFixed(1)} / ` +
+        `${carryByX.get(0.2)!.toFixed(1)} ft, which no fence can explain, beside ` +
+        `HR ${(100 * hrByX.get(-0.2)!).toFixed(1)} % / ` +
+        `${(100 * hrByX.get(0.2)!).toFixed(1)} %, which the\n    published profile's ` +
+        `9 ft LC/RC split now confounds.\n` +
         `    The + side aims AWAY from a RHB, which walks contact toward the HANDLE,\n` +
         `    where this model's eA rises instead of collapsing. The HUD teaches the\n` +
         `    symmetric half of this only.`,

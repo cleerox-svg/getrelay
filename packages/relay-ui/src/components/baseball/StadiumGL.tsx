@@ -53,6 +53,7 @@ import { sceneNow, tickSceneClock } from '../../lib/scene3d/clock';
 import { buildCameraRig } from './stadium/camera';
 import type { CameraMode } from './stadium/camera';
 import { buildField } from './stadium/field';
+import { buildCentrefield } from './stadium/centrefield';
 import { buildFence } from './stadium/fence';
 import { buildFlight } from './stadium/flight';
 import type { FlightPaths } from './stadium/flight';
@@ -60,6 +61,8 @@ import { buildMound } from './stadium/mound';
 import { buildReticle } from './stadium/reticle';
 import { buildRoof } from './stadium/roof';
 import { buildScaleReference } from './stadium/scale';
+import { buildSky } from './stadium/sky';
+import { buildSkyline } from './stadium/skyline';
 import { buildStands } from './stadium/stands';
 import { pickStadiumQuality } from './stadium/quality';
 import type { StadiumQuality } from './stadium/quality';
@@ -85,7 +88,16 @@ export type { CameraMode } from './stadium/camera';
 const SUN_POS: [number, number, number] = [-520, 700, 260];
 const SUN_TARGET: [number, number, number] = [0, 0, -170];
 
-/** Sky, and the scene background. A day game; night is an `exposure` + sun change. */
+/**
+ * The clear colour BEHIND the sky dome. A day game; night is an `exposure` and a
+ * sun change.
+ *
+ * ⚠ IT IS NO LONGER THE SKY. `stadium/sky.ts` draws a graded dome, because a
+ * flat fill measured 0.0000 of detail and "identical at five separated points"
+ * — no horizon, no haze, and the top of the bowl meeting coloured paper. This
+ * constant survives only as the clear the dome is drawn over, so a frame in
+ * which the dome somehow fails to build is a plausible sky rather than black.
+ */
 const SKY = 0x8fb6dd;
 
 /**
@@ -124,6 +136,12 @@ export interface StadiumApi {
   stats(): StadiumStats;
   /** Distance and height of the DRAWN wall at a bearing, read out of geometry. */
   measureFence(bearingDeg: number): { distFt: number; heightFt: number } | null;
+  /**
+   * Peak height and the two radii of the DRAWN roof at a bearing. `null` for a
+   * park with no roof. See `stadium/roof.ts`'s `RoofPart.sample` for why this
+   * exists beside `measureFence` rather than the harness trusting `parks.ts`.
+   */
+  measureRoof(bearingDeg: number): { peakFt: number; innerFt: number; outerFt: number } | null;
   /**
    * Change camera mode. EASES, it does not cut — see `stadium/camera.ts`. The
    * transition is driven by the scene clock, so a frozen clock holds it exactly
@@ -355,13 +373,23 @@ export default function StadiumGL({
     // adding a wash, so it is not a token 0.3.
     scene.add(new HemisphereLight(0xcfe4f8, 0x7c7264, 1.6));
 
-    // --- the park. Six builders, each pure, each returning a handle.
+    // --- the park. Each builder pure, each returning a handle.
     const ctx: StadiumCtx = { scene, track, park, quality };
     const field = buildField(ctx);
     const fence = buildFence(ctx);
     buildMound(ctx);
+    // The sky, first, so it is behind everything. One BackSide dome, one map.
+    buildSky(scene, track, quality.grainPx);
     const stands = buildStands(ctx);
-    buildRoof(ctx, stands);
+    const roof = buildRoof(ctx, stands);
+    // The centre-field structure — the frame, hotel window band, banners and
+    // flags that surround the board. It OWNS the recess `buildStands` cut for it
+    // and exports the board's real geometry (`CENTREFIELD_BOARD`); no board is
+    // mounted here, that is a separate slice.
+    buildCentrefield(ctx, stands);
+    // Outside the bowl, over the roof opening. One merged mesh, seeded, and it
+    // deliberately does NOT enlarge the shadow volume below — see `skyline.ts`.
+    buildSkyline(ctx);
     if (scaleReference) buildScaleReference(ctx);
     // The ball, its contact shadow and the two tracers. It takes the sun's
     // direction of travel because it projects the contact shadow itself — see
@@ -485,6 +513,7 @@ export default function StadiumGL({
     const api: StadiumApi = {
       stats: () => last,
       measureFence: (deg) => fence.sample(deg),
+      measureRoof: (deg) => roof.sample(deg),
       setMode: (m) => rig.setMode(m),
       cameraAim: () => ({ target: rig.target(), progress: rig.progress(), mode: rig.mode() }),
       setExposure: (e) => {

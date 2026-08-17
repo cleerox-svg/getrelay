@@ -60,9 +60,11 @@ const outDir = path.join(pkgDir, '.baseball-shots');
 // park, and five flight scenes.
 //
 // `park-alpine` is the proof that a park is data: a different fence row must
-// produce a visibly different wall (347/390/415/375/350 against Harbourfront's
-// symmetric 328/375/400, a 16 ft wall in left-centre against a uniform 10, and
-// NO ROOF at all against a 282 ft ring).
+// produce a visibly different wall (347/390/415/375/350 against the home park's
+// published 328/368/381/400/372/359/328 profile, a 16 ft wall in left-centre
+// against a column that runs 8 ft at dead centre to 14 ft 4 in on the left
+// line, NO ROOF at all against a 282 ft ring, and — since M3 — NO SKYLINE
+// against a city, because `surroundings` is a park field like `roof` is).
 //
 // ⚠ EVERY SCENE CARRIES `t=` OR `bt=`, AND THAT IS A DETERMINISM REQUIREMENT,
 // NOT A FRAMING CHOICE. With neither, `StadiumGL` plays the flight back off
@@ -224,6 +226,9 @@ const FENCE_BEARINGS = [-45, -22, 0, 22, 45];
  */
 const FENCE_TOL_FT = 0.05;
 
+/** See `checkRoof`. Derived from float32 at 282 ft, exactly as FENCE_TOL_FT is. */
+const ROOF_TOL_FT = 0.05;
+
 /**
  * ⚠ THE TRACER GATE, AND ITS TWO DERIVED TOLERANCES.
  *
@@ -310,23 +315,27 @@ const BATTED_TOL_FT = 0.01;
  * The GPU ceiling, per scene. Charter rule 7: "GPU budget with a number", and a
  * number nobody enforces is a comment.
  *
- * M1's worst scene was `wide` at 18 draws / 1,845 triangles. M2b adds at most
- * four: the ball, its contact shadow, the pitch tracer and the batted tracer
- * (three geometries draw nothing when their draw range is 0, which three skips
- * before it counts a call). The two ceilings are deliberately NOT set the same
- * multiple of that, because the two costs do not grow the same way:
+ * M1's worst scene was `wide` at 18 draws / 1,845 triangles; M2b took it to 22
+ * / 2,249 with the ball, its contact shadow and the two tracers; M3's art pass
+ * takes it to 26 / 15,060 — a banded bowl, a roof truss, a mown field and a
+ * whole city for FOUR extra draw calls, which is the merge discipline working
+ * (authored naively they would have been ~40 more). NEITHER CEILING MOVED. The
+ * two are deliberately NOT set to the same multiple of the worst scene, because
+ * the two costs do not grow the same way:
  *
  *   • DRAW CALLS are the dominant mobile cost and the one thing the charter
  *     legislates directly — the crowd is ONE `InstancedMesh`, repeated geometry
  *     is instanced or merged. Draw calls should therefore grow by ones as M2 art
  *     lands (crowd, lights, scoreboard, skyline, bat), not by multiples.
- *     40 is 1.8× today's worst, and sits UNDER 3 × 22 = 66, so the "somebody
- *     gave every seating section its own material" regression trips it. That is
- *     the failure this number exists for.
+ *     40 is 1.5× today's worst, and sits UNDER 3 × 26 = 78, so the "somebody
+ *     gave every seating section its own material" regression trips it — and at
+ *     M3 that regression was one design decision away: the bowl is nine bands
+ *     and the city is seventeen solids, all of which merge to three calls.
  *   • TRIANGLES are cheap per instance and expensive per bad decision. An
  *     instanced crowd legitimately adds six figures of triangles inside ONE draw
  *     call, so a 3× ceiling here would fire on correct M2 art and get raised,
- *     which is how a budget becomes a formality. 120,000 is a real static-scene
+ *     which is how a budget becomes a formality. M3's mown-turf grid alone is
+ *     8,640 of them and it is one call. 120,000 is a real static-scene
  *     budget for a mid-range mobile GPU and still catches what actually goes
  *     wrong — an un-instanced crowd or a 64-segment sphere per seat lands in the
  *     millions, not the tens of thousands.
@@ -574,6 +583,7 @@ function checkReport(report) {
     violations.push(`fence height off by ${worstH.toFixed(3)} ft > tol ${FENCE_TOL_FT} ft`);
   }
 
+  violations.push(...checkRoof(report));
   violations.push(...checkPitchTracer(report));
   violations.push(...checkBattedTracer(report));
   violations.push(...checkBall(report));
@@ -581,6 +591,55 @@ function checkReport(report) {
   violations.push(...checkReveal(report));
   violations.push(...checkFraming(report));
   return violations;
+}
+
+/**
+ * THE ROOF, MEASURED OUT OF THE GEOMETRY RATHER THAN PRINTED FROM `parks.ts`.
+ *
+ * ⚠ THIS CLOSES A HOLE THE GATE NAMED IN ITS OWN OUTPUT. `roofPeak 282 ft` was
+ * read from the park DATA and printed beside numbers that had been measured off
+ * the vertex buffer, which reads as a measurement and is not one — the same
+ * tautology `checkBall`'s note describes for `ballScene()`. And it matters more
+ * than a cosmetic dimension: `resolveFence` rules a ball that reaches
+ * `roofPeakFt` `'roof'` and never a home run, so the ceiling is a GAMEPLAY
+ * boundary. A roof drawn at 240 ft over a 282 ft rule would have printed a clean
+ * run.
+ *
+ * `ROOF_TOL_FT` is the same class of number as `FENCE_TOL_FT` and is derived the
+ * same way: the deck is a chord polyline through a CONSTANT height, so unlike
+ * the wall there is no sagitta at all in `y` — the only error is float32 at
+ * ~282 ft, i.e. 282·2⁻²³ = 3.4e-5 ft. 0.05 ft is ~1,500× that and 0.6 in on a
+ * 282 ft ceiling, and it is 200× smaller than the smallest error anybody would
+ * author by hand.
+ */
+function checkRoof(report) {
+  const rows = report.roof ?? [];
+  const measured = rows.filter((r) => r.geo);
+  if (report.roofPeakFt > 0 && measured.length === 0) {
+    console.error('    ✗ the park has a roof and none of it could be measured');
+    return ['roof unmeasurable in a park that has one'];
+  }
+  if (measured.length === 0) {
+    console.log('  ROOF   none (park has no roof) — nothing to measure');
+    return [];
+  }
+  let worst = 0;
+  const parts = [];
+  for (const r of measured) {
+    worst = Math.max(worst, Math.abs(r.geo.peakFt - report.roofPeakFt));
+    parts.push(
+      `${String(r.deg).padStart(4)}° ${r.geo.peakFt.toFixed(2)} ft (band ${r.geo.innerFt.toFixed(
+        0,
+      )}→${r.geo.outerFt.toFixed(0)} ft)`,
+    );
+  }
+  console.log(`  ROOF   geometry vs parks.ts ${report.roofPeakFt} ft — worst |Δ| ${worst.toFixed(
+    3,
+  )} ft (tol ${ROOF_TOL_FT} ft)`);
+  console.log(`         ${parts.join('   ')}`);
+  return worst > ROOF_TOL_FT
+    ? [`roof height off by ${worst.toFixed(3)} ft > tol ${ROOF_TOL_FT} ft`]
+    : [];
 }
 
 /**
@@ -1236,6 +1295,7 @@ async function main() {
               geo: stadium.measureFence(deg),
               park: sim.fenceAt(deg),
             })),
+            roof: bearings.map((deg) => ({ deg, geo: stadium.measureRoof(deg) })),
             pitch: sim.pitch,
             batted: sim.batted,
             ballTimeS: sim.ballTimeS,

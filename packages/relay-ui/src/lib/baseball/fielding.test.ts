@@ -406,8 +406,10 @@ describe('boundaries', () => {
   });
 
   it('a foul pop is caught only inside the park\'s own foul territory', () => {
-    // Depth into foul ground = dist·sin(|bearing| − 45). At 150 ft the 28 ft of
-    // Harbourfront foul ground runs out somewhere near 55.7°.
+    // Depth into foul ground = dist·sin(|bearing| − 45). At 150 ft the home
+    // park's 60 ft backstop runs out near 68.6° (it was 28 ft ⇒ 55.7° before the
+    // published profile landed — the boundary is read from the park, not typed,
+    // so the assertion moved with the data and the printed line says where).
     const foul = (bearingDeg: number, hangS: number) => ({
       ...ball(150, bearingDeg, hangS),
       outcome: 'foul' as const,
@@ -453,14 +455,26 @@ describe('boundaries', () => {
 describe('end to end: a swing, a park and a defence', () => {
   it('the fence walk and the fielding lookup agree on one real flight', () => {
     // The whole stage-4 chain on one ball: launch → flight → fence → fielders.
+    // ⚠ TWO RUNGS MOVED WITH THE PUBLISHED FENCE PROFILE, AND THE REASON IS THE
+    // WALL, NOT THE PHYSICS. The LC wall at −25° used to be 375 ft and a uniform
+    // 10 ft; the published profile puts it at 373.1 ft and 11 ft 7 in. So the
+    // "over it" rung needed 96 mph and now needs 97 — the ball that used to
+    // clear by inches now hits 1.8 ft below the top of a wall that got 1.6 ft
+    // taller. Nothing in `fielding.ts`, `resolveFence` or the aero core moved.
+    //
+    // The gap rung moved for the opposite reason and it is a TEST-ROBUSTNESS
+    // fix, not a re-tune: 102 mph at −20° arrived 0.05 ft above the ground at
+    // the wall — a rung sitting on the inPlay/offWall boundary to within an
+    // inch, which would flip on any future 0.1 ft of anything. 103 arrives
+    // 3.6 ft up, comfortably inside the band the rung is meant to name.
     let table =
-      '\n[END TO END — Harbourfront, roof shut, defence 0.5]\n  EV   LA   spray   carry   hang    fence     result\n';
+      '\n[END TO END — SkyDome, roof shut, defence 0.5]\n  EV   LA   spray   carry   hang    fence     result\n';
     const rows: Array<[number, number, number, string]> = [
       [88, 27, 0, 'OUT'], // a lazy fly to centre
       [93, 27, -25, 'OUT'], // one step in front of the LC wall
       [95, 27, -25, 'DOUBLE'], // off the wall
-      [96, 27, -25, 'HR'], // over it
-      [102, 14, -20, 'DOUBLE'], // a liner into the gap
+      [97, 27, -25, 'HR'], // over it
+      [103, 14, -20, 'DOUBLE'], // a liner into the gap
       [100, -22, 15, 'SINGLE'], // a chopper — the landing-point limitation, capped
       [106, 27, 50, 'FOUL'], // pulled foul
     ];

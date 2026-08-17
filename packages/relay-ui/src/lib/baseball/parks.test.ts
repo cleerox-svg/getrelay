@@ -28,8 +28,8 @@ import {
   ROOF_CLOSED_RH,
   ROOF_CLOSED_TEMP_F,
   roofClosed,
-  validatePark,
 } from './parks';
+import { validatePark } from './parkValidate';
 import type { Park } from './parks';
 import { GAME_AIR } from './pitchSim';
 import { FIXED_DT } from './tuning';
@@ -63,7 +63,7 @@ function evFor(target: number, measure: (f: BattedFlight) => number, spray = 0):
 
 describe('the fence, interpolated', () => {
   it('is monotone-cubic-Hermite: smooth, local, and it never overshoots', () => {
-    let table = '\n[HARBOURFRONT FENCE — pchip through 5 samples, ft]\n  bearing  dist   height   (linear-in-polar for contrast)\n';
+    let table = '\n[SKYDOME FENCE — pchip through 7 published samples, ft]\n  bearing  dist   height   (linear-in-polar for contrast)\n';
     const lin = (b: number) => {
       // The rejected alternative, computed here so the contrast is measured.
       const f = HARBOURFRONT.fence;
@@ -100,29 +100,81 @@ describe('the fence, interpolated', () => {
     expect(fenceAt(HARBOURFRONT, 1).distFt).toBeLessThan(400);
     expect(fenceAt(HARBOURFRONT, -1).distFt).toBeLessThan(400);
 
-    // A symmetric park interpolates symmetrically — otherwise a pulled ball and
-    // an opposite-field ball of the same length disagree.
-    for (let b = 0.5; b <= 45; b += 0.5) {
-      expect(fenceAt(HARBOURFRONT, -b).distFt).toBeCloseTo(fenceAt(HARBOURFRONT, b).distFt, 9);
+    // ⚠ THE PARK IS NO LONGER SYMMETRIC, AND THAT REPLACED A TEST RATHER THAN
+    // DELETING ONE. This used to assert `fenceAt(−b) === fenceAt(b)` on a
+    // deliberately symmetric wall. The published profile is asymmetric — 368 ft
+    // in LC against 359 in RC, 381 in the LC alley against 372 in the RC alley
+    // — so the assertion that carries the same weight is that the two halves
+    // DISAGREE by the amount the DATA disagrees by, at the knots and off them.
+    // A mirrored or a collapsed interpolant fails this; the old one could not
+    // have seen either.
+    expect(fenceAt(HARBOURFRONT, -30).distFt - fenceAt(HARBOURFRONT, 30).distFt).toBeCloseTo(9, 9);
+    expect(fenceAt(HARBOURFRONT, -15).distFt - fenceAt(HARBOURFRONT, 15).distFt).toBeCloseTo(9, 9);
+    // Off-knot, where only the interpolant can answer: left is deeper by
+    // 3–10 ft everywhere except the lines, which are both 328 by construction.
+    for (let b = 2; b <= 43; b += 0.5) {
+      expect(fenceAt(HARBOURFRONT, -b).distFt).toBeGreaterThan(fenceAt(HARBOURFRONT, b).distFt);
     }
-    // A constant height column comes back constant — 10 ft to 1e-14, i.e. the
-    // Hermite basis summing to 1 and nothing else. A ringing interpolant would
-    // put a dip in a uniform wall; this one puts a rounding error in it.
-    for (let b = -45; b <= 45; b += 1) {
-      expect(Math.abs(fenceAt(HARBOURFRONT, b).heightFt - 10)).toBeLessThan(1e-12);
+    expect(fenceAt(HARBOURFRONT, -45).distFt).toBe(fenceAt(HARBOURFRONT, 45).distFt);
+
+    // ⚠ AND THE HEIGHT COLUMN IS NOW A REAL CURVE, WHICH IT HAS NEVER BEEN
+    // HERE. Every knot used to carry a uniform 10 ft, so a stage-4 mutation
+    // that pinned the height to its FIRST SAMPLE changed nothing in this park
+    // and had to be caught at Alpine. Seven knots with four local extrema
+    // (−30 min, −15 max, 0 min, +30 max) is what Fritsch–Carlson exists for:
+    // NO BEARING MAY REPORT A WALL OUTSIDE THE ENVELOPE OF THE TWO KNOTS THAT
+    // BOUND IT. A wall taller than both its neighbours is a bump the player can
+    // see and a home run the sim takes away.
+    const knots = HARBOURFRONT.fence;
+    let worstOver = 0;
+    for (let b = -45; b <= 45; b += 0.25) {
+      let i = 0;
+      while (i < knots.length - 2 && b > (knots[i + 1]?.bearingDeg ?? 0)) i++;
+      const k0 = knots[i];
+      const k1 = knots[i + 1];
+      if (!k0 || !k1) continue;
+      const h = fenceAt(HARBOURFRONT, b).heightFt;
+      const d = fenceAt(HARBOURFRONT, b).distFt;
+      worstOver = Math.max(
+        worstOver,
+        h - Math.max(k0.heightFt, k1.heightFt),
+        Math.min(k0.heightFt, k1.heightFt) - h,
+        d - Math.max(k0.distFt, k1.distFt),
+        Math.min(k0.distFt, k1.distFt) - d,
+      );
     }
+    log(`  worst overshoot past a bounding knot: ${worstOver.toExponential(2)} ft\n`);
+    expect(worstOver).toBeLessThanOrEqual(0);
+    // …and the height column is genuinely being READ, not pinned: the wall is
+    // 14 ft 4 in down the left line and 8 ft flat at dead centre.
+    expect(fenceAt(HARBOURFRONT, -45).heightFt).toBeCloseTo(14 + 4 / 12, 9);
+    expect(fenceAt(HARBOURFRONT, 0).heightFt).toBeCloseTo(8, 9);
+    expect(fenceAt(HARBOURFRONT, 45).heightFt).toBeCloseTo(12 + 7 / 12, 9);
+    // ⚠ THE GAMEPLAY INVERSION, ASSERTED. Dead centre is the DEEPEST wall and
+    // the LOWEST one at the same time, which is the opposite of the usual
+    // assumption and is the reason the dead-centre trough moved. The quantity
+    // that decides a home run is distance-at-wall-height, so `dist + height` is
+    // the honest one-number proxy to compare bearings on.
+    const reach = (b: number) => fenceAt(HARBOURFRONT, b).distFt + fenceAt(HARBOURFRONT, b).heightFt;
+    expect(fenceAt(HARBOURFRONT, 0).heightFt).toBeLessThan(fenceAt(HARBOURFRONT, -45).heightFt);
+    expect(fenceAt(HARBOURFRONT, 0).heightFt).toBeLessThan(fenceAt(HARBOURFRONT, 45).heightFt);
+    expect(reach(0) - reach(15)).toBeCloseTo(25.25, 2);
+    expect(reach(0) - reach(-15)).toBeCloseTo(14.25, 2);
 
     // It is NOT secretly linear. If it were, the renderer gets its creases back.
     expect(Math.abs(fenceAt(HARBOURFRONT, -33).distFt - lin(-33))).toBeGreaterThan(0.5);
 
     // C¹ AT THE KNOTS, which is the property the crease-free wall needs and the
-    // one linear interpolation fails. Compare the one-sided slopes across the
-    // −22° sample; linear's jump by 0.66 ft/deg, pchip's agree to <0.01.
+    // one linear interpolation fails. ⚠ THE BEARING MOVED WITH THE DATA: this
+    // read −22°, which was a knot in the old symmetric wall and is an interior
+    // point of the −30…−15 span in the published one — where linear is smooth
+    // too, so the contrast half of the test would have measured nothing and
+    // passed for the wrong reason. −30° is a knot in the current data.
     const slope = (b: number, h: number) =>
       (fenceAt(HARBOURFRONT, b + h).distFt - fenceAt(HARBOURFRONT, b).distFt) / h;
-    const jump = Math.abs(slope(-22, 1e-4) - slope(-22, -1e-4));
-    const linJump = Math.abs((lin(-21.9999) - lin(-22)) / 1e-4 - (lin(-22.0001) - lin(-22)) / -1e-4);
-    log(`  knot slope jump at −22°: pchip ${jump.toFixed(5)} ft/deg, linear ${linJump.toFixed(5)}\n`);
+    const jump = Math.abs(slope(-30, 1e-4) - slope(-30, -1e-4));
+    const linJump = Math.abs((lin(-29.9999) - lin(-30)) / 1e-4 - (lin(-30.0001) - lin(-30)) / -1e-4);
+    log(`  knot slope jump at −30°: pchip ${jump.toFixed(5)} ft/deg, linear ${linJump.toFixed(5)}\n`);
     expect(jump).toBeLessThan(0.01);
     expect(linJump).toBeGreaterThan(0.3);
   });
@@ -217,6 +269,8 @@ describe('parks as data', () => {
         { bearingDeg: 44, distFt: 328, heightFt: 10 }, // does not end at +45
       ],
       foulTerritoryFt: 0,
+      backstopFt: 4, // nearer the plate than the batter's box
+      surroundings: 'downtown' as never, // not one of the two
       wind: {
         open: { bearingCentreDeg: Number.NaN, swingDeg: 400, gustScale: -1 },
         closed: {} as never,
@@ -224,11 +278,16 @@ describe('parks as data', () => {
     };
     const errs = validatePark(bad);
     log(`\n[validatePark on a deliberately broken park — ${errs.length} problems]\n  ${errs.join('\n  ')}\n`);
-    expect(errs.length).toBe(14);
+    expect(errs.length).toBe(16);
     expect(errs.join('|')).toContain('id is empty');
     expect(errs.join('|')).toContain('name is empty');
     expect(errs.join('|')).toContain('elevationFt');
     expect(errs.join('|')).toContain('foulTerritoryFt');
+    // ⚠ THE BACKSTOP IS ITS OWN FIELD AND ITS OWN COMPLAINT. It is read only by
+    // the scene, so a wrong value fails nothing in the physics — the validator
+    // is the only thing between a typo and a screenshot nobody re-reads.
+    expect(errs.join('|')).toContain('backstopFt 4');
+    expect(errs.join('|')).toContain('surroundings downtown');
     expect(errs.join('|')).toContain("roofPeakFt must be 0 when roof is 'none'");
     expect(errs.join('|')).toContain('wind.closed must be null');
     expect(errs.join('|')).toContain('bearingCentreDeg is not finite');
@@ -258,18 +317,44 @@ describe('home-run resolution', () => {
     // printed beside it because the two differ by more than a wall's worth.
     const wall = fenceAt(HARBOURFRONT, 0);
     expect(wall.distFt).toBe(400);
-    expect(wall.heightFt).toBe(10);
+    // ⚠ 8 ft, NOT 10 — the published profile's centre-field wall is the LOWEST
+    // on the field. The test reads `wall.heightFt` everywhere below rather than
+    // a literal, so the boundary it asserts is the park's own.
+    expect(wall.heightFt).toBe(8);
 
-    let table = '\n[HARBOURFRONT · dead centre, 400 ft, 10 ft wall]\n  d@10ft   EV      carry    h at fence   call\n';
-    const rows = [400, 395].map((target) => {
+    // ⚠ THE FIRST ROW IS BRACKETED, NOT SAT ON, AND THE OLD ONE WAS LUCKY.
+    // `resolveFence`'s test is STRICT (`pz > wall.heightFt`), so a ball bisected
+    // to arrive at EXACTLY wall height at exactly the fence is a coin flip on
+    // the last bit — it happened to land on `homeRun` under the old uniform
+    // 10 ft wall and lands on `offWall` under the published 8 ft one, with
+    // nothing about the resolver having changed. A boundary test that depends on
+    // which side of a float the bisection stops is not measuring the boundary.
+    // So the clearing row is a QUARTER OF AN INCH over (400.021 ft) and the
+    // exact-400.000 row is printed with whatever the resolver actually calls it,
+    // which is the honest way to show a knife edge.
+    const OVER_FT = 0.25 / 12;
+    let table =
+      '\n[SKYDOME · dead centre, 400 ft, 8 ft wall]\n  d@wall   EV      carry    h at fence   call\n';
+    const rows = [400 + OVER_FT, 395].map((target) => {
       const ev = evFor(target, (f) => distanceAtHeight(f, wall.heightFt) ?? 0);
       const f = fly(ev);
       const r = resolveFence(f, HARBOURFRONT, false);
-      table += `  ${target} ft  ${ev.toFixed(2)}  ${f.carryFt.toFixed(2)} ft  ${(r.heightAtFenceFt ?? 0)
+      table += `  ${target.toFixed(3)} ft  ${ev.toFixed(2)}  ${f.carryFt.toFixed(2)} ft  ${(
+        r.heightAtFenceFt ?? 0
+      )
         .toFixed(3)
         .padStart(8)} ft   ${r.outcome}\n`;
       return { target, r, f };
     });
+    // The knife edge itself, printed and not asserted on.
+    const edge = resolveFence(
+      fly(evFor(400, (f) => distanceAtHeight(f, wall.heightFt) ?? 0)),
+      HARBOURFRONT,
+      false,
+    );
+    table += `  400.000 ft (EXACTLY on the wall top) → ${edge.outcome}, h at fence ${(
+      edge.heightAtFenceFt ?? 0
+    ).toFixed(6)} ft\n`;
 
     // And the number that is NOT a home run, which is worth printing because it
     // is the one everybody assumes is: a ball whose CARRY is exactly 400 lands at
@@ -277,14 +362,18 @@ describe('home-run resolution', () => {
     const carry400 = fly(evFor(400, (f) => f.carryFt));
     const c400 = resolveFence(carry400, HARBOURFRONT, false);
     table += `\n  a 400 ft CARRY to a 400 ft fence: ${c400.outcome} — it needs ${(
-      fly(evFor(400, (f) => distanceAtHeight(f, 10) ?? 0)).carryFt - 400
-    ).toFixed(1)} ft more carry to clear the 10 ft wall.\n`;
+      fly(evFor(400, (f) => distanceAtHeight(f, wall.heightFt) ?? 0)).carryFt - 400
+    ).toFixed(1)} ft more carry to clear the ${wall.heightFt} ft wall.\n`;
     log(table);
 
     expect(rows[0]?.r.outcome).toBe('homeRun');
-    expect(rows[0]?.r.heightAtFenceFt ?? 0).toBeCloseTo(10, 2);
+    // Just over the top, by the quarter inch the row was bracketed by and no
+    // more — a two-sided bound, so a resolver that ignored the height column
+    // and called everything past 400 ft a home run fails the upper half.
+    expect(rows[0]?.r.heightAtFenceFt ?? 0).toBeGreaterThan(wall.heightFt);
+    expect(rows[0]?.r.heightAtFenceFt ?? 0).toBeLessThan(wall.heightFt + 0.05);
     expect(rows[1]?.r.outcome).toBe('offWall');
-    expect(rows[1]?.r.heightAtFenceFt ?? 0).toBeLessThan(10);
+    expect(rows[1]?.r.heightAtFenceFt ?? 0).toBeLessThan(wall.heightFt);
     // The finding, pinned: carry alone does not clear a wall.
     expect(c400.outcome).not.toBe('homeRun');
     expect(rows[0]?.f.carryFt ?? 0).toBeGreaterThan(405);

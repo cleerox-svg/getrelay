@@ -195,14 +195,22 @@ describe('the goldens that make a wrong knot slope FAIL', () => {
     // in the one quantity the game reads. They are quoted at OFF-KNOT bearings
     // because on a knot every interpolant in the world agrees.
     //
-    // Measured cost of the mutations these kill: zeroing the interior slopes moves
-    // Harbourfront's fence by up to 4.97 ft (at −29.65°) and Alpine's by 5.33;
-    // zeroing every slope moves Harbourfront 6.54 ft and Alpine's wall HEIGHT
-    // 2.67 ft. Both die here, and the second dies in four tests.
+    // Measured cost of the mutations these kill, RE-MEASURED against the
+    // published seven-knot wall (the old figures were the symmetric five-knot
+    // one and did not survive the data change): zeroing the interior slopes
+    // moves the home park's fence by up to 2.91 ft (at −35.00°) and its wall
+    // HEIGHT by 0.46 ft, and Alpine's fence by 5.33; zeroing every slope moves
+    // the home park 6.66 ft / 0.82 ft of height and Alpine's height 2.67 ft.
+    //
+    // ⚠ THE HEIGHT COLUMN NOW MOVES AT THE HOME PARK AT ALL, which it could not
+    // before — a uniform 10 ft wall reproduces itself under any slopes, which is
+    // why the height half of these goldens used to be the literal 10 in every
+    // row and proved nothing. Seven published heights with four local extrema
+    // is the first data in this repo that the height interpolant can get wrong.
     const rows: Array<[string, number, number, number]> = [
-      ['harbourfront', -33, 355.549076, 10],
-      ['harbourfront', -12, 390.136379, 10],
-      ['harbourfront', 12, 390.136379, 10],
+      ['harbourfront', -33, 363.040302, 11.318667],
+      ['harbourfront', -12, 384.952, 12.256],
+      ['harbourfront', 12, 377.18478, 10.065684],
       ['alpine', -33, 369.327781, 14.096384],
       ['alpine', -12, 402.9454, 13.184],
       ['alpine', 12, 392.968, 8],

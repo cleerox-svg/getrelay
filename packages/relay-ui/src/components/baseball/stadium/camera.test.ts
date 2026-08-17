@@ -242,6 +242,45 @@ describe('camera rig', () => {
     }
   });
 
+  it('the BATTER frame holds the zone AND keeps the near dirt off the bottom third', () => {
+    // ⚠ THE FRAMING ARGUMENT, AS ASSERTIONS. `camera.ts`'s `batter` row carries
+    // three pages of derivation and NOTHING checked any of it, so M2c's zone
+    // framing and M3b's dirt reduction were both one careless edit from being
+    // silently undone. Both are stated here in the units the argument uses.
+    const cam = makeCamera();
+    const rig = buildCameraRig();
+    rig.snap(cam, 'batter', null);
+    const v = (p: readonly [number, number, number]) => screenOf(cam, p).v;
+
+    // (1) THE ZONE IS THE SUBJECT. Rule zone 1.60–3.40 ft at the plate.
+    const zTop = v([0, 3.4, 0]);
+    const zBot = v([0, 1.6, 0]);
+    const zCtr = v([0, 2.5, 0]);
+    expect(zBot - zTop).toBeGreaterThan(0.22); // big enough to aim inside
+    expect(zBot - zTop).toBeLessThan(0.36); // not swallowing the frame
+    expect(zCtr).toBeGreaterThan(0.45);
+    expect(zCtr).toBeLessThan(0.65);
+    // The M2c defect, restated as a bound: the zone must not sit under the HUD's
+    // bottom chrome. The placement it replaced put it at 78 % down the screen.
+    expect(zBot).toBeLessThan(0.76);
+
+    // (2) THE WHOLE PITCH IS IN THE MIDDLE 60 % — release through the plate.
+    const rel = v([0, 5.8, -54]);
+    expect(rel).toBeGreaterThan(0.2);
+    expect(zBot).toBeLessThan(0.8);
+    expect(rel).toBeLessThan(zTop); // the ball comes from ABOVE the zone
+
+    // (3) THE NEAR DIRT. `field.ts` skins a 13 ft circle around the plate; its
+    // far rim is the top edge of the brown band across the bottom of this frame.
+    // At the placement this replaces it projected to v = 0.673 (y = 1076 px of
+    // 1600, measured on the render to the pixel), a 524 px / 32.7 % band. The
+    // bound is the objective M3b was given — materially under 30.5 % — expressed
+    // as the rim, which is the thing the CAMERA controls.
+    const rim = v([0, 0.18, -13]);
+    expect(rim).toBeGreaterThan(0.7);
+    expect(1 - rim).toBeLessThan(0.29);
+  });
+
   it('the BATTER camera ignores the ball entirely — the timing frame never moves', () => {
     // ⚠ NON-NEGOTIABLE, and it is the reason `follow` is a column in the table
     // rather than a global. This is the frame the player times the swing
@@ -303,6 +342,22 @@ describe('camera rig', () => {
 //   (5) the `dt` clamp/guard replaced by a raw `const dt = dtS`      → 1 fail
 //   (6) `follow` made global — the batter row follows too            → 1 fail
 //   (7) first-sight `copy` replaced by a damp from the mode anchor   → 1 fail
+//
+// M3b added the batter-FRAMING test, and four more mutations were watched. All
+// four are placements somebody could plausibly write, which is the point:
+//
+//   (8) the batter row reverted to M3a's [0, 3.2, 8] / fov 40      → 1 fail
+//       (the rim bound: 32.7 % of the frame is dirt)
+//   (9) the eye raised to 5.5 ft with the look DIRECTION held —
+//       i.e. the "it is one number" fix, exactly as proposed        → 1 fail
+//       (the zone bottom lands at v = 1.14, 224 px off the picture)
+//  (10) the new eye and standoff kept but the 40° lens restored     → 1 fail
+//  (11) the aim dropped 3° further down                            → 1 fail
+//       (the ground comes straight back up into the bottom third)
+//
+// ⚠ (9) IS THE ONE WORTH READING. It is not a strawman — it is the change the
+// visual gate measured and recommended, and its dirt-band measurement was
+// correct. What it did not measure is the subject the frame exists to hold.
 //
 // ⚠ (4) FIRST KILLED ONLY ONE TEST, AND THE SECOND ONE WAS HOLLOW. The
 // frame-rate-independence test held the ball STILL, and a stationary target is

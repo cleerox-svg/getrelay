@@ -36,6 +36,30 @@ export interface StadiumQuality {
   fenceStepDeg: number;
   /** Angular sampling of the seating bowl and roof ring, deg. */
   bowlStepDeg: number;
+  /**
+   * Edge of the procedurally-generated crowd/seat texture, px. 0 ⇒ no map at
+   * all, which is a legitimate tier and not a broken one — the bowl is then flat
+   * navy with its bands intact, because the BANDS are geometry and the crowd is
+   * not.
+   *
+   * ⚠ THIS IS THE CROWD'S ONLY KNOB, AND THAT IS THE DESIGN. The charter says
+   * gate the crowd behind `pickStadiumQuality`; the cheapest way to obey it is
+   * to have no crowd instances to gate. Speckle in one texture costs one texture
+   * and zero draw calls, so the tier controls resolution rather than population.
+   */
+  seatTexturePx: number;
+  /**
+   * Edge of the ONE shared ground-grain tile, px. 0 ⇒ no map, and every ground
+   * surface then ships its flat authored colour.
+   *
+   * ⚠ ONE NUMBER FOR FOUR SURFACES, because there is one tile — turf, warning
+   * track, infield clay and the plate circle all `clone()` it and differ only
+   * in `repeat`. See `stadium/grain.ts` for why that is the whole design and
+   * not an optimisation.
+   */
+  grainPx: number;
+  /** Truss cells around the roof arc. 0 ⇒ no lattice, just the dark underside. */
+  trussCells: number;
   /** Upper bound on `devicePixelRatio`. */
   pixelRatioCap: number;
   /** Why this tier was chosen — surfaced to the harness output. */
@@ -49,6 +73,9 @@ const TIERS: Record<StadiumTier, Omit<StadiumQuality, 'reason'>> = {
     shadowMapSize: 1024,
     fenceStepDeg: 3,
     bowlStepDeg: 6,
+    seatTexturePx: 0,
+    grainPx: 0,
+    trussCells: 0,
     pixelRatioCap: 1,
   },
   medium: {
@@ -57,6 +84,9 @@ const TIERS: Record<StadiumTier, Omit<StadiumQuality, 'reason'>> = {
     shadowMapSize: 1024,
     fenceStepDeg: 1.5,
     bowlStepDeg: 3,
+    seatTexturePx: 256,
+    grainPx: 256,
+    trussCells: 96,
     pixelRatioCap: 1.5,
   },
   high: {
@@ -65,6 +95,9 @@ const TIERS: Record<StadiumTier, Omit<StadiumQuality, 'reason'>> = {
     shadowMapSize: 1024,
     fenceStepDeg: 0.5,
     bowlStepDeg: 1.5,
+    seatTexturePx: 512,
+    grainPx: 512,
+    trussCells: 144,
     pixelRatioCap: 2,
   },
 };

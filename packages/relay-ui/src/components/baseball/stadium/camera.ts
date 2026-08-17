@@ -20,8 +20,8 @@
 // ⚠ IT IS NOT A SMALL MOVE, AND CALLING IT ONE WAS WRONG. This work has been
 // described as a "yaw-only pull-back" and as "aiming at the ball", both of which
 // read as a stationary camera turning its head. It is not. `batter` → `flight`
-// TRANSLATES the camera 148.2 ft — [0, 3.2, 8] to [−40, 120, 90] — while the fov
-// goes 40° → 55° and the near plane 1 → 4 ft, all inside `CAMERA_EASE_S` = 0.8 s;
+// TRANSLATES the camera 141.5 ft — [0, 4, 19.5] to [−40, 120, 90] — while the fov
+// goes 20° → 55° and the near plane 1 → 4 ft, all inside `CAMERA_EASE_S` = 0.8 s;
 // see that constant for what that is in ft/s. And the FOLLOW alone is not a yaw
 // either: aiming at the −40° ball swings the axis 23.5° in BEARING and 2.4° in
 // ELEVATION. Nothing about the behaviour is wrong — the description was, and an
@@ -90,26 +90,87 @@ export const CAMERAS: Record<CameraMode, CameraSpec> = {
   // at `foulTerritoryFt`, so the camera has to sit nearer than that or it shoots
   // through the stands).
   //
-  // ⚠ RE-FRAMED IN M2c, AND THE OLD ONE WAS MEASURABLY UNPLAYABLE. The previous
+  // ⚠ RE-FRAMED IN M2c, AND THE OLD ONE WAS MEASURABLY UNPLAYABLE. The M2c
   // placement — [0, 8.5, 20] looking at [0, 4, −55] — put the strike zone 13.3°
   // below the look axis against a 20° half-FOV, i.e. 78 % of the way DOWN a
-  // portrait screen, under the HUD's own bottom chrome. The visual gate
-  // photographed it the moment the reticle existed to sit in it. The zone is
-  // this mode's SUBJECT now, so the framing is derived from the two things the
-  // shot has to contain:
+  // portrait screen, under the HUD's own bottom chrome. The zone is this mode's
+  // SUBJECT, so the framing is derived from the things the shot has to contain:
+  // the release point (0, 5.8, −54), the zone (0, 1.6…3.4, 0), and — added in
+  // M3b — the near GROUND, which nothing had ever been derived against.
   //
-  //     release point  (0, 5.8, −54) → +2.4° from a camera at (0, 3.2, 8)
-  //     zone centre    (0, 2.5,   0) → −5.0° from the same camera
+  // ⚠ M3b: THE NEAR DIRT WEDGE, AND THE FIX IS NOT THE ONE IT LOOKED LIKE. The
+  // shipped frame put a flat brown band across its bottom 524 px — 32.7 % of the
+  // picture, and 30.5 % of it classified as dirt. That band is the 13 ft SKINNED
+  // CIRCLE at the plate (`field.ts`'s `HOME_CIRCLE_FT`), whose far rim at
+  // (0, 0.18, −13) projected to y = 1076 px. The obvious diagnosis was the eye
+  // height: 3.2 ft is a crouching catcher's, 2.3 ft under a standing batter's,
+  // and raising it to 5.5 ft moves that rim to y ≈ 1315 — the band HALVES.
   //
-  // Aim at the bisector (−1.3°) and the whole pitch spans 41 %→59 % of the
-  // frame, dead centre, with the 1.8 ft zone 32 % of the screen height tall.
+  // ⚠ THAT MEASUREMENT IS REAL AND THE CONCLUSION FROM IT IS WRONG, which is
+  // why the whole ladder is written out here. Raising the eye with the look
+  // DIRECTION held also drags the zone down by the same 2.3 ft of parallax at
+  // 8 ft of standoff: the zone bottom lands at v = 1.140, i.e. **224 px below
+  // the bottom of the picture**. That is the M2c defect restored and then some.
+  // Re-aiming to put the zone back costs the whole gain, because the near ground
+  // and the zone are at the SAME PLACE — the circle is centred on the plate — so
+  // nothing that moves one leaves the other. Measured, holding the zone framed
+  // exactly as it is framed today (26–34 % of frame height, centre in 45–65 %,
+  // bottom ≤ 75.5 %, release inside the middle 60 %), the best reachable dirt
+  // band per eye height is:
+  //
+  //     eye ft   best z   fov   aim      dirt band     ← lower is better
+  //       3.2      19.5    20   +0.40°   346 px (21.7 %)
+  //       3.6      19.5    20   −0.75°   383 px (23.9 %)
+  //       4.0      19.5    20   −1.90°   419 px (26.2 %)   ← SHIPPED
+  //       4.4      19.0    20   −3.25°   462 px (28.9 %)
+  //       4.8      19.0    20   −4.45°   501 px (31.3 %)
+  //       5.2      14.5    26   −7.25°   613 px (38.3 %)
+  //       5.5+     — no placement satisfies the zone framing at all —
+  //
+  // i.e. the relationship runs the OTHER WAY: once the zone is held, every inch
+  // of eye height COSTS dirt, because a higher eye must aim further down to keep
+  // a zone 8–20 ft away in frame, and aiming down is what puts the ground back
+  // in the bottom of the picture. Above ~5.3 ft there is no placement at any
+  // standoff or focal length that frames the zone at all.
+  //
+  // ⚠ SO THE LEVER IS STANDOFF AND FOCAL LENGTH, NOT HEIGHT. The zone's angular
+  // size and the release-to-zone angular separation both fall as 1/z, so their
+  // RATIO — which is what fixes where the zone sits in frame — is invariant to
+  // backing away; the ground's depression angle is not. Pulling back from 8 ft
+  // to 19.5 ft and halving the FOV therefore leaves the zone framed as it was
+  // while the near ground falls out of the bottom crop. The frozen 4.0 ft /
+  // 19.5 ft / 20° row above is what ships:
+  //
+  //     release (0, 5.8, −54)  → 33.6 % of frame height
+  //     zone     1.6 … 3.4 ft  → 49.3 % … 75.4 %  (26.1 % tall, centre 62.4 %)
+  //     plate-circle far rim   → y = 1181 px, a 419 px band  (was y = 1076 / 524)
+  //
+  // against the shipped 41.8 % / 44.1–74.9 % (30.8 % tall, centre 59.5 %). The
+  // zone slides 2.9 % down the frame and loses 4.7 % of its height; the dirt
+  // band loses a fifth of itself. THAT IS THE TRADE, and it is stated rather
+  // than hidden because the whole ladder above is a knob the next reader will
+  // want to turn.
+  //
+  // ⚠ AND HEIGHT STILL MOVED, TO 4.0 ft, WHICH IS NOT A BATTER'S EYE AND IS NOT
+  // CLAIMED TO BE. 5.5 ft is unreachable (see the ladder); 4.0 ft is what the
+  // dirt objective could pay for. This camera is not standing in the box in any
+  // case — it is 19.5 ft BEHIND the plate on the centre line, which is a slot
+  // camera, and a slot camera at 4 ft is an ordinary broadcast placement. The
+  // rest of "the plate area reads as a flat brown lot" is answered where it
+  // actually lives: `field.ts` now draws batter's boxes, a catcher's box and
+  // seeded clay grain into what used to be one flat colour.
+  //
+  // ⚠ THE 20° LENS IS A GAMEPLAY GAIN, NOT JUST A FRAMING ONE. Everything past
+  // the plate is magnified ~2× against the old 40°: the ball at release is
+  // 7.5 px of radius instead of 4.3, and the mound, the wall and the bowl come
+  // up with it. Reading break is the one skill this game has.
   //
   // ⚠ IT DOES NOT FOLLOW, AND THAT IS NON-NEGOTIABLE. This is the frame the
   // player times the swing against. A camera that drifts before the tap would
   // break the one skill the game has, so `follow: false` here is a gameplay
   // constraint, not a framing preference — and `camera.test.ts` asserts that a
   // ball in the scene moves this pose by exactly zero.
-  batter: { pos: [0, 3.2, 8], look: [0, 2.52, -30], fov: 40, near: 1, follow: false },
+  batter: { pos: [0, 4, 19.5], look: [0, 2.36, -30], fov: 20, near: 1, follow: false },
   // From the mound, looking in at the plate. Narrow, because a pitcher's view of
   // a 17 in plate 55 ft away IS narrow and pretending otherwise flatters the aim.
   pitcher: { pos: [0, 6, -55], look: [0, 2.6, 0], fov: 26, near: 1, follow: false },
@@ -157,10 +218,10 @@ export const CAMERAS: Record<CameraMode, CameraSpec> = {
  * timer, so there is one piece of state and not two.
  *
  * ⚠ AND WHAT IT IS EASING IS BIG. `batter` → `flight` interpolates POSITION over
- * 148.2 ft (|[−40, 120, 90] − [0, 3.2, 8]|), plus fov 40° → 55°, near 1 → 4 ft,
+ * 141.5 ft (|[−40, 120, 90] − [0, 4, 19.5]|), plus fov 20° → 55°, near 1 → 4 ft,
  * and a look point slewing onto a moving ball. Over 0.8 s that averages
- * 185 ft/s, and a quintic's peak rate is 30u²(1−u)² at u = ½ = **1.875×** its
- * mean — so mid-move the camera is travelling ~347 ft/s. That is the honest size
+ * 177 ft/s, and a quintic's peak rate is 30u²(1−u)² at u = ½ = **1.875×** its
+ * mean — so mid-move the camera is travelling ~332 ft/s. That is the honest size
  * of the move, and it is recorded here because the same curve that gives the
  * 190 ms hold at the START is what concentrates the speed in the MIDDLE.
  *
