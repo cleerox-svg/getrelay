@@ -447,8 +447,38 @@ export function isBarrel(evMph: number, laDeg: number): boolean {
 /** Max rounds the worker will accept in one submitted game. MIRRORED. */
 export const MAX_ROUNDS = 8;
 
-/** Max points per round the worker will accept. MIRRORED. */
+/**
+ * Max points per round the worker will accept for the ARCADE games. MIRRORED.
+ *
+ * ⚠ NOT THE DERBY'S NUMBER ANY MORE — see `DERBY_POINTS_PER_ROUND`. It is kept
+ * because it is still the worker's clamp for fog, tune, golf and golfrange, and
+ * because `MAX_SUBMITTABLE_SCORE` below is the figure the mirror test prints.
+ */
 export const MAX_POINTS_PER_ROUND = 2000;
 
-/** The worker's hard score ceiling. DERIVED from the two mirrors above. */
+/**
+ * Max points per DERBY round the worker will accept. MIRRORED from
+ * `DERBY_POINTS_PER_ROUND` in `packages/relay-worker/src/games.ts`.
+ *
+ * ⚠ IT IS A SECOND, WIDER CLAMP AND NOT A REPLACEMENT — the worker branches on
+ * the game id, exactly the way `MAX_COURSE_ROUNDS` branches the rounds ceiling,
+ * so raising this does NOT widen anything for the other four games.
+ *
+ * ⚠ WHY IT MOVED. The derby pays a CHAIN MULTIPLIER (up to ×2) on a home run
+ * inside a run of consecutive home runs. At 2000/round the per-pitch ceiling was
+ * 250 against a ~190-point barrelled home run, so the multiplier had 1.32× of
+ * room and the clamp ate it before it could express anything: measured, the best
+ * good→perfect ratio ANY payout could reach under 2000/round was 1.12, and only
+ * by cutting the base home-run payout ~35 % — i.e. by undoing the fix that made
+ * solid contact pay. At 4000/round the per-pitch ceiling is 500, the base payout
+ * does not move at all, and the ratio is 1.135. `derbySim.test.ts` prints both
+ * curves.
+ *
+ * ⚠ DEPLOY THE WORKER FIRST. A widening accepts everything the old client sent,
+ * so worker-then-UI is safe; UI-then-worker loses every chained session to a 400
+ * that `DerbyGame.bank()` swallows.
+ */
+export const DERBY_POINTS_PER_ROUND = 4000;
+
+/** The worker's hard ARCADE score ceiling. DERIVED from the two mirrors above. */
 export const MAX_SUBMITTABLE_SCORE = MAX_ROUNDS * MAX_POINTS_PER_ROUND;

@@ -13,6 +13,7 @@
 // rule is "GL renders and never computes gameplay, HUD polls and never
 // re-renders per frame" — copy is the HUD's half of that, and it stays copy.
 
+import { chainMultiplier } from '../../../lib/baseball/derbyChain';
 import type { SwingResult } from '../../../lib/baseball/derbyState';
 import type { Park } from '../../../lib/baseball/parks';
 import { FOUL_LINE_DEG } from '../../../lib/baseball/parks';
@@ -34,8 +35,17 @@ import { FOUL_LINE_DEG } from '../../../lib/baseball/parks';
 export function describeSwing(r: SwingResult): string {
   const ft = r.distFt.toFixed(0);
   switch (r.outcome) {
-    case 'homeRun':
-      return `GONE! ${ft} ft · +${r.points}`;
+    case 'homeRun': {
+      // ⚠ THE MULTIPLIER IS PRINTED WHEN IT IS EARNING, AND ONLY THEN. A
+      // mechanic the player cannot see is a mechanic he cannot chase, and
+      // `+380` on its own is indistinguishable from a monstrous home run. The
+      // factor is read from `chainMultiplier(r.chainIndex)` — the sim's own
+      // function on the sim's own reported index — rather than divided out of
+      // `points`, which rounds and would print `×1.99`.
+      const m = chainMultiplier(r.chainIndex);
+      const chain = m > 1 ? ` ×${m.toFixed(2)}` : '';
+      return `GONE! ${ft} ft · +${r.points}${chain}`;
+    }
     case 'foul':
       return `Foul ball · +${r.points}`;
     case 'take':

@@ -253,6 +253,7 @@ export class DerbySim {
     const pr = served.result;
     const base = {
       points: 0,
+      chainIndex: 0,
       contactZM: null,
       evMph: 0,
       laDeg: 0,
@@ -333,6 +334,14 @@ export class DerbySim {
     const outcome: DerbyOutcome =
       play.outcome === 'homeRun' ? 'homeRun' : play.outcome === 'foul' ? 'foul' : 'inPlay';
     const barrel = isBarrel(contact.evMph, contact.laDeg);
+    // ⚠ THE CHAIN IS READ, NEVER WRITTEN, HERE. `curStreak` is the run of
+    // consecutive home runs BEFORE this swing, so this swing's 1-based position
+    // in that run is `curStreak + 1` — and only if it is itself a home run. It
+    // is computed from the counter rather than by incrementing it because
+    // `resolveSwing` is also `predict()`, which is asserted to mutate nothing;
+    // `commit()` is the one place the counter moves. A non-home-run passes 0,
+    // and `swingPoints` proves it never reads it.
+    const chainIndex = outcome === 'homeRun' ? this.curStreak + 1 : 0;
     return {
       ...base,
       outcome,
@@ -340,12 +349,19 @@ export class DerbySim {
       undercutIn,
       lateralIn,
       contactZM: geom.contactZM,
+      chainIndex,
       // ⚠ EVERY OUTCOME GOES THROUGH THE ONE SCORER, and the cap it is handed is
       // the CONFIG's, never the constant — an overridden `pitchesPerRound` must
       // re-derive its own or the round ceiling the worker enforces is wrong.
       // This used to be a ternary that paid a home run and paid everything else
       // zero; `derbyScoring.ts`'s header has the measurement that changed it.
-      points: swingPoints(outcome, flight.carryFt, barrel, perPitchCap(this.cfg.pitchesPerRound)),
+      points: swingPoints(
+        outcome,
+        flight.carryFt,
+        barrel,
+        perPitchCap(this.cfg.pitchesPerRound),
+        chainIndex,
+      ),
       evMph: contact.evMph,
       laDeg: contact.laDeg,
       sprayDeg: contact.sprayDeg,
