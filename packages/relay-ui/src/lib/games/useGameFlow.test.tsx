@@ -326,9 +326,11 @@ describe('useGameFlow', () => {
     });
 
     it('does not arm the guard for the NEXT free session', () => {
-      // The staleness hazard of a ref-held flag, pinned: finish a guarded
+      // The staleness hazard of a ref-held flag, pinned: abandon a guarded
       // round, then start an unguarded one (course round → range practice) and
-      // the confirm step must be gone.
+      // the confirm step must be gone. This one leaves via the BACK gesture;
+      // the UI-exit sibling below is the stronger case, since it bypasses the
+      // popstate escalation entirely.
       mount();
       act(() => flow.startFreeGuarded());
       act(() => back()); // pause
@@ -361,6 +363,78 @@ describe('useGameFlow', () => {
       expect(screen.getByTestId('paused').textContent).toBe('false');
       expect(log.map((e) => e.action)).toEqual(['POP']);
       expect(depth()).toBe(-1);
+    });
+
+    it('does not arm the guard for a later session left via the UI exit path', () => {
+      // THE test for enterFree's unconditional write, and the only one that can
+      // be: leaving by the buttons never runs the popstate escalation, so the
+      // entry write is the sole thing standing between a finished guarded round
+      // and a range session that inherits its confirm step.
+      mount();
+      act(() => flow.startFreeGuarded());
+      act(() => {
+        flow.setScreen('results'); // e.g. the scorecard after a finished round
+        flow.consumeHistoryEntry('free');
+      });
+      log = [];
+
+      act(() => flow.startFree()); // in by the plain door
+      act(() => back());
+
+      // Unguarded means unguarded: one press, straight to the menu.
+      expect(screen.getByTestId('screen').textContent).toBe('menu');
+      expect(screen.getByTestId('paused').textContent).toBe('false');
+      expect(log.map((e) => e.action)).toEqual(['PUSH', 'POP']);
+      expect(depth()).toBe(0);
+    });
+
+    // Leaving from the PAUSE SHEET is the sequence that makes entry-time
+    // `paused` reset load-bearing: the sheet's exit button moves the screen and
+    // consumes the marker but does NOT reset `paused` (FogScreen never does;
+    // GolfScreen relies on the hook). So the pause state outlives the session
+    // and the NEXT guarded round would start already-paused. Split in two so a
+    // regression names the harm and not just the precondition.
+    function exitFromPauseSheet() {
+      mount();
+      act(() => flow.startFreeGuarded());
+      act(() => back()); // pause arm: sheet up
+      expect(screen.getByTestId('paused').textContent).toBe('true');
+      // Exactly what the sheet's exit button does — note: no setPaused(false).
+      act(() => {
+        flow.setScreen('menu');
+        flow.consumeHistoryEntry('free');
+      });
+    }
+
+    it('re-entering after a pause-sheet exit starts UNPAUSED', () => {
+      exitFromPauseSheet();
+
+      act(() => flow.startFreeGuarded());
+
+      expect(screen.getByTestId('screen').textContent).toBe('free');
+      expect(screen.getByTestId('paused').textContent).toBe('false');
+    });
+
+    it('round two is still protected: its FIRST back press pauses, it does not exit', () => {
+      // The harm, asserted directly. If entry left `paused` true, this press
+      // reads the leave arm and the round is destroyed on a single press —
+      // exactly the failure the whole mechanism exists to prevent, resurrected
+      // on the second guarded round of a session.
+      exitFromPauseSheet();
+      act(() => flow.startFreeGuarded());
+      log = [];
+
+      act(() => back());
+
+      expect(screen.getByTestId('screen').textContent).toBe('free'); // frozen, not lost
+      expect(screen.getByTestId('paused').textContent).toBe('true');
+      expect(log.map((e) => e.action)).toEqual(['POP', 'PUSH']);
+      expect(depth()).toBe(0);
+
+      // And the escalation still completes normally from there.
+      act(() => back());
+      expect(screen.getByTestId('screen').textContent).toBe('menu');
+      expect(screen.getByTestId('paused').textContent).toBe('false');
     });
   });
 

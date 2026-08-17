@@ -55,12 +55,18 @@ export function useGameFlow() {
   // history alone (same reason pausedRef exists), and a session's guard is
   // fixed at entry, so nothing renders off it.
   //
-  // The staleness invariant that makes this safe to read from a ref: the
-  // ONLY way onto the free screen is enterFree(), which every entry point
-  // routes through and which writes this unconditionally, and the leave
-  // branch clears it. So the value read is always the one the live session
-  // declared — a guarded course round can never leave its guard armed for
-  // the next range-practice session.
+  // The staleness invariant that makes this safe to read from a ref, and
+  // it rests on ONE mechanism rather than several: enterFree() writes this
+  // UNCONDITIONALLY, and enterFree is the only assignment of screen =
+  // 'free' in the codebase. So every read is preceded by the live
+  // session's own declaration, and a guarded course round cannot leave the
+  // guard armed for the range-practice session after it.
+  //
+  // The leave branch deliberately does NOT also clear it. A second clear
+  // there is unreachable-as-safety — you cannot get back to a read without
+  // passing through enterFree — and its only real effect was to mask the
+  // absence of the unconditional write from the tests, which is how the
+  // write went unpinned in the first place. One mechanism, one test.
   const freeGuardRef = useRef(false);
 
   const location = useLocation();
@@ -154,8 +160,6 @@ export function useGameFlow() {
       // over it.
       if (pausedRef.current) {
         abandonedRef.current = true;
-        // The session is over; disarm so nothing can read a stale guard.
-        freeGuardRef.current = false;
         setPaused(false);
         setScreen('menu');
       } else {
@@ -227,6 +231,20 @@ export function useGameFlow() {
   // the session's reset.
   function enterFree(guardProgress: boolean) {
     freeGuardRef.current = guardProgress;
+    // Start every session UNPAUSED, exactly as startGame() does. This is
+    // not defensive tidying — without it the guard eats itself on the
+    // SECOND guarded round of a session:
+    //   startFreeGuarded() → back (pause arm, paused true) → the pause
+    //   sheet's own exit button moves the screen and consumes the marker
+    //   but does NOT reset paused → startFreeGuarded() again → the first
+    //   back press reads pausedRef true and takes the LEAVE arm → the
+    //   round is destroyed on one press, which is the bug this whole
+    //   mechanism exists to prevent.
+    // The reset belongs HERE rather than at the exit buttons because the
+    // call sites disagree about it (BaseballScreen resets, FogScreen does
+    // not) and every one of them is a chance to forget. Entering a screen
+    // is the moment its pause state is unambiguously known.
+    setPaused(false);
     setScreen('free');
     // Same back-gesture guard entry as the guess game.
     nav(location.pathname, { state: { game: 'free' } });
