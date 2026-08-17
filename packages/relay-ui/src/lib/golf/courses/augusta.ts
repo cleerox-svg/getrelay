@@ -74,7 +74,16 @@ const BLOOM = {
   // shrubs and is never a canopy tree either. Same warm-hue problem as 12, found
   // by the data guard in courses.test.ts rather than by eye (0xf2d34e lit as a
   // pale mustard cream), so it takes the same treatment.
-  yellowJasmine: { color: 0xfbc70e, fraction: 0.6, form: 'understory' }, // 8
+  //   `fraction` is 0.85 — HIGHER than 12's 0.8 — because the two holes are not
+  // framed alike. 8 is a wide-open uphill tee view onto a DISTANT tree line; 12
+  // stands its drift much closer to camera. At 0.6 the hole covered 0.173% of
+  // frame against 12's 0.378%, and the visual gate ruled it "under-planted for a
+  // hole called Yellow Jasmine": only the near right-hand cluster read as
+  // deliberate planting, the rest as dots. Perspective, not the drift, is what
+  // costs the area, so the hole that shows its tree line from further away needs
+  // MORE flowering trees to read the same — not the same number. 0.85 measures
+  // 0.259%, i.e. ~68% of 12's share from roughly double the distance.
+  yellowJasmine: { color: 0xfbc70e, fraction: 0.85, form: 'understory' }, // 8
   carolinaCherry: { color: 0xf0efe0, fraction: 0.5 }, // 9 — white racemes
   camellia: { color: 0xd8506e, fraction: 0.5 }, // 10 — deep rose
   whiteDogwood: { color: 0xf3f2e8, fraction: 0.5 }, // 11
