@@ -801,6 +801,63 @@ out to be wrong in an instructive way.
    **That makes it a content bug on every dogleg, not a hole-8 quirk**, and it
    is only visible now because making a collider match its art put a second
    volume on the same ground. Worth its own investigation.
+   → **INVESTIGATED, and it is an order of magnitude worse than filed. Still
+   open.** Measured across all four courses with the game's own corridor test:
+
+   |  | filed | measured |
+   |---|---|---|
+   | collidable trunks inside the rough | 1 | **171** |
+   | canopies overhanging playable ground | 5 | **359** |
+   | out of how many trees | — | 3,084 |
+
+   The two definitions genuinely disagree, and that is the whole bug:
+   `surfaceAt` (`terrain.ts:842-845`) classifies the corridor by
+   `nearestOnPolyline(...).dist <= roughHalf` — **perpendicular** distance to the
+   centerline — while `courseTrees` (`terrain.ts:1049-1054`) offsets in **x**.
+   For a centerline running at θ to the d axis the achieved clearance is
+   `off · cos θ`, verified exactly: hole 8's tree at `d 332` sits 41.45 yd
+   perpendicular against an intended 50, and 41.45/50 = 0.8290 = cos 34.0°.
+
+   It therefore scales with dogleg angle, which is why hole 8 is one of the
+   *mildest* cases rather than the whole story. Holes turning under 28° are
+   clean; Augusta 10 (51°) and 13 (50°) carry 12–14 trunks each, and the worst
+   tree on the property stands **12.8 yd inside the OB line**.
+
+   **Fix direction, measured, not guessed.** Dividing the offset by cos θ *and*
+   sampling the centerline at the tree's own `d` (today it is sampled at the
+   unshifted row `d`, a second smaller error worth ~2 yd on a 34° dogleg) takes
+   it to **2 trunks / 11 canopies**, moving trees a mean 6.7 yd. A true-normal
+   offset is *worse* — 23 trunks — because near the vertex the normal from one
+   leg swings the tree toward the other leg. All 13 residuals sit within 21 yd
+   of a dogleg vertex: the unmitred corner.
+
+   ⚠ **One design question blocks an exact fix.** Past the last centerline
+   vertex `nearestOnPolyline` clamps to the endpoint, so the corridor ends in a
+   rounded cap and a naive "solve for perpendicular distance == off" collapses
+   those trees onto the centerline. What the tree line should do beyond the
+   green needs deciding before the solve is written.
+
+   ⚠ **This is a collision change on all four courses, not a visual tweak.** It
+   moves every dogleg's grove and therefore every Augusta and Listowel
+   screenshot. It wants its own PR with its own before/after, not a ride-along.
+16. **Hole 8's FAR tree line still reads as scattered specks**, and raising
+   `fraction` again will not fix it — 0.85 is already near saturation there
+   (4 of ~5 broadleaf crowns between x 230–680 carry a drift). Two findings from
+   the gate on the 0.85 frame:
+   • **Contiguity, not area, is what reads as planting.** Hole 8 and hole 12
+     span nearly the same horizontal extent of frame (342 px vs 352 px). Hole 12
+     reads better because its yellow is two unbroken ribbons — widest blob
+     161 px — where hole 8's is nine islands averaging 38 px, leaving 100–130 px
+     of bare trunk line at x 198–475 and x 604–705. **The area-share ratio the
+     tuning was aimed at is a red herring.**
+   • **Distance haze eats the colour before it can read.** Far drifts desaturate
+     down the depth gradient — sat 0.55 near, 0.44 mid, 0.24 far, and 0.14 at
+     x 237–260, where the mound is visible to the eye but reads as pale grey
+     stone and falls below the chroma gate entirely, so it does not even appear
+     in the 0.259% measurement. Hole 12 never shows this because its drift is
+     close to camera.
+   Levers are drift *span* (world radius / instances per shrub, so one far drift
+   covers more trunk spacing) and blossom fog handling — not `fraction`.
 15. **Hole 8 is under-planted for a hole called Yellow Jasmine.** After the drift
    was resized to its collider, yellow fell to 0.165% of frame and only the near
    right-hand cluster reads as deliberate planting; on the before frame you would
@@ -808,6 +865,14 @@ out to be wrong in an instructive way.
    Not a defect but a tuning value: `yellowJasmine.fraction` 0.6 → ~0.85, with
    hole 12 at 0.8 / 0.376% as the reference for "enough". Deliberately left out
    of the collider change so the physics delta stayed reviewable on its own.
+   → **FIXED at 0.85, and the gate passed it — but only the near half improved.**
+   Yellow went 0.173% → 0.259% of frame (+49%) at 34 draw calls unchanged,
+   +5,760 triangles, riding the existing instanced leaf batch. Only 1,676 px
+   differ, in five clusters at x 98–761: the left tree-line foot went from one
+   lonely 15 px clump to a continuous 67 px drift, so the corridor is now framed
+   on **both** sides rather than reading lopsided. Split by depth the gain is
+   +57% near (y > 552) against +21% far — see defect 16 for why the far half did
+   not move, and why raising `fraction` again is the wrong lever.
 
 **Instanced foliage — the single largest GPU win measured on this codebase.**
 The tee view's 1,034 draw calls were **559 individual meshes of tree**. There was
