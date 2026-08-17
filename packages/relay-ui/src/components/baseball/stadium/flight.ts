@@ -1,6 +1,16 @@
 // THE BALL AND ITS FLIGHT — the ball mesh, its contact shadow, and the two
 // tracers that draw where it has been.
 //
+// ⚠ "WHERE IT HAS BEEN" IS NOW LITERAL. The tracers used to be handed the whole
+// flight the instant it was served, so the complete arc — INCLUDING THE LANDING
+// POINT — was on screen before the ball got there. Two leaks, and the pitch one
+// is the worse: the player could read a home run before it happened, and could
+// read the break of an incoming pitch before having to commit to a swing. The
+// path is still built once, in one piece, from the sim's own samples; what moves
+// per frame is the DRAW RANGE (`tracer.ts`'s `reveal`). No vertex changes after
+// `setPaths`, which is what keeps the visual gate's 0.002 ft drawn-vs-sim
+// comparison a statement about the renderer rather than about an animation.
+//
 // ⚠ ONE SOURCE. Everything drawn here is a frame conversion of a `PitchTrack`
 // or a `BattedTrack` that a `lib/baseball` integrator produced. There is no
 // smoothing, no spline, no re-integration and no "prettier" curve: the tracer's
@@ -137,6 +147,15 @@ export interface FlightHandle extends StadiumPart {
   setPaths(paths: FlightPaths): void;
   /** Place the ball at TRUE PHYSICAL seconds since release. */
   setTime(tS: number): void;
+  /**
+   * The BATTED ball's scene position, or null when there is no batted ball or
+   * it has not been struck yet. This is the camera's follow target and it is
+   * deliberately NARROWER than `ballScene()`: pointing a following camera at the
+   * PITCH would re-frame every shot in the harness that has a pitch in the air
+   * and no swing, and would put the upper-deck camera on a 55 ft pitch flight
+   * that the batter camera is already holding.
+   */
+  followScene(): [number, number, number] | null;
   /** Apply the screen-space size floor. Call AFTER `setTime`, before render. */
   sizeFor(camera: PerspectiveCamera, viewportHeightPx: number): void;
   /** The drawn ball's scene position, or null when it is not in flight. */
@@ -145,8 +164,10 @@ export interface FlightHandle extends StadiumPart {
   ballVisible(): boolean;
   /** The ball's DRAWN radius, scene ft. `BALL_RADIUS_FT` unless the floor bit. */
   ballScale(): number;
-  /** The tracer vertices AS DRAWN — the visual gate reads this. */
+  /** The tracer vertices AS DRAWN (i.e. as far as the ball has got). */
   tracer(which: 'pitch' | 'batted'): number[];
+  /** The WHOLE built path, revealed or not — the gate's geometry seam. */
+  tracerFull(which: 'pitch' | 'batted'): number[];
   /** Is that tracer actually being rendered? */
   tracerVisible(which: 'pitch' | 'batted'): boolean;
   /** Total length of the play, true physical seconds. */
@@ -231,6 +252,71 @@ export function buildFlight(ctx: StadiumCtx, opts: FlightOptions): FlightHandle 
   let paths: FlightPaths = { pitch: null, batted: null, contactTS: 0 };
   let battedScene: number[] = [];
   let ballPos: [number, number, number] | null = null;
+  let battedPos: [number, number, number] | null = null;
+  /**
+   * The last time `setTime` was given, so that `setPaths` can re-apply the
+   * reveal without the composer having to remember to call `setTime` again.
+   * `-1` is "nothing in flight", the same sentinel the loop uses.
+   */
+  let lastTimeS = -1;
+
+  /**
+   * How many leading samples of a track have HAPPENED by `t` — the reveal count.
+   *
+   * ⚠ IT IS A LOWER BOUND ON PURPOSE: the count is the number of samples at or
+   * before `t`, so the drawn tip lags the ball by up to ONE substep and NEVER
+   * leads it. Leading by even one substep is the defect this whole change exists
+   * to remove, so the inequality is the safe way round. The lag is bounded by
+   * `|v|·FIXED_MS` = 1.13 ft on a 94 mph pitch and 1.25 ft off a 105 mph bat,
+   * and it is almost entirely ALONG the view axis in the two cameras that watch
+   * those (behind the plate; the upper deck) — the visual gate measures it, and
+   * the tip-vs-ball assertion is written against exactly this bound rather than
+   * against a tolerance somebody liked the look of.
+   *
+   * Binary search rather than a scan: a fly ball is up to 1,440 samples and this
+   * runs twice a frame.
+   */
+  const revealCount = (times: readonly number[], t: number): number => {
+    const n = times.length;
+    if (n === 0 || t < (times[0] ?? 0)) return 0;
+    if (t >= (times[n - 1] ?? 0)) return n;
+    let lo = 0;
+    let hi = n - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if ((times[mid] ?? 0) <= t) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo + 1;
+  };
+
+  /**
+   * Reveal each tracer as far as the ball has travelled.
+   *
+   * ⚠ ONE MECHANISM, AND A DEAD SECOND ONE WAS DELETED RATHER THAN KEPT. This
+   * first shipped as `struck ? pitchTimes.length : revealCount(pitchTimes, tS)`
+   * — "once the ball is hit, pin the pitch trail fully open, because it is
+   * history now". That branch is UNREACHABLE, and the mutation that removes it
+   * passed all six tests in `flight.test.ts`. The reason is arithmetic:
+   * `contactTS` IS the plate crossing, which is the pitch track's own last
+   * sample, so `tS ≥ contactTS` already implies `revealCount` returns the whole
+   * track. Two mechanisms covering one case is exactly the shape BASEBALL.md
+   * records in `fielding.ts` (an unreachable `Math.max(0, …)` hiding beside a
+   * live cap), so it goes the same way. The EQUIVALENCE is what gets asserted
+   * instead — `flight.test.ts` pins `contactTS === last pitch sample` — so the
+   * day a caller contacts the ball somewhere other than the plate, that is a
+   * test failure and a decision to make, not a silently wrong trail.
+   */
+  const applyReveal = (tS: number) => {
+    const pitchTimes = paths.pitch?.t;
+    if (pitchTimes && pitchTimes.length > 1) {
+      tracers.pitch.reveal(revealCount(pitchTimes, tS));
+    }
+    const battedTimes = paths.batted?.t;
+    if (battedTimes && battedTimes.length > 1) {
+      tracers.batted.reveal(revealCount(battedTimes, tS - paths.contactTS));
+    }
+  };
 
   const setPaths = (next: FlightPaths) => {
     paths = next;
@@ -255,6 +341,9 @@ export function buildFlight(ctx: StadiumCtx, opts: FlightOptions): FlightHandle 
       }
       tracers.batted.set(battedScene);
     } else tracers.batted.clear();
+    // `set()` reveals everything it wrote; trim it straight back to the instant
+    // the ball is actually at, so no frame ever renders the un-revealed path.
+    applyReveal(lastTimeS);
   };
 
   /**
@@ -288,17 +377,22 @@ export function buildFlight(ctx: StadiumCtx, opts: FlightOptions): FlightHandle 
   };
 
   const setTime = (tS: number) => {
+    lastTimeS = tS;
     const pitchEnd = paths.pitch?.t[paths.pitch.t.length - 1] ?? 0;
     let p: [number, number, number] | null = null;
+    let batted: [number, number, number] | null = null;
     if (paths.batted && tS >= paths.contactTS) {
-      p = sampleBatted(tS - paths.contactTS);
+      batted = sampleBatted(tS - paths.contactTS);
+      p = batted;
     } else if (paths.pitch && paths.pitch.t.length > 1 && tS >= 0 && tS <= pitchEnd) {
       // The SAME sampler the swing resolves against — pitchSim exports it for
       // this call, so what is drawn and what is hit cannot disagree.
       const s = sampleTrack(paths.pitch, tS);
       p = sceneFromReport(s.d, s.x, s.h);
     }
+    applyReveal(tS);
     ballPos = p;
+    battedPos = batted;
     ball.visible = p !== null;
     shadow.visible = p !== null;
     if (!p) return;
@@ -339,9 +433,13 @@ export function buildFlight(ctx: StadiumCtx, opts: FlightOptions): FlightHandle 
     // and this is the same rule applied to the ball. `null` still means "not in
     // flight", which is a state of the SETTER, so that part stays with `ballPos`.
     ballScene: () => (ballPos ? (ball.position.toArray() as [number, number, number]) : null),
+    // Same read-the-mesh rule as `ballScene`: the camera must follow the drawn
+    // ball, not a variable that claims to know where it is.
+    followScene: () => (battedPos ? (ball.position.toArray() as [number, number, number]) : null),
     ballVisible: () => ball.visible && group.visible,
     ballScale: () => ball.scale.x,
     tracer: (which) => tracers[which].read(),
+    tracerFull: (which) => tracers[which].readAll(),
     tracerVisible: (which) => tracers[which].visible(),
     durationS: () => {
       const pitchEnd = paths.pitch?.t[paths.pitch.t.length - 1] ?? 0;

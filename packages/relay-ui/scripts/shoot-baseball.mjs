@@ -28,8 +28,17 @@
 //   • THE TRACER AGAINST THE SIM. See the block above `TRACER_TOL_FT`. This is
 //     the check the visual gate was created for and it was blind to it until the
 //     ball existed: the sim reports N inches of break, and the DRAWN curve must
-//     bend the same way and the same amount.
+//     bend the same way and the same amount. It reads the FULL built path
+//     (`tracerFull`), which is what keeps it measuring the whole curve now that
+//     the trail is revealed progressively — see `checkPitchTracer`.
 //   • the batted tracer's own apex and carry, against `BattedFlight`'s.
+//   • THE REVEAL — how much of that path is on screen yet. New, and it is an
+//     INFORMATION-LEAK check, not a cosmetic one: the whole arc including the
+//     landing point used to be drawn from the instant the pitch was served. See
+//     `checkReveal`.
+//   • THE FRAMING — is the ball actually in the picture. `checkBall` asserts
+//     `Object3D.visible`, which is explicitly NOT the same thing; `checkFraming`
+//     projects the drawn ball through the drawing camera and asks.
 //
 // ⚠ SwiftShader validates composition, geometry and materials but NOT real-GPU
 // behaviour. "Renders fine in SwiftShader" is not evidence of on-device safety —
@@ -108,12 +117,52 @@ const SCENES = {
   // Same camera and same frozen instant as `pitch-4seam`, so the pair differ by
   // the aid and nothing else.
   aim: { query: 'scene=batter&pitch=ff&t=0.30&aim=-0.55,-0.45', label: 'aim' },
+  // ⚠ THE THREE FOLLOW SCENES, AND THEY EXIST BECAUSE A HUMAN PLAYED THE BUILD
+  // AND SAID "it's odd that I can't see the ball if it's hit to left or right
+  // field". The `flight` camera's horizontal FOV at this viewport is ±16.3°
+  // about a FIXED axis, so a ball to either corner simply left the picture.
+  // Measured before the follow landed, at 105 mph / 26.5° / bt = 2.6 s:
+  //
+  //     spray   ball on screen (0…1, y down)   what the PNG showed
+  //     −40°    (−0.083, 0.470)                off the LEFT edge; a sliver of
+  //                                            tracer at the frame border
+  //     +40°    ( 1.098, 0.470)                nothing at all — no ball, no arc
+  //
+  // `expectBallInFrame` turns that from a picture a human has to squint at into
+  // a number the run exits non-zero on. Both corners, because a follow that
+  // yaws the wrong way fixes one and doubles the other.
+  'follow-pull': {
+    query: 'scene=flight&pitch=ff&hit=1&spray=-40&bt=2.6',
+    label: 'follow-pull',
+    expectBallInFrame: true,
+  },
+  'follow-oppo': {
+    query: 'scene=flight&pitch=ff&hit=1&spray=40&bt=2.6',
+    label: 'follow-oppo',
+    expectBallInFrame: true,
+  },
+  // The transition CAUGHT MID-MOVE — mount on the batter camera, ease to the
+  // deck, and freeze 400 ms in. This is the only shot that can see the ease at
+  // all: every other scene mounts in its final mode and snaps. 400 ms of a
+  // 800 ms quintic is smootherstep(0.5) = 0.5, i.e. the exact half-way pose,
+  // which is also the frame in which a linear blend and a quintic one AGREE —
+  // so this shot proves the transition exists and `camera.test.ts` proves its
+  // shape. The ball is 0.40 s off the bat and must be in frame throughout.
+  'follow-ease': {
+    query: 'scene=flight&pitch=ff&hit=1&bt=0.40&from=batter&ease=400',
+    label: 'follow-ease',
+    expectBallInFrame: true,
+  },
 };
 
 // Portrait, a phone screen. Same shape as the golf harness so the two sets of
 // shots are comparable side by side.
 const VIEWPORT = { width: 900, height: 1600 };
-const READY_TIMEOUT_MS = 20000;
+// ⚠ RAISED FROM 20 s FOR `?ease=`. A transition shot spends an EXACT slice of
+// virtual time — 400 ms at a 50 ms virtual step is 8 extra rendered frames, and
+// SwiftShader renders this scene at roughly 3 fps, so ~3 s more before the
+// beacon. The number is headroom over a measured cost, not a guess at one.
+const READY_TIMEOUT_MS = 30000;
 
 // Bearings the fence table is printed at: dead centre, the two power alleys and
 // both foul lines. −45/0/+45 are sampled knots in both parks; ±22 is a knot in
@@ -465,7 +514,175 @@ function checkReport(report) {
   violations.push(...checkBattedTracer(report));
   violations.push(...checkBall(report));
   violations.push(...checkContactSeam(report));
+  violations.push(...checkReveal(report));
+  violations.push(...checkFraming(report));
   return violations;
+}
+
+/**
+ * THE INFORMATION-LEAK CHECK — new, and the reason the two tracer seams are now
+ * two functions instead of one.
+ *
+ * The owner played the shipped build and reported "the arc is there steady when
+ * I expected it would be created as the ball is flying not ahead of it". It was:
+ * the whole flight, INCLUDING THE LANDING POINT, was drawn the instant the pitch
+ * was served. That is not a look problem, it is an information leak — a home run
+ * is readable before it happens, and an incoming pitch's break is readable
+ * before the player has to commit — and the pitch half is the worse of the two.
+ *
+ * Three assertions, each killing a different way of getting this wrong:
+ *
+ *   (a) THE COUNT, re-derived here. The harness counts the sim's own samples at
+ *       or before the frozen instant and requires the draw range to equal it
+ *       EXACTLY. That kills a full reveal (the old behaviour), an off-by-one
+ *       lead, a reveal stuck at zero, and a reveal keyed off the wrong clock.
+ *       It is arithmetic on `report.pitch.track.t`, not a read of anything the
+ *       renderer computed, so it cannot become a tautology.
+ *   (b) THE PREFIX, bit for bit. Every drawn float must be the corresponding
+ *       float of the FULL buffer. This is the "the geometry must not change"
+ *       claim, mechanically: an implementation that rewrote the vertex data per
+ *       frame to end at the ball would pass (a) and (c) and fail here — and it
+ *       would also have quietly invalidated the 0.002 ft drawn-vs-sim
+ *       comparison, which now reads the full buffer and would be comparing
+ *       something that is re-authored every frame.
+ *   (c) THE TIP, geometrically. The last drawn vertex must lie BEHIND the drawn
+ *       ball along the path, by no more than the one sim substep the reveal
+ *       granularity allows. "Behind" is a dot product against the next (hidden)
+ *       vertex, so it needs no frame convention and no tolerance to have a sign;
+ *       "no more than" is bounded by the distance to that same next vertex,
+ *       which is DERIVED from the track rather than chosen. A tracer written in
+ *       reverse order passes (a) and (b) and dies here.
+ */
+function checkReveal(report) {
+  const violations = [];
+  const t = report.ballTimeS;
+  if (t === null || t === undefined) return [];
+  const struck = !!report.batted && t >= report.contactTS;
+  const rows = [
+    {
+      which: 'pitch',
+      drawn: report.pitchTracer,
+      all: report.pitchTracerAll,
+      // Once the ball is struck the pitch is HISTORY and stays fully drawn —
+      // that trail is what makes the contact seam legible.
+      want: struck ? report.pitch.track.t.length : countAtOrBefore(report.pitch.track.t, t),
+      live: !struck,
+    },
+    {
+      which: 'batted',
+      drawn: report.battedTracer,
+      all: report.battedTracerAll,
+      want: report.batted ? countAtOrBefore(report.batted.track.t, t - report.contactTS) : 0,
+      live: struck,
+    },
+  ];
+  for (const r of rows) {
+    if (r.all.length === 0) continue;
+    const drawnN = r.drawn.length / 3;
+    const allN = r.all.length / 3;
+    console.log(
+      `  REVEAL ${r.which.padEnd(6)} drawn ${String(drawnN).padStart(4)} of ${String(allN).padStart(
+        4,
+      )} verts   expected ${String(r.want).padStart(4)}${r.live ? '   ← the live track' : ''}`,
+    );
+    if (drawnN !== r.want) {
+      violations.push(
+        `the ${r.which} tracer draws ${drawnN} vertices at t = ${t.toFixed(3)} s, but only ` +
+          `${r.want} of the sim's samples have happened — ` +
+          (drawnN > r.want ? 'the arc is drawn AHEAD of the ball' : 'the trail lags the ball'),
+      );
+    }
+    // (b) the drawn vertices are the leading ones of the built path, exactly.
+    let firstDiff = -1;
+    for (let i = 0; i < r.drawn.length; i++) {
+      if (r.drawn[i] !== r.all[i]) {
+        firstDiff = i;
+        break;
+      }
+    }
+    if (firstDiff >= 0) {
+      violations.push(
+        `the ${r.which} tracer's drawn vertices are not a PREFIX of the built path ` +
+          `(float ${firstDiff}: ${r.drawn[firstDiff]} vs ${r.all[firstDiff]}) — ` +
+          `the geometry is being rewritten, not revealed`,
+      );
+    }
+    // (c) the tip, against the drawn ball.
+    if (!r.live || drawnN < 1 || drawnN >= allN || !report.ballScene) continue;
+    const tip = [r.all[(drawnN - 1) * 3], r.all[(drawnN - 1) * 3 + 1], r.all[(drawnN - 1) * 3 + 2]];
+    const next = [r.all[drawnN * 3], r.all[drawnN * 3 + 1], r.all[drawnN * 3 + 2]];
+    const toBall = report.ballScene.map((v, i) => v - tip[i]);
+    const toNext = next.map((v, i) => v - tip[i]);
+    const lag = Math.hypot(...toBall);
+    const step = Math.hypot(...toNext);
+    // ⚠ NORMALISED, AND THE EPSILON IS THE FLOAT32 ONE. When the frozen instant
+    // lands exactly on a substep the ball sits ON the tip vertex, `toBall` is a
+    // Float64-minus-Float32 difference (2.7e-5 ft at 450 ft) and its SIGN is
+    // noise. Dividing by the step turns the dot product into a length along the
+    // path, which `TRACER_TOL_FT` is already the derived tolerance for.
+    const along =
+      (toBall[0] * toNext[0] + toBall[1] * toNext[1] + toBall[2] * toNext[2]) / (step || 1);
+    console.log(
+      `         tip → ball ${lag.toFixed(4)} ft, forward ${
+        along > -TRACER_TOL_FT ? 'yes' : 'NO'
+      }  (bound: one substep = ${step.toFixed(4)} ft + tol ${TRACER_TOL_FT})`,
+    );
+    if (along < -TRACER_TOL_FT) {
+      violations.push(
+        `the ${r.which} trail's tip is AHEAD of the ball — the outcome is on screen before it happens`,
+      );
+    }
+    if (lag > step + TRACER_TOL_FT) {
+      violations.push(
+        `the ${r.which} trail's tip is ${lag.toFixed(4)} ft behind the ball, over the ` +
+          `${step.toFixed(4)} ft one-substep bound — the trail is detached`,
+      );
+    }
+  }
+  return violations;
+}
+
+/** How many of `times` are at or before `t`. The reveal count, re-derived. */
+function countAtOrBefore(times, t) {
+  let n = 0;
+  for (const v of times) if (v <= t) n++;
+  return n;
+}
+
+/**
+ * THE FRAMING CHECK — new, and it is the owner's second defect written as a
+ * number.
+ *
+ * `ballScreen()` is the DRAWN ball projected by the DRAWING camera into 0…1
+ * viewport coordinates. "In frame" is therefore `0 ≤ u,v ≤ 1` and nothing else,
+ * and it is the one thing `checkBall` explicitly could NOT say: its own note
+ * warns that `Object3D.visible` is not "in this picture", and cites `flight.png`
+ * passing with no ball anywhere in the shot.
+ *
+ * It is asserted only for the scenes that claim it (`expectBallInFrame`), and
+ * PRINTED for every scene — because a mode whose ball is legitimately off-frame
+ * (`flight` at t = 0.30 s, the pitch still below the bottom crop) is a fact
+ * about the framing, not a regression, and a gate that fails on correct data is
+ * worth as little as one that passes on wrong data.
+ */
+function checkFraming(report) {
+  const p = report.ballScreen;
+  const cam = report.cameraAim;
+  console.log(
+    `  FRAME  mode ${String(cam?.mode).padEnd(7)} ease ${(cam?.progress ?? 0).toFixed(3)}` +
+      `  aim (${(cam?.target ?? []).map((v) => v.toFixed(1)).join(', ')})` +
+      `   ball on screen ${p ? `(${p[0].toFixed(3)}, ${p[1].toFixed(3)})` : '— (off frustum)'}` +
+      `   clock ${report.clockNow ?? '—'} ms`,
+  );
+  if (!report.expectBallInFrame) return [];
+  if (!p) return ['the ball is outside the camera frustum in a scene that must contain it'];
+  const inFrame = p[0] >= 0 && p[0] <= 1 && p[1] >= 0 && p[1] <= 1;
+  return inFrame
+    ? []
+    : [
+        `the ball is OFF FRAME at (${p[0].toFixed(3)}, ${p[1].toFixed(3)}) — the camera is not ` +
+          `following it, which is the defect this scene exists to catch`,
+      ];
 }
 
 /** Linear interpolation of a t-ordered sample list. Clamped, like `sampleTrack`. */
@@ -584,8 +801,11 @@ function checkBall(report) {
  * so the sim was never wrong; only the preview was.
  */
 function checkContactSeam(report) {
-  const p = report.pitchTracer;
-  const b = report.battedTracer;
+  // The BUILT paths, not the revealed ones: the seam is a property of the
+  // geometry, and reading the reveal would make this check silently skip on
+  // every shot frozen before contact.
+  const p = report.pitchTracerAll;
+  const b = report.battedTracerAll;
   if (p.length < 3 || b.length < 3) return [];
   const gap = Math.max(
     Math.abs(p[p.length - 3] - b[0]),
@@ -604,7 +824,16 @@ function checkContactSeam(report) {
 function checkPitchTracer(report) {
   const violations = [];
   const p = report.pitch;
-  const drawn = reportFromSceneFlat(report.pitchTracer);
+  // ⚠ THE FULL BUILT PATH, NOT THE REVEALED PREFIX, AND THE DISTINCTION IS THE
+  // WHOLE RE-BASING THIS CHECK NEEDED. The trail is now revealed progressively,
+  // so `tracer()` returns only the part of the flight that has happened. Point
+  // this comparison at that and it quietly stops asking anything about the part
+  // of the curve the ball has not reached — which on a shot frozen at t = 0.30 s
+  // is 40 % of a pitch, and on `homerun` is the entire descending limb, i.e.
+  // exactly the geometry a "prettier curve" bug would live in. `readAll()`
+  // exists so this check keeps measuring what it always measured; `checkReveal`
+  // is where the reveal itself is asserted.
+  const drawn = reportFromSceneFlat(report.pitchTracerAll);
   console.log(
     `  PITCH ${p.id}  plate ${p.plate.speedMph.toFixed(1)} mph at` +
       ` x ${p.plate.x.toFixed(2)} h ${p.plate.h.toFixed(2)} ft` +
@@ -717,7 +946,8 @@ function checkBattedTracer(report) {
   if (!report.batted) return [];
   const violations = [];
   const b = report.batted;
-  const drawn = worldFromSceneFlat(report.battedTracer);
+  // The full built path — see the note in `checkPitchTracer`.
+  const drawn = worldFromSceneFlat(report.battedTracerAll);
   console.log(
     `  BATTED  EV ${b.evMph.toFixed(1)} mph  LA ${b.laDeg.toFixed(1)}°  spray ${b.sprayDeg.toFixed(1)}°` +
       `  carry ${b.carryFt.toFixed(1)} ft  apex ${b.apexFt.toFixed(1)} ft  hang ${b.hangS.toFixed(2)} s`,
@@ -837,17 +1067,28 @@ async function main() {
             ballTimeS: sim.ballTimeS,
             contactTS: sim.contactTS,
             mode: stadium.mode,
+            // AS DRAWN (the reveal) and AS BUILT (the geometry). Two questions,
+            // two readers — see `tracer.ts`'s note on `readAll`.
             pitchTracer: stadium.tracer('pitch'),
             battedTracer: stadium.tracer('batted'),
+            pitchTracerAll: stadium.tracerFull('pitch'),
+            battedTracerAll: stadium.tracerFull('batted'),
             tracerVisible: {
               pitch: stadium.tracerVisible('pitch'),
               batted: stadium.tracerVisible('batted'),
             },
             ballScene: stadium.ballScene(),
+            ballScreen: stadium.ballScreen(),
             ballVisible: stadium.ballVisible(),
             ballScale: stadium.ballScale(),
+            cameraAim: stadium.cameraAim(),
+            clockNow: window.__sceneClockNow ? window.__sceneClockNow() : null,
           };
         }, FENCE_BEARINGS);
+
+        // The scene's own claim about itself, carried into the checks. Guarded
+        // because `report` is `{ err }` when the handle is broken.
+        if (report && !report.err) report.expectBallInFrame = !!SCENES[id].expectBallInFrame;
 
         const file = path.join(outDir, `${label}.png`);
         await page.screenshot({ path: file });

@@ -18,9 +18,18 @@ import type { SwingResult } from '../../../lib/baseball/derbyState';
 // When the ball is not being drawn (before contact, after it is parked) the
 // projection returns null and the tag simply HOLDS its last position — which is
 // where the ball finished, i.e. exactly where a broadcast leaves the graphic.
+//
+// ⚠ AND `follow` IS THE SAME RULE APPLIED TO A MOVING CAMERA. The projection is
+// correct in world space, so once the camera EASES BACK to the box after a play
+// (`stadium/camera.ts`) a tag that kept following would sail across the screen
+// chasing a ball that had already stopped. Holding is the same behaviour the
+// null branch above already had; `follow` just lets the HUD say when the play is
+// over, which is knowledge this widget has no other way to get.
 
 export interface ExitVeloTagProps {
   result: SwingResult | null;
+  /** Track the ball, or hold the last position. See the note above. */
+  follow: boolean;
   /** `StadiumApi.ballScreen()` — 0…1 viewport, y down, or null. */
   getBallScreen: () => [number, number] | null;
 }
@@ -30,10 +39,15 @@ const FALLBACK: [number, number] = [0.5, 0.42];
 /** Offset from the ball, px, so the tag never sits on top of it. */
 const OFFSET_Y_PX = -34;
 
-export function ExitVeloTag({ result, getBallScreen }: ExitVeloTagProps) {
+export function ExitVeloTag({ result, follow, getBallScreen }: ExitVeloTagProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const lastRef = useRef<[number, number]>(FALLBACK);
   const visible = !!result && result.contactZM !== null;
+
+  // ⚠ A REF, NOT A DEP. Re-running the effect on `follow` would restart the rAF
+  // mid-flight; the loop reads the current value each frame instead.
+  const followRef = useRef(follow);
+  followRef.current = follow;
 
   useEffect(() => {
     if (!visible) return;
@@ -41,7 +55,7 @@ export function ExitVeloTag({ result, getBallScreen }: ExitVeloTagProps) {
     const loop = () => {
       const host = hostRef.current;
       if (host) {
-        const p = getBallScreen();
+        const p = followRef.current ? getBallScreen() : null;
         if (p) lastRef.current = p;
         const [u, v] = lastRef.current;
         // translate(-50%, -100%) anchors the tag's bottom centre on the ball;

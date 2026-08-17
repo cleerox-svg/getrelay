@@ -14,6 +14,16 @@
 // 120 times a second for data that only changes when a new flight is served.
 // The buffer is sized once at build time and the draw range moves.
 //
+// ⚠ AND THE DRAW RANGE IS NOW THE REVEAL. `set()` writes the WHOLE flight once;
+// `reveal(n)` says how much of it has happened yet. The vertex data never moves
+// after `set()` — which is what keeps the visual gate's drawn-vs-sim comparison
+// a statement about the renderer and not about an animation — while what the GPU
+// rasterises grows with the ball. Before this, the entire arc INCLUDING THE
+// LANDING POINT was on screen from the instant the pitch was served: the player
+// could read a home run before it happened, and could read the pitch's break
+// before having to commit to a swing. That is an information leak, not a
+// framerate problem, and it is fixed here rather than in the sim.
+//
 // It is a `Line`, i.e. ONE draw call per tracer. WebGL ignores
 // `LineBasicMaterial.linewidth` on every platform that matters, so the tracer is
 // 1 px wide by construction — bright colours rather than thick ones.
@@ -29,12 +39,37 @@ import {
 import type { StadiumCtx, StadiumPart } from './geom';
 
 export interface TracerHandle extends StadiumPart {
-  /** Replace the drawn polyline. `points` is flat scene-space `[x, y, z, …]`. */
+  /**
+   * Replace the polyline. `points` is flat scene-space `[x, y, z, …]`.
+   *
+   * Writes the WHOLE path and reveals all of it; `reveal()` is what trims it
+   * back to the part that has happened. A caller that wants a progressive trail
+   * calls `set()` once per flight and `reveal()` once per frame.
+   */
   set(points: readonly number[]): void;
+  /**
+   * How many leading vertices the GPU draws. Clamped to what `set()` wrote, so
+   * a caller cannot reveal geometry that is not there.
+   */
+  reveal(count: number): void;
+  /** Vertices `set()` wrote, revealed or not. */
+  written(): number;
   /** Draw nothing (draw range 0) without freeing the buffer. */
   clear(): void;
   /** The vertices AS DRAWN, read out of the attribute. The gate's seam. */
   read(): number[];
+  /**
+   * The WHOLE written path, revealed or not — the gate's geometry seam.
+   *
+   * ⚠ TWO READERS, TWO QUESTIONS, AND CONFLATING THEM WOULD HAVE HOLLOWED THE
+   * GATE. `read()` answers "what is on screen right now", which is what the
+   * information-leak check needs; this answers "what did the renderer build from
+   * the sim", which is what the 0.002 ft drawn-vs-sim comparison needs. Point
+   * the second question at `read()` and it silently becomes a check on a
+   * prefix — every hidden vertex stops being compared, and a tracer that is
+   * wrong past the ball passes forever.
+   */
+  readAll(): number[];
   /** Is the line actually being rendered? Position without this proves nothing. */
   visible(): boolean;
 }
@@ -68,27 +103,45 @@ export function buildTracer({ scene, track }: StadiumCtx, opts: TracerOptions): 
   group.add(line);
   scene.add(group);
 
+  let written = 0;
+
   return {
     group,
     set(points) {
       const count = Math.min(Math.floor(points.length / 3), opts.maxPoints);
       for (let i = 0; i < count * 3; i++) positions[i] = points[i] ?? 0;
       attr.needsUpdate = true;
+      written = count;
       geom.setDrawRange(0, count);
     },
+    reveal(count) {
+      const n = Number.isFinite(count) ? Math.floor(count) : 0;
+      geom.setDrawRange(0, Math.max(0, Math.min(n, written)));
+    },
+    written: () => written,
     clear() {
+      written = 0;
       geom.setDrawRange(0, 0);
     },
     // ⚠ READ THE DRAW RANGE, NOT A PRIVATE COUNTER. This used to close over its
     // own `count`, which agreed with `drawRange.count` only because `set()` wrote
-    // both. The gate's whole claim is that it reads WHAT THE GPU DRAWS, and the
-    // first progressive draw range — the obvious next step, since these tracers
-    // double as the ball's trail — would have made that claim false silently:
-    // `read()` would keep returning geometry that is no longer being rasterised
-    // and every delta the harness prints would stay zero. One source of truth,
-    // and it is the one three hands to `drawArrays`.
+    // both. The gate's whole claim is that it reads WHAT THE GPU DRAWS, and a
+    // progressive draw range would have made that claim false silently: `read()`
+    // would keep returning geometry that is no longer being rasterised and every
+    // delta the harness prints would stay zero. One source of truth, and it is
+    // the one three hands to `drawArrays`.
+    //
+    // ⚠ THE PROGRESSIVE DRAW RANGE HAS NOW LANDED, and this line is why the gate
+    // did not have to be weakened for it. `read()` narrowed to the revealed
+    // prefix on the day `reveal()` appeared — automatically, because it was
+    // already asking three rather than a counter — so the harness's re-basing was
+    // a matter of pointing the geometry checks at `readAll()` and pointing a NEW
+    // check (the trail's tip must never be ahead of the ball) at `read()`.
     read() {
       return Array.from(positions.subarray(0, geom.drawRange.count * 3));
+    },
+    readAll() {
+      return Array.from(positions.subarray(0, written * 3));
     },
     visible() {
       return line.visible && group.visible && geom.drawRange.count > 0;
