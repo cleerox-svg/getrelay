@@ -19,12 +19,23 @@ import type { DerbyOutcome } from './derbyScoring';
 import type { FenceOutcome } from './parks';
 import type { PitchId } from './pitches';
 import type { PitchResult } from './pitchSim';
-import { MAX_POINTS_PER_ROUND } from './tuning';
+import { DERBY_POINTS_PER_ROUND } from './tuning';
 
 /** Everything one swing produced. `last` in `getState()`; the ExitVelo tag's row. */
 export interface SwingResult {
   outcome: DerbyOutcome;
   points: number;
+  /**
+   * This swing's 1-based position in the run of consecutive home runs it belongs
+   * to; 0 for anything that is not a home run.
+   *
+   * ⚠ IT IS REPORTED, NOT RE-DERIVED. The HUD needs to be able to say "×1.50" on
+   * the line that says "+237", and the only honest source for that is the index
+   * the SCORER was actually handed — a HUD that recomputed it from `curStreak`
+   * would be reading the counter AFTER `commit()` incremented it, i.e. one
+   * ahead, on exactly the swing the player is looking at.
+   */
+  chainIndex: number;
   /** + = LATE, s, true physical time against the plate crossing. */
   timingErrorS: number;
   undercutIn: number;
@@ -205,7 +216,7 @@ export function derbyState(s: DerbyCore): DerbyState {
     // exceptions to remember.
     last: copySwing(s.last),
     roundsPlayed,
-    maxScore: roundsPlayed * MAX_POINTS_PER_ROUND,
+    maxScore: roundsPlayed * DERBY_POINTS_PER_ROUND,
   };
 }
 

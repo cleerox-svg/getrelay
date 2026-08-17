@@ -1,8 +1,9 @@
 // Home Run Derby — the PAYOUT, and nothing else.
 //
 // Split out of `derbyRules.ts` at the 500-line cap — EXTRACTION, NOT A RAISED
-// CAP. It imports NOTHING from the rest of the game, so it is the LEAF of the
-// derby's module graph: `derbyRules` (the format) imports it, never the other
+// CAP. It imports nothing from the rest of the game except `derbyChain.ts`,
+// which is the LEAF (a pure `chain index → factor` law, extracted from here at
+// the cap in turn). `derbyRules` (the format) imports this file, never the other
 // way round, which is what lets `validateDerbyFormat` check the payout against
 // the format's own per-pitch cap with no cycle to reason about. The cap is a
 // REQUIRED argument here rather than a default read off a constant, for the same
@@ -30,7 +31,7 @@
 //
 // ⚠ AND THE HARD CONSTRAINT THAT SHAPES EVERY NUMBER BELOW.
 // `packages/relay-worker/src/games.ts` REJECTS (400, never truncates) a
-// submission whose score exceeds `rounds × MAX_POINTS_PER_ROUND`, and
+// submission whose score exceeds `rounds × DERBY_POINTS_PER_ROUND`, and
 // `DerbyGame.bank()` swallows the 400 with `.catch(() => undefined)` — so an
 // over-cap score vanishes silently with NO UI signal. M2c shipped exactly that
 // bug once (via `bestStreak`) and it took mutation testing against the real
@@ -40,6 +41,8 @@
 // clamp by looping over the outcome ENUM at inputs no physics can reach — so
 // "somebody adds a payout for a sixth outcome and forgets the cap" is a test
 // failure rather than a silently-lost score.
+
+import { CHAIN_MAX_STEPS, CHAIN_MULT_MAX, CHAIN_START, chainMultiplier } from './derbyChain';
 
 /**
  * The whole enum, as data, so a new outcome cannot be added untested.
@@ -165,6 +168,7 @@ export const FOUL_CREDIT_FRACTION = 0.25;
  */
 export const BARREL_BONUS_POINTS = 25;
 
+
 /** The home-run curve. UNCLAMPED — `swingPoints` is the one place that clamps. */
 function homeRunCredit(carryFt: number): number {
   return HR_BASE_POINTS + Math.max(0, carryFt - DISTANCE_DATUM_FT) * POINTS_PER_FT;
@@ -185,12 +189,20 @@ function contactCredit(carryFt: number): number {
  * an integrator, and a NaN score would propagate through `commit()` into
  * `submitGameScore`, fail the worker's `Number.isInteger` and be dropped
  * silently, because the 400 is swallowed by a `.catch`.
+ *
+ * ⚠ `chainIndex` IS REQUIRED, NOT OPTIONAL-WITH-A-DEFAULT. A default of 1 would
+ * make "the caller forgot to thread the chain through" compile and score
+ * silently as an isolated home run, which is precisely the class of bug this
+ * file's header is about. Required means every call site is a type error until
+ * somebody decides what the chain state is there — and there are exactly two
+ * (`derbySim.resolveSwing` and the validators below).
  */
 export function swingPoints(
   outcome: DerbyOutcome,
   carryFt: number,
   barrel: boolean,
   cap: number,
+  chainIndex: number,
 ): number {
   if (outcome === 'whiff' || outcome === 'take') return 0;
   const carry = Number.isFinite(carryFt) ? carryFt : 0;
@@ -198,6 +210,13 @@ export function swingPoints(
   // one, scaled — see `FOUL_CREDIT_FRACTION`.
   let fair = outcome === 'homeRun' ? homeRunCredit(carry) : contactCredit(carry);
   if (barrel) fair += BARREL_BONUS_POINTS;
+  // ⚠ THE CHAIN IS A HOME-RUN-ONLY TERM, and it multiplies the WHOLE fair
+  // payout, barrel bonus included — the same way `FOUL_CREDIT_FRACTION` scales
+  // the whole thing, so "a chained home run is worth N× the same ball on its
+  // own" is literally true of the code rather than true of most of it. An out, a
+  // foul, a whiff and a take never read `chainIndex` at all, which is the
+  // structural half of "earned by skill, not by volume".
+  if (outcome === 'homeRun') fair *= chainMultiplier(chainIndex);
   const raw = outcome === 'foul' ? fair * FOUL_CREDIT_FRACTION : fair;
   return Math.min(cap, Math.max(0, Math.round(raw)));
 }
@@ -226,6 +245,25 @@ const PROBE_CARRIES = [
 ];
 
 /**
+ * The chain positions the cap check probes. Four are unreachable on purpose —
+ * a restored snapshot is player-adjacent input and `swingPoints` is total.
+ */
+const PROBE_CHAIN = [
+  Number.NEGATIVE_INFINITY,
+  -1,
+  Number.NaN,
+  0,
+  1,
+  CHAIN_START - 1,
+  CHAIN_START,
+  CHAIN_START + CHAIN_MAX_STEPS,
+  24,
+  1e9,
+  Number.MAX_SAFE_INTEGER,
+  Number.POSITIVE_INFINITY,
+];
+
+/**
  * THE WORKER'S INVARIANT, over the whole outcome enum. Cheap — a few dozen
  * arithmetic calls — because `derbyRules.validateDerbyFormat` calls it on the
  * LIVE config path, where it is the one payout property that actually depends on
@@ -238,6 +276,12 @@ const PROBE_CARRIES = [
  * runs were the only thing that scored. The failure it now guards is "somebody
  * adds a payout for a sixth outcome and forgets the cap", and a hand-written
  * list of the outcomes that happen to score today cannot see that.
+ *
+ * ⚠ AND IT IS NOW ALSO A LOOP OVER THE CHAIN, for the same reason it is a loop
+ * over the enum: the multiplier is a second axis the clamp has to survive, and
+ * an absurd chain index (a restored snapshot, a future caller) must clamp rather
+ * than overflow. `MAX_SAFE_INTEGER × MAX_SAFE_INTEGER` points is exactly the
+ * shape that produces a non-integer score and a silent 400.
  */
 export function validatePayoutCap(cap: number): string[] {
   const bad: string[] = [];
@@ -245,15 +289,17 @@ export function validatePayoutCap(cap: number): string[] {
   for (const o of DERBY_OUTCOMES) {
     for (const c of PROBE_CARRIES) {
       for (const b of [false, true]) {
-        const p = swingPoints(o, c, b, cap);
-        const at = `${o} @ ${c} barrel=${b}`;
-        if (!Number.isInteger(p)) bad.push(`${at} pays ${p}, not an integer`);
-        if (p > cap) bad.push(`${at} pays ${p} > cap ${cap}`);
-        if (p < 0) bad.push(`${at} pays ${p} < 0`);
-        // NO CONTACT, NO POINTS — at every input, including a barrelled whiff,
-        // which is impossible and is probed anyway because `swingPoints` is
-        // total and a future caller may not be careful.
-        if ((o === 'whiff' || o === 'take') && p !== 0) bad.push(`${at} pays ${p}`);
+        for (const k of PROBE_CHAIN) {
+          const p = swingPoints(o, c, b, cap, k);
+          const at = `${o} @ ${c} barrel=${b} chain=${k}`;
+          if (!Number.isInteger(p)) bad.push(`${at} pays ${p}, not an integer`);
+          if (p > cap) bad.push(`${at} pays ${p} > cap ${cap}`);
+          if (p < 0) bad.push(`${at} pays ${p} < 0`);
+          // NO CONTACT, NO POINTS — at every input, including a barrelled whiff,
+          // which is impossible and is probed anyway because `swingPoints` is
+          // total and a future caller may not be careful.
+          if ((o === 'whiff' || o === 'take') && p !== 0) bad.push(`${at} pays ${p}`);
+        }
       }
     }
   }
@@ -285,11 +331,18 @@ export function validateDerbyPayout(cap: number): string[] {
   //     about which ball was better. (It bites for real: at
   //     `pitchesPerRound = 20` the cap is 100 and both curves saturate before
   //     600 ft.) So: strict while the home run has room, never inverted after.
+  //
+  //     ⚠ THE HOME RUN IS COMPARED AT CHAIN POSITION 1 — its WEAKEST state — so
+  //     the claim stays "a home run beats the best in-play ball at every carry"
+  //     rather than "…once you have chained three of them". The multiplier is
+  //     ≥ 1 and monotone (asserted in (3)), so the strict inequality at position
+  //     1 carries to every position above it.
+  const CHAIN_PROBE = [1, 2, CHAIN_START, CHAIN_START + CHAIN_MAX_STEPS, 24];
   for (let c = 0; c <= 700; c += 5) {
     for (const b of [false, true]) {
-      const hr = swingPoints('homeRun', c, b, cap);
-      const ip = swingPoints('inPlay', c, b, cap);
-      const fo = swingPoints('foul', c, b, cap);
+      const hr = swingPoints('homeRun', c, b, cap, 1);
+      const ip = swingPoints('inPlay', c, b, cap, 0);
+      const fo = swingPoints('foul', c, b, cap, 0);
       if (ip > hr || (hr < cap && ip >= hr)) {
         bad.push(`a ${c} ft out (${ip}) pays at least as much as a ${c} ft HR (${hr})`);
       }
@@ -302,18 +355,59 @@ export function validateDerbyPayout(cap: number): string[] {
       }
     }
     for (const o of ['homeRun', 'inPlay', 'foul'] as const) {
-      if (swingPoints(o, c + 5, false, cap) < swingPoints(o, c, false, cap)) {
-        bad.push(`${o} pays less at ${c + 5} ft than at ${c} ft`);
+      for (const k of CHAIN_PROBE) {
+        if (swingPoints(o, c + 5, false, cap, k) < swingPoints(o, c, false, cap, k)) {
+          bad.push(`${o} pays less at ${c + 5} ft than at ${c} ft (chain ${k})`);
+        }
       }
     }
   }
 
-  // (2) A BARREL IS NEVER A PENALTY, and never worth more than its own bonus.
+  // (2) A BARREL IS NEVER A PENALTY, and never worth more than its own bonus —
+  //     scaled by whatever multiplier the same swing already earns, because the
+  //     chain multiplies the WHOLE fair payout and the bonus is part of it.
   for (let c = 0; c <= 700; c += 25) {
     for (const o of ['homeRun', 'inPlay', 'foul'] as const) {
-      const d = swingPoints(o, c, true, cap) - swingPoints(o, c, false, cap);
-      if (d < 0) bad.push(`${o} @ ${c} ft: a barrel is worth ${d}`);
-      if (d > BARREL_BONUS_POINTS) bad.push(`${o} @ ${c} ft: a barrel is worth ${d}, over its bonus`);
+      for (const k of CHAIN_PROBE) {
+        const d = swingPoints(o, c, true, cap, k) - swingPoints(o, c, false, cap, k);
+        const ceiling =
+          BARREL_BONUS_POINTS * (o === 'homeRun' ? chainMultiplier(k) : 1) + 1; // +1 = rounding
+        if (d < 0) bad.push(`${o} @ ${c} ft chain ${k}: a barrel is worth ${d}`);
+        if (d > ceiling) {
+          bad.push(`${o} @ ${c} ft chain ${k}: a barrel is worth ${d}, over its bonus ${ceiling}`);
+        }
+      }
+    }
+  }
+
+  // (3) THE CHAIN ITSELF. Four properties, and each one is a mutation somebody
+  //     will make: the multiplier starts at exactly 1 (so an isolated home run
+  //     pays what it paid before the chain existed, which is what keeps the
+  //     novice and casual rows unmoved), it is monotone non-decreasing, it never
+  //     exceeds its own derived ceiling, and — the one that makes "skill, not
+  //     volume" structural — NO non-home-run outcome reads the chain at all.
+  for (let k = 1; k < CHAIN_START; k++) {
+    if (chainMultiplier(k) !== 1) {
+      bad.push(`chainMultiplier(${k}) is ${chainMultiplier(k)}, not 1 below CHAIN_START`);
+    }
+  }
+  if (chainMultiplier(CHAIN_START) <= 1) {
+    bad.push(`chainMultiplier(${CHAIN_START}) is ${chainMultiplier(CHAIN_START)}: the ramp is flat`);
+  }
+  for (let k = 0; k <= 64; k++) {
+    const m = chainMultiplier(k);
+    if (m < chainMultiplier(k - 1)) bad.push(`chainMultiplier is not monotone at ${k}`);
+    if (m > CHAIN_MULT_MAX) bad.push(`chainMultiplier(${k}) = ${m} > ${CHAIN_MULT_MAX}`);
+    if (m < 1) bad.push(`chainMultiplier(${k}) = ${m} < 1`);
+    for (const o of DERBY_OUTCOMES) {
+      if (o === 'homeRun') continue;
+      for (const c of [0, 200, 400, 700]) {
+        for (const b of [false, true]) {
+          if (swingPoints(o, c, b, cap, k) !== swingPoints(o, c, b, cap, 0)) {
+            bad.push(`${o} @ ${c} ft reads the chain (index ${k})`);
+          }
+        }
+      }
     }
   }
   return bad;

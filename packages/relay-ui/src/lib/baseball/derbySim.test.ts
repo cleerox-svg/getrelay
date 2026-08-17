@@ -133,6 +133,7 @@ import {
   validateDerbyFormat,
   validateDerbyMix,
 } from './derbyRules';
+import { CHAIN_MULT_MAX, CHAIN_START, chainMultiplier } from './derbyChain';
 import {
   BARREL_BONUS_POINTS,
   CONTACT_DATUM_FT,
@@ -141,6 +142,7 @@ import {
   DISTANCE_DATUM_FT,
   FOUL_CREDIT_FRACTION,
   HR_BASE_POINTS,
+  POINTS_PER_FT,
   swingPoints,
   validateDerbyPayout,
   validatePayoutCap,
@@ -151,7 +153,7 @@ import type { DerbySim as DerbySimType } from './derbySim';
 import type { SwingResult } from './derbyState';
 import { PITCHES } from './pitches';
 import type { PitchId } from './pitches';
-import { MAX_POINTS_PER_ROUND, MAX_ROUNDS, PITCH_TEMPO, isBarrel } from './tuning';
+import { DERBY_POINTS_PER_ROUND, MAX_ROUNDS, PITCH_TEMPO, isBarrel } from './tuning';
 
 import { ZONE_CENTER, reticleToPlate } from './zone';
 
@@ -194,6 +196,45 @@ const ownDataProps = (o: object) =>
 
 const f = (v: number, w = 7, d = 2) => v.toFixed(d).padStart(w);
 
+/**
+ * Standard normal draws off ONE seeded `mulberry32` stream — Marsaglia polar.
+ *
+ * ⚠ SEEDED, because `determinism.test.ts` bans `Math.random` from the sim and a
+ * bench that drives it with an unseeded RNG cannot be re-run to check a number
+ * somebody disputes. The stream is the same generator the sim's own serve uses,
+ * fed a different seed, so no shared state leaks between the player model and
+ * the pitches he is facing.
+ */
+function gaussian(seed: number): () => number {
+  const r = mulberry32(seed >>> 0);
+  let spare: number | null = null;
+  return () => {
+    if (spare !== null) {
+      const v = spare;
+      spare = null;
+      return v;
+    }
+    let u = 0;
+    let v = 0;
+    let s = 0;
+    do {
+      u = r() * 2 - 1;
+      v = r() * 2 - 1;
+      s = u * u + v * v;
+    } while (s === 0 || s >= 1);
+    const m = Math.sqrt((-2 * Math.log(s)) / s);
+    spare = v * m;
+    return u * m;
+  };
+}
+
+/** Median of a sample. Even lengths average the two middles. */
+function median(a: number[]): number {
+  const s = [...a].sort((x, y) => x - y);
+  const h = s.length >> 1;
+  return s.length % 2 ? s[h]! : (s[h - 1]! + s[h]!) / 2;
+}
+
 /** The worker's own source — read as TEXT, never imported. See `tuning.test.ts`. */
 const WORKER_GAMES = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -224,18 +265,18 @@ describe('derby — format and the server clamp', () => {
     expect(validateDerbyMix()).toEqual([]);
     expect(validateDerbyFormat()).toEqual([]);
 
-    // ⚠ THE CLAMP IS `rounds × MAX_POINTS_PER_ROUND`, read from the mirrored
+    // ⚠ THE CLAMP IS `rounds × DERBY_POINTS_PER_ROUND`, read from the mirrored
     // constants rather than from a literal, so a worker change that lands in
     // tuning.ts fails HERE instead of on the wire.
     expect(DERBY_ROUNDS).toBeLessThanOrEqual(MAX_ROUNDS);
-    expect(MAX_POINTS_PER_PITCH * PITCHES_PER_ROUND).toBe(MAX_POINTS_PER_ROUND);
+    expect(MAX_POINTS_PER_PITCH * PITCHES_PER_ROUND).toBe(DERBY_POINTS_PER_ROUND);
 
     console.log(
       `\nFORMAT  ${DERBY_ROUNDS} rounds × ${PITCHES_PER_ROUND} pitches = ` +
         `${DERBY_ROUNDS * PITCHES_PER_ROUND} swings\n` +
-        `        per-pitch cap ${MAX_POINTS_PER_PITCH} (= ${MAX_POINTS_PER_ROUND}/${PITCHES_PER_ROUND}, DERIVED)\n` +
-        `        round ceiling ${MAX_POINTS_PER_ROUND}, session ceiling ` +
-        `${DERBY_ROUNDS * MAX_POINTS_PER_ROUND} against the worker's rounds×2000\n` +
+        `        per-pitch cap ${MAX_POINTS_PER_PITCH} (= ${DERBY_POINTS_PER_ROUND}/${PITCHES_PER_ROUND}, DERIVED)\n` +
+        `        round ceiling ${DERBY_POINTS_PER_ROUND}, session ceiling ` +
+        `${DERBY_ROUNDS * DERBY_POINTS_PER_ROUND} against the worker's rounds×${DERBY_POINTS_PER_ROUND}\n` +
         `        homeRun = ${HR_BASE_POINTS} + max(0, carry − ${DISTANCE_DATUM_FT}) × 1\n` +
         `        inPlay  = max(0, carry − ${CONTACT_DATUM_FT}) × ${CONTACT_POINTS_PER_FT}\n` +
         `        foul    = ${FOUL_CREDIT_FRACTION} × the same ball in play\n` +
@@ -253,7 +294,7 @@ describe('derby — format and the server clamp', () => {
 
     // Exactly two outcomes pay nothing, and they are the two with no contact.
     for (const o of DERBY_OUTCOMES) {
-      const paid = swingPoints(o, 400, false, MAX_POINTS_PER_PITCH);
+      const paid = swingPoints(o, 400, false, MAX_POINTS_PER_PITCH, 1);
       expect(paid > 0, `${o} @ 400 ft`).toBe(o !== 'whiff' && o !== 'take');
     }
 
@@ -270,7 +311,9 @@ describe('derby — format and the server clamp', () => {
     expect(BARREL_BONUS_POINTS).toBeGreaterThan(0);
     for (const o of ['homeRun', 'inPlay', 'foul'] as const) {
       const cap = MAX_POINTS_PER_PITCH;
-      expect(swingPoints(o, 400, true, cap), o).toBeGreaterThan(swingPoints(o, 400, false, cap));
+      expect(swingPoints(o, 400, true, cap, 1), o).toBeGreaterThan(
+        swingPoints(o, 400, false, cap, 1),
+      );
     }
 
     // ⚠ AND `validateDerbyFormat` ACTUALLY SURFACES THE PAYOUT'S COMPLAINTS. The
@@ -293,7 +336,7 @@ describe('derby — format and the server clamp', () => {
     // comment claims, at every carry — not spot-checked.
     for (let c = 0; c <= 500; c += 25) {
       const fairRaw = Math.max(0, c - CONTACT_DATUM_FT) * CONTACT_POINTS_PER_FT;
-      expect(swingPoints('foul', c, false, MAX_POINTS_PER_PITCH)).toBe(
+      expect(swingPoints('foul', c, false, MAX_POINTS_PER_PITCH, 0)).toBe(
         Math.round(fairRaw * FOUL_CREDIT_FRACTION),
       );
     }
@@ -302,12 +345,13 @@ describe('derby — format and the server clamp', () => {
     for (const c of [120, 155.5, 200, 250, 300, 340, 380, 400, 420, 440]) {
       const cap = MAX_POINTS_PER_PITCH;
       rows.push(
-        `  ${f(c, 6, 1)} ft | HR ${String(swingPoints('homeRun', c, false, cap)).padStart(3)}` +
-          ` (barrel ${String(swingPoints('homeRun', c, true, cap)).padStart(3)})` +
-          ` | inPlay ${String(swingPoints('inPlay', c, false, cap)).padStart(3)}` +
-          ` (barrel ${String(swingPoints('inPlay', c, true, cap)).padStart(3)})` +
-          ` | foul ${String(swingPoints('foul', c, false, cap)).padStart(3)}` +
-          ` | whiff ${swingPoints('whiff', c, true, cap)}`,
+        `  ${f(c, 6, 1)} ft | HR ${String(swingPoints('homeRun', c, false, cap, 1)).padStart(3)}` +
+          ` (barrel ${String(swingPoints('homeRun', c, true, cap, 1)).padStart(3)})` +
+          ` (chained ${String(swingPoints('homeRun', c, true, cap, 99)).padStart(3)})` +
+          ` | inPlay ${String(swingPoints('inPlay', c, false, cap, 0)).padStart(3)}` +
+          ` (barrel ${String(swingPoints('inPlay', c, true, cap, 0)).padStart(3)})` +
+          ` | foul ${String(swingPoints('foul', c, false, cap, 0)).padStart(3)}` +
+          ` | whiff ${swingPoints('whiff', c, true, cap, 99)}`,
       );
     }
     console.log('\nPAYOUT LADDER — every outcome, by projected carry\n' + rows.join('\n'));
@@ -315,15 +359,15 @@ describe('derby — format and the server clamp', () => {
 
   it('⚠ the format validator BITES, and the config path actually calls it', () => {
     // ⚠ THE DIVISIBILITY CHECK COULD NOT FIRE. It was written as
-    // `perPitch * perRound !== MAX_POINTS_PER_ROUND`, and (2000/3)*3 is exactly
+    // `perPitch * perRound !== DERBY_POINTS_PER_ROUND`, and (4000/3)*3 is exactly
     // 2000 in IEEE-754 — so 3, 6, 7 and 9 pitches all PASSED while producing a
     // fractional per-pitch cap, which the worker (`Number.isInteger`) would then
     // reject on the wire. Every one of these is now caught.
     for (const per of [3, 6, 7, 9, 11, 12, 13]) {
-      expect(Number.isInteger(MAX_POINTS_PER_ROUND / per)).toBe(false);
+      expect(Number.isInteger(DERBY_POINTS_PER_ROUND / per)).toBe(false);
       expect(validateDerbyFormat(DERBY_ROUNDS, per).length).toBeGreaterThan(0);
       // …and the arithmetic the old check used really does say they are fine:
-      expect((MAX_POINTS_PER_ROUND / per) * per).toBe(MAX_POINTS_PER_ROUND);
+      expect((DERBY_POINTS_PER_ROUND / per) * per).toBe(DERBY_POINTS_PER_ROUND);
     }
     for (const per of [1, 2, 4, 5, 8, 10, 16, 20]) {
       expect(validateDerbyFormat(DERBY_ROUNDS, per)).toEqual([]);
@@ -352,7 +396,7 @@ describe('derby — format and the server clamp', () => {
     expect(() => new DerbySim({ seed: 1, rounds: 1, pitchesPerRound: 20 })).not.toThrow();
   });
 
-  it('⚠ no achievable input can put a round over MAX_POINTS_PER_ROUND', () => {
+  it('⚠ no achievable input can put a round over DERBY_POINTS_PER_ROUND', () => {
     // Three legs, and all three are needed because the first two are arithmetic
     // and the third is the only one that sees the wiring.
     //
@@ -364,7 +408,7 @@ describe('derby — format and the server clamp', () => {
     for (const o of DERBY_OUTCOMES) {
       for (const carry of [0, 350, 400, 500, 1000, 1e9, Number.MAX_SAFE_INTEGER, Infinity]) {
         for (const b of [false, true]) {
-          const p = swingPoints(o, carry, b, MAX_POINTS_PER_PITCH);
+          const p = swingPoints(o, carry, b, MAX_POINTS_PER_PITCH, 99);
           expect(p, `${o} @ ${carry} barrel=${b}`).toBeLessThanOrEqual(MAX_POINTS_PER_PITCH);
           expect(Number.isInteger(p), `${o} @ ${carry} barrel=${b}`).toBe(true);
         }
@@ -374,8 +418,8 @@ describe('derby — format and the server clamp', () => {
     //     cannot break the round ceiling either — again over every outcome.
     for (const per of [1, 2, 4, 5, 8, 10, 20]) {
       for (const o of DERBY_OUTCOMES) {
-        expect(swingPoints(o, 1e9, true, perPitchCap(per)) * per).toBeLessThanOrEqual(
-          MAX_POINTS_PER_ROUND,
+        expect(swingPoints(o, 1e9, true, perPitchCap(per), 1e9) * per).toBeLessThanOrEqual(
+          DERBY_POINTS_PER_ROUND,
         );
       }
     }
@@ -387,14 +431,15 @@ describe('derby — format and the server clamp', () => {
       const pr = wide.servePitch();
       wide.setReticle(pr.plate.x + 0.45, pr.plate.h);
       wide.swing(pr.plate.t - 0.002);
-      expect(wide.getState().roundScore).toBeLessThanOrEqual(MAX_POINTS_PER_ROUND);
+      expect(wide.getState().roundScore).toBeLessThanOrEqual(DERBY_POINTS_PER_ROUND);
     }
-    expect(wide.getState().score).toBeLessThanOrEqual(MAX_POINTS_PER_ROUND);
+    expect(wide.getState().score).toBeLessThanOrEqual(DERBY_POINTS_PER_ROUND);
 
     // (3) Play real sessions at absurd bat speeds — the only reachable dial that
     //     grows carry — and check the invariant after EVERY swing, partial
     //     rounds included, against the clamp the worker actually applies.
     const rows: string[] = [];
+    let shipWorstRound = 0;
     for (const bat of [71.5, 80, 90, 105, 130]) {
       let worstRound = 0;
       let bestHr = 0;
@@ -407,8 +452,8 @@ describe('derby — format and the server clamp', () => {
           sim.setReticle(pr.plate.x + 0.45, pr.plate.h);
           const r = sim.swing(pr.plate.t - 0.002);
           const st = sim.getState();
-          expect(st.roundScore).toBeLessThanOrEqual(MAX_POINTS_PER_ROUND);
-          expect(st.score).toBeLessThanOrEqual(st.roundsPlayed * MAX_POINTS_PER_ROUND);
+          expect(st.roundScore).toBeLessThanOrEqual(DERBY_POINTS_PER_ROUND);
+          expect(st.score).toBeLessThanOrEqual(st.roundsPlayed * DERBY_POINTS_PER_ROUND);
           worstRound = Math.max(worstRound, st.roundScore, ...st.roundScores);
           if (r.outcome === 'homeRun') {
             hrs++;
@@ -418,13 +463,28 @@ describe('derby — format and the server clamp', () => {
       }
       rows.push(
         `  bat ${f(bat, 5, 1)} mph | best HR ${f(bestHr, 6, 1)} ft | ${String(hrs).padStart(2)} HR ` +
-          `| worst round ${String(worstRound).padStart(4)} / ${MAX_POINTS_PER_ROUND} ` +
-          `(${f((100 * (MAX_POINTS_PER_ROUND - worstRound)) / MAX_POINTS_PER_ROUND, 5, 1)} % headroom)`,
+          `| worst round ${String(worstRound).padStart(5)} / ${DERBY_POINTS_PER_ROUND} ` +
+          `(${f((100 * (DERBY_POINTS_PER_ROUND - worstRound)) / DERBY_POINTS_PER_ROUND, 5, 1)} % headroom)`,
       );
+      if (bat === BAT_SPEED_MPH) shipWorstRound = worstRound;
     }
     console.log(
-      '\nCLAMP HEADROOM — a maximum-effort session at each bat speed\n' + rows.join('\n'),
+      '\nCLAMP HEADROOM — a maximum-effort session at each bat speed\n' +
+        rows.join('\n') +
+        `\n  ⚠ THE SHIPPING ROW IS THE ONE WITH A BOUND ON IT. The absurd-bat rows are\n` +
+        `  proof the cap holds AT saturation; the 71.5 row is the CARD BUDGET — the\n` +
+        `  room a future bat-speed modulator has before the clamp starts eating it.`,
     );
+    // ⚠ THE CARD BUDGET, ASSERTED. `baseball-progression`'s card stats are
+    // modulators on physics constants (bat speed raises exit velocity raises
+    // carry raises points), so a payout that already saturates the round ceiling
+    // at the SHIPPING bat speed makes every future card worth nothing. The
+    // shipping build before the chain multiplier kept 32.3 % of headroom here;
+    // this bound is deliberately looser than that (25 %) so the knobs have room
+    // to move, and deliberately tighter than "under the cap" so they cannot move
+    // all the way to saturation without failing. `CHAIN_STEP = 0.5` fails it.
+    expect(shipWorstRound, 'the shipping row measured nothing').toBeGreaterThan(0);
+    expect(shipWorstRound).toBeLessThan(0.75 * DERBY_POINTS_PER_ROUND);
   });
 
   it('⚠ a MAXIMAL session survives the worker’s OWN acceptance predicate', () => {
@@ -451,7 +511,7 @@ describe('derby — format and the server clamp', () => {
     // the worker to `export const MAX_ROUNDS: number = 8;` fails 2 tests loudly
     // (the `readConst` guard), and changing the worker's 2000 to 200 fails 1.
     // What it CANNOT see is the worker TIGHTENING its logic — `rounds *
-    // (MAX_POINTS_PER_ROUND / 2)` fails 0 tests here. That half is covered on the
+    // (DERBY_POINTS_PER_ROUND / 2)` fails 0 tests here. That half is covered on the
     // worker side by `games.test.ts`, which is where a transcription belongs to
     // be checked; this is the client half of a pincer, not the whole of it.
     const workerSrc = readFileSync(WORKER_GAMES, 'utf8');
@@ -462,10 +522,20 @@ describe('derby — format and the server clamp', () => {
       return Number(m![1]);
     };
     const wMaxRounds = readConst('MAX_ROUNDS');
-    const wPerRound = readConst('MAX_POINTS_PER_ROUND');
+    const wPerRound = readConst('DERBY_POINTS_PER_ROUND');
+    const wArcadePerRound = readConst('MAX_POINTS_PER_ROUND');
     const wPitches = readConst('DERBY_PITCHES_PER_ROUND');
     // The client's format must be the one the worker's streak bound assumes.
     expect(wPitches).toBe(PITCHES_PER_ROUND);
+    // ⚠ AND THE DERBY'S POINTS CEILING MUST BE THE DERBY'S OWN. Reading
+    // MAX_POINTS_PER_ROUND here as well is what makes "the worker branches"
+    // observable from this side: if somebody collapses the branch and raises the
+    // shared constant instead, the two reads become equal and this fails.
+    expect(wArcadePerRound).toBeLessThan(wPerRound);
+    expect(wPerRound).toBe(DERBY_POINTS_PER_ROUND);
+    expect(workerSrc).toContain(
+      "game === 'bbderby' ? DERBY_POINTS_PER_ROUND : MAX_POINTS_PER_ROUND",
+    );
 
     /**
      * `games.ts`'s `roundsAndStreakValid` + its score clamp, HAND-TRANSCRIBED —
@@ -493,8 +563,10 @@ describe('derby — format and the server clamp', () => {
     // included, because that is what the abandon net does.
     const rows: string[] = [];
     let shipPeak = 0;
-    for (const bat of [undefined, 105, 130, 200]) {
+    let worstPeak = 0;
+    for (const bat of [undefined, 90, 105, 130, 200]) {
       let peak = 0;
+      let bestStreak = 0;
       for (const seed of [1, 2, 3, 4, 5]) {
         const sim = new DerbySim({ seed, ...(bat === undefined ? {} : { batSpeedMph: bat }) });
         while (sim.getState().phase !== 'done') {
@@ -505,26 +577,225 @@ describe('derby — format and the server clamp', () => {
           const body = { score: st.score, rounds: st.roundsPlayed, bestStreak: st.bestStreak };
           expect(workerAccepts(body), `bat ${bat} seed ${seed}: ${JSON.stringify(body)}`).toBe(true);
           peak = Math.max(peak, st.score / (st.roundsPlayed * wPerRound));
+          bestStreak = Math.max(bestStreak, st.bestStreak);
         }
       }
       if (bat === undefined) shipPeak = peak;
+      worstPeak = Math.max(worstPeak, peak);
       rows.push(
         `  bat ${(bat === undefined ? `${BAT_SPEED_MPH} (shipping)` : String(bat)).padStart(16)} mph` +
           ` | peak ${f(100 * peak, 6, 1)} % of rounds × ${wPerRound}` +
-          ` | headroom ${f(100 * (1 - peak), 5, 1)} %`,
+          ` | headroom ${f(100 * (1 - peak), 5, 1)} %` +
+          ` | longest chain ${String(bestStreak).padStart(2)}`,
       );
     }
     console.log(
       `\nWORKER CLAMP — a maximal session against the worker's OWN predicate\n` +
         rows.join('\n') +
-        `\n  Every submission above was ACCEPTED. Note the 200 mph row saturating at\n` +
-        `  exactly 100 %: that is the STRUCTURAL cap (pitchesPerRound × perPitchCap ≡\n` +
-        `  MAX_POINTS_PER_ROUND) doing its job — the worker's bound is ≤, so exactly\n` +
-        `  full is fine and one point more is a silent 400.`,
+        `\n  Every submission above was ACCEPTED, and no row exceeded 100 %: that is the\n` +
+        `  STRUCTURAL cap (pitchesPerRound × perPitchCap ≡ DERBY_POINTS_PER_ROUND) doing\n` +
+        `  its job — the worker's bound is ≤, so exactly full is fine and one point more\n` +
+        `  is a silent 400. The chain multiplier is INSIDE that clamp, so it cannot\n` +
+        `  break it however long the run gets.\n` +
+        `  ⚠ THE 200 mph ROW IS NOT THE HARDEST CASE and stopped being it here: at that\n` +
+        `  bat speed the ball apexes past the 282 ft roof, is ruled 'roof' rather than a\n` +
+        `  home run, and so earns the CONTACT curve and NO chain at all. 105–130 mph is\n` +
+        `  where the payout actually peaks.`,
     );
     // The shipping config keeps real headroom — the absurd-bat rows are proof
     // the cap holds at saturation, this is proof the game is nowhere near it.
     expect(shipPeak).toBeLessThan(1);
+    // ⚠ AND NOTHING, AT ANY REACHABLE BAT SPEED, GOES OVER. `workerAccepts`
+    // above already refuses `score > rounds × wPerRound`, so this is the same
+    // property said as a number the printed table can be read against.
+    expect(worstPeak).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('derby — the chain multiplier', () => {
+  it('⚠ the ramp is a RUN of home runs, and an isolated one pays what it always did', () => {
+    // (1) THE RAMP, SPELLED OUT AS LITERALS. Not `1 + CHAIN_STEP * (k - 2)` —
+    //     that is the implementation, and a test that recomputes it passes for
+    //     every value of every constant in it, which is this suite's named
+    //     failure mode. These are the numbers a player experiences.
+    expect(chainMultiplier(1)).toBe(1);
+    expect(chainMultiplier(2)).toBe(1);
+    expect(chainMultiplier(3)).toBe(1.25);
+    expect(chainMultiplier(4)).toBe(1.5);
+    expect(chainMultiplier(5)).toBe(1.75);
+    expect(chainMultiplier(6)).toBe(2);
+    expect(chainMultiplier(24)).toBe(2);
+    expect(CHAIN_MULT_MAX).toBe(2);
+    expect(CHAIN_START).toBe(3);
+
+    // (2) A NON-HOME-RUN NEVER READS IT — the structural half of "skill, not
+    //     volume". A player who puts 24 balls in play earns no multiplier, and
+    //     that is not a rule written anywhere, it is `swingPoints` not passing
+    //     the index into the contact curve.
+    const cap = MAX_POINTS_PER_PITCH;
+    for (const o of ['inPlay', 'foul', 'whiff', 'take'] as const) {
+      for (const k of [0, 1, 3, 6, 24]) {
+        expect(swingPoints(o, 420, true, cap, k), `${o} @ chain ${k}`).toBe(
+          swingPoints(o, 420, true, cap, 0),
+        );
+      }
+    }
+    // …and prove the probe can see a difference at all, or the loop above is
+    // satisfied by a scorer that ignores the chain entirely.
+    expect(swingPoints('homeRun', 420, true, cap, 6)).toBeGreaterThan(
+      swingPoints('homeRun', 420, true, cap, 1),
+    );
+
+    // (3) THE GOLDEN THE BOTTOM OF THE CURVE RESTS ON. An isolated home run pays
+    //     EXACTLY the pre-chain payout — `HR_BASE_POINTS + (carry − datum) +
+    //     barrel` — so "the novice and casual rows do not move" is a property of
+    //     the code and not of a session average. A base cut to fund the
+    //     multiplier (the alternative this design rejected) fails right here.
+    for (const c of [350, 380, 400, 415, 440]) {
+      for (const b of [false, true]) {
+        const expected = Math.round(
+          HR_BASE_POINTS + (c - DISTANCE_DATUM_FT) * 1 + (b ? BARREL_BONUS_POINTS : 0),
+        );
+        expect(swingPoints('homeRun', c, b, cap, 1), `${c} ft barrel=${b}`).toBe(expected);
+        expect(swingPoints('homeRun', c, b, cap, 2), `${c} ft barrel=${b}`).toBe(expected);
+      }
+    }
+    expect(POINTS_PER_FT).toBe(1);
+
+    // (4) THE CHAIN IS THE SIM'S OWN COUNTER, READ ONE AHEAD — and `predict()`
+    //     must not move it. This is the wiring `swingPoints` cannot see.
+    const sim = new DerbySim({ seed: 5150 });
+    sim.curStreak = 5;
+    const before = sim.curStreak;
+    sim.servePitch();
+    sim.setReticle(ZONE_CENTER.x, ZONE_CENTER.h);
+    const p = sim.predict(sim.served!.result.plate.t);
+    expect(sim.curStreak, 'predict() moved the streak').toBe(before);
+    expect(p.chainIndex).toBe(p.outcome === 'homeRun' ? before + 1 : 0);
+
+    const rows: string[] = [];
+    for (let k = 1; k <= 7; k++) {
+      rows.push(
+        `  HR #${k} of a run  ×${chainMultiplier(k).toFixed(2)}  ` +
+          `⇒ a barrelled 415 ft ball pays ${swingPoints('homeRun', 415, true, cap, k)} / ${cap}`,
+      );
+    }
+    console.log('\nCHAIN — the multiplier on consecutive home runs\n' + rows.join('\n'));
+  });
+
+  it('⚠ THE SKILL CURVE — the chain is worth nothing at the bottom and everything at the top', () => {
+    // ⚠ THE MEASUREMENT THIS WHOLE PASS EXISTS FOR. A gaussian player: timing
+    // error drawn in the player's WALL milliseconds (`PITCH_TEMPO` converts it
+    // to the true physical seconds the sim takes — the thumb lives in wall time
+    // and that is the axis a difficulty is stated on), aim error drawn in feet
+    // on both reticle axes, 40 sessions per skill, MEDIAN session score.
+    //
+    // ⚠ THE AIM/TIMING TIE IS A MODEL AND IS STATED HERE RATHER THAN HIDDEN:
+    // aim σ = 0.010 ft per ms of timing σ, i.e. a player 45 ms loose on the tap
+    // is also 5.4 in loose with the reticle. It is a reconstruction of the model
+    // the M2 review reported against, not that script — it reproduces the six
+    // reported post-M2 figures (744/1606/2979/3531/3678/3742) to 5.3 % RMS,
+    // which is close enough to compare curves and not close enough to quote
+    // absolute numbers from somebody else's harness.
+    //
+    // Both columns are scored from the SAME 240 sessions: `chain` is what the
+    // sim paid, `flat` re-scores every swing at chain position 1. So the two
+    // differ by the mechanic and by nothing else — not by a different seed, a
+    // different draw or a different physics.
+    const cap = MAX_POINTS_PER_PITCH;
+    const SKILLS = [
+      { name: 'novice ', ms: 45 },
+      { name: 'casual ', ms: 30 },
+      { name: 'decent ', ms: 18 },
+      { name: 'good   ', ms: 10 },
+      { name: 'expert ', ms: 5 },
+      { name: 'perfect', ms: 0 },
+    ];
+    const chainMed: Record<string, number> = {};
+    const flatMed: Record<string, number> = {};
+    const rows: string[] = [];
+    for (const sk of SKILLS) {
+      const aimFt = sk.ms * 0.01;
+      const chain: number[] = [];
+      const flat: number[] = [];
+      let neverWorse = true;
+      let clipped = 0;
+      let swings = 0;
+      for (let i = 0; i < 40; i++) {
+        const g = gaussian((1000 + i) * 7919 + 13);
+        const sim = new DerbySim({ seed: 1000 + i });
+        let cs = 0;
+        let fs = 0;
+        while (sim.getState().phase !== 'done') {
+          const pr = sim.servePitch();
+          sim.setReticle(pr.plate.x + g() * aimFt, pr.plate.h + g() * aimFt);
+          const r = sim.swing(pr.plate.t + ((g() * sk.ms) / 1000) * PITCH_TEMPO);
+          cs += r.points;
+          fs += swingPoints(r.outcome, r.distFt, r.barrel, cap, 1);
+          swings++;
+          // ⚠ DID THE CLAMP BIND? Asked by scoring the SAME swing against an
+          // unreachable cap and comparing, so nothing here re-implements the
+          // payout — the difference is the clamp and only the clamp.
+          if (swingPoints(r.outcome, r.distFt, r.barrel, 1e9, r.chainIndex) !== r.points) clipped++;
+        }
+        if (cs < fs) neverWorse = false;
+        chain.push(cs);
+        flat.push(fs);
+      }
+      // ⚠ THE MULTIPLIER IS NEVER A PENALTY, per SESSION, not on average.
+      expect(neverWorse, `${sk.name}: a session scored less WITH the chain`).toBe(true);
+      // ⚠ AND THE PER-PITCH CLAMP MUST NOT BIND IN REAL PLAY, AT ANY SKILL.
+      // This is the assertion that makes the chain knobs sweepable: raise
+      // `CHAIN_STEP` to 0.5 or `CHAIN_MAX_STEPS` to 8 and the clamp starts
+      // clipping 2–7 % of home runs, at which point the top of the curve is
+      // being set by the submission ceiling rather than by the payout — the
+      // mechanic goes flat again and nothing says so. `swings` is asserted
+      // non-zero first so "0 clipped" cannot mean "0 measured".
+      expect(swings, `${sk.name}: nothing was measured`).toBe(40 * 24);
+      expect(clipped, `${sk.name}: the per-pitch clamp bound ${clipped}/${swings} times`).toBe(0);
+      chainMed[sk.name.trim()] = median(chain);
+      flatMed[sk.name.trim()] = median(flat);
+      const c = median(chain);
+      const fl = median(flat);
+      rows.push(
+        `  ${sk.name}  σt ${String(sk.ms).padStart(2)} ms  aim ${aimFt.toFixed(2)} ft |` +
+          ` flat ${String(fl).padStart(6)} | chain ${String(c).padStart(6)} |` +
+          ` chain is ${f((100 * (c - fl)) / c, 5, 1)} % of it`,
+      );
+    }
+    const ratio = (a: Record<string, number>, hi: string, lo: string) => a[hi]! / a[lo]!;
+    console.log(
+      '\nSKILL CURVE — median of 40 sessions per row, same sessions scored both ways\n' +
+        rows.join('\n') +
+        `\n  good → perfect   flat ${ratio(flatMed, 'perfect', 'good').toFixed(3)}×` +
+        `   chain ${ratio(chainMed, 'perfect', 'good').toFixed(3)}×` +
+        `\n  decent → good    flat ${ratio(flatMed, 'good', 'decent').toFixed(3)}×` +
+        `   chain ${ratio(chainMed, 'good', 'decent').toFixed(3)}×` +
+        `\n  novice → perfect flat ${ratio(flatMed, 'perfect', 'novice').toFixed(2)}×` +
+        `   chain ${ratio(chainMed, 'perfect', 'novice').toFixed(2)}×`,
+    );
+
+    // ⚠ THE DEFECT, ASSERTED. Without the chain an expert and a perfect player
+    // are the same player: the flat column's good→perfect is under 1.06. If this
+    // ever stops being true the mechanic's justification has gone with it, and
+    // that is worth failing over rather than quietly keeping a multiplier
+    // nothing needs.
+    expect(ratio(flatMed, 'perfect', 'good')).toBeLessThan(1.06);
+    // …and with it, there is something at the top to chase.
+    expect(ratio(chainMed, 'perfect', 'good')).toBeGreaterThan(1.1);
+    // The rung below moved too — this is a ladder, not one raised step.
+    expect(ratio(chainMed, 'good', 'decent')).toBeGreaterThan(1.3);
+
+    // ⚠ THE BOTTOM DID NOT PAY FOR IT. The novice row is BYTE-IDENTICAL to the
+    // flat payout — a novice reaches a third consecutive home run 0.05 times a
+    // session — and the casual row (the owner's measured skill: 7 HR, best
+    // streak 3) gains a little and loses nothing. A design that funded the
+    // multiplier by cutting the base payout fails both of these.
+    expect(chainMed.novice).toBe(flatMed.novice);
+    expect(chainMed.casual).toBeGreaterThanOrEqual(flatMed.casual!);
+    expect((chainMed.casual! - flatMed.casual!) / chainMed.casual!).toBeLessThan(0.05);
+    // …while at the top it is a quarter of the money.
+    expect((chainMed.perfect! - flatMed.perfect!) / chainMed.perfect!).toBeGreaterThan(0.2);
   });
 });
 
@@ -1410,8 +1681,22 @@ describe('derby — outcomes', () => {
     //     timing with a dead-centre reticle is still beaten (that is FINDING 3,
     //     the park's deepest wall, and it is real baseball) — but no longer by
     //     the 2.2× the home-run-only payout gave it.
+    //
+    //     ⚠ THE CHAIN MULTIPLIER GAVE SOME OF THIS BACK, MEASURED: 76.5 % of
+    //     peak before it, 70.7 % after (peak/trough 1.31× → 1.41×, against the
+    //     home-run-only payout's 2.2×). That is not a bug in the chain, it is
+    //     the chain doing exactly what it is for — it is SUPERLINEAR in home-run
+    //     rate, so it re-amplifies every home-run-rate gap it finds, and this
+    //     row's gap is a real one (FINDING 3: a dead-centre reticle at perfect
+    //     timing sprays at the park's 400 ft + 10 ft wall and clears it 54.9 %
+    //     of the time, against 96 % from a reticle 0.2 ft to the pull side). The
+    //     honest statement is that the mechanic cannot tell a home-run-rate gap
+    //     that comes from skill from one that comes from the park's geometry,
+    //     and the fix for the second is the aim sweep next door, not the payout.
+    //     The bound is loosened to 0.65 and NOT removed, so a collapse back
+    //     toward the pre-M2 trough still fails here.
     expect(byBias.get(0)!).toBeLessThan(peak);
-    expect(byBias.get(0)!).toBeGreaterThan(0.75 * peak);
+    expect(byBias.get(0)!).toBeGreaterThan(0.65 * peak);
   });
 
   it('⚠ FINDING 3: dead centre is the WORST viable aim, and the sweep is ASYMMETRIC', () => {
@@ -1506,6 +1791,24 @@ describe('derby — outcomes', () => {
     );
     expect(st.roundsPlayed).toBe(DERBY_ROUNDS);
     expect(() => sim.servePitch()).toThrow();
+
+    // ⚠ `maxScore` IS THE DERBY'S CEILING, NOT THE ARCADE ONE, and this
+    // assertion exists because it was a SURVIVING MUTATION: reverting
+    // `derbyState.ts` to `roundsPlayed * 2000` failed 0 of 203 tests. It is the
+    // number a HUD would print beside the score and the number a "you are at
+    // 90 % of the cap" warning would ever be derived from, so a stale 2000 is a
+    // readout that says a full session is 6000 when the worker will take 12000.
+    // Written out (3 × 4000 = 12000) rather than computed from the constant, so
+    // it cannot pass for every value of it — and the identity against the
+    // per-pitch cap is asserted beside it, because THAT is the structural one.
+    expect(st.maxScore).toBe(12000);
+    expect(st.maxScore).toBe(st.roundsPlayed * PITCHES_PER_ROUND * MAX_POINTS_PER_PITCH);
+    expect(st.score).toBeLessThanOrEqual(st.maxScore);
+    // …and it tracks PARTIAL sessions, which is what `bank()` submits on abandon.
+    const partial = new DerbySim({ seed: 8888 });
+    partial.servePitch();
+    partial.take();
+    expect(partial.getState().maxScore).toBe(4000);
 
     // ⚠ THE HOME-RUN STREAK IS BOOKED HERE TOO, and it used to be the one
     // exception. `bestStreak` is submitted to the leaderboard beside `score`,

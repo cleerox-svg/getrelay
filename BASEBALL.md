@@ -887,6 +887,7 @@ the render layer; contact resolves at the true physical state.
 | `packages/relay-ui/src/lib/baseball/fielding.test.ts` | The fielding bench: prints the reach ladder and a named batted-ball ladder; asserts the catch boundary exactly on the reach, the single/double index boundary, the foul-territory boundary, the rating's ±15 % span, and the landing-point limitation |
 | `packages/relay-ui/src/lib/baseball/derbyScoring.ts` | THE PAYOUT, and the LEAF of the derby's module graph — it imports nothing from the game, so `derbyRules` can check it against the format's derived cap with no cycle. One clamped scorer (`swingPoints`) that every outcome goes through, `validatePayoutCap` on the live config path and the full `validateDerbyPayout` sweep in the bench. Extracted at the 500-line cap in the M2 feel pass |
 | `packages/relay-ui/src/lib/baseball/contactWindow.ts` | The bat GEOMETRY — `BAT_TIP_M`, `BAT_HANDLE_LIMIT_M` and the bisection that inverts `contactGeometry`. Three unrelated consumers (`derbySim`, `TimingBar`, the benches) and no knowledge of the format. Extracted at the same cap, same pass |
+| `packages/relay-ui/src/components/baseball/stadium/camera.ts` | The four camera PLACEMENTS + the rig that moves between them: a quintic transition and a damped follow point, both driven by a `dtS` ARGUMENT so `lib/scene3d/clock.ts` can freeze them. `follow` is a column, true for `flight` alone; `batter` is `false` because that frame is what the swing is timed against. Extracted from `StadiumGL.tsx` when the table acquired state |
 | `packages/relay-ui/src/components/baseball/shared/swingCopy.ts` | The derby's readout COPY — `describeSwing`, `coachSwing`, `parkCopyNumbers`. Pure `SwingResult → string`, so every outcome is testable in a millisecond instead of only through a 24-pitch mounted session |
 | `packages/relay-ui/src/lib/baseball/determinism.test.ts` | Source-reading guard: no `Math.random`, `Date.now`, `performance.` or `new Date` in any baseball source |
 | `packages/relay-ui/src/lib/baseball/budget.test.ts` | Anti-bloat guard: 500-line cap per shipping `lib/baseball` module (tests exempt), 700 per component, 900 for `StadiumGL.tsx`; no `three` in the sim; no barrel `index.ts` |
@@ -1151,10 +1152,26 @@ the render layer; contact resolves at the true physical state.
   > changed. The gate's magenta scan measures it directly — 40,336 px in each
   > `pitcher` shot, 11 px in each `wide`, **0 px in `batter`**.
 - **M2 — art, and four things the gate photographed.** Recorded here so they are
-  not lost, and deliberately **not** fixed in the M1 follow-up pass:
-  - **The bowl is not a building.** It is an open lofted ribbon with no back and
-    no seat deck, and the apron disc runs to 570 ft past the bowl's 459–531 ft
-    outer edge, so bare ground shows beyond the stands.
+  not lost, and deliberately **not** fixed in the M1 follow-up pass. The list is
+  in **priority order**, and the ordering changed at M2e — see the first item.
+  - **The bowl is not a building — and M2e promoted it to FIRST.** It is an open
+    lofted ribbon with no back and no seat deck, and the apron disc runs to
+    570 ft past the bowl's 459–531 ft outer edge, so bare ground shows beyond the
+    stands.
+    ⚠ **What changed is not the defect but its consequence.** As a static art gap
+    it was a thing a still frame showed you once. Now the camera EASES from the
+    box to the upper deck on every home run, and a featureless grey slab
+    **sweeps across roughly a third of the frame** during that 0.8 s move. That
+    is the single thing most likely to make the follow read as motion sickness
+    rather than as broadcast, and it is not a still-frame problem, so no
+    screenshot in the gate can adjudicate it. It goes ahead of the other three.
+    ⚠ **Related, and PRE-EXISTING — not caused by M2e.** `wide.png` and
+    `park-alpine-wide.png` show the near bowl as **semi-transparent with radial
+    spoke banding**: precisely the z-fighting symptom `CAMERAS`'s own `near` note
+    records having FIXED by pushing `wide`'s near plane to 200 ft. Confirmed
+    pre-existing by pixel diff — those two scenes differ from `main` by **32
+    pixels, all of them tracer**. Filed as an art / near-plane item, not as a
+    camera regression.
   - **The roof ring degenerates.** 120 ft of band over the outfield down to a 5 ft
     sliver behind home and along the sides (clamped by `MIN_BAND_FT`), which from
     above projects as a 2 px dark wire across the field and reads as an artifact.
@@ -1369,6 +1386,198 @@ the render layer; contact resolves at the true physical state.
   mutation is 1 fail. The `kinds.size > 1` check next to it was also satisfied by
   {GONE!, Foul ball} and never required the in-play line, so it names the branch
   now.
+- **M2e — the camera moves, and the tracer stops spoiling the outcome.** →
+  **Done.** Owner feedback after playing the live build (1,540 points, 7 HR — the
+  M2 feel pass worked). Three items, two of them defects:
+  **(1) THE TRACER WAS DRAWN AHEAD OF THE BALL, and it was an information leak.**
+  `setPaths` handed each tracer the whole flight the instant it was served, so
+  the complete arc — **including the landing point** — was on screen before the
+  ball got there. Confirmed by rendering, not by reading: `batter.png` at
+  t = 0.30 s showed the yellow pitch line running past the ball down to the
+  plate, and `homerun.png` at bt = 2.6 s showed the entire descending limb from
+  the apex. The pitch half is the worse of the two — it shows the **break before
+  the player has to commit** — and it was live for the 380 ms wind-up as well,
+  because `serve()` hands over the flight before release. Fixed with a
+  progressive `setDrawRange` (`tracer.reveal`): the path is still built ONCE from
+  the sim's samples and **no vertex moves after `setPaths`**, so the visual
+  gate's geometry comparison is unaffected. The reveal is SAMPLE-GRANULAR and
+  deliberately a lower bound, so the tip lags the ball by up to one substep
+  (measured 1.13 ft on a 94 mph pitch, 1.25 ft off a 105 mph bat) and **never
+  leads it**. That lag is almost entirely along the view axis of the two cameras
+  that watch those flights, which is why it was chosen over writing an
+  interpolated tip vertex — that would break the prefix property the gate's
+  geometry seam rests on.
+  **(2) THE BALL LEFT THE FRAME AND WAS NEVER SEEN AGAIN.** `CAMERAS.flight`'s
+  horizontal FOV at 900×1600 portrait is 2·atan(tan 27.5°·0.5625) = **32.6°**,
+  i.e. ±16.3° about a FIXED axis. Measured before the fix at 105 mph / 26.5° /
+  bt = 2.6 s, with the ball drawn at (∓164.65, 93.30, −196.22) scene ft: at −40°
+  of spray it projects to **(−0.241, 0.467)** — **217 px off the left edge**, a
+  sliver of tracer at the border — and at +40° to **(+1.716, 0.467)**, **645 px
+  past the right edge**, with **no ball and no arc anywhere in the picture**.
+  Widening the FOV cannot fix it (it needs 90°+, which throws the ball away to a
+  few pixels); aiming at the ball can, at no cost in angular resolution — though
+  it is not free in MOTION, see (3).
+  ⚠ **The figures this entry first published — (−0.083, 0.470) and (1.098,
+  0.470) — did not reproduce, and they understated the defect in two independent
+  ways. The reasoning is the reusable part:**
+  **(i)** the recorded pair is symmetric about u ≈ **0.5075**, which only a
+  camera at **x = 0** can produce. `CAMERAS.flight` stands at **x = −40**, so the
+  true pair is symmetric about u = **0.738** — and *that asymmetry is exactly why
+  the oppo corner is ~3× worse than the pull corner* (645 px against 217). A
+  symmetric pair out of an asymmetric rig is the tell, and spotting it is cheaper
+  than re-measuring. (From x = 0 the same two balls give −0.479 / +1.479.)
+  **(ii)** its **span** was 1.181 frame widths against a true **1.957** — 40 %
+  short — so it understated *both* corners regardless of centring. Span depends
+  only on the FOV and the ball positions (it is identical from x = 0 and from
+  x = −40), so this is a second error and not a consequence of the first.
+  **And the method that makes such a figure checkable:** validate it against the
+  harness's own printed control before trusting it on a counterfactual. The
+  `flight` scene has no swing, so its camera never follows and it still prints
+  the fixed-axis projection every run — `ball on screen (1.074, 1.333)`. The
+  recomputation above reproduces that as **(1.0738, 1.3333)** through the same
+  code path that produced the two corrected rows.
+  **(3) THE CAMERA NOW FOLLOWS, through the machinery that already existed.**
+  `CAMERAS` had four modes and nothing switched between them during play except
+  one hard CUT to `flight` at contact. The placements moved to
+  `stadium/camera.ts` — they acquired STATE (a transition, a follow point), and a
+  table with state in it is a subsystem — and gained one column, `follow`, true
+  for exactly one row. `batter` is `follow: false` and that is a **gameplay
+  constraint, not framing**: it is the frame the swing is timed against, and
+  `camera.test.ts` asserts a ball in the scene moves it by exactly zero. The
+  transition is a quintic smootherstep over `CAMERA_EASE_S = 0.8 s`, whose zero
+  derivative at u = 0 gives ~190 ms of near-hold on the box after contact — the
+  "hold through contact" beat expressed by the curve rather than by a second
+  timer. The look point damps onto the ball with `FOLLOW_TAU_S = 0.2 s`, so the
+  ball is intended to sit AHEAD of the axis by ~v·τ and drift back to centre as
+  it slows: an ease, not a rigid chase.
+  ⚠ **IT IS NOT A "YAW-ONLY PULL-BACK", AND DESCRIBING IT THAT WAY MADE IT SOUND
+  SMALLER AND SAFER THAN IT IS.** The rig interpolates **position** between
+  `CAMERAS.batter.pos = [0, 3.2, 8]` and `CAMERAS.flight.pos = [−40, 120, 90]` —
+  a **148.2 ft translation** — plus fov 40° → 55°, near 1 → 4 ft, and a look
+  point slewing onto a moving ball, all inside `CAMERA_EASE_S = 0.8 s`. That
+  averages 185 ft/s, and a quintic's peak rate is 30u²(1−u)² at u = ½ =
+  **1.875×** its mean, so **mid-move the camera travels ~347 ft/s**. Even the
+  follow alone is not a yaw: aiming at the −40° ball swings the axis **23.5° in
+  bearing and 2.4° in elevation**. Nothing about the behaviour is wrong; the
+  description was. It matters because this is the part most likely to read badly
+  in motion, and a future reader deciding whether to touch it should know its
+  real size.
+  **The determinism cost was paid up front with golf's `lib/scene3d/clock.ts`**
+  (PR #249). Camera motion is time-driven, and golf measured **23 of 25 scenes
+  differing between two identical runs** from `performance.now()` alone.
+  `StadiumGL` takes its `dt` from `tickSceneClock` and `baseballpreview.tsx`
+  engages a 50 ms virtual clock and FREEZES it at the ready beacon, so `dt = 0`,
+  `u` does not advance and the damping factor is `1 − e⁰ = 0`. **All 15 scenes
+  are byte-identical across two runs**, the three new ones included.
+  ⚠ **One claim in this file's own first draft was too strong and is corrected
+  rather than left standing.** The exponential damping is exact under
+  subdivision only for its HOMOGENEOUS part; a target that MOVES between samples
+  is zero-order held, so two step sizes differ by `≈ v·Δh/2` — measured
+  **1.34 ft** between 16.7 ms and 50 ms on a 202 ft/s ball, which is 0.19° at the
+  ~400 ft the deck camera stands off a fly, i.e. 9 px of a 1600 px frame. It
+  cannot reach the screenshot gate at all, because `?t=` freezes the ball and a
+  frozen target is the stationary case. Bounded and asserted, not assumed away.
+  **THE GATE WAS RE-BASED, AND IT GOT STRONGER RATHER THAN WEAKER.** The 0.002 ft
+  drawn-vs-sim comparison now reads `tracerFull()` (the built path) instead of
+  `tracer()` (the revealed prefix) — pointed at the prefix it would silently stop
+  asking anything about the part of the curve the ball has not reached, which on
+  `homerun` is the whole descending limb. It still reports **1.28e-7 ft forward
+  and 1.27e-7 ft reverse**, unchanged. Three new checks sit beside it: the reveal
+  COUNT re-derived by the harness from the sim's own sample times (kills a full
+  reveal, an off-by-one lead, a stuck reveal); the BUFFER against the sim's own
+  track, float for float (kills "rewrite the buffer each frame", which would have
+  gutted the comparison above); and the TIP against the ball as a dot
+  product toward the next hidden vertex, bounded by that vertex's own distance
+  (kills a reversed buffer, and needs no frame convention).
+  ⚠ **The buffer check's FIRST VERSION WAS A TAUTOLOGY AND COULD NOT FAIL** — a
+  M2e follow-up finding, corrected rather than left standing. It compared
+  `tracer()` against `tracerFull()`, and `stadium/tracer.ts` `subarray`s **the
+  same backing `Float32Array`** for both readers, so the comparison was
+  `positions[i] !== positions[i]`. Its own note claimed "an implementation that
+  rewrote the vertex data per frame to end at the ball would pass (a) and (c) and
+  fail here"; it would **not**, because such an implementation rewrites
+  `positions` in place and both readers return the rewritten prefix identically.
+  Nothing escaped in the meantime — the property was still defended by the
+  reverse Hausdorff, which reads `tracerFull` over the whole path — but a dead
+  assertion that reads as a live one, in a file whose charter is "IT ASSERTS
+  NUMBERS, IT DOES NOT MERELY PRINT THEM", is worse than none. It is now two
+  legs, **both measured against the sim** and neither against the renderer:
+  the drawn prefix must equal the sim's leading samples **index for index**, and
+  the built buffer must equal the whole track and be **the same length as it**.
+  (`Math.fround` makes those EQUALITIES, not tolerances: a `BufferAttribute` is
+  float32.) The prefix claim then falls out as a *consequence* of two sim-anchored
+  measurements. **Two mutations were written into `flight.ts` as real behaviour
+  and watched:** (M1) "rewrite the vertices each frame so the trail ends exactly
+  at the ball" — the old comment's own example — fails **15/15 scenes**, on which
+  the old check was **silent on all 15** and `(c)` was **skipped on all 15**
+  (it only runs while `drawn < built`, which that mutation makes false by
+  construction); and (M2) "resample the built polyline uniformly by ARC LENGTH",
+  which is the same curve with the index-to-time correspondence destroyed and is
+  the reason the index leg exists at all — forward Hausdorff **1.06e-7 ft**
+  (19,000× under tolerance), reverse **2.18e-4 ft** (9× under), horizontal
+  deflection **4.99e-2 in against a 5.00e-2 in tolerance, i.e. it PASSED**, and
+  the index comparison fires on the **fourth float** of the buffer.
+  Plus `checkFraming`,
+  which projects the drawn ball through the drawing camera and asks the one
+  question `checkBall` explicitly cannot — its own note warns that
+  `Object3D.visible` is not "in this picture". Three new scenes: `follow-pull`,
+  `follow-oppo` and `follow-ease` (mounted on the batter camera, eased to the
+  deck, frozen exactly 400 ms in via a new `?from=` / `?ease=`, which is
+  smootherstep(0.5) = 0.500 and the gate prints it). `flight.png` is the ONE
+  pre-existing PNG unchanged, because the follow target is the BATTED ball only
+  and that scene has a pitch in the air.
+  **Fifteen mutations were watched to fail** — seven in `camera.test.ts`, five in
+  `flight.test.ts`, three in `DerbyGame.camera.test.tsx` — **and two were watched
+  to PASS**, both of which removed code:
+  ⚠ **(a) `applyReveal`'s `struck ? full : count` branch was unreachable.**
+  `contactTS` IS the plate crossing, i.e. the pitch track's own last sample, so
+  `tS ≥ contactTS` already reveals the whole pitch through the ordinary path. Two
+  mechanisms covering one case — the shape § "Fielding" records for the
+  unreachable `Math.max(0, …)` — so the branch is deleted and the PREMISE is
+  asserted instead. ⚠ **(b) `endPlay`'s `setMode('batter')` deleted failed 0 of 3
+  tests**, because `nextPitch` set it too, 1500 ms later, with the aim reticle
+  already up and the camera still sliding home under it. The second call is gone
+  and the assertion now measures the GAP between the return and the next aim.
+  ⚠ **Two of the new tests were hollow when first written**, and both are
+  recorded at their sites: the HUD stub recorded `api.setMode` (which `DerbyGame`
+  never calls — it sets React state, which becomes the `mode` PROP), so the
+  recorder stayed empty and two tests passed on `[]`; and the
+  frame-rate-independence test held the ball STILL, where a stationary target is
+  copied exactly on first sight, so the damping it existed to police never ran.
+  **Not done, and deliberately:** the art pass (turf, seams, infield grass, bowl
+  detail) and the rest of the `lib/scene3d` reconciliation. `clock.ts` is adopted;
+  `quality.ts` / `stats.ts` / `env.ts` are a separate slice.
+  ⚠ **KNOWN LIMITS OF THE GATE ON THIS WORK — recorded, not fixed.** They come
+  out of `baseball-visual-qa`'s pass on the follow camera and they are the things
+  a green run does **not** say:
+  - **The gate structurally CANNOT see the follow lag.** Every captured frame has
+    the ball at exactly **(0.500, 0.500)** — `follow-pull` and `follow-oppo` both
+    print it — because `?t=` / `?bt=` FREEZE the ball and a stationary target is
+    the **converged** case of `1 − e^(−dt/τ)`. So `FOLLOW_TAU_S`'s note about
+    "~30 ft of lag, the ball sits ahead of frame centre, which is what reads as
+    speed" is **untested by the gate by construction**, and what the gate
+    photographs is precisely the rigid-chase look that note says the constant
+    avoids. The comment at the constant now says so. Only a real-time capture or
+    on-device play can settle it.
+  - **`FOLLOW_MIN_HANG_S = 1.2` is exercised by no scene.** It is asserted from
+    both sides in `DerbyGame.camera.test.tsx` and photographed by nothing.
+  - **On-device watch items, for which SwiftShader is the wrong instrument.**
+    (a) The **near plane interpolating 1 → 4 ft** across the 148 ft translation.
+    A wrong near plane already produced a translucent bowl and radial turf spokes
+    on this very scene once — `CAMERAS`'s own `near` note records it — and where
+    before only the four table values were reachable, **every intermediate value
+    is now reachable at runtime**. (b) The **follow at full frame rate**: the
+    whole point of `FOLLOW_TAU_S` is a behaviour at 60 fps that no still frame
+    contains. "Renders fine in SwiftShader" is not evidence about either.
+  - **Pre-existing, and NOT from this work:** `wide.png` and
+    `park-alpine-wide.png` show the near bowl as **semi-transparent with radial
+    spoke banding**. Confirmed pre-existing — those two scenes differ from `main`
+    by **32 pixels, all tracer** — and filed under the M2 art list above as a
+    near-plane item.
+  - **Charter gaps with no scene at all:** there is no `batter-open` /
+    roof-open pair and **no `night` scene**. Roof state is exercised only
+    STRUCTURALLY, via `park-alpine-*` (Harbourfront's 282 ft ring against
+    Alpine's absence of one), never as an open/closed pair at the same park.
 - **Stage 5 — game & scene.** `derbySim.ts`, `duelSim.ts` (3 innings, 3 outs, no
   steals/errors/subs/shifts), `ai.ts`, the crowd/lights/skyline builders, HUDs,
   and the budget / determinism / IP guard tests.
@@ -1526,6 +1735,31 @@ the render layer; contact resolves at the true physical state.
   One test is stated in wall ms and therefore DOES depend on it, on purpose —
   `derbySim.test.ts`'s cliff/slope sweep — and it is the measurement that
   justifies the value.
+- **A TRAIL THAT REACHES PAST THE BALL IS AN INFORMATION LEAK, not a look bug.**
+  The tracers are built once from the sim's samples and REVEALED with
+  `setDrawRange`; no vertex may move after `setPaths`, because the visual gate's
+  0.002 ft drawn-vs-sim comparison reads the built buffer (`tracerFull`) and a
+  buffer that is re-authored every frame is not a thing that comparison can be
+  about. The reveal count is a LOWER bound on purpose — the tip lags by up to one
+  substep and never leads. If a check ever needs "what is on screen", that is
+  `tracer()`; if it needs "what the renderer built", that is `tracerFull()`.
+  Confusing them narrows the geometry check to a prefix and it fails silently.
+- **NEVER assert one read-back against another read-back of the same buffer.**
+  `tracer()` and `tracerFull()` are two `subarray` windows onto one
+  `Float32Array`, so `read()[i] !== readAll()[i]` is `positions[i] !==
+  positions[i]` — identically false, for **every** implementation, including the
+  in-place per-frame rewrite it was written to catch. The gate shipped exactly
+  that as its "the geometry must not change" assertion. A read-back is only
+  evidence against **something the renderer did not produce**: the sim's own
+  track, or a snapshot the harness took itself. Same rule that made
+  `ballScene()` and `read()` read out of the Object3D in the first place, one
+  level up.
+- **The render layer's clock is `lib/scene3d/clock.ts`, never `performance.now()`.**
+  Anything time-driven in the scene — the camera transition, the follow damping,
+  the standalone replay loop — takes `dt` from `tickSceneClock`, and every branch
+  must tolerate `dt === 0`. That is the whole of what lets a moving camera
+  coexist with byte-identical PNGs. Golf measured 23 of 25 scenes differing
+  between two identical runs before it did this, and the cause was time, not RNG.
 - **The called zone is the rule zone plus one ball RADIUS a side (19.90 in),
   not a diameter (22.81 in).** A strike is any part of the ball over any part of
   the plate and we integrate the ball's *centre*, so the centre may sit one

@@ -18,20 +18,44 @@
 //   ?aim=<u>,<v>                        SHOW the zone frame + reticle, placed
 //                                       at reticle (u, v) ∈ [−1, 1] (zone.ts).
 //                                       Omit and neither is built into a shot.
+//   ?from=batter|pitcher|flight|wide    MOUNT in this camera mode, then ease to
+//                                       `?scene=` — how a shot catches the
+//                                       camera transition mid-move.
+//   ?ease=<ms>                          virtual ms of that transition to run
+//                                       before freezing. Must be a multiple of
+//                                       VIRTUAL_STEP_MS.
 //
 // ⚠ THE READY BEACON WAITS FOR A REAL FRAME. `window.__baseballReady` is set
 // from StadiumGL's `onReady`, which fires after three rendered frames — not on
 // DOMContentLoaded and not on a timer. A screenshot taken before the first
 // render is a black PNG that passes every check a human is not looking at.
 //
-// ⚠ EVERYTHING HERE IS SEEDED OR FROZEN. With `?t=` or `?bt=` present the
-// renderer never reads `performance.now()`, the pitch is `simulatePitch` on a
-// named row of `PITCHES` at a fixed target, and the batted ball is one
-// `launchFromAngles` + `simulateBattedBall` with the roof shut. Two runs of the
-// harness are byte-identical because there is nothing left in the loop to vary.
+// ⚠ EVERYTHING HERE IS SEEDED OR FROZEN. With `?t=` or `?bt=` present the ball
+// never reads a wall clock, the pitch is `simulatePitch` on a named row of
+// `PITCHES` at a fixed target, and the batted ball is one `launchFromAngles` +
+// `simulateBattedBall` with the roof shut.
+//
+// ⚠ AND SINCE THE CAMERA MOVES, TIME ITSELF IS NOW VIRTUAL. `?t=` freezes the
+// BALL; it says nothing about the camera ease or the follow damping, both of
+// which are driven by elapsed seconds and would otherwise make the captured
+// frame a function of how fast the machine ran. `lib/scene3d/clock.ts` (golf's
+// PR #249) makes time an input: one fixed step per RENDERED FRAME, engaged here
+// before any scene mounts and FROZEN at the ready beacon, after which `dt === 0`
+// and every later frame is identical. The shipped app never engages it, so
+// `StadiumGL` behaves exactly as before down to the millisecond. Golf measured
+// 23 of 25 scenes differing between two runs with no code change at all, caused
+// by `performance.now()` and not by RNG; this is that lesson taken up front
+// rather than after the gate goes amber.
 
 import { StrictMode, useCallback, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
+import {
+  advanceSceneClock,
+  engageVirtualClock,
+  freezeSceneClock,
+  sceneClockPending,
+  sceneNow,
+} from './lib/scene3d/clock';
 import StadiumGL, { isCameraMode } from './components/baseball/StadiumGL';
 import type { CameraMode, StadiumApi } from './components/baseball/StadiumGL';
 import type { FlightPaths } from './components/baseball/stadium/flight';
@@ -100,26 +124,59 @@ interface BaseballHandle {
     stats(): ReturnType<StadiumApi['stats']>;
     /** What the BUILT GEOMETRY says the wall is at a bearing. */
     measureFence(bearingDeg: number): { distFt: number; heightFt: number } | null;
-    /** The DRAWN tracer's vertices, flat scene `[x, y, z, …]` ft. */
+    /** The tracer's vertices AS DRAWN — how far the trail has been revealed. */
     tracer(which: 'pitch' | 'batted'): number[];
+    /** The WHOLE built path, revealed or not — the geometry seam. */
+    tracerFull(which: 'pitch' | 'batted'): number[];
     tracerVisible(which: 'pitch' | 'batted'): boolean;
     /** Where the ball is actually drawn, scene ft. */
     ballScene(): [number, number, number] | null;
+    /** The drawn ball in 0…1 viewport coords (y down), or null if off-frustum. */
+    ballScreen(): [number, number] | null;
     ballVisible(): boolean;
     ballScale(): number;
+    /** Where the camera is aimed, how settled the ease is, and which mode. */
+    cameraAim(): ReturnType<StadiumApi['cameraAim']>;
   };
 }
 
 interface PreviewWindow {
   __baseballReady?: boolean;
   __baseball?: BaseballHandle;
+  /** Virtual time now. A determinism probe: it must match across runs. */
+  __sceneClockNow?: () => number;
 }
 
 const w = window as unknown as PreviewWindow;
 
+/**
+ * One virtual frame, ms. 50 ms = 20 fps of virtual time.
+ *
+ * ⚠ IT IS A COST KNOB, NOT A LOOK KNOB, and that is worth stating because
+ * golf's equivalent (100 ms) is neither. Both of this scene's time-driven
+ * quantities are EXACT under subdivision: the transition blend accumulates
+ * `dt / CAMERA_EASE_S` (a sum, so any split of the same total gives the same
+ * `u`), and the follow damping is an exponential (`e^(−T/τ)` whatever the
+ * steps). So the step only decides how many SwiftShader frames a `?ease=`
+ * slice costs — at ~3 fps, 400 ms of ease is 8 frames ≈ 3 s. It must divide
+ * every `?ease=` value the harness asks for.
+ */
+const VIRTUAL_STEP_MS = 50;
+
+engageVirtualClock(1000, VIRTUAL_STEP_MS);
+w.__sceneClockNow = () => sceneNow();
+
 const params = new URLSearchParams(location.search);
 const sceneParam = params.get('scene');
 const mode: CameraMode = isCameraMode(sceneParam) ? sceneParam : 'wide';
+/**
+ * The camera mode the scene MOUNTS in, when a shot wants to photograph the
+ * transition rather than either endpoint. Absent ⇒ mount in `mode` and never
+ * move, which is what every M1/M2 scene does and why their PNGs are unaffected
+ * by any of this.
+ */
+const fromParam = params.get('from');
+const mountMode: CameraMode = isCameraMode(fromParam) ? fromParam : mode;
 const park = parkById(params.get('park') ?? '') ?? HARBOURFRONT;
 const num = (key: string, fallback: number): number => {
   const v = Number.parseFloat(params.get(key) ?? '');
@@ -127,6 +184,8 @@ const num = (key: string, fallback: number): number => {
 };
 const exposureParam = num('exposure', 0);
 const exposure = exposureParam > 0 ? exposureParam : 1;
+/** Virtual ms of camera transition to run before freezing. 0 ⇒ freeze at once. */
+const easeMs = Math.max(0, num('ease', 0));
 const seed = Math.trunc(num('seed', 20260816)) >>> 0;
 
 const pitchId = (params.get('pitch') ?? 'ff') as PitchId;
@@ -271,25 +330,59 @@ function Preview() {
 
   const onReady = useCallback((api: StadiumApi) => {
     const handle = w.__baseball;
-    if (!handle) return;
+    // ⚠ ONCE. `onReady` fires from inside the render loop, and this callback now
+    // has SIDE EFFECTS (it switches camera mode and spends virtual time). Under
+    // StrictMode's double mount the first scene is normally torn down before its
+    // third frame, but "normally" is not a guarantee worth a non-deterministic
+    // shot.
+    if (!handle || handle.stadium) return;
     if (aimParam) api.setReticle(derby.reticleX, derby.reticleH);
     handle.stadium = {
       mode,
       stats: () => api.stats(),
       measureFence: (deg) => api.measureFence(deg),
       tracer: (which) => api.tracer(which),
+      tracerFull: (which) => api.tracerFull(which),
       tracerVisible: (which) => api.tracerVisible(which),
       ballScene: () => api.ballScene(),
+      ballScreen: () => api.ballScreen(),
       ballVisible: () => api.ballVisible(),
       ballScale: () => api.ballScale(),
+      cameraAim: () => api.cameraAim(),
     };
-    w.__baseballReady = true;
+    // No transition asked for: stop the world here. Every later frame — the
+    // shooter's settle delay included — then renders the identical picture.
+    if (mountMode === mode || easeMs <= 0) {
+      freezeSceneClock();
+      w.__baseballReady = true;
+      return;
+    }
+    // ⚠ THE TRANSITION IS DRIVEN, NOT WAITED FOR. `setMode` starts the ease and
+    // `advanceSceneClock` buys it an EXACT slice of virtual time; the poll below
+    // watches the budget drain rather than a wall clock, so the captured frame
+    // is `easeMs` into the move on any machine at any frame rate. Freezing on a
+    // timer instead is precisely the bug golf's beacon had — its 4 s wall-clock
+    // fallback beat the frame path on every single scene.
+    api.setMode(mode);
+    advanceSceneClock(easeMs);
+    const poll = () => {
+      if (sceneClockPending() > 0) {
+        requestAnimationFrame(poll);
+        return;
+      }
+      freezeSceneClock();
+      w.__baseballReady = true;
+    };
+    requestAnimationFrame(poll);
   }, []);
 
   return (
     <StadiumGL
       park={park}
-      mode={mode}
+      // MOUNT mode, which is `mode` unless `?from=` asked for a transition. The
+      // prop never changes afterwards — `api.setMode` drives the ease — so this
+      // does not re-render the tree or rebuild the park.
+      mode={mountMode}
       exposure={exposure}
       qualityOverride={params.get('quality')}
       // The magenta 6 ft measuring stick. OFF by default in the component so it

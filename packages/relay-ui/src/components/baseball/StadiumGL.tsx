@@ -12,7 +12,10 @@
 // `wide` are four camera placements over one built park. GOLF.md's rendering
 // chapter records what happened when Course and Range were separate scenes: they
 // drifted and a shared kit had to be retrofitted. A second GL file is a
-// permanent parity tax and there will not be one.
+// permanent parity tax and there will not be one. The placements and the ease
+// between them live in `stadium/camera.ts` — the machinery existed and nothing
+// used it, and the follow camera the owner asked for is that machinery being
+// switched on rather than a parallel system beside it.
 //
 // ⚠ NO GAMEPLAY IS COMPUTED HERE. Layer discipline: the sim owns state, GL
 // renders, the HUD polls. The park is read from `parks.ts` — the SAME module
@@ -46,6 +49,9 @@ import { HARBOURFRONT } from '../../lib/baseball/parks';
 import type { Park } from '../../lib/baseball/parks';
 import { PITCH_TEMPO } from '../../lib/baseball/tuning';
 import { ZONE_CENTER } from '../../lib/baseball/zone';
+import { sceneNow, tickSceneClock } from '../../lib/scene3d/clock';
+import { buildCameraRig } from './stadium/camera';
+import type { CameraMode } from './stadium/camera';
 import { buildField } from './stadium/field';
 import { buildFence } from './stadium/fence';
 import { buildFlight } from './stadium/flight';
@@ -59,74 +65,14 @@ import { pickStadiumQuality } from './stadium/quality';
 import type { StadiumQuality } from './stadium/quality';
 import type { Disposable, StadiumCtx, Track } from './stadium/geom';
 
-export type CameraMode = 'batter' | 'pitcher' | 'flight' | 'wide';
-
-export const CAMERA_MODES: CameraMode[] = ['batter', 'pitcher', 'flight', 'wide'];
-
-export const isCameraMode = (v: unknown): v is CameraMode =>
-  CAMERA_MODES.includes(v as CameraMode);
-
-/**
- * The four camera placements, in SCENE feet: `x` lateral (+ = first-base side),
- * `y` up, `z` negative toward centre field. See `stadium/geom.ts` for the frame.
- *
- * These are FRAMING, the one honestly subjective thing in this file — every
- * other number in the scene is data. They are written as a table so that
- * re-framing a shot is an edit to five numbers and not to a render path.
- */
-/**
- * ⚠ `near` IS PER MODE, AND THAT IS A BUG FIX, NOT A FLOURISH. A stadium spans
- * three orders of magnitude — a 0.05 ft gap between the grass and the warning
- * track, read from 1200 ft away in the `wide` shot. With one 0.5 ft near plane
- * and a 6000 ft far plane the depth buffer could not separate them: the first
- * `wide` render showed the seating bowl as TRANSLUCENT and the turf striped with
- * radial spokes, both of which are z-fighting and neither of which is a material
- * problem. The near plane is therefore pushed out to just inside the nearest
- * geometry each camera can actually see.
- */
-const CAMERAS: Record<
-  CameraMode,
-  { pos: [number, number, number]; look: [number, number, number]; fov: number; near: number }
-> = {
-  // Behind the plate at CATCHER/UMPIRE height, inside the backstop (which stands
-  // at `foulTerritoryFt`, so the camera has to sit nearer than that or it shoots
-  // through the stands).
-  //
-  // ⚠ RE-FRAMED IN M2c, AND THE OLD ONE WAS MEASURABLY UNPLAYABLE. The previous
-  // placement — [0, 8.5, 20] looking at [0, 4, −55] — put the strike zone 13.3°
-  // below the look axis against a 20° half-FOV, i.e. 78 % of the way DOWN a
-  // portrait screen, under the HUD's own bottom chrome. The visual gate
-  // photographed it the moment the reticle existed to sit in it. The zone is
-  // this mode's SUBJECT now, so the framing is derived from the two things the
-  // shot has to contain:
-  //
-  //     release point  (0, 5.8, −54) → +2.4° from a camera at (0, 3.2, 8)
-  //     zone centre    (0, 2.5,   0) → −5.0° from the same camera
-  //
-  // Aim at the bisector (−1.3°) and the whole pitch spans 41 %→59 % of the
-  // frame, dead centre, with the 1.8 ft zone 32 % of the screen height tall.
-  // The eye height is a crouching catcher's, not a standing batter's, for the
-  // same reason every baseball game uses it: a camera ABOVE the zone and close
-  // to it must look DOWN at it, and that is the geometry that pushed the old
-  // framing into the floor. Framing is the one honestly subjective thing in this
-  // file (see the note above `CAMERAS`); the numbers it is derived FROM are not.
-  batter: { pos: [0, 3.2, 8], look: [0, 2.52, -30], fov: 40, near: 1 },
-  // From the mound, looking in at the plate. Narrow, because a pitcher's view of
-  // a 17 in plate 55 ft away IS narrow and pretending otherwise flatters the aim.
-  pitcher: { pos: [0, 6, -55], look: [0, 2.6, 0], fov: 26, near: 1 },
-  // Upper deck behind home, a little to the third-base side, looking out over
-  // the whole outfield — the frame a batted ball is watched in. Two earlier
-  // framings put the camera beside or behind the bowl and photographed the back
-  // of the seating rake; a camera ABOVE the rake looking down its axis is what
-  // clears it. It is also the only mode that gets the 282 ft roof and the 10 ft
-  // wall into one frame, so the ceiling reads as a height against something.
-  flight: { pos: [-40, 120, 90], look: [-40, 60, -380], fov: 55, near: 4 },
-  // The whole park. High enough to clear the back of the bowl behind home
-  // (deck top 130 ft at r ≈ 160 ft), which the first framing did not and so
-  // photographed the outside of the backstop instead of the field. Nearest
-  // geometry is the roof rim at ~780 ft, so a 200 ft near plane is generous.
-  wide: { pos: [0, 1000, 470], look: [0, 0, -200], fov: 56, near: 200 },
-};
+// The camera modes, their placements and the rig that moves between them live in
+// `stadium/camera.ts` — re-exported here because this file is the module every
+// consumer already imports, and because a HUD asking for a camera mode has no
+// business knowing which builder owns the table. See that file for why the
+// placements moved out: they acquired STATE (an ease, a follow point), and a
+// table with state in it is a subsystem.
+export { CAMERA_MODES, isCameraMode } from './stadium/camera';
+export type { CameraMode } from './stadium/camera';
 
 /**
  * Sun, scene ft. It sits on the POSITIVE-z side (behind home) on purpose: that
@@ -178,7 +124,14 @@ export interface StadiumApi {
   stats(): StadiumStats;
   /** Distance and height of the DRAWN wall at a bearing, read out of geometry. */
   measureFence(bearingDeg: number): { distFt: number; heightFt: number } | null;
+  /**
+   * Change camera mode. EASES, it does not cut — see `stadium/camera.ts`. The
+   * transition is driven by the scene clock, so a frozen clock holds it exactly
+   * where it is and two harness runs capture the same frame.
+   */
   setMode(mode: CameraMode): void;
+  /** The camera's current aim point, scene ft, and how settled the ease is. */
+  cameraAim(): { target: [number, number, number]; progress: number; mode: CameraMode };
   setExposure(exposure: number): void;
   /** Hand the renderer a precomputed flight. Nothing here computes gameplay. */
   setFlight(paths: FlightPaths | null): void;
@@ -188,8 +141,18 @@ export interface StadiumApi {
    * by a wall clock is the obvious way to make two runs disagree.
    */
   setBallTime(tS: number | null): void;
-  /** The DRAWN tracer's vertices, scene ft — the visual gate's read-back seam. */
+  /**
+   * The tracer's vertices AS DRAWN, scene ft — i.e. only as far as the ball has
+   * actually travelled. The gate's leak seam: if this reaches past the ball, the
+   * player can read the outcome before it happens.
+   */
   tracer(which: 'pitch' | 'batted'): number[];
+  /**
+   * The WHOLE built path, revealed or not — the gate's GEOMETRY seam, and the
+   * one the 0.002 ft drawn-vs-sim comparison must use. Pointing that comparison
+   * at `tracer()` would silently narrow it to a prefix.
+   */
+  tracerFull(which: 'pitch' | 'batted'): number[];
   /** Is that tracer being rendered? Vertices nobody draws prove nothing. */
   tracerVisible(which: 'pitch' | 'batted'): boolean;
   /**
@@ -429,15 +392,12 @@ export default function StadiumGL({
     cam.updateProjectionMatrix();
     renderer.shadowMap.needsUpdate = true;
 
-    const applyMode = (m: CameraMode) => {
-      const c = CAMERAS[m];
-      camera.position.set(...c.pos);
-      camera.fov = c.fov;
-      camera.near = c.near;
-      camera.lookAt(c.look[0], c.look[1], c.look[2]);
-      camera.updateProjectionMatrix();
-    };
-    applyMode(initialRef.current.mode);
+    // The camera rig. It owns the placements, the ease between them and the
+    // follow damping; this file owns the camera object and the loop that feeds
+    // it. The MOUNT is a snap — an ease from nowhere is just a slower cut, and
+    // the harness would then photograph a camera still in transit on frame 3.
+    const rig = buildCameraRig();
+    rig.snap(camera, initialRef.current.mode, null);
 
     const resize = () => {
       const w = Math.max(1, host.clientWidth);
@@ -456,20 +416,33 @@ export default function StadiumGL({
     let frames = 0;
     const shadowTexelFt = (2 * half) / quality.shadowMapSize;
     let last: StadiumStats = emptyStats(quality, half, shadowTexelFt);
-    // ⚠ THE ONLY CLOCK IN THE BASEBALL GAME, and it is read in exactly one
-    // branch. `ballTime` is a frozen TRUE PHYSICAL time when the screenshot
-    // harness (or a paused HUD) sets one, and `performance.now()` is never
-    // touched in that case — which is what makes two harness runs byte-identical.
+    // `ballTime` is a frozen TRUE PHYSICAL time when the screenshot harness (or
+    // a paused HUD) sets one; the wall clock is then never consulted for the
+    // BALL at all, which is what made two harness runs byte-identical before the
+    // camera moved. The camera's own time now comes from the scene clock below,
+    // which the harness freezes for the same reason.
     let ballTime: number | null = initialRef.current.ballTimeS ?? null;
     let playStartMs = 0;
     const projScratch = new Vector3();
-    const tick = () => {
+    // ⚠ THE SCENE CLOCK, AND IT IS THE ONLY CLOCK THIS FILE READS. `sceneNow()`
+    // and `tickSceneClock()` are `performance.now()` verbatim until a harness
+    // calls `engageVirtualClock()`, so the shipped app is unchanged to the
+    // millisecond — and with the clock engaged and FROZEN, `dt` is exactly 0,
+    // the camera ease does not advance and the follow damping's factor is
+    // `1 − e⁰ = 0`. That is what lets a moving camera coexist with the
+    // byte-identical-PNG claim. Golf measured 23 of 25 scenes differing between
+    // two identical runs before it did this; see `lib/scene3d/README.md`.
+    let lastClockMs = sceneNow();
+    const tick = (rafNowMs?: number) => {
+      const nowMs = tickSceneClock(rafNowMs);
+      const dtS = (nowMs - lastClockMs) / 1000;
+      lastClockMs = nowMs;
       if (ballTime !== null) {
         ballFlight.setTime(ballTime);
       } else {
         const dur = ballFlight.durationS();
         if (dur > 0) {
-          if (playStartMs === 0) playStartMs = performance.now();
+          if (playStartMs === 0) playStartMs = nowMs;
           // ⚠ THE TEMPO SCALES THE CLOCK, NEVER `dt`, AND IT IS A MULTIPLY.
           // `pitchSim` integrated this flight at true physical time and cannot
           // import `PITCH_TEMPO`; the render layer MULTIPLIES its own wall clock
@@ -479,10 +452,15 @@ export default function StadiumGL({
           // silently move every break number. This branch is the STANDALONE
           // scene's replay; when a HUD is driving, `DerbyGame.trueTimeOf` owns
           // the same identity and `setBallTime` arrives already converted.
-          const played = ((performance.now() - playStartMs) / 1000) * PITCH_TEMPO;
+          const played = ((nowMs - playStartMs) / 1000) * PITCH_TEMPO;
           ballFlight.setTime(played % (dur + REPLAY_GAP_S));
         } else ballFlight.setTime(-1);
       }
+      // ⚠ AFTER `setTime`, BEFORE `sizeFor` AND `render`. The rig follows the
+      // ball's position for THIS frame, and `sizeFor` needs the camera the frame
+      // is actually drawn with — get either order wrong and the ball's
+      // screen-space size floor is computed against last frame's camera.
+      rig.update(camera, dtS, ballFlight.followScene());
       // The screen-space size floor, against the DRAWING BUFFER's height —
       // real pixels, not CSS ones. See `MIN_BALL_PX` in stadium/flight.ts.
       ballFlight.sizeFor(camera, renderer.domElement.height);
@@ -507,7 +485,8 @@ export default function StadiumGL({
     const api: StadiumApi = {
       stats: () => last,
       measureFence: (deg) => fence.sample(deg),
-      setMode: applyMode,
+      setMode: (m) => rig.setMode(m),
+      cameraAim: () => ({ target: rig.target(), progress: rig.progress(), mode: rig.mode() }),
       setExposure: (e) => {
         renderer.toneMappingExposure = e;
       },
@@ -532,6 +511,7 @@ export default function StadiumGL({
       setAiming: (on) => reticle.setVisible(on, on),
       reticleScene: () => reticle.reticleScene(),
       tracer: (which) => ballFlight.tracer(which),
+      tracerFull: (which) => ballFlight.tracerFull(which),
       tracerVisible: (which) => ballFlight.tracerVisible(which),
       ballScene: () => ballFlight.ballScene(),
       ballScreen: () => {

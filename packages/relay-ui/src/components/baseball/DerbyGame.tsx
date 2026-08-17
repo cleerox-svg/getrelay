@@ -64,6 +64,19 @@ const RESULT_HOLD_MS = 1500;
 /** Extra true-physical seconds a late tap is still accepted for. FEEL KNOB. */
 const SWING_TAIL_S = 0.06;
 
+/**
+ * Shortest hang time that earns the pull-back to the deck camera, s. FEEL KNOB.
+ *
+ * ⚠ IT EXISTS BECAUSE THE EASE HAS A LENGTH. `stadium/camera.ts` takes
+ * `CAMERA_EASE_S = 0.8` to travel from the box to the upper deck, so on a ball
+ * hanging 1.0 s the camera arrives as the ball lands and immediately reverses —
+ * a swoop out and straight back, spent on a routine grounder the batter camera
+ * already contains (it lands inside the infield arc, 128–156 ft out, dead
+ * ahead). A presentation decision, which is the HUD's to make: no sim, score or
+ * fielding number reads it. `DerbyGame.camera.test.tsx` asserts both sides.
+ */
+const FOLLOW_MIN_HANG_S = 1.2;
+
 /** The play clock: a WALL ms origin, and the crossing it changes rate at. */
 interface PlayClock {
   t0: number;
@@ -279,7 +292,13 @@ export function DerbyGame({ seed, park, paused = false, onFinish, onExit }: Derb
       // `BattedFlight` the sim integrated, handed straight to the renderer.
       setFlight({ pitch: pitchTrackRef.current, batted: r.flight.track, contactTS: c.plateT });
       clockRef.current = { ...c, endS: c.plateT + r.flight.hangS };
-      setMode('flight');
+      // ⚠ THE CAMERA IS TOLD AFTER CONTACT HAS RESOLVED, and that is the whole
+      // of "hold the batter camera through contact": by this line the tap is
+      // taken and `sim.swing()` has produced the ball, so no camera motion can
+      // precede the frame the player timed against. The move is an EASE
+      // (`stadium/camera.ts`) whose quintic has covered 10 % at 25 % of its
+      // duration — ~190 ms more of near-hold before the pull-back is visible.
+      if (r.flight.hangS >= FOLLOW_MIN_HANG_S) setMode('flight');
       play('swing');
       if (r.outcome === 'homeRun') play('ding');
     }
@@ -294,6 +313,14 @@ export function DerbyGame({ seed, park, paused = false, onFinish, onExit }: Derb
     stageRef.current = 'result';
     resultAtRef.current = performance.now();
     setStage('result');
+    // ⚠ COME BACK HERE, NOT IN `nextPitch`. The return is an ease now and needs
+    // somewhere to spend its 0.8 s; `RESULT_HOLD_MS` (1500) is the beat doing
+    // nothing else. Starting it at `nextPitch` would run the camera home WHILE
+    // the aim UI and the zone reticle were already up — the player asked to aim
+    // at a plate still sliding into place. A no-op when the camera never left
+    // (whiff, take, or a hang under FOLLOW_MIN_HANG_S): the rig ignores a
+    // re-select of the mode it is already on.
+    setMode('batter');
   }
 
   function nextPitch() {
@@ -308,7 +335,12 @@ export function DerbyGame({ seed, park, paused = false, onFinish, onExit }: Derb
     clockRef.current = null;
     elapsedRef.current = 0;
     setStage('aim');
-    setMode('batter');
+    // ⚠ NO `setMode` HERE, AND ITS ABSENCE IS THE POINT. `endPlay` sent the
+    // camera home 1500 ms ago; this call was a second mechanism covering the
+    // same case — deleting `endPlay`'s failed 0 of 3 camera tests while this one
+    // silently did the job at the wrong moment. `endPlay` is the only setter of
+    // stage 'result' and this is only reached FROM 'result', so the ease cannot
+    // have been skipped. One mechanism; the TIMING is what is asserted now.
     setFlight(null);
     setLast(null);
   }
@@ -486,7 +518,16 @@ export function DerbyGame({ seed, park, paused = false, onFinish, onExit }: Derb
         onSwing={swingNow}
       />
 
-      <ExitVeloTag result={stage === 'aim' ? null : last} getBallScreen={getBallScreen} />
+      {/* ⚠ `follow` IS WHAT STOPS THE TAG AND THE CAMERA FIGHTING. The tag is
+          correct in WORLD space, so a moving camera moves it — right while the
+          ball is live, wrong once the play is over, when the camera eases back
+          to the box and would drag the graphic after a ball that has stopped.
+          `false` parks it where the ball finished, as a broadcast does. */}
+      <ExitVeloTag
+        result={stage === 'aim' ? null : last}
+        follow={stage === 'flight'}
+        getBallScreen={getBallScreen}
+      />
 
       <div
         style={{
