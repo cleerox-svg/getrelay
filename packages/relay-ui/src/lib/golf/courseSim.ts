@@ -184,13 +184,19 @@ function puttSpeedForPower(power: number): number {
   return PUTT_MIN_SPEED + p * p * (PUTT_MAX_SPEED - PUTT_MIN_SPEED);
 }
 
-// --- Tree collision (trunk ricochet + canopy brush) ------------------------
+// --- Tree collision (trunk ricochet + canopy brush + understory drift) -----
 // Trees are deterministic DATA (terrain.courseTrees) shared with the renderer, so
-// the trunk the player sees is the trunk the ball hits. A trunk is a vertical
-// cylinder the ball CAROMS off (reflect the inbound normal component, restitution
-// < 1 → a central hit comes back, a glancing hit deflects); the canopy is a soft
-// sphere that lightly DAMPS an airborne ball passing through it — leaves brushing
-// it, not a hard stop.
+// the trunk the player sees is the trunk the ball hits. THREE volumes, stacked,
+// each with the response its material deserves:
+//   • the TRUNK, a rigid vertical cylinder (trunkR, ground → height) the ball
+//     CAROMS off — reflect the inbound normal component, restitution < 1, so a
+//     central hit comes back and a glancing one deflects;
+//   • the CANOPY, a soft sphere (canopyR at canopyH) that lightly DAMPS an
+//     airborne ball passing through — leaves brushing it, not a hard stop;
+//   • the UNDERSTORY DRIFT, a half-ellipsoid on the deck (shrubR/shrubH) present
+//     only on the flowering trees of an 'understory' hole, which damps HARD —
+//     a thicket, not a brush. It is the newest and the only one that exists
+//     because of authored ART: the drift is drawn, so it has to be felt.
 //
 // Restitution of a trunk carom (reflected normal component kept fraction). Lower
 // than a fibreglass pin — a tree trunk deadens the knock — but lively enough to
@@ -205,6 +211,23 @@ const TRUNK_SPEED_KEEP = 0.85;
 // lob dwelling ~0.4 s near the top still loses only ~4%. dt-scaled so it's a
 // gentle brush, not a catch, and identical live + headless.
 const CANOPY_KEEP_PER_SEC = 0.9;
+// Fraction of HORIZONTAL speed kept per second inside a flowering UNDERSTORY
+// drift (CourseTree.shrubR/shrubH — only the holes whose bloom.form is
+// 'understory' have any). The decay is 37× the canopy's (ln 0.02 against
+// ln 0.9), because this is not leaves in passing: it is a dense 2–3 m thicket
+// standing on the ground, and a ball that goes into one does not come out the
+// far side with its pace. dt-scaled like the canopy, so the model stays
+// emergent — clip the
+// rim in 0.05 s and lose ~18%, plough the middle in 0.17 s and lose ~49%, trickle
+// in at rolling pace and stop. A very fast ball still punches through with
+// something left, which is right: that is what a hot ball does to a shrub.
+//
+// It DAMPS and never reflects. A trunk is rigid, so it caroms; a forsythia is
+// not, so a ball is caught and dropped, not bounced. vh is left to gravity for
+// the same reason (and consistently with the trunk carom and the pin) — damping
+// the fall would make the ball HANG in the bush, which is the one thing it
+// visibly does not do.
+const SHRUB_KEEP_PER_SEC = 0.02;
 
 // Where a shot ended up. The solid lies double as the resting-lie readout; the
 // terminal ones end the shot.
@@ -398,6 +421,12 @@ export class CourseSim {
   // after construction, so it needs no CourseSnapshot entry: predict() reads but
   // never mutates it, leaving the snapshot round-trip guard byte-identical.
   private readonly trees: CourseTree[];
+  // Just the trees carrying a flowering UNDERSTORY drift, pre-filtered once. On
+  // the 16 of 18 Augusta holes (and every Listowel hole) with no 'understory'
+  // bloom this is EMPTY, so the shrub brush costs one empty iteration per substep
+  // and the trees those holes plant play exactly as they always did. Immutable
+  // after construction, like `trees`.
+  private readonly shrubs: CourseTree[];
 
   private clubId: string;
   private spinBack = 0;
@@ -461,6 +490,7 @@ export class CourseSim {
     this.hole = hole;
     this.par = hole.par;
     this.trees = courseTrees(hole);
+    this.shrubs = this.trees.filter((t) => t.shrubR !== undefined && t.shrubH !== undefined);
     this.clubId = clubId;
     this.windAlong = hole.wind.along;
     this.windCross = hole.wind.cross;
@@ -910,6 +940,10 @@ export class CourseSim {
       // grounded, so the ball is always below the trunk top. Reposition + reflect
       // happen inside; re-sample the ground under the (possibly nudged) position.
       this.hitTrunk(b.d - b.vd * dt, b.x - b.vx * dt, 0);
+      // …and a rolling ball that enters a flowering understory drift is dragged
+      // down by it, BEFORE the rest test below reads the speed — so the ball can
+      // come to rest in the shrub it rolled into, in the same substep.
+      this.brushShrub(0, dt);
       b.h = this.ground(b.d, b.x);
       this.total = this.origin2D(b.d, b.x);
       const surf = this.lieAt(b.d, b.x);
@@ -983,6 +1017,11 @@ export class CourseSim {
       ground = this.ground(b.d, b.x);
     }
     this.brushCanopy(relH, dt);
+    // The canopy's leaves are up at canopyH; a drift is on the DECK. The two
+    // volumes never overlap (a drift tops out at 1.6·scale, the canopy sphere
+    // starts at 3.6·scale), so a low ball skimming the tree line meets the shrub
+    // and a high one meets the leaves — never both.
+    this.brushShrub(relH, dt);
     // Land on descent (h dropping to the surface), OR when a still-climbing liner
     // has clearly PENETRATED rising terrain — the latter catches a low shot that
     // would otherwise tunnel through an upslope. The penetration MARGIN keeps a
@@ -1134,6 +1173,48 @@ export class CourseSim {
         b.vd *= k;
         b.vx *= k;
         b.vh *= k;
+        return;
+      }
+    }
+  }
+
+  // Understory drift — a ball inside a flowering shrub mass sheds HORIZONTAL pace
+  // fast (SHRUB_KEEP_PER_SEC, dt-scaled). The volume is the half-ellipsoid
+  // standing on the ground at the trunk that `terrain.courseTrees` emits and
+  // `foliage.groveFromCourseTrees` FILLS WITH THE DRAWN BLOSSOM — same two
+  // numbers, so what you see is what you hit. Only trees whose hole blooms
+  // 'understory' have one; `this.shrubs` is empty everywhere else.
+  //
+  // WHY THIS EXISTS. The drift is a visually solid mass at ball height, and it
+  // used to be drawn 5.7× wider than the only thing the sim collided with there
+  // (the 1.3–1.7 yd trunk cylinder) — so a ball rolled through eight yards of
+  // apparent flowering shrub and felt nothing. The fix is NOT a wider trunk: the
+  // trunk cylinder reflects, and it runs up to 8.7–11.4 yd, so widening it would
+  // have caromed balls off empty air ABOVE the shrub — trading a phantom on the
+  // deck for a bigger one in the air. A drift is short, wide and soft, so it
+  // needs its own volume with its own height and its own response.
+  //
+  // The test is the ball's CENTRE inside the ellipsoid, not a swept sphere: this
+  // is a brush like the canopy's, not a carom like the trunk's, and a 10–14 yd
+  // mass cannot be tunnelled at any speed the sim produces (a 60 yd/s ball moves
+  // 0.25 yd per substep). Brushes the FIRST drift entered. `relH` is the ball's
+  // height above the LOCAL ground (0 when rolling). Only scales the ball's own
+  // velocity, so it is snapshot-guard safe.
+  private brushShrub(relH: number, dt: number): void {
+    if (relH < 0) relH = 0;
+    const b = this.ball;
+    for (const t of this.shrubs) {
+      const R = t.shrubR!;
+      const H = t.shrubH!;
+      if (relH > H) continue; // over the top of the drift
+      const dd = b.d - t.d;
+      if (dd > R || dd < -R) continue; // broad phase (cheap axis reject)
+      const dx = b.x - t.x;
+      if (dx > R || dx < -R) continue;
+      if ((dd * dd + dx * dx) / (R * R) + (relH * relH) / (H * H) <= 1) {
+        const k = Math.pow(SHRUB_KEEP_PER_SEC, dt);
+        b.vd *= k;
+        b.vx *= k;
         return;
       }
     }

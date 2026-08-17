@@ -262,6 +262,27 @@ describe('Augusta — the flowering holes actually flower', () => {
       const bloomed = courseTrees(h).filter((t) => t.bloom !== undefined);
       expect(bloomed.length, `hole ${h.id} planted no flowering tree`).toBeGreaterThan(4);
       expect(bloomed.every((t) => t.kind === 'broadleaf')).toBe(true);
+      // …and every one of those drifts is a COLLIDABLE. This is the difference
+      // between the two forms and the reason the autumn guard above cannot be
+      // satisfied for free: choosing 'understory' puts a visible mass at ball
+      // height, so it has to put an obstacle there too.
+      expect(bloomed.every((t) => t.shrubR !== undefined && t.shrubH !== undefined)).toBe(true);
+      for (const t of bloomed) {
+        // A drift is a SHRUB drift: never wider than the crown it grows under
+        // (canopyR), and 2–3 m tall rather than the 4–6 yd the first pass drew.
+        expect(t.shrubR!).toBeLessThan(t.canopyR);
+        expect(t.shrubH!).toBeGreaterThan(2.5);
+        expect(t.shrubH!).toBeLessThan(3.6);
+      }
+    }
+  });
+
+  it('gives a CANOPY hole no drift at all — the form is the whole difference', () => {
+    for (const id of FLOWERING) {
+      const h = byId(id);
+      if (h.bloom!.form === 'understory') continue;
+      const trees = courseTrees(h);
+      expect(trees.some((t) => 'shrubR' in t || 'shrubH' in t), `hole ${id}`).toBe(false);
     }
   });
 
@@ -274,15 +295,38 @@ describe('Augusta — the flowering holes actually flower', () => {
     }
   });
 
-  it('does not change a single thing the ball touches', () => {
-    // The whole safety argument for bloom: strip it and the tree list is
-    // byte-identical, so a flowering hole plays exactly as a plain one would.
+  // ⚠ THE SAFETY ARGUMENT, AND WHERE IT NOW STOPS. It used to be one sentence —
+  // "strip the bloom and the tree list is byte-identical, so a flowering hole
+  // plays exactly as a plain one would". That is still true of a CANOPY bloom and
+  // it is load-bearing: 2, 13 and 16 are pixel-identical frames on the strength of
+  // it. It is NOT true of an understory drift, and pretending otherwise is what
+  // let a phantom obstacle ship. So the guarantee splits in two, and each half is
+  // tested for exactly what it claims.
+  it('CANOPY bloom does not change a single thing the ball touches', () => {
     for (const id of FLOWERING) {
       const h = byId(id);
+      if (h.bloom!.form === 'understory') continue;
       const { bloom: _bloom, ...plain } = h;
       const stripped = courseTrees(plain as CourseHole).map((t) => JSON.stringify(t));
       const flowering = courseTrees(h).map((t) => {
         const { bloom: _b, ...rest } = t;
+        return JSON.stringify(rest);
+      });
+      expect(flowering, `hole ${id}`).toEqual(stripped);
+    }
+  });
+
+  it('UNDERSTORY bloom ADDS a drift and changes nothing else', () => {
+    // The narrower claim the drift can honour: it does not move a tree, resize a
+    // trunk, or touch a canopy — it only puts a new volume where the blossom is
+    // drawn. Everything the ball touched before, it still touches identically.
+    for (const id of FLOWERING) {
+      const h = byId(id);
+      if (h.bloom!.form !== 'understory') continue;
+      const { bloom: _bloom, ...plain } = h;
+      const stripped = courseTrees(plain as CourseHole).map((t) => JSON.stringify(t));
+      const flowering = courseTrees(h).map((t) => {
+        const { bloom: _b, shrubR: _r, shrubH: _hh, ...rest } = t;
         return JSON.stringify(rest);
       });
       expect(flowering, `hole ${id}`).toEqual(stripped);
