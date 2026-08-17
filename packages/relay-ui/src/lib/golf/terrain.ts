@@ -1000,13 +1000,82 @@ function centerlineXAt(hole: CourseHole, d: number): number {
 const SHRUB_R = 3.2;
 const SHRUB_H = 1.6;
 
+// Slide a tree straight out along ±x until its COLLIDABLE TRUNK is entirely off
+// playable ground — perpendicular distance to the centerline ≥ roughHalf +
+// trunkR. Returns `x` untouched when it already is, which most trees already are.
+//
+// ⚠ THIS EXISTS BECAUSE THE GROVE AND THE CORRIDOR MEASURE DIFFERENT THINGS.
+// `surfaceAt` classifies the corridor by PERPENDICULAR distance to the
+// centerline polyline (`nearestOnPolyline`), while the grove below lines it out
+// at a lateral **x-offset**. On a centerline running at θ to the d axis those
+// differ by exactly cos θ, so the achieved clearance is `off · cos θ` and the
+// tree line walks into the corridor it is supposed to flank. Measured before
+// this guard: 171 collidable trunks standing inside the rough and 359 canopies
+// overhanging playable ground, across 3,084 trees on all four courses — scaling
+// with dogleg angle, so holes under ~28° were clean while Augusta 10 (51°) and
+// 13 (50°) carried 12–14 apiece and the worst tree stood 12.8 yd inside the OB
+// line. Hole 8, the hole it was first reported on, was one of the mildest.
+//
+// ⚠ THE TARGET IS THE TRUNK, AND ONLY THE TRUNK. A canopy overhanging the rough
+// is not a defect, it is what a tree-lined hole IS — on a real course you play
+// from under the branches. What is indefensible is a solid, ball-caroming trunk
+// standing on ground the hole invites you to play from. Two wider targets were
+// implemented and measured, and both were rejected:
+//   • `roughHalf + canopyR` (no part of the tree over playable ground) clears
+//     the canopies too, but it also lifts every UNDERSTORY DRIFT clear of the
+//     corridor: shrubR 3.2 < canopyR 3.4, so a drift whose tree clears by the
+//     canopy can never reach playable ground, and the `brushShrub` damping
+//     shipped in #261 becomes dead code for any in-play ball. `courseSim.test.ts`
+//     catches exactly this — its Augusta 8 case asserts a drift stands in play,
+//     and that premise vanishes. Costs 530 moved trees to delete a feature.
+//   • `off` (`roughHalf + 8`) restores the grove's nominal margin but moves
+//     1,763 trees — 57% of the grove, 40 of 45 holes — because ANY sloped
+//     centerline shortens clearance a little. A course-wide relayout bought for
+//     uniformity no player can perceive.
+// This target moves 246 trees (8%, 32 holes, mean 0.41 yd, max 22.0) and is the
+// weakest one that makes the invariant true, so the tree line still crowds the
+// corridor everywhere it did before — it just no longer stands IN it.
+//
+// Bisection rather than trigonometry because the corridor is a POLYLINE: near a
+// dogleg vertex the nearest segment changes under the tree, and closed-form
+// per-segment offsets mitre badly there (a true-normal offset measured WORSE
+// than doing nothing — 23 trunks — since the normal from one leg swings the tree
+// toward the other). `nearestOnPolyline(...).dist` is monotonic in |x − cx| once
+// outside the corridor, so 24 halvings settle it to well under a yard.
+function clearOfCorridor(
+  hole: CourseHole,
+  d: number,
+  x: number,
+  trunkR: number,
+  side: 1 | -1,
+): number {
+  const target = hole.roughHalf + trunkR;
+  if (nearestOnPolyline(hole.centerline, d, x).dist >= target) return x;
+  const cx = centerlineXAt(hole, d);
+  let lo = Math.abs(x - cx);
+  let hi = lo + target * 3;
+  for (let i = 0; i < 24; i++) {
+    const mid = (lo + hi) / 2;
+    if (nearestOnPolyline(hole.centerline, d, cx + side * mid).dist < target) lo = mid;
+    else hi = mid;
+  }
+  return cx + side * hi;
+}
+
 // The tree grove for a hole. Deterministic in the hole (integer d steps, no RNG).
 export function courseTrees(hole: CourseHole): CourseTree[] {
   const out: CourseTree[] = [];
   const dMax = treeSpanMaxD(hole);
   const off = hole.roughHalf + 8;
   const bloom = hole.bloom;
-  const push = (kind: 'pine' | 'broadleaf', x: number, d: number, scale: number, seed: number) => {
+  const push = (
+    kind: 'pine' | 'broadleaf',
+    x0: number,
+    d: number,
+    scale: number,
+    seed: number,
+    side: 1 | -1,
+  ) => {
     // Per-species trunk/canopy dimensions (yd), scaled with the render scale so the
     // collision volumes track the DRAWN tree (see-what-you-play). Trunk radius ≈
     // the tree kit's trunk-cylinder base radius (scenery.ts: broadleaf 0.45→0.85,
@@ -1019,6 +1088,11 @@ export function courseTrees(hole: CourseHole): CourseTree[] {
     const canopyR = (kind === 'pine' ? 2.9 : 3.4) * scale;
     const canopyH = 7 * scale;
     const height = (kind === 'pine' ? 5.0 : 5.25) * scale;
+    // The nominal x-offset is only a STARTING POINT — see clearOfCorridor. It is
+    // applied here rather than at the call sites so no future placement row can
+    // opt out of the invariant by forgetting to call it, and it needs trunkR,
+    // which is only known at this point. `ground` is sampled at the FINAL x.
+    const x = clearOfCorridor(hole, d, x0, trunkR, side);
     const tree: CourseTree = {
       d,
       x,
@@ -1054,13 +1128,18 @@ export function courseTrees(hole: CourseHole): CourseTree[] {
     const rd = d + (d % 5) - 2;
     // Front line: broadleaves, every third step a pine for variety (same as the
     // old inline grove so the look is byte-for-byte unchanged).
-    push(d % 3 === 0 ? 'pine' : 'broadleaf', lx, ld, 1.7 + (d % 5) * 0.12, 5000 + d);
-    push(d % 3 === 1 ? 'pine' : 'broadleaf', rx, rd, 1.65 + (d % 4) * 0.14, 9000 + d);
+    // NOTE the rows still sample the centerline at the UNSHIFTED `d` while the
+    // tree is planted at `ld`/`rd` (±3 yd). On a 34° dogleg that is a further
+    // ~2 yd of drift. It is left alone deliberately: clearOfCorridor measures at
+    // the tree's OWN d, so the invariant holds either way, and re-sampling here
+    // would move trees that are not breaking anything.
+    push(d % 3 === 0 ? 'pine' : 'broadleaf', lx, ld, 1.7 + (d % 5) * 0.12, 5000 + d, -1);
+    push(d % 3 === 1 ? 'pine' : 'broadleaf', rx, rd, 1.65 + (d % 4) * 0.14, 9000 + d, 1);
     // A receding, still-sizable pine further out each side for a layered line.
     if (d % 2 === 0) {
       const ox = off + 14;
-      push('pine', cx - ox, ld - 6, 1.35, 3000 + d);
-      push('pine', cx + ox, rd + 6, 1.4, 4000 + d);
+      push('pine', cx - ox, ld - 6, 1.35, 3000 + d, -1);
+      push('pine', cx + ox, rd + 6, 1.4, 4000 + d, 1);
     }
   }
   return out;

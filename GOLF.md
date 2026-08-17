@@ -831,15 +831,64 @@ out to be wrong in an instructive way.
    leg swings the tree toward the other leg. All 13 residuals sit within 21 yd
    of a dogleg vertex: the unmitred corner.
 
-   ⚠ **One design question blocks an exact fix.** Past the last centerline
-   vertex `nearestOnPolyline` clamps to the endpoint, so the corridor ends in a
-   rounded cap and a naive "solve for perpendicular distance == off" collapses
-   those trees onto the centerline. What the tree line should do beyond the
-   green needs deciding before the solve is written.
+   → **FIXED — by `clearOfCorridor`, and by fixing LESS than first proposed.**
+   `courseTrees` now slides each tree straight out along ±x until its collidable
+   trunk is entirely off playable ground (perpendicular clearance ≥
+   `roughHalf + trunkR`), leaving it alone when it already is. **246 → 0**,
+   guarded over every hole of every course by `courses.test.ts`.
 
-   ⚠ **This is a collision change on all four courses, not a visual tweak.** It
-   moves every dogleg's grove and therefore every Augusta and Listowel
-   screenshot. It wants its own PR with its own before/after, not a ride-along.
+   ⚠ **Two counts appear in this entry and they measure different things.** 171
+   is trunk CENTRES inside the corridor (`perp < roughHalf`); 246 is trunks
+   *touching* it (`perp − trunkR < roughHalf`), which is what the guard asserts
+   and therefore the honest number for the fix. They partition the same 530
+   trees against the canopy count — 171 + 359 and 246 + 284 both total 530 — so
+   quoting one against the other's baseline overstates or understates the change.
+   Verified against the real bundled `courseTrees`, not a reimplementation: tree
+   count, per-tree identity (kind/seed/scale/d) and bloom assignment are all
+   preserved, so nothing but x moves.
+
+   ⚠ **The first attempt fixed too much, and the sim tests caught it.** Pushing
+   until no part of the tree overlapped playable ground — trunk *and* canopy —
+   read as the more principled invariant and was implemented first. It is wrong:
+   `shrubR` (3.2·scale) is smaller than `canopyR` (3.4·scale), so a tree cleared
+   by its canopy can never have its understory drift reach the corridor, and the
+   `brushShrub` damping shipped in #261 becomes dead code for any in-play ball.
+   `courseSim.test.ts`'s Augusta 8 case asserts exactly that drift-in-play and
+   went undefined. The wider target cost 530 moved trees to delete a feature.
+   **A canopy over the rough is not a defect — it is what a tree-lined hole IS.**
+   The line is: you may be under a tree, you may be in its brush, you may not be
+   inside its trunk.
+
+   Three targets were implemented and measured before choosing:
+
+   | target | trunks in | canopies over | trees moved | holes | mean move |
+   |---|---|---|---|---|---|
+   | `roughHalf + trunkR` (shipped) | 0 | 530 (intended) | 246 (8%) | 32/45 | 0.41 yd |
+   | `roughHalf + canopyR` | 0 | 0 | 530 (17%) | 35/45 | 1.15 yd |
+   | `off` = `roughHalf + 8` | 0 | 0 | 1,763 (57%) | 40/45 | 4.27 yd |
+
+   Restoring the grove's nominal `off` was rejected too: **any** sloped
+   centerline shortens clearance a little, so it relays out 57% of the grove for
+   uniformity no player can perceive.
+
+   **The design question dissolved rather than being answered.** Past the last
+   centerline vertex `nearestOnPolyline` clamps to the endpoint, so the corridor
+   is a disc of radius `roughHalf` there — and a tree at `cx ± off` sits at
+   `√((d−dEnd)² + off²) ≥ off`, i.e. *always already outside it*. There was never
+   a violation out there. The earlier "exact solve" broke only because forcing
+   `perp == off` **pulled trees in** where they were fine; "push out, never pull
+   in" needs no rule for the cap at all.
+
+   Implementation notes worth keeping: bisection, not trigonometry, because the
+   nearest segment changes under the tree near a vertex and closed-form
+   per-segment offsets mitre badly there — a true-normal offset measured **worse
+   than doing nothing** (23 trunks), since the normal from one leg swings the
+   tree toward the other. The guard writes out its own perpendicular measure
+   longhand rather than importing `nearestOnPolyline`, so the fix and the
+   assertion cannot agree by construction, and counts the trees it checked so it
+   cannot pass vacuously. The rows still sample the centerline at the unshifted
+   `d` while planting at `ld`/`rd` (±3 yd, ~2 yd of drift on a 34° dogleg); left
+   alone deliberately, since `clearOfCorridor` measures at the tree's own `d`.
 16. **Hole 8's FAR tree line still reads as scattered specks**, and raising
    `fraction` again will not fix it — 0.85 is already near saturation there
    (4 of ~5 broadleaf crowns between x 230–680 carry a drift). Two findings from

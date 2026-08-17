@@ -286,6 +286,71 @@ describe('Augusta — the flowering holes actually flower', () => {
     }
   });
 
+  // Perpendicular distance from a point to the hole's centerline polyline, written
+  // out longhand ON PURPOSE. terrain.ts has `nearestOnPolyline`, but importing the
+  // production helper would make the guard below re-run the very arithmetic it is
+  // supposed to check — the placement fix and the assertion would agree by
+  // construction and a sign error in either would pass. This is the same measure
+  // stated independently.
+  const perpToCenterline = (hole: CourseHole, d: number, x: number): number => {
+    let best = Infinity;
+    const cl = hole.centerline;
+    for (let i = 0; i < cl.length - 1; i++) {
+      const a = cl[i]!;
+      const b = cl[i + 1]!;
+      const vd = b.d - a.d;
+      const vx = b.x - a.x;
+      const len2 = vd * vd + vx * vx || 1e-6;
+      const t = Math.max(0, Math.min(1, ((d - a.d) * vd + (x - a.x) * vx) / len2));
+      best = Math.min(best, Math.hypot(d - (a.d + vd * t), x - (a.x + vx * t)));
+    }
+    return best;
+  };
+
+  // ⚠ THE GROVE AND THE CORRIDOR ONCE MEASURED DIFFERENT THINGS. `surfaceAt`
+  // classifies the corridor by PERPENDICULAR distance to the centerline polyline;
+  // `courseTrees` lines the grove out at a lateral x-offset. Those agree only on a
+  // straight hole — on a centerline at θ to the d axis the achieved clearance is
+  // `off · cos θ`, so the tree line walked into the corridor it was meant to flank.
+  // Unguarded, that put 171 COLLIDABLE trunks inside the rough and 359 canopies
+  // over playable ground across 3,084 trees, scaling with dogleg angle (holes
+  // under ~28° clean; Augusta 10 at 51° and 13 at 50° carrying 12–14 each; worst
+  // tree 12.8 yd inside the OB line).
+  //
+  // This is the guard, and it is deliberately stated over EVERY hole of EVERY
+  // course rather than over the doglegs that were measured — the bug is a
+  // property of the placement model, so a new hole with a sharper turn must fail
+  // here rather than ship.
+  //
+  // ⚠ IT GUARDS THE TRUNK ONLY, AND THAT IS THE POINT. Do not "strengthen" this
+  // to the canopy or the drift. A canopy over the rough is what a tree-lined hole
+  // IS, and the understory drift is REQUIRED to reach playable ground or the
+  // brushShrub damping has nothing to damp — courseSim.test.ts asserts a drift in
+  // play on Augusta 8 and will fail if you push the whole tree out. The line is:
+  // you may be under a tree, you may be in its brush, you may not be inside its
+  // trunk.
+  it('never plants a collidable TRUNK on playable ground, on any hole of any course', () => {
+    let checked = 0;
+    for (const course of Object.values(GOLF_COURSES)) {
+      for (const hole of course.holes) {
+        for (const t of courseTrees(hole)) {
+          // Same measure surfaceAt uses to decide rough-vs-OB.
+          const clear = perpToCenterline(hole, t.d, t.x) - t.trunkR;
+          expect(
+            clear,
+            `${course.id} h${hole.id}: ${t.kind} trunk at d ${t.d} x ${t.x.toFixed(1)} stands ` +
+              `${(hole.roughHalf - clear).toFixed(1)} yd INSIDE the corridor ` +
+              `(clearance ${clear.toFixed(1)} vs roughHalf ${hole.roughHalf})`,
+          ).toBeGreaterThanOrEqual(hole.roughHalf - 1e-6);
+          checked++;
+        }
+      }
+    }
+    // The assertion above is vacuously true if courseTrees ever returns nothing,
+    // which is exactly how this guard would rot without anyone noticing.
+    expect(checked).toBeGreaterThan(3000);
+  });
+
   it('actually plants flowering trees on the three holes the visual gate shoots', () => {
     // 2 Pink Dogwood, 13 Azalea, 16 Redbud — the frames that measured ZERO pink.
     for (const id of [2, 13, 16]) {
