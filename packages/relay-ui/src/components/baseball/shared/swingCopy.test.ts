@@ -29,6 +29,7 @@ function swing(over: Partial<SwingResult>): SwingResult {
   return {
     outcome: 'inPlay',
     points: 0,
+    chainIndex: 0,
     timingErrorS: 0,
     undercutIn: 0,
     lateralIn: 0,
@@ -90,6 +91,36 @@ describe('derby copy — every scoring outcome shows its payout', () => {
       describeSwing(swing({ outcome: 'inPlay', fence: 'offWall', distFt: 399, points: 85 })),
     ).toContain('Off the wall');
     expect(describeSwing(swing({ outcome: 'inPlay', distFt: 399, points: 85 }))).toContain('Caught');
+  });
+
+  it('⚠ a CHAINED home run says so, and an unchained one does not', () => {
+    // The multiplier is the one mechanic in the derby whose value is invisible
+    // in the number beside it: `+380` reads as a monstrous home run, not as a
+    // fifth straight one. So the factor is printed — but only while it is
+    // actually earning, or every home run carries a decorative `×1.00`.
+    for (const k of [0, 1, 2]) {
+      expect(
+        describeSwing(swing({ outcome: 'homeRun', distFt: 412, points: 187, chainIndex: k })),
+        `chain ${k}`,
+      ).toBe('GONE! 412 ft · +187');
+    }
+    expect(
+      describeSwing(swing({ outcome: 'homeRun', distFt: 412, points: 234, chainIndex: 3 })),
+    ).toBe('GONE! 412 ft · +234 ×1.25');
+    expect(
+      describeSwing(swing({ outcome: 'homeRun', distFt: 412, points: 374, chainIndex: 9 })),
+    ).toBe('GONE! 412 ft · +374 ×2.00');
+
+    // ⚠ AND NOTHING ELSE PRINTS ONE, at any chain index — the copy must not
+    // invent a multiplier for an outcome the scorer does not give one to.
+    for (const outcome of ['inPlay', 'foul', 'whiff', 'take'] as const) {
+      for (const k of [0, 3, 9]) {
+        expect(
+          describeSwing(swing({ outcome, distFt: 380, points: 20, chainIndex: k })),
+          `${outcome} @ ${k}`,
+        ).not.toContain('×');
+      }
+    }
   });
 });
 
