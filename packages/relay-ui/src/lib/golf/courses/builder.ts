@@ -9,6 +9,8 @@ import {
   EDGE_WOBBLE,
   maxGreenPadRadius,
   corridorHalfAt,
+  heightAt,
+  surfaceAt,
   type CircleFeature,
   type CourseHole,
   type GreenDef,
@@ -21,9 +23,10 @@ import type { GolfCourse } from './types';
 
 // The max slope (rise/run) a resting putt can hold, derived from the REAL green
 // calibration (Stimpmeter μ·g / g = μ ≈ 0.0611 at stimp 10) rather than a magic
-// number — see greenPhysics.ts. A green whose tiltPct + undulation exceeds this
-// would let NO putt come to rest (the green design guard, GOLF.md), so it is the
-// hard cap validateHole() enforces on authored greens.
+// number — see greenPhysics.ts. Where the PUTTING SURFACE is steeper than this a
+// dead ball rolls off on its own (the green design guard, GOLF.md), so it is the
+// hard cap validateHole() enforces — measured on the surface, see
+// maxGreenGradient() below.
 export const MU = greenRollDecel(GRAVITY) / GRAVITY;
 
 function dist(a: { d: number; x: number }, b: { d: number; x: number }): number {
@@ -117,6 +120,78 @@ export function defineCourse(
   };
 }
 
+// --- The green design guard (measured, not arithmetic) ---------------------
+
+// Samples per green RADIUS along each axis of the sampling grid. 20 gives a
+// ~0.75 yd grid on a 15 yd green — an order finer than the 12 yd wavelength of
+// the interior undulation field and far finer than the yards-wide pad overruns
+// this exists to catch. Grid count is scale-invariant: the on-surface sample
+// count is ≈ π·GREEN_SAMPLES_PER_R² ≈ 1256 on every green, whatever its radius.
+const GREEN_SAMPLES_PER_R = 20;
+
+// Below this many on-surface samples the measurement is not a measurement. A
+// green that lands here has degenerate geometry (or the sampler has rotted) and
+// must fail rather than pass with nothing checked.
+const MIN_GREEN_SAMPLES = 400;
+
+// The central-difference half-step (yd) the slope is measured over. Deliberately
+// the SAME 0.5 that terrain.gradientAt uses, because that is the slope the ball
+// actually feels each grounded substep — this guard must measure the physics'
+// own view of the surface, not a sharper idealisation of it.
+const GRAD_EPS = 0.5;
+
+/**
+ * The steepest slope (rise/run) anywhere on a hole's PUTTING SURFACE, plus where
+ * it is and how many points were actually measured.
+ *
+ * ⚠ WHY THIS IS WRITTEN OUT LONGHAND. It replaces `tiltPct + undulation ≤ μ`,
+ * which was a units error (a gradient added to a YARD amplitude) and, worse,
+ * never looked at the surface: it over-charged an author ~4× for undulation
+ * while completely missing a greenside pond whose grading skirt ran onto the
+ * green and left a 0.26 slope on the putting surface — 4× μ, i.e. ground a dead
+ * ball cannot rest on.
+ *
+ * So the measure is stated INDEPENDENTLY of the height model's own internals:
+ * the mask is `surfaceAt(...) === 'green'` (the lie the player is actually
+ * given, whose green test is its own radius comparison), and the slope is a
+ * central difference on `heightAt` written out here rather than imported. In
+ * particular it must NOT be expressed in terms of whatever blend `heightAt` uses
+ * to fade its pads — if the guard and the pad shared that helper, a wrong pad
+ * and a wrong assertion would agree by construction and a sign error in either
+ * would pass. `checked` is returned for the same reason: an empty sweep is the
+ * one way this rots silently, so callers assert on it.
+ */
+export function maxGreenGradient(h: CourseHole): {
+  slope: number;
+  at: Pt;
+  checked: number;
+} {
+  const g = h.green;
+  // The green edge is organic, so sweep the bounding box of its WORST-case
+  // outward bulge and let the classifier decide what is green.
+  const reach = g.r * (1 + EDGE_WOBBLE);
+  const step = g.r / GREEN_SAMPLES_PER_R;
+  let slope = 0;
+  let at: Pt = { d: g.d, x: g.x };
+  let checked = 0;
+  for (let dd = -reach; dd <= reach; dd += step) {
+    for (let dx = -reach; dx <= reach; dx += step) {
+      const d = g.d + dd;
+      const x = g.x + dx;
+      if (surfaceAt(h, d, x) !== 'green') continue;
+      const gd = (heightAt(h, d + GRAD_EPS, x) - heightAt(h, d - GRAD_EPS, x)) / (2 * GRAD_EPS);
+      const gx = (heightAt(h, d, x + GRAD_EPS) - heightAt(h, d, x - GRAD_EPS)) / (2 * GRAD_EPS);
+      const m = Math.hypot(gd, gx);
+      checked++;
+      if (m > slope) {
+        slope = m;
+        at = { d, x };
+      }
+    }
+  }
+  return { slope, at, checked };
+}
+
 // --- Validation ------------------------------------------------------------
 
 // Return a list of human-readable invariant violations for one hole ([] = good).
@@ -125,7 +200,8 @@ export function defineCourse(
 //   • centerline strictly downrange-ordered (increasing d);
 //   • the pin sits inside the MIN (wobbled-in) green so the cup is always on the
 //     putting surface: dist(pin,green) < green.r·(1−EDGE_WOBBLE);
-//   • the green holds a putt: tiltPct + undulation ≤ μ (the green design guard);
+//   • the green holds a putt: the MEASURED max |gradient| anywhere on the
+//     putting surface ≤ μ (the green design guard — see maxGreenGradient);
 //   • every hazard clears the wobbled green pad: dist(hazard,green) ≥
 //     maxGreenPadRadius(hole) + hazard.r·(1+EDGE_WOBBLE);
 //   • plus a few structural sanity checks (rough wider than fairway, etc).
@@ -155,9 +231,18 @@ export function validateHole(h: CourseHole): string[] {
     );
   }
 
-  if (g.tiltPct + g.undulation > MU + 1e-9) {
+  // THE GREEN DESIGN GUARD, measured on the actual putting surface (see
+  // maxGreenGradient). Everything that shapes the green's height is in this
+  // number — the planar tilt, the interior undulation, the surviving whisper of
+  // hills, and any hazard/pad grading that reaches the surface.
+  const gm = maxGreenGradient(h);
+  if (gm.checked < MIN_GREEN_SAMPLES) {
     errs.push(
-      `${tag}: green too steep to hold a putt — tiltPct+undulation=${(g.tiltPct + g.undulation).toFixed(4)} > μ=${MU.toFixed(4)}`,
+      `${tag}: green slope guard measured only ${gm.checked} on-surface samples (< ${MIN_GREEN_SAMPLES}) — the green is degenerate or unclassifiable`,
+    );
+  } else if (gm.slope > MU + 1e-9) {
+    errs.push(
+      `${tag}: green too steep to hold a putt — max |gradient| on the putting surface=${gm.slope.toFixed(4)} > μ=${MU.toFixed(4)} at d=${gm.at.d.toFixed(1)} x=${gm.at.x.toFixed(1)} (${gm.checked} samples)`,
     );
   }
 

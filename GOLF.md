@@ -83,7 +83,7 @@ overlay. Default equip renders byte-identically to the pre-economy scenes.
 
 | Course | id | Holes | Par | Yards |
 |---|---|---|---|---|
-| Augusta National | `augusta` | 18 | 72 | 7,555 |
+| Augusta National | `augusta` | 18 | 72 | 7,545 |
 | Listowel · Vintage | `listowel-vintage` | 9 | 36 | 3,366 |
 | Listowel · Heritage | `listowel-heritage` | 9 | 36 | 3,395 |
 | Listowel · Millennium | `listowel-millennium` | 9 | 36 | 3,445 |
@@ -231,8 +231,8 @@ TOTAL is carry plus a run-out the bounce/roll core derives from the LANDING LIE.
 - **Headless harness** (vitest). `pnpm --filter @relay/ui test` drives the REAL
   sims and prints per-club / per-layout dynamics tables with regression-failing
   assertions. **Tune against this and against device telemetry — never guess.**
-  Current golf + `scene3d` coverage: **629 tests across 18 files** —
-  `courses.test.ts` 330, `courseSim` 67, `puttCourses` 35, `foliage` 30,
+  Current golf + `scene3d` coverage: **643 tests across 18 files** —
+  `courses.test.ts` 338, `courseSim` 73, `puttCourses` 35, `foliage` 30,
   `terrain` 26, `puttSim` 22, `instancing` 16, `rangeSim` 15, `greenPhysics` 15,
   `courseData` 14, `scene3d/quality` 12, `scene3d/env` 12, `clock` 10,
   `golf/scene/quality` 8, `scene3d/budget` 5, `components/golf/budget` 4,
@@ -521,10 +521,22 @@ Every path below resolves on disk. Root for UI paths is
   - Invariants (pin inside the MIN wobbled green; hazards outside
     `maxGreenPadRadius`; green tilt ≲ μ) are enforced by `validateCourse()`, so
     a mis-authored hole fails a test rather than shipping.
-- **⚠ GREEN DESIGN GUARD.** A resting putt can only hold where slope ≲ μ (~6.1%
-  at stimp 10). Keep green tilt + undulation under that, or raise stimp/μ in
-  lockstep. `builder.ts` derives the cap from `greenPhysics` rather than
-  hardcoding it.
+- **⚠ GREEN DESIGN GUARD, AND IT IS A MEASUREMENT.** A resting putt can only hold
+  where slope ≲ μ (~6.1% at stimp 10), so `validateHole` samples the FINISHED
+  SURFACE — max `|gradientAt|` over every point `surfaceAt` calls `'green'`, ≤ μ
+  (`builder.ts` `maxGreenGradient`, cap derived from `greenPhysics`, never
+  hardcoded). Authored tilt is the dominant term but not the only one: the
+  undulation, the surviving whisper of hills and any neighbouring pad's grading
+  all land in that number.
+  ⚠ It used to read `tiltPct + undulation ≤ μ`, and that sum is meaningless —
+  `tiltPct` is a gradient, `undulation` an amplitude in YARDS. It over-charged
+  authors ~4× for undulation while never once looking at the surface, so it
+  missed the real defect underneath: `heightAt` applied every pond's levelling
+  pad with no green mask while `surfaceAt` gives the green strict precedence over
+  water, and 14 of 17 authored ponds graded 3.5–5.9 yd ONTO their own green,
+  leaving slopes to 0.262 — ground a dead ball rolls off on its own. Height
+  precedence must match lie precedence; the pads compose multiplicatively
+  (`waterPad *= 1 - gBlend`).
 - **⚠ ONE intent for Course play, and never a flag per flow.** What a Course
   round IS (normal / daily / tournament) lives in a single discriminated union in
   `GolfScreen`, switched on once. Adding a new flow means a new `kind` — NOT
@@ -605,6 +617,12 @@ it looks live and isn't.
   `course`/`secondAim` scenes run on (`golfpreview.tsx`). No player can reach
   it — Course mode plays `GOLF_COURSES`. Keep it: it is the stable baseline
   frame for the visual gate.
+  ⚠ **Unreachable is not exempt.** It is the frame the harness renders and the
+  green the putting numbers were tuned on, so `courses.test.ts` now runs it
+  through the SAME `validateHole` loop as the shipped holes, as a pseudo-course.
+  Being outside that loop is why it drifted: it carried a green measuring
+  `|gradient|` 0.207 against μ = 0.0611 and a `yards` of 520 against its own
+  513.0 yd centerline.
 - **`water.ts`'s `pickWaterQuality` promotes on a capability sniff**
   (`cores > 4 && maxTextureSize >= 8192`), which a typical mid-range Android
   satisfies — so the tier meant to be gated behind headroom is what most phones

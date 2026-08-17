@@ -44,9 +44,18 @@
 //         r          = putting-surface radius (yd), the BASE radius the organic
 //                      edge wobbles around (see ORGANIC EDGES below);
 //         raise      = pad elevation above the base grade (yd);
-//         tiltPct    = planar fall (yd of drop per yd) — the main break. Keep
-//                      tiltPct + undulation ≲ μ (~0.061 at stimp 10) or a resting
-//                      putt won't hold anywhere (green design guard, GOLF.md);
+//         tiltPct    = planar fall (yd of drop per yd) — the main break. The
+//                      green design guard (GOLF.md) is on the FINISHED SURFACE:
+//                      max |gradientAt| anywhere surfaceAt() says 'green' must
+//                      stay ≤ μ (~0.061 at stimp 10) or a dead ball rolls off on
+//                      its own. tiltPct is the dominant term but NOT the only
+//                      one — the undulation, the surviving whisper of hills and
+//                      any neighbouring pad's grading all land in the same
+//                      number, so it is MEASURED by validateHole, not summed.
+//                      ⚠ Do not add tiltPct to undulation: one is a gradient and
+//                      the other an amplitude in YARDS. That sum is what the
+//                      guard used to be, and it over-charged authors ~4× for
+//                      undulation while missing a real 0.26 slope on a green;
 //         tiltDir    = direction of the fall line (rad); π = back-to-front;
 //         undulation = amplitude (yd) of gentle interior rolls beyond the tilt.
 //   fringeW           — width (yd) of the FRINGE collar ring around the green.
@@ -682,6 +691,30 @@ export function heightAt(hole: CourseHole, d: number, x: number): number {
     }
   }
 
+  // ⚠ THE GREEN PAD OUTRANKS THE WATER PAD, because surfaceAt says so.
+  // Classification precedence is strict — green > fringe > water — so a point on
+  // the putting surface is GREEN even where a pond's grading skirt reaches it.
+  // The HEIGHT model has to agree, or the two disagree about the same yard of
+  // ground: the player is told "green" and putts on it, while the surface under
+  // him is being dragged toward the pond's level plateau.
+  //
+  // It is not a rounding error. Every greenside pond grades a skirt of 10–22 yd
+  // (derived from its depth) around itself, and 14 of the 17 authored ponds ran
+  // 3.5–5.9 yd of that skirt ONTO their own green. The measured slope left on the
+  // putting surface reached 0.262 against μ=0.0611 — 4× the steepest ground a
+  // dead ball can rest on — so a slow putt near that edge slid off the green on
+  // its own (Augusta 11: 6.0 yd off, from a 15.4 yd putt). validateHole's green
+  // design guard now MEASURES this rather than adding up authored numbers.
+  //
+  // The mask is multiplicative for the same reason the hills' is (just below):
+  // the pads compose as weights, so the water pad is zero across the green AND
+  // its flush fringe collar (gBlend = 1 there) and fades back in exactly as the
+  // green pad's own skirt fades out — no seam, no discontinuity, and no authored
+  // pond moves. Everything OUTSIDE the mown pad grades level as before, which is
+  // all the pond's rim needs: the placement invariant already keeps a hazard's
+  // whole wobbled outline clear of the wobbled pad.
+  waterPad *= 1 - gBlend;
+
   // Rolling hills, almost entirely erased under the green pad: a real green is
   // graded far smoother than the fairway mounds, so its own planar tilt (not the
   // surrounding noise) is the slope a putt breaks on. Leaving even 10% of the
@@ -854,10 +887,20 @@ export function surfaceAt(hole: CourseHole, d: number, x: number): Surface {
 // collar; a pond guarding the approach short of the green and a greenside bunker
 // front-right — both sitting OUTSIDE the fringe so the green never abuts them
 // (they border the collar). Distances in yards.
+//
+// ⚠ IT IS A FIXTURE, NOT AN EXEMPTION. No player can reach this hole (Course
+// mode plays GOLF_COURSES), but the screenshot harness renders it and the
+// putting physics were tuned against it, so it is held to the SAME contract as a
+// shipped hole — courses.test.ts runs it through the same validateHole loop.
+// Being outside that gate is exactly why it drifted: it shipped with a green
+// whose surface slope reached 0.207 (3.4× μ, so a dead ball could not rest on
+// large parts of it) and a `yards` of 520 against a 513.0 yd centerline.
 export const HOLE_1: CourseHole = {
   id: 1,
   par: 5,
-  yards: 520,
+  // The centerline path length, rounded: 180.10 + 140.36 + 140.51 + 52.04 =
+  // 513.01. The scorecard length of a hole is how far you actually walk it.
+  yards: 513,
   tee: { d: 0, x: 0 },
   pin: { d: 512, x: 18 },
   centerline: [
@@ -870,7 +913,32 @@ export const HOLE_1: CourseHole = {
   fairwayHalf: 16,
   fairwayTaper: -3, // pinch to 13-yd half (26-yd fairway) at the green
   roughHalf: 40,
-  green: { d: 512, x: 18, r: 15, raise: 3.2, tiltPct: 0.04, tiltDir: Math.PI, undulation: 0.08 },
+  // GREEN, RE-MEASURED. tiltPct 0.04 → 0.037, undulation 0.08 → 0.04. Every
+  // number below is off the harness, not a guess:
+  //
+  //  • HEADROOM. The finished surface measured max |gradient| 0.0609 against
+  //    μ = 0.0611 — the hole every putting number in the game is calibrated on
+  //    sat at 99.7% of the steepest ground a dead ball can rest on, with nothing
+  //    left for a future noise, epsilon or pad change to spend. It now measures
+  //    0.0497 (81% of μ). For scale the shipped fleet runs 62–96%.
+  //  • THE UNDULATION WAS THE OUTLIER. 0.08 yd is 6–8× every authored green
+  //    (0.010–0.014) and contributed ~0.014 of that gradient on its own. 0.04
+  //    still gives the showcase green 3× the fleet's interior movement, so it
+  //    reads as a green and not a plane.
+  //  • THE TILT IS THE CENTRE OF THE WINDOW THE PUTTING HARNESS DEFINES, and it
+  //    is a window, not a preference: at ≥0.038 courseSim.test.ts's "an on-line
+  //    ~6ft putt at a normal pace HOLES OUT" fails (the pin sits exactly at this
+  //    green's centre, so that putt runs the pure cross-slope line and the break
+  //    beats the cup), and at ≤0.036 "a downhill putt runs further than the same
+  //    putt uphill" fails (the grade stops dominating the interior noise). 0.037
+  //    passes BOTH at every undulation from 0.03 to 0.06.
+  //  • AND IT IS NO LONGER A COINCIDENCE. At the old tilt 0.04, undulation 0.08
+  //    was the ONLY value in 0.01–0.08 whose noise field cancelled enough break
+  //    to drop that putt at all — every other undulation missed at all 14 paces
+  //    the test scans. The reference hole was satisfying a pinned playability
+  //    invariant by luck. It now drops it at the same 2 of 14 paces as before
+  //    while sitting a fifth clear of μ.
+  green: { d: 512, x: 18, r: 15, raise: 3.2, tiltPct: 0.037, tiltDir: Math.PI, undulation: 0.04 },
   fringeW: 1,
   hazards: [
     { kind: 'bunker', d: 300, x: 20, r: 12, depth: -1.6 }, // fairway bunker, inside the dogleg

@@ -18,8 +18,10 @@ import {
   greenPadRadius,
   courseTrees,
   EDGE_WOBBLE,
+  HOLE_1,
   type CourseHole,
 } from '../terrain';
+import type { GolfCourse } from './types';
 
 const VALID_RESULTS: CourseResult[] = [
   'tee',
@@ -103,8 +105,31 @@ function greenNeverAbutsHazard(h: CourseHole): void {
   }
 }
 
+// ⚠ THE REFERENCE HOLE IS GATED TOO, THROUGH THIS EXACT LOOP.
+// `terrain.ts`'s HOLE_1 is not in GOLF_COURSES and no player can reach it — but
+// it is the hole the screenshot harness renders by default and the hole the
+// putting physics were tuned against, which makes it the LAST hole that should
+// be exempt from the contract. Being exempt is why it drifted unnoticed: it
+// carried a green whose finished surface reached |gradient| 0.207 against
+// μ = 0.0611 (a dead ball could not rest on much of it) and a `yards` of 520
+// against its own 513.0 yd centerline.
+//
+// It joins the SAME loop rather than getting a parallel assertion of its own,
+// because a parallel one is free to fall behind the gate it is imitating — which
+// is the same failure mode one step removed.
+const GATED: GolfCourse[] = [
+  ...GOLF_COURSES,
+  {
+    id: 'terrain-fixture',
+    name: 'terrain.ts · HOLE_1 (QA fixture, unreachable in play)',
+    holes: [HOLE_1],
+    par: HOLE_1.par,
+    yards: HOLE_1.yards,
+  },
+];
+
 describe('golf courses — per-hole invariants + playability', () => {
-  for (const course of GOLF_COURSES) {
+  for (const course of GATED) {
     describe(course.name, () => {
       for (const h of course.holes) {
         describe(`hole ${h.id}${h.name ? ` · ${h.name}` : ''}`, () => {
@@ -150,17 +175,52 @@ describe('golf courses — per-hole invariants + playability', () => {
           // green on a short par 4). The auto-recommended tee club must not
           // OVERSHOOT: its full-power total lands at or short of the pin, so a
           // player who pulls full power doesn't automatically fly the green.
+          //
+          // ⚠ …EXCEPT WHERE THE HOLE DEMANDS A FORCED CARRY, and the exception is
+          // the whole reason this assertion is split. On a hole whose tee→pin line
+          // crosses water the two goals genuinely conflict: the club that stays
+          // short of the pin is often the club that comes up wet, and on six of the
+          // ten par 3s NO power setting of the never-overshoot pick reached dry
+          // land. The carry wins there, because the player can always ease off a
+          // long club but cannot power a short one over a creek — so a forced-carry
+          // hole gets a BOUNDED overshoot (never more than a green's diameter past
+          // the flag) instead of a hard ceiling. Everywhere else, the original
+          // ceiling stands untouched.
           it('the recommended tee club does not overshoot the hole at full power', () => {
+            // Does the tee→pin line cross a hazard SHORT of the pin, and how far
+            // out is its far edge? Written longhand from the hole's own circles
+            // rather than by calling the sim's private frontal-carry helper, so the
+            // rule and the check cannot agree by construction.
+            const teeToPin = Math.hypot(h.pin.d - h.tee.d, h.pin.x - h.tee.x);
+            const ud = (h.pin.d - h.tee.d) / teeToPin;
+            const ux = (h.pin.x - h.tee.x) / teeToPin;
+            let forcedCarry = 0;
+            for (const hz of h.hazards) {
+              const rd = hz.d - h.tee.d;
+              const rx = hz.x - h.tee.x;
+              const along = rd * ud + rx * ux;
+              const perp = Math.sqrt(Math.max(0, rd * rd + rx * rx - along * along));
+              if (perp >= hz.r) continue;
+              const far = along + Math.sqrt(hz.r * hz.r - perp * perp);
+              if (far > 0 && far < teeToPin) forcedCarry = Math.max(forcedCarry, far);
+            }
+
             const s = new CourseSim(h);
             const club = s.getState().clubId;
             const full = new CourseSim(h).simulateShot({ clubId: club, power: 1 });
-            // Straight-line tee→pin (what the recommendation targets). The played
-            // total must not exceed it (the pin sits inside the green, so ≤ tee→pin
-            // keeps the ball at/short of the green — never flying it).
-            const teeToPin = Math.hypot(h.pin.d - h.tee.d, h.pin.x - h.tee.x);
-            // Grace only for a hole shorter than a full sand wedge, where SW is the
-            // sole choice and the finesse curve dials the distance down.
-            expect(full.total).toBeLessThanOrEqual(Math.max(teeToPin, 131));
+            if (forcedCarry > 0) {
+              // The clearing club may run past the flag — but a pick that flies the
+              // green by more than its own diameter is not a recommendation, it is
+              // the two-club over-correction this rule is written to avoid.
+              expect(full.total).toBeLessThanOrEqual(teeToPin + 2 * h.green.r);
+            } else {
+              // Straight-line tee→pin (what the recommendation targets). The played
+              // total must not exceed it (the pin sits inside the green, so ≤ tee→pin
+              // keeps the ball at/short of the green — never flying it).
+              // Grace only for a hole shorter than a full sand wedge, where SW is the
+              // sole choice and the finesse curve dials the distance down.
+              expect(full.total).toBeLessThanOrEqual(Math.max(teeToPin, 131));
+            }
           });
 
           // REGRESSION (device report: "ball floats above the surface"): a shot
@@ -179,6 +239,63 @@ describe('golf courses — per-hole invariants + playability', () => {
       }
     });
   }
+});
+
+// --- A pond may not reach the putting surface, in HEIGHT as well as in LIE ---
+//
+// `surfaceAt` gives the green strict precedence over water, and `heightAt` used
+// to disagree with it about the same yard of ground. Every pond grades a skirt
+// (10–22 yd, derived from its depth) around itself so its surface can be level,
+// and that skirt ran 3.5–5.9 yd ONTO the green on 14 of the 17 authored ponds.
+// The player was told "green" and putted, while the ground under him was being
+// dragged toward the pond's plateau — measured slopes up to 0.262 against
+// μ = 0.0611, so a dead ball rolled itself off (Augusta 11: a slow putt from
+// 15.4 yd slid 6.0 yd clean off the green).
+//
+// validateHole's green design guard catches the SYMPTOM (a green too steep to
+// hold a putt). This states the CAUSE's fix at its strongest, and independently:
+// delete every water hazard from a hole and the height of its putting surface
+// does not move by a single bit. Stated as exact equality on purpose — the
+// placement invariant already keeps a hazard's whole wobbled outline off the
+// wobbled pad, so the pad mask is the entire difference and there is no
+// legitimate epsilon to allow. It samples and counts its own points rather than
+// reusing the guard's sampler, so the two cannot rot together.
+describe('greenside water — the green pad outranks the water pad', () => {
+  it('deleting a hole\'s ponds does not move its putting surface by one bit', () => {
+    let holesWithWater = 0;
+    let checked = 0;
+    const drifted: string[] = [];
+    for (const course of GATED) {
+      for (const h of course.holes) {
+        if (!h.hazards.some((hz) => hz.kind === 'water')) continue;
+        holesWithWater++;
+        const dry: CourseHole = { ...h, hazards: h.hazards.filter((hz) => hz.kind !== 'water') };
+        const g = h.green;
+        const reach = g.r * (1 + EDGE_WOBBLE);
+        for (let dd = -reach; dd <= reach; dd += 0.7) {
+          for (let dx = -reach; dx <= reach; dx += 0.7) {
+            const d = g.d + dd;
+            const x = g.x + dx;
+            if (surfaceAt(h, d, x) !== 'green') continue;
+            checked++;
+            const wet = heightAt(h, d, x);
+            const nowet = heightAt(dry, d, x);
+            if (wet !== nowet) {
+              drifted.push(
+                `${course.id} h${h.id} @ d=${d.toFixed(1)} x=${x.toFixed(1)}: ` +
+                  `${wet.toFixed(4)} vs ${nowet.toFixed(4)} (Δ ${(wet - nowet).toFixed(4)})`,
+              );
+            }
+          }
+        }
+      }
+    }
+    expect(drifted.slice(0, 8), `pond grading reached the putting surface`).toEqual([]);
+    // Vacuity guards: this passes trivially if no hole has water, or if the
+    // sampler stops landing on green.
+    expect(holesWithWater).toBeGreaterThanOrEqual(17);
+    expect(checked).toBeGreaterThan(10000);
+  });
 });
 
 // --- Flowering canopy (data guard) -----------------------------------------
