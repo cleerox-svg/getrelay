@@ -114,8 +114,9 @@ describe('GamesDeepLink', () => {
     mount('/games/golf');
     const state = landedState as Record<string, unknown>;
     // The key-collision guard, asserted literally: useGameFlow reads
-    // state.game (and legacy state.fog) as its back-gesture marker. A hub
-    // entry keyed `game` would look like a marker.
+    // state.game as its back-gesture marker. A hub entry keyed `game` would
+    // look like a marker. `fog` was the legacy marker key, now retired from
+    // the hook — pinned as absent here so it cannot creep back in either.
     expect(Object.keys(state)).toEqual(['hubGame']);
     expect(state.game).toBeUndefined();
     expect(state.fog).toBeUndefined();

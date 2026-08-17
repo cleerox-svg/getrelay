@@ -5,6 +5,12 @@
 // distance-to-pin, lie), and shows the hole-out result. Reuses the range's
 // controls so the two modes feel the same. Lazy-loaded so `three` stays out of
 // the main bundle.
+//
+// It also owns the ROUND: the card, the pause sheet (CoursePauseSheet) and the
+// one funnel — `reportCard` — through which a full round, an abandoned partial
+// round and the unmount safety net all report, sharing a single one-shot guard.
+// The scorecard rendering lives in CourseScorecard.tsx so the end-of-round card
+// and the mid-round pause sheet cannot drift.
 
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { CourseSim, type CourseState } from '../../lib/golf/courseSim';
@@ -21,6 +27,16 @@ import { AccuracyBar } from './shared/AccuracyBar';
 import { ClubSelector } from './shared/ClubSelector';
 import { MuteButton } from './shared/MuteButton';
 import { TelemetryPanel, type ShotTelemetry } from './shared/TelemetryPanel';
+import { CoursePauseSheet } from './CoursePauseSheet';
+import {
+  CourseScorecardOverlay,
+  cardTotals,
+  scoreState,
+  toPar,
+  toParBug,
+  MONO,
+  type HoleScore,
+} from './CourseScorecard';
 import {
   frostedSurface,
   FROST_RADIUS_CARD,
@@ -48,21 +64,6 @@ function scoreName(strokes: number, par: number): string {
   return `+${d}`;
 }
 
-// One completed hole on the round scorecard (local to CourseGame — nothing is
-// added to CourseSim, so the CourseSnapshot guard is untouched).
-interface HoleScore {
-  hole: number;
-  par: number;
-  strokes: number;
-}
-
-// Format a running / total score relative to par: 0 → "E", positive → "+n",
-// negative → "−n" (true minus sign).
-function toPar(n: number): string {
-  if (n === 0) return 'E';
-  return n > 0 ? `+${n}` : `−${-n}`;
-}
-
 const lieLabel: Record<string, string> = {
   tee: 'Tee',
   fairway: 'Fairway',
@@ -74,41 +75,6 @@ const lieLabel: Record<string, string> = {
   cartpath: 'Cart path',
   ob: 'Out of bounds',
 };
-
-// The app bundles JetBrains Mono as var(--font-mono); Tailwind's `font-mono`
-// only reaches the generic ui-monospace stack, so numerals use this inline.
-const MONO = { fontFamily: 'var(--font-mono)' } as const;
-
-// Broadcast "score state" palette, driven by strokes-relative-to-par (d):
-// under → emerald, level → slate, over → rose. `grad` is the state stripe/bug
-// gradient, `dark` the ink that reads on it, `chip`/`chipFg` the ± chip colours.
-function scoreState(d: number): { grad: string; dark: string; chip: string; chipFg: string } {
-  if (d < 0)
-    return {
-      grad: 'linear-gradient(155deg,#43c96d,#1c6f3d)',
-      dark: '#062012',
-      chip: 'rgba(67,201,109,.16)',
-      chipFg: '#8ff0ab',
-    };
-  if (d > 0)
-    return {
-      grad: 'linear-gradient(155deg,#f0492e,#8f1f12)',
-      dark: '#2a0a05',
-      chip: 'rgba(240,73,46,.16)',
-      chipFg: '#ffb3a6',
-    };
-  return {
-    grad: 'linear-gradient(155deg,#64717d,#333e47)',
-    dark: '#0b0f12',
-    chip: 'rgba(255,255,255,.08)',
-    chipFg: 'rgba(255,255,255,.6)',
-  };
-}
-
-// Signed to-par bug label: even reads "E", otherwise the true ± sign.
-function toParBug(d: number): string {
-  return d === 0 ? 'E' : toPar(d);
-}
 
 // One "this hole" stat cell in the 3-column broadcast panel: tiny dim uppercase
 // label over a big mono tabular value with a small unit.
@@ -156,6 +122,8 @@ export default function CourseGame({
   course,
   startHole,
   seed,
+  paused = false,
+  onResume,
   onExit,
   onRoundComplete,
   onHoleComplete,
@@ -163,6 +131,18 @@ export default function CourseGame({
 }: {
   course: GolfCourse;
   startHole?: number;
+  // Freeze the round and raise the pause sheet. Same contract GolfGame (mini
+  // golf) and RangeGame already implement: the back gesture that sets it is a
+  // history event owned by the parent (GolfScreen / useGameFlow's guarded free
+  // screen), Resume calls onResume, and the sheet's "End round" funnels through
+  // the same exit path as the header back button.
+  //
+  // While paused NOTHING may advance: not the sim (CourseGL's fixed-step loop
+  // reads the same flag) and not the accuracy bar's sweep — a marker that kept
+  // sweeping under a pause would fire a random-timed shot the instant the player
+  // resumed, which is worse than not pausing at all.
+  paused?: boolean;
+  onResume?: () => void;
   // Equipped ball skin + trail (golf economy), forwarded straight into the GL
   // scene. Optional — omitted → the stock look.
   cosmetics?: GolfCosmetics;
@@ -172,10 +152,10 @@ export default function CourseGame({
   // omitted, wind is random and re-rolled on replay (unchanged behaviour).
   seed?: number;
   onExit?: () => void;
-  // Fired EXACTLY ONCE per completed full round, when the end-of-round
-  // scorecard is revealed (full-round mode only — never in single-hole mode).
-  // Lets the parent record the round to the leaderboard. Optional: when
-  // omitted, nothing changes.
+  // Fired EXACTLY ONCE per completed full round, when the FINAL hole is holed
+  // out and carded (full-round mode only — never in single-hole mode). Lets the
+  // parent record the round to the leaderboard. Optional: when omitted, nothing
+  // changes.
   onRoundComplete?: (r: {
     courseId: string;
     holes: number;
@@ -246,10 +226,15 @@ export default function CourseGame({
   const [card, setCard] = useState<HoleScore[]>([]);
   const [showScorecard, setShowScorecard] = useState(false);
   const cardedRef = useRef(false); // one-shot: this hole appended to `card`.
-  const roundReportedRef = useRef(false); // one-shot: onRoundComplete fired.
+  const roundReportedRef = useRef(false); // one-shot: round/hole reported once.
+  // The live card, for the unmount safety net (a cleanup closes over the array
+  // from the render that registered it, which on an abandoned round is the WRONG
+  // one — it predates the last hole-out).
+  const cardRef = useRef(card);
+  cardRef.current = card;
 
   // Running score across the holes carded so far (full-round HUD readout).
-  const scoreToPar = card.reduce((a, h) => a + (h.strokes - h.par), 0);
+  const scoreToPar = cardTotals(card).toPar;
   const isLastHole = holeIdx === course.holes.length - 1;
 
   // Personal best-shot records (from POST /game/golf-records on hole-out).
@@ -287,7 +272,11 @@ export default function CourseGame({
 
   // Poll the sim for HUD readouts, and bank a telemetry record when a shot comes
   // to rest (mirrors how RangeGame captures last-shot telemetry off its events).
+  // Paused stops the poll too, exactly as RangeGame's does: the sim is frozen, so
+  // every tick would re-read the same state, and the pause sheet reads the values
+  // as they stood when play stopped.
   useEffect(() => {
+    if (paused) return;
     const id = window.setInterval(() => {
       const next = sim.getState();
       setSt(next);
@@ -296,7 +285,7 @@ export default function CourseGame({
     }, 120);
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sim]);
+  }, [sim, paused]);
 
   // Seed the Personal bests once on mount from the player's saved records, so the
   // recap can show last-known bests immediately (and still show them if the
@@ -369,12 +358,51 @@ export default function CourseGame({
     setCard((c) => [...c, { hole: sim.hole.id, par: st.par, strokes: st.strokes }]);
   }, [single, st.holed, st.par, st.strokes, sim]);
 
+  // THE ONE FUNNEL every full-round card reaches the outside world through: the
+  // final hole-out (below), the pause sheet's "End round", and the unmount safety
+  // net. All three share the roundReportedRef one-shot, which is what makes it
+  // impossible for a PARTIAL report and a FULL report to both fire for one round.
+  // `holes` is card.length, so a 6-of-9 walk-off is reported as a 6-hole round
+  // rather than being thrown away (mirroring GolfGame/RangeGame, which bank a
+  // partial run on unmount). Never fires in single-hole mode (that path is
+  // onHoleComplete) and never on an empty card.
+  const reportCard = (c: HoleScore[]) => {
+    if (single || roundReportedRef.current || c.length < 1) return;
+    roundReportedRef.current = true;
+    onRoundComplete?.({ courseId: course.id, holes: c.length, ...cardTotals(c) });
+  };
+  // Latest-render closure, for the cleanup below (an unmount cleanup registered
+  // with [] deps would otherwise call the MOUNT render's function).
+  const reportCardRef = useRef(reportCard);
+  reportCardRef.current = reportCard;
+
+  // Full-round only: report the completed round when the FINAL hole is CARDED —
+  // NOT when a button is pressed. It used to fire from revealScorecard(), so a
+  // player who tapped "Menu" instead of "See scorecard" had the whole round (and
+  // in a tournament, their event entry) silently discarded. The card holds one
+  // entry per hole holed out, so card.length === course.holes.length IS "the
+  // round is over"; reading it HERE, not in the carding effect above, guarantees
+  // the final hole's strokes are already in the total.
+  useEffect(() => {
+    if (card.length === 0 || card.length < course.holes.length) return;
+    reportCardRef.current(card);
+  }, [single, card, course.id, course.holes.length, onRoundComplete]);
+
+  // Abandon safety net, mirroring GolfGame's and RangeGame's: unmounted mid-round
+  // (route change, tab switch, navbar link, the second back press while paused)
+  // with >=1 hole carded and nothing reported yet → bank the partial round. `card`
+  // is component state with no persistence, so before this the six holes played
+  // before walking off hole 7 were simply destroyed. Reads cardRef, not `card`:
+  // this cleanup is registered once, at mount, when the card is still empty.
+  useEffect(() => {
+    return () => reportCardRef.current(cardRef.current);
+  }, []);
+
   // Single-hole only: when the chosen hole is holed out (the same moment the
   // single-branch "Play again" recap becomes visible), report the result to the
-  // parent EXACTLY ONCE — mirroring revealScorecard's one-shot pattern.
-  // Guarded by roundReportedRef so it fires once even across re-renders;
-  // playAgain resets the ref so a replay reports again. Full-round mode is
-  // untouched (it never enters this branch).
+  // parent EXACTLY ONCE. Guarded by roundReportedRef so it fires once even
+  // across re-renders; playAgain resets the ref so a replay reports again.
+  // Full-round mode is untouched (it never enters this branch).
   useEffect(() => {
     if (!single || !st.holed || roundReportedRef.current) return;
     roundReportedRef.current = true;
@@ -437,25 +465,9 @@ export default function CourseGame({
     resetHoleBookkeeping();
   };
 
-  // Full-round: reveal the end-of-round scorecard and report the completed round
-  // to the parent (leaderboard) EXACTLY ONCE, computed from the local card.
-  // Guarded by roundReportedRef so it fires once even if the scorecard
-  // re-renders; playRoundAgain resets the ref so a second round reports too.
-  const revealScorecard = () => {
-    setShowScorecard(true);
-    if (!roundReportedRef.current) {
-      roundReportedRef.current = true;
-      const strokes = card.reduce((a, h) => a + h.strokes, 0);
-      const par = card.reduce((a, h) => a + h.par, 0);
-      onRoundComplete?.({
-        courseId: course.id,
-        holes: card.length,
-        strokes,
-        par,
-        toPar: strokes - par,
-      });
-    }
-  };
+  // Full-round: reveal the end-of-round scorecard. PURELY PRESENTATIONAL — the
+  // round is reported by the effect above, on the final hole-out.
+  const revealScorecard = () => setShowScorecard(true);
 
   // Full-round: restart the whole round from hole 1 with a fresh scorecard AND a
   // freshly rolled round wind.
@@ -478,6 +490,15 @@ export default function CourseGame({
   const club = (dir: 1 | -1) => {
     play('ui-club');
     sim.cycleClub(dir);
+  };
+
+  // Pause sheet: "End round". Banks whatever is carded, then leaves through the
+  // SAME exit the header back button uses — the sheet never gets its own way out.
+  // The hole in progress is not carded, so it is not banked; the sheet's confirm
+  // text says so.
+  const endRound = () => {
+    reportCard(cardRef.current);
+    onExit?.();
   };
 
   // Putt read (on the green): distance in feet + uphill/downhill + break, from
@@ -509,7 +530,15 @@ export default function CourseGame({
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#000', zIndex: 30 }}>
       <Suspense fallback={<div style={{ position: 'fixed', inset: 0, background: '#0a1a0a' }} />}>
-        <CourseGL key={resetKey} sim={sim} paused={armed || st.holed} onArm={() => setArmed(true)} cosmetics={cosmetics} />
+        {/* `paused` here freezes CourseGL's fixed-step loop (sim.substep) AND its
+            pointer input — the pause sheet must not be playable through. */}
+        <CourseGL
+          key={resetKey}
+          sim={sim}
+          paused={armed || st.holed || paused}
+          onArm={() => setArmed(true)}
+          cosmetics={cosmetics}
+        />
       </Suspense>
 
       {/* Top HUD */}
@@ -582,7 +611,9 @@ export default function CourseGame({
           )}
         </div>
         {/* Round wind compass — same chip the Range shows, read from the sim —
-            plus a compact quick-mute (Course has no pause sheet). */}
+            plus a compact quick-mute. Mute is ALSO a row on the pause sheet now
+            (parity with Putt + Range); the icon stays because reaching for it
+            mid-shot shouldn't cost a pause. */}
         <div className="flex-1 flex justify-end items-start gap-1.5">
           <MuteButton variant="icon" />
           <WindChip along={st.windAlong} cross={st.windCross} />
@@ -649,7 +680,10 @@ export default function CourseGame({
       {/* Telemetry debug panel + copy export, shared with the range. */}
       <TelemetryPanel lastShot={lastShot} log={telemetryRef.current} />
 
-      {armed && !st.holed && <AccuracyBar onStop={fire} label="Tap to strike" />}
+      {/* The strike beat. `paused` freezes the sweep in place (phase persists) and
+          swallows taps — a marker still sweeping behind the pause sheet would fire
+          a random-timed shot the moment the player resumed. */}
+      {armed && !st.holed && <AccuracyBar paused={paused} onStop={fire} label="Tap to strike" />}
 
       {/* Hole-out result card (broadcast/TV-golf styling; always dark over the
           live 3D scene). All data + button logic below is unchanged. */}
@@ -804,199 +838,37 @@ export default function CourseGame({
         </div>
       )}
 
-      {/* End-of-round scorecard (full-round mode). Rows per hole with ± to par,
-          front-9 and (18-hole) back-9 subtotals, and the totals. */}
+      {/* End-of-round scorecard (full-round mode) — the same ScorecardTable the
+          pause sheet renders mid-round (components/golf/CourseScorecard.tsx). */}
       {showScorecard && (
-        <div
-          style={{
-            position: 'absolute',
-            inset: 0,
-            zIndex: 60,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'rgba(0,0,0,.72)',
-            padding: 16,
-          }}
-        >
-          {(() => {
-            const totalStrokes = card.reduce((a, h) => a + h.strokes, 0);
-            const totalPar = card.reduce((a, h) => a + h.par, 0);
-            const totalD = totalStrokes - totalPar;
-            const totalState = scoreState(totalD);
-            return (
-              <div
-                className="w-[min(92vw,420px)] overflow-hidden rounded-2xl border"
-                style={{
-                  background: 'linear-gradient(160deg,#0f1a14,#0a120d)',
-                  borderColor: 'rgba(255,255,255,.08)',
-                  boxShadow: '0 20px 60px rgba(0,0,0,.55)',
-                }}
-              >
-                {/* Header: title + course on the left, total score bug right. */}
-                <div className="flex items-end justify-between gap-3 px-4 pb-3 pt-4">
-                  <div className="min-w-0">
-                    <div className="text-2xl font-extrabold uppercase tracking-wide text-white">
-                      Scorecard
-                    </div>
-                    <div
-                      className="mt-0.5 text-[11px] uppercase tracking-wide text-white/55"
-                      style={MONO}
-                    >
-                      {course.name}
-                      {course.location ? ` · ${course.location}` : ''}
-                    </div>
-                  </div>
-                  <div
-                    className="flex flex-col items-center justify-center rounded-xl px-3 py-1.5"
-                    style={{ background: totalState.grad, color: totalState.dark }}
-                  >
-                    <span
-                      className="text-2xl font-extrabold leading-none tabular-nums"
-                      style={MONO}
-                    >
-                      {totalStrokes}
-                    </span>
-                    <span className="mt-0.5 text-[8px] font-bold uppercase tracking-wider opacity-80">
-                      {toParBug(totalD)} · to par
-                    </span>
-                  </div>
-                </div>
-
-                <div className="max-h-[52vh] overflow-auto px-4 pb-1">
-                  <div className="grid grid-cols-[1fr_auto_auto_auto] items-center">
-                    <div className="py-1 pl-2 text-[10px] font-bold uppercase tracking-wide text-white/40">
-                      Hole
-                    </div>
-                    <div className="py-1 px-3 text-right text-[10px] font-bold uppercase tracking-wide text-white/40">
-                      Par
-                    </div>
-                    <div className="py-1 px-3 text-right text-[10px] font-bold uppercase tracking-wide text-white/40">
-                      Score
-                    </div>
-                    <div className="py-1 pr-2 text-right text-[10px] font-bold uppercase tracking-wide text-white/40">
-                      ±
-                    </div>
-                    {card.map((h, i) => (
-                      <ScoreRow key={h.hole} hole={h} alt={i % 2 === 1} />
-                    ))}
-                  </div>
-
-                  {(() => {
-                    const front = card.slice(0, 9);
-                    const back = card.slice(9);
-                    const sub = (rows: HoleScore[]) => ({
-                      par: rows.reduce((a, h) => a + h.par, 0),
-                      strokes: rows.reduce((a, h) => a + h.strokes, 0),
-                    });
-                    const f = sub(front);
-                    const b = sub(back);
-                    const total = sub(card);
-                    return (
-                      <div className="mt-2 space-y-1.5 border-t border-white/15 px-2 pt-2.5">
-                        {/* Out/In split only for an 18-hole round; a 9-hole round
-                            would make "Out" identical to "Total", so just show the
-                            total. */}
-                        {back.length > 0 && (
-                          <>
-                            <SubtotalRow label="Out" par={f.par} strokes={f.strokes} />
-                            <SubtotalRow label="In" par={b.par} strokes={b.strokes} />
-                          </>
-                        )}
-                        <SubtotalRow label="Total" par={total.par} strokes={total.strokes} bold />
-                      </div>
-                    );
-                  })()}
-                </div>
-
-                <div className="flex gap-2.5 px-4 pb-4 pt-3">
-                  <button
-                    onClick={playRoundAgain}
-                    className="flex-1 rounded-full bg-emerald-500 px-5 py-2.5 text-sm font-bold text-white"
-                  >
-                    Play round again
-                  </button>
-                  <button
-                    onClick={onExit}
-                    className="rounded-full bg-white/20 px-5 py-2.5 text-sm font-bold text-white"
-                  >
-                    Menu
-                  </button>
-                </div>
-              </div>
-            );
-          })()}
-        </div>
+        <CourseScorecardOverlay
+          course={course}
+          card={card}
+          onPlayAgain={playRoundAgain}
+          onExit={onExit}
+        />
       )}
-    </div>
-  );
-}
 
-// One hole row on the scorecard (broadcast): mono tabular cells, an alternating
-// faint row tint, and the ± rendered as a state-coloured chip.
-function ScoreRow({ hole, alt }: { hole: HoleScore; alt: boolean }) {
-  const d = hole.strokes - hole.par;
-  const state = scoreState(d);
-  const cell = alt ? 'bg-white/[.03]' : '';
-  return (
-    <>
-      <div className={`py-1.5 pl-2 tabular-nums text-white ${cell}`} style={MONO}>
-        {hole.hole}
-      </div>
-      <div className={`py-1.5 px-3 text-right tabular-nums text-white/55 ${cell}`} style={MONO}>
-        {hole.par}
-      </div>
-      <div
-        className={`py-1.5 px-3 text-right font-semibold tabular-nums text-white ${cell}`}
-        style={MONO}
-      >
-        {hole.strokes}
-      </div>
-      <div className={`py-1.5 pr-2 text-right ${cell}`}>
-        <span
-          className="inline-block rounded px-1.5 py-0.5 text-[11px] font-bold tabular-nums"
-          style={{ ...MONO, background: state.chip, color: state.chipFg }}
-        >
-          {toPar(d)}
-        </span>
-      </div>
-    </>
-  );
-}
-
-// A subtotal / total line under the scorecard rows (broadcast): mono strokes +
-// a state-coloured (±) suffix; the Total row is emphasised.
-function SubtotalRow({
-  label,
-  par,
-  strokes,
-  bold,
-}: {
-  label: string;
-  par: number;
-  strokes: number;
-  bold?: boolean;
-}) {
-  const d = strokes - par;
-  const state = scoreState(d);
-  return (
-    <div className="flex items-center justify-between">
-      <span
-        className={`text-[11px] uppercase tracking-wide ${
-          bold ? 'font-extrabold text-white' : 'font-bold text-white/70'
-        }`}
-      >
-        {label}
-      </span>
-      <span className="tabular-nums" style={MONO}>
-        <span className={bold ? 'text-base font-extrabold text-white' : 'font-semibold text-white'}>
-          {strokes}
-        </span>
-        <span className="ml-1.5 text-xs font-bold" style={{ color: state.chipFg }}>
-          ({toPar(d)})
-        </span>
-      </span>
+      {/* Pause sheet. The round stays mounted and FROZEN underneath (the sim's
+          loop and the strike beat both read `paused`), so Resume is a true
+          continue with the card intact; "End round" banks the carded holes and
+          leaves through the same exit as the header back button. */}
+      {paused && (
+        <CoursePauseSheet
+          courseName={course.name}
+          holeNo={sim.hole.id}
+          holeCount={course.holes.length}
+          card={card}
+          // The hole in progress — dropped once it is holed out and carded (i.e.
+          // pausing on top of the hole-out card), where it is already a row on
+          // the card and has nothing left to lose.
+          inProgress={
+            st.holed ? undefined : { hole: sim.hole.id, par: st.par, strokes: st.strokes }
+          }
+          onResume={() => onResume?.()}
+          onEndRound={endRound}
+        />
+      )}
     </div>
   );
 }

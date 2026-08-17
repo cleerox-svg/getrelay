@@ -6,21 +6,12 @@ import { resolveFrameById } from '../../lib/golf/cosmetics';
 import { getCourse } from '../../lib/golf/courses';
 import type { GolfCourse } from '../../lib/golf/courses';
 import { synthTournamentCourse } from '../../lib/golf/tournamentCourse';
+import { submitPendingResult, type PendingResult } from '../../lib/golf/pendingResult';
+import { MEDALS, fmtToPar } from './shared/scoreFormat';
 import type {
   Tournament,
   TournamentLeaderboardEntry,
 } from '../../lib/types';
-
-// Medal colours for the top three, self-contained so they read both inside the
-// .golf-hub layer and on the standalone results screens (mirrors GolfLeaderboard).
-const MEDALS = ['#C9A227', '#9AA0A6', '#B0763A'];
-
-// ± to-par label: 0 → "E", positive → "+n", negative → "−n" (true minus sign).
-function fmtToPar(n: number | null | undefined): string {
-  if (n == null) return '—';
-  if (n === 0) return 'E';
-  return n > 0 ? `+${n}` : `−${Math.abs(n)}`;
-}
 
 // Ordinal-ish rank label ("1st", "2nd", "3rd", "12th").
 function fmtRank(n: number): string {
@@ -60,13 +51,13 @@ function holeLabel(courseId: string, hole: number): { course: string; hole: numb
 
 interface Props {
   // Launch the seeded 3-hole tournament round. GolfScreen plays the synthesized
-  // course as a full round (NO startHole) through its existing Course free-screen
-  // path, and reports the finished ROUND total back via pendingResult below.
+  // course as a GUARDED full round (NO startHole) through its Course free screen,
+  // and reports the finished ROUND total back via pendingResult below.
   onPlay: (course: GolfCourse, seed: number) => void;
-  // Set by GolfScreen when a tournament round finishes (the round's to-par +
-  // total strokes). We POST it here, show the updated rank / "improved!" state,
-  // then call onResultConsumed so it isn't submitted twice.
-  pendingResult: { toPar: number; strokes: number } | null;
+  // The PERSISTED pending result (lib/golf/pendingResult): the round's to-par +
+  // total strokes, set by GolfScreen or read back on a later mount if the POST
+  // never landed. POSTed here; onResultConsumed then clears GolfScreen's slot.
+  pendingResult: PendingResult | null;
   onResultConsumed: () => void;
 }
 
@@ -151,10 +142,11 @@ export function GolfTournaments({ onPlay, pendingResult, onResultConsumed }: Pro
   // Submit a finished round total. Keeps the server's read-after-write standing
   // and badges "improved!"; refreshes the leaderboard. Retryable on failure.
   const submitPending = useCallback(
-    (res: { toPar: number; strokes: number }) => {
+    (res: PendingResult) => {
       setSubmitState('saving');
-      api
-        .postTournamentResult(res)
+      // Via pendingResult's once-only guard, NOT api directly — submittingRef
+      // below dies with this mount, so a remount mid-flight would re-POST.
+      submitPendingResult(res, (b) => api.postTournamentResult(b))
         .then((r) => {
           setTourney((prev) =>
             prev ? { ...prev, entry: r.entry, entrants: r.entrants } : prev,
@@ -169,16 +161,22 @@ export function GolfTournaments({ onPlay, pendingResult, onResultConsumed }: Pro
     [loadBoard, scope, onResultConsumed],
   );
 
+  // Submittable only once we can PROVE the round belongs to the event now live:
+  // the record is persisted, so it can outlive the event, and the POST body
+  // carries no event id — a round played in the last one would be filed against
+  // this one. GolfScreen evicts a mismatched record. Same rule as GolfDaily.
+  const current = tourney && pendingResult?.tag === String(tourney.seed) ? pendingResult : null;
+
   // Fire the submit exactly once per pending result object (identity-guarded so a
   // re-render doesn't re-POST). GolfScreen clears pendingResult via
   // onResultConsumed on success, so a failed submit leaves it for the Retry.
-  const submittingRef = useRef<{ toPar: number; strokes: number } | null>(null);
+  const submittingRef = useRef<PendingResult | null>(null);
   useEffect(() => {
-    if (pendingResult && submittingRef.current !== pendingResult) {
-      submittingRef.current = pendingResult;
-      submitPending(pendingResult);
+    if (current && submittingRef.current !== current) {
+      submittingRef.current = current;
+      submitPending(current);
     }
-  }, [pendingResult, submitPending]);
+  }, [current, submitPending]);
 
   // ---- Loading / needs-connection states ----
   if (loadError) {
@@ -314,14 +312,14 @@ export function GolfTournaments({ onPlay, pendingResult, onResultConsumed }: Pro
             Saving your round…
           </div>
         ) : null}
-        {submitState === 'error' && pendingResult ? (
+        {submitState === 'error' && current ? (
           <div className="px-4 pb-2 text-[13px]" style={{ color: 'var(--ping)' }}>
             Couldn’t submit.
             <button
               type="button"
               className="ml-2 font-semibold"
               style={{ color: 'var(--golf-accent)', background: 'transparent', border: 0 }}
-              onClick={() => submitPending(pendingResult)}
+              onClick={() => submitPending(current)}
             >
               Retry
             </button>

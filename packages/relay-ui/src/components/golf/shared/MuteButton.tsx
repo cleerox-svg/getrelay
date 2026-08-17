@@ -3,14 +3,17 @@ import { frostedSurface, FROST_RADIUS_CHIP, FROST_TEXT, FROST_DIM } from './fros
 
 // A quick-mute control shared by the golf HUDs. It toggles the master `muted`
 // audio pref (persisted via lib/audio/prefs, read live by the engine so the
-// change is instant). Two shapes:
-//   • 'sheet' — a full-width secondary button matching the pause-sheet buttons
-//     (Putt + Range pause sheets).
-//   • 'icon'  — a compact icon button for a HUD top bar (Course, which has no
-//     pause sheet).
+// change is instant). Three shapes:
+//   • 'sheet'      — a full-width secondary button matching the pause-sheet
+//     buttons (Putt + Range pause sheets), coloured from the THEME vars.
+//   • 'sheet-dark' — the same row on an explicitly dark card: the Course pause
+//     sheet is a dark broadcast card floating over the live 3D scene, so
+//     var(--text) would paint dark ink on it in the light theme. Same tokens the
+//     rest of the Course HUD uses (see shared/frosted.ts).
+//   • 'icon'       — a compact icon button for a HUD top bar.
 // A simple speaker glyph doubles as the state read-out (🔈 on / 🔇 muted).
 
-export function MuteButton({ variant = 'sheet' }: { variant?: 'sheet' | 'icon' }) {
+export function MuteButton({ variant = 'sheet' }: { variant?: 'sheet' | 'sheet-dark' | 'icon' }) {
   const [prefs, setPrefs] = useAudioPrefs();
   const muted = prefs.muted;
   const toggle = () => setPrefs({ muted: !muted });
@@ -42,6 +45,7 @@ export function MuteButton({ variant = 'sheet' }: { variant?: 'sheet' | 'icon' }
     );
   }
 
+  const dark = variant === 'sheet-dark';
   return (
     <button
       type="button"
@@ -51,12 +55,12 @@ export function MuteButton({ variant = 'sheet' }: { variant?: 'sheet' | 'icon' }
         width: '100%',
         marginTop: 8,
         borderRadius: 12,
-        border: '1px solid var(--separator)',
+        border: `1px solid ${dark ? 'rgba(255,255,255,.14)' : 'var(--separator)'}`,
         padding: '13px 0',
         fontSize: 15,
         fontWeight: 600,
-        background: 'transparent',
-        color: 'var(--text)',
+        background: dark ? 'rgba(255,255,255,.06)' : 'transparent',
+        color: dark ? FROST_TEXT : 'var(--text)',
       }}
     >
       {muted ? '🔇 Sound off' : '🔈 Sound on'}
