@@ -82,7 +82,14 @@ const BLOOM = {
   // deliberate planting, the rest as dots. Perspective, not the drift, is what
   // costs the area, so the hole that shows its tree line from further away needs
   // MORE flowering trees to read the same — not the same number. 0.85 measures
-  // 0.259%, i.e. ~68% of 12's share from roughly double the distance.
+  // 0.259%.
+  //   ⚠ DO NOT RAISE IT FURTHER, and do not chase hole 12's area share. The gate
+  // measured both frames at nearly the same horizontal extent (342 px vs 352 px)
+  // — 12 reads better because its yellow is two unbroken ribbons where 8's is
+  // nine islands, so CONTIGUITY is the variable, not area. 0.85 already puts a
+  // drift on 4 of the ~5 broadleaf crowns across 8's far centre, and the far
+  // ones desaturate to sat 0.14 under distance haze anyway. The remaining gap is
+  // drift SPAN and fog handling (GOLF.md defect 16), not `fraction`.
   yellowJasmine: { color: 0xfbc70e, fraction: 0.85, form: 'understory' }, // 8
   carolinaCherry: { color: 0xf0efe0, fraction: 0.5 }, // 9 — white racemes
   camellia: { color: 0xd8506e, fraction: 0.5 }, // 10 — deep rose
