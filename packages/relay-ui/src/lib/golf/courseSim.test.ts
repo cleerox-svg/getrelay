@@ -1143,24 +1143,47 @@ describe('course sim — understory drift (a thicket, not a phantom)', () => {
   // ⚠ THE ONE PLACE THIS CHANGES A PLAYABLE SHOT, and it is worth pinning by
   // name. HOLE_1's tree line stands 8 yd OUTSIDE the OB edge, so a rolling ball
   // is out of bounds long before it reaches a drift — the whole grove is
-  // unreachable on the ground. Augusta 8 doglegs 34° left, and because the grove
-  // is laid out at a lateral x-offset from the centerline rather than
-  // perpendicular to it, the right-hand tree line crosses the corridor at the
-  // corner: one flowering broadleaf stands at d 332, x 0.2, in ROUGH. Its drift
-  // is drawn on playable ground, and until now the ball went straight through it.
-  it('catches a ball rolling through the drift that stands IN PLAY on Augusta 8', () => {
+  // unreachable on the ground. Augusta 8 doglegs 34° left and its right-hand tree
+  // line crowds the corner, so a drift there does spill onto playable ground.
+  //
+  // ⚠ THE SELECTOR CHANGED, AND WHY MATTERS. This used to look for a tree whose
+  // TRUNK stood in rough, which worked only because the grove's lateral x-offset
+  // let the tree line walk INTO the corridor on a dogleg (GOLF.md defect 14).
+  // `clearOfCorridor` fixed that, and a selector keyed to the bug went undefined
+  // the moment it did. The drift is what has to reach playable ground, not the
+  // trunk: the trunk now clears by trunkR while shrubR (3.2·scale) still extends
+  // ~4 yd back inside, which is the whole reason the wider "push the canopy out
+  // too" variant of that fix was rejected — it would have lifted every drift out
+  // of play and left brushShrub with nothing to damp.
+  it('catches a ball rolling through a drift that reaches PLAYABLE ground on Augusta 8', () => {
     const hole8 = getCourse('augusta').holes.find((h) => h.id === 8)!;
     const { bloom: _b, ...plain } = hole8;
-    const inPlay = courseTrees(hole8).find(
-      (t) => t.shrubR !== undefined && surfaceAt(hole8, t.d, t.x) === 'rough',
-    );
-    expect(inPlay, 'no drift on playable ground — the premise of this test moved').toBeDefined();
+    // Find a drift that overlaps the corridor, and a line through it that is
+    // actually in rough — stepping inward from the trunk, which is now OB.
+    let inPlay: ReturnType<typeof courseTrees>[number] | undefined;
+    let ballX = 0;
+    outer: for (const t of courseTrees(hole8)) {
+      if (t.shrubR === undefined) continue;
+      for (let step = 0.5; step < t.shrubR - 0.5; step += 0.5) {
+        for (const cand of [t.x - step, t.x + step]) {
+          if (
+            surfaceAt(hole8, t.d, cand) === 'rough' &&
+            surfaceAt(hole8, t.d - t.shrubR - 1, cand) === 'rough'
+          ) {
+            inPlay = t;
+            ballX = cand;
+            break outer;
+          }
+        }
+      }
+    }
+    expect(inPlay, 'no drift reaches playable ground — the premise of this test moved').toBeDefined();
 
     const roll = (hole: CourseHole) => {
       const s = new CourseSim(hole);
       const b = s.ball;
       b.d = inPlay!.d - inPlay!.shrubR! - 1;
-      b.x = inPlay!.x;
+      b.x = ballX;
       b.h = heightAt(hole, b.d, b.x);
       b.vd = 20;
       b.vx = 0;
