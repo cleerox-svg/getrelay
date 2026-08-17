@@ -162,6 +162,47 @@ const CLUB_FULL_TOTAL: Record<string, number> = {
   pw: 166,
   sw: 131,
 };
+// Full-power CARRY (yd) per club — the FLAT-LIE ladder the range harness prints
+// ([FULL-POWER NEUTRAL BAG] in rangeSim.test.ts, and GOLF.md §1.5). This is the
+// OTHER half of the club recommendation and it answers a different question from
+// CLUB_FULL_TOTAL: not "how far will this run out" but "how far will it fly
+// before it first touches the ground", i.e. what it can CARRY over water.
+//
+// ⚠ IT IS THE FLAT LADDER, DELIBERATELY, AND IT IS NOT THE MIN. CLUB_FULL_TOTAL
+// takes the MAX total measured across every hole, because for "can never
+// overshoot" the conservative direction is UP. The mirror-image choice here — the
+// MIN carry across every hole — was measured and REJECTED: it is dominated by
+// shots the terrain truncates rather than by the club (a trunk strike, a green
+// climbing 13 yd uphill), which drags the 5-iron to 207 yd off a tee and to 63 yd
+// off an approach lie. Recommending on those numbers up-clubs by two on Augusta 4
+// (a 240-yd par 3 whose front bunker ends 214 yd out): the hybrid clears the sand
+// and then flies the green by 36 yd, which is a worse shot than the one being
+// fixed. The flat ladder is the club's OWN number; the per-hole spread measured
+// across the authored par 3s is −3%..+9% of it, which HAZARD_CARRY_MARGIN covers.
+//
+// The guarantee is not carried by this table alone: courseSim.test.ts sweeps
+// EVERY par 3 of EVERY course, simulates the recommended club at full power and
+// asserts the REAL carry clears the real hazard — so a hole where the nominal
+// number lies fails a test instead of drowning a tee shot. Re-measure both tables
+// if the ballistics change.
+const CLUB_FULL_CARRY: Record<string, number> = {
+  driver: 291,
+  '3wood': 260,
+  hybrid: 243,
+  '5iron': 217,
+  '7iron': 191,
+  '9iron': 165,
+  pw: 137,
+  sw: 109,
+};
+// How far PAST a frontal hazard's back edge the recommended club must be able to
+// carry (yd). Small on purpose: the hazard requirement is measured to the exact
+// far edge of the circle, so this is authoring headroom (and cover for the −3% of
+// the flat ladder an uphill hole costs), not a landing-zone target. Every yard
+// added here is a yard of overshoot risk on the other side, because on a hole
+// with a forced carry the two goals genuinely conflict — 3 yd is what keeps the
+// 5-iron (217) on Augusta 4's 213.6-yd carry instead of jumping to the hybrid.
+const HAZARD_CARRY_MARGIN = 3;
 // Putt power model (its own map, DISTINCT from the full-swing power floor). On
 // the green a stroke ROLLS along the ground (no loft, no floor); drag power maps
 // to an initial ground speed calibrated via the Stimpmeter roll-out so:
@@ -654,13 +695,91 @@ export class CourseSim {
 
   // --- Interactive control surface (CourseGL drives this; CourseGame reads it) --
 
-  // The sensible club for the CURRENT lie + distance-to-pin: the LONGEST club
-  // whose full-power total does NOT overshoot the pin — so full power lands AT or
-  // just SHORT of the target and the auto-club never flies the green (the old
-  // rule picked the shortest club that "reaches", so a full-power 3-wood bombed a
-  // short par 4's green). The player still dials power/cycles up for more. A wedge
-  // out of sand regardless; green → putter (putt mode handles the stroke). Used
-  // to auto-set the club each new shot.
+  // How far a shot from the ball's lie must CARRY, along the ball→pin line, to
+  // clear the LAST water/bunker crossing that line short of the pin — 0 when the
+  // line is clean. Pure geometry over the hole's own hazard circles: project each
+  // centre onto the line, and if the perpendicular miss is inside the radius the
+  // line cuts the circle, entering at `along − half` and leaving at `along + half`.
+  // It is the FAR edge that matters (that is the yardage a shot has to fly), and
+  // the LAST one, because clearing the deepest crossing clears every earlier one.
+  //
+  // Two rejections, both deliberate: a crossing whose far edge is already BEHIND
+  // the ball (far ≤ 0) is water the ball is past, and one whose far edge is at or
+  // BEYOND the pin (far ≥ R) is not a carry at all — it is a hazard wrapping the
+  // green, and "carry it" would mean flying the flag. Those stay a shot-shape
+  // problem for the player, not a club recommendation.
+  //
+  // ⚠ THE LINE HAS NO WIDTH, so this is DISCONTINUOUS at perp == r: a ball whose
+  // line grazes a 10-yd pond at 9.99 yd off centre asks for the full carry, and one
+  // at 10.01 asks for none — a centimetre of lateral movement can flip the
+  // recommended club. That is inherent to modelling the shot as a zero-width ray
+  // and it is left in rather than smoothed, because the alternatives are worse:
+  // inflating the radius makes the sim demand a carry over water the shot visibly
+  // misses, and fading the requirement in would hand back a club that half-clears a
+  // pond. The player sees it only as the auto-club changing when they re-address
+  // from a hair further left, and can cycle clubs freely. The test copy of this
+  // geometry shares the same edge by construction.
+  private frontalCarry(): number {
+    const b = this.ball;
+    const p = this.hole.pin;
+    const R = Math.hypot(p.d - b.d, p.x - b.x);
+    if (R < 1e-6) return 0;
+    const ud = (p.d - b.d) / R;
+    const ux = (p.x - b.x) / R;
+    let need = 0;
+    for (const hz of this.hole.hazards) {
+      if (hz.kind !== 'water' && hz.kind !== 'bunker') continue;
+      const rd = hz.d - b.d;
+      const rx = hz.x - b.x;
+      const along = rd * ud + rx * ux;
+      const perp2 = rd * rd + rx * rx - along * along;
+      if (perp2 >= hz.r * hz.r) continue; // the line misses this hazard
+      const far = along + Math.sqrt(hz.r * hz.r - perp2);
+      if (far <= 0 || far >= R) continue; // behind the ball / not short of the pin
+      if (far > need) need = far;
+    }
+    return need;
+  }
+
+  // The sensible club for the CURRENT lie + distance-to-pin, in two steps.
+  //
+  // 1. NEVER OVERSHOOT — the LONGEST club whose full-power TOTAL fits inside the
+  //    distance to the pin, so full power lands AT or just SHORT of the target and
+  //    the auto-club never flies the green (the old rule picked the shortest club
+  //    that "reaches", so a full-power 3-wood bombed a short par 4's green).
+  // 2. THEN CLEAR THE WATER — if the ball→pin line crosses a hazard short of the
+  //    pin (frontalCarry) that the step-1 club cannot CARRY, up-club to the
+  //    SHORTEST club that can. Step 1 is a run-out rule and run-out is exactly
+  //    what a par-3 green takes away: CLUB_FULL_TOTAL holds the MAX total measured
+  //    across every hole, but a shot landing on a receptive green checks and runs
+  //    20–35% under that maximum, so the pick was one to three clubs short — and
+  //    on SIX of the ten authored par 3s NO power setting of the recommended club
+  //    reached dry land (Augusta 12 picked a sand wedge for a 129-yd water carry).
+  //    A club that cannot carry the hazard is not a conservative recommendation,
+  //    it is a wet ball.
+  //
+  // Where the two rules disagree the carry wins, because the penalties are not
+  // symmetric: overshooting the green costs a chip back, and the player can always
+  // dial the power down; the water costs a stroke and a replay and no power
+  // setting avoids it. On a hole with NO frontal hazard nothing changes — step 2
+  // never fires and the never-overshoot property is exactly as it was. If not even
+  // the driver can carry the hazard the step-1 club stands: up-clubbing to a club
+  // that ALSO comes up wet would give up the one property that still holds.
+  //
+  // ⚠ THIS RUNS ON EVERY LIE, NOT JUST THE TEE, and the par 3s are only where it
+  // was most visible. An APPROACH over water is up-clubbed by the same rule and
+  // gives up the same distance control: measured on the HOLE_1 fixture, whose pond
+  // ends 25 yd short of the pin, a 240-yd approach goes 7-iron (18 yd short of the
+  // flag, and wet) → hybrid (16 past, dry), and a 300-yd one 5-iron (47 short, wet)
+  // → driver (23 past, dry). That is the intended trade and not a side effect: the
+  // ball is dry and puttable instead of re-teed for a penalty, and easing off is
+  // the player's to do. What bounds it is that step 2 stops at the FIRST club that
+  // clears, so the overshoot is only ever as much as the carry itself forces —
+  // courseSim.test.ts pins that on approach lies by measuring the shortest club
+  // whose real carry clears and asserting the pick is that club or one longer.
+  //
+  // A wedge out of sand regardless; green → putter (putt mode handles the stroke).
+  // Used to auto-set the club each new shot.
   recommendedClub(): string {
     const b = this.ball;
     const p = this.hole.pin;
@@ -672,10 +791,17 @@ export class CourseSim {
     // fits (≤ R) is the longest club that won't overshoot. If even the shortest
     // (sand wedge) would overshoot (a very short pitch), fall back to it and let
     // the wedge finesse curve dial the distance down.
-    for (const c of CLUBS) {
-      if ((CLUB_FULL_TOTAL[c.id] ?? Infinity) <= R) return c.id;
+    let i = CLUBS.findIndex((c) => (CLUB_FULL_TOTAL[c.id] ?? Infinity) <= R);
+    if (i < 0) i = CLUBS.length - 1; // shortest (sand wedge)
+    const need = this.frontalCarry();
+    if (need > 0 && (CLUB_FULL_CARRY[CLUBS[i]!.id] ?? 0) < need + HAZARD_CARRY_MARGIN) {
+      // Walk UP the bag (CLUBS is longest-first, so j < i is a longer club) and
+      // take the FIRST — i.e. the shortest — that carries the hazard.
+      for (let j = i - 1; j >= 0; j--) {
+        if ((CLUB_FULL_CARRY[CLUBS[j]!.id] ?? 0) >= need + HAZARD_CARRY_MARGIN) return CLUBS[j]!.id;
+      }
     }
-    return CLUBS[CLUBS.length - 1]!.id; // shortest (sand wedge)
+    return CLUBS[i]!.id;
   }
 
   selectClub(id: string): void {

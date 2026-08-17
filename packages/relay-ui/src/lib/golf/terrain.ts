@@ -44,9 +44,18 @@
 //         r          = putting-surface radius (yd), the BASE radius the organic
 //                      edge wobbles around (see ORGANIC EDGES below);
 //         raise      = pad elevation above the base grade (yd);
-//         tiltPct    = planar fall (yd of drop per yd) — the main break. Keep
-//                      tiltPct + undulation ≲ μ (~0.061 at stimp 10) or a resting
-//                      putt won't hold anywhere (green design guard, GOLF.md);
+//         tiltPct    = planar fall (yd of drop per yd) — the main break. The
+//                      green design guard (GOLF.md) is on the FINISHED SURFACE:
+//                      max |gradientAt| anywhere surfaceAt() says 'green' must
+//                      stay ≤ μ (~0.061 at stimp 10) or a dead ball rolls off on
+//                      its own. tiltPct is the dominant term but NOT the only
+//                      one — the undulation, the surviving whisper of hills and
+//                      any neighbouring pad's grading all land in the same
+//                      number, so it is MEASURED by validateHole, not summed.
+//                      ⚠ Do not add tiltPct to undulation: one is a gradient and
+//                      the other an amplitude in YARDS. That sum is what the
+//                      guard used to be, and it over-charged authors ~4× for
+//                      undulation while missing a real 0.26 slope on a green;
 //         tiltDir    = direction of the fall line (rad); π = back-to-front;
 //         undulation = amplitude (yd) of gentle interior rolls beyond the tilt.
 //   fringeW           — width (yd) of the FRINGE collar ring around the green.
@@ -596,6 +605,72 @@ export function maxGreenPadRadius(hole: CourseHole): number {
 
 // --- Elevation -------------------------------------------------------------
 
+/**
+ * ⚠ THE GREEN PAD OUTRANKS A POND'S LEVELLING PAD, because surfaceAt says so.
+ * How much of one water hazard's pad survives at a point, given how far that
+ * point is from the green centre (`dg`) and how far the mown pad reaches at that
+ * angle (`padOuter`). 1 = pad applies in full, 0 = fully suppressed.
+ *
+ * WHY IT EXISTS. Classification precedence is strict — green > fringe > water —
+ * so a point on the putting surface is GREEN even where a pond's grading skirt
+ * reaches it, and the HEIGHT model has to agree or the two disagree about the
+ * same yard of ground: the player is told "green" and putts on it while the
+ * surface under him is dragged toward the pond's level plateau. Not a rounding
+ * error — every pond grades a 10–22 yd skirt (derived from its depth) around
+ * itself and 14 of the 17 authored ponds ran 3.5–5.9 yd of it ONTO their own
+ * green, leaving slopes to 0.262 against μ = 0.0611, i.e. ground a dead ball
+ * rolls off on its own (Augusta 11: a slow putt slid 6.0 yd clean off the green).
+ *
+ * ⚠ WHY IT IS NOT `1 - gBlend`, WHICH IS THE OBVIOUS AND WRONG ANSWER. gBlend is
+ * to hand and is 1 on the green, so it looks like the mask. It is not the pad —
+ * it is the pad PLUS the raise-derived SKIRT that ramps the pad to grade (14–26
+ * yd) — and the placement invariant only clears a hazard of the PAD, never of
+ * that skirt. So gBlend is still ~0.54 at a greenside pond's NEAR rim and 0 at
+ * its FAR rim, and scaling by it tilts the pad ACROSS THE POND, reintroducing
+ * precisely the rim spread the water pad exists to remove. Measured on HOLE_1:
+ * rim spread 0.07 → 1.01 yd, waterline receding to 68% of the basin radius
+ * against the ~94% WATER_LIP is written for — the "crater with a puddle in it"
+ * that comment warns about.
+ *
+ * THE THREE PROPERTIES IT HAS TO HAVE AT ONCE, and where each comes from:
+ *  • ZERO PAD ACROSS GREEN AND FRINGE — the whole point. `dg ≤ padOuter` there
+ *    (fringeW > 0 puts every green point strictly inside the pad), so the mask
+ *    is 1 and the pad is 0. EXACT, not approximate: `courses.test.ts` asserts
+ *    that deleting a hole's ponds does not move its putting surface by one bit.
+ *  • THE POND ITSELF UNTOUCHED — also exact. The ramp ends at `outer`, the
+ *    distance from the green centre to this hazard's NEAREST possible outline
+ *    point (`dist − r·(1+EDGE_WOBBLE)`), so every point of the basin, its rim
+ *    and its level plane sits at `dg ≥ outer` where the mask is already 0. Only
+ *    the part of the skirt lying BETWEEN the mown pad and the pond is trimmed,
+ *    which is the entire job.
+ *  • NO NEW BANK. Those two endpoints are fixed; what is left is the shape
+ *    between them, and it has to fall no harder than the pad's own skirt. Ending
+ *    the ramp at `maxGreenPadRadius` instead — the tightest envelope that still
+ *    satisfies the first two — compresses the pad's whole raise into the 0–2.4 yd
+ *    of wobble slack and measures a 1.67 gradient in the rough (a 59° wall, from
+ *    a shipped worst of 0.63). Ramping to the pond instead spends the real gap
+ *    (7.5 yd on HOLE_1) and measures 0.63 — unchanged from shipped.
+ *
+ * PER HAZARD, not once per point, because the gap is per hazard. `outer` is
+ * clamped up to `maxGreenPadRadius` so a hole that VIOLATES the placement
+ * invariant degrades to the tight envelope rather than dividing by ~zero;
+ * validateHole fails such a hole anyway.
+ */
+function greenPadPriority(
+  hole: CourseHole,
+  hz: CircleFeature,
+  dg: number,
+  padOuter: number,
+): number {
+  if (dg <= padOuter) return 0;
+  const nearestOutline = dist(hz.d, hz.x, hole.green) - hz.r * (1 + EDGE_WOBBLE);
+  const outer = Math.max(maxGreenPadRadius(hole), nearestOutline);
+  const band = outer - padOuter;
+  if (dg >= outer || band <= 1e-9) return 1;
+  // Same raised-cosine profile as every other blend in this file.
+  return 1 - (0.5 + 0.5 * Math.cos(((dg - padOuter) / band) * Math.PI));
+}
+
 // Ground elevation (yards) at a world point: base tee→green grade + rolling
 // hills, then feature stamps (green pad raise + tilt + undulation, hazard
 // basins). Because the physics reads THIS and its gradient, a stamped green
@@ -658,6 +733,11 @@ export function heightAt(hole: CourseHole, d: number, x: number): number {
   //
   // BUNKERS are deliberately excluded: sand genuinely follows the ground it sits
   // in, and the sand cap is drawn on the dished bowl. Only water needs a level lip.
+  //
+  // ⚠ AND EACH POND'S PAD IS MASKED OFF THE MOWN GREEN PAD — read
+  // greenPadPriority's header above for why that mask exists, why it is
+  // emphatically NOT `1 - gBlend`, and why it ramps to the POND rather than to
+  // the pad's own bulge. All three were measured; two of them look right.
   let waterPad = 0;
   let waterPlateau = 0;
   for (const hz of hole.hazards) {
@@ -666,11 +746,11 @@ export function heightAt(hole: CourseHole, d: number, x: number): number {
     const hzR = edgeRadius(featureSeed(hz.d, hz.x), featureAngle(hz.d, hz.x, d, x), hz.r);
     const skirt = Math.min(22, Math.max(10, Math.abs(hz.depth) * 6));
     const b =
-      dh <= hzR
+      (dh <= hzR
         ? 1
         : dh < hzR + skirt
           ? 0.5 + 0.5 * Math.cos(((dh - hzR) / skirt) * Math.PI)
-          : 0;
+          : 0) * greenPadPriority(hole, hz, dg, padOuter);
     if (b > waterPad) {
       waterPad = b;
       // The level the surround grades to: the hole's BASE elevation at the
@@ -854,10 +934,20 @@ export function surfaceAt(hole: CourseHole, d: number, x: number): Surface {
 // collar; a pond guarding the approach short of the green and a greenside bunker
 // front-right — both sitting OUTSIDE the fringe so the green never abuts them
 // (they border the collar). Distances in yards.
+//
+// ⚠ IT IS A FIXTURE, NOT AN EXEMPTION. No player can reach this hole (Course
+// mode plays GOLF_COURSES), but the screenshot harness renders it and the
+// putting physics were tuned against it, so it is held to the SAME contract as a
+// shipped hole — courses.test.ts runs it through the same validateHole loop.
+// Being outside that gate is exactly why it drifted: it shipped with a green
+// whose surface slope reached 0.207 (3.4× μ, so a dead ball could not rest on
+// large parts of it) and a `yards` of 520 against a 513.0 yd centerline.
 export const HOLE_1: CourseHole = {
   id: 1,
   par: 5,
-  yards: 520,
+  // The centerline path length, rounded: 180.10 + 140.36 + 140.51 + 52.04 =
+  // 513.01. The scorecard length of a hole is how far you actually walk it.
+  yards: 513,
   tee: { d: 0, x: 0 },
   pin: { d: 512, x: 18 },
   centerline: [
@@ -870,7 +960,51 @@ export const HOLE_1: CourseHole = {
   fairwayHalf: 16,
   fairwayTaper: -3, // pinch to 13-yd half (26-yd fairway) at the green
   roughHalf: 40,
-  green: { d: 512, x: 18, r: 15, raise: 3.2, tiltPct: 0.04, tiltDir: Math.PI, undulation: 0.08 },
+  // GREEN, RE-MEASURED. tiltPct 0.04 → 0.037, undulation 0.08 → 0.04. Every
+  // number below is off the harness, not a guess:
+  //
+  //  • HEADROOM. The finished surface measured max |gradient| 0.0609 against
+  //    μ = 0.0611 — the hole every putting number in the game is calibrated on
+  //    sat at 99.7% of the steepest ground a dead ball can rest on, with nothing
+  //    left for a future noise, epsilon or pad change to spend. It now measures
+  //    0.0497 (81% of μ). For scale the shipped fleet runs 62–96%.
+  //  • THE UNDULATION WAS THE OUTLIER. 0.08 yd is 6–8× every authored green
+  //    (0.010–0.014) and contributed ~0.014 of that gradient on its own. 0.04
+  //    still gives the showcase green 3× the fleet's interior movement, so it
+  //    reads as a green and not a plane.
+  //  • THE PAIR SITS INSIDE A REGION THE HARNESS DEFINES, and it is a REGION, not
+  //    a window on one axis — the earlier note here said "tilt ≥0.038 fails, tilt
+  //    ≤0.036 fails" and that was simply not what the suite reports. Both bounds
+  //    MOVE with undulation. Sweeping the whole golf suite over the grid (⛌ = the
+  //    test that fires):
+  //
+  //        tilt \ und   0.06   0.04   0.03   0.02   0.01
+  //        0.044        ⛌6ft   ⛌6ft   ⛌6ft   ⛌6ft   ⛌6ft
+  //        0.040        ⛌6ft   ⛌6ft   ⛌6ft   ⛌6ft   ⛌6ft
+  //        0.038         ok    ⛌6ft   ⛌6ft   ⛌6ft   ⛌6ft
+  //        0.037         ok     ok     ok    ⛌6ft   ⛌6ft
+  //        0.036        ⛌dn     ok     ok     ok    ⛌6ft
+  //        0.034        ⛌dn    ⛌dn     ok     ok     ok
+  //        0.030        ⛌dn    ⛌dn    ⛌dn    ⛌dn    ⛌dn
+  //
+  //    6ft = courseSim.test.ts "an on-line ~6ft putt at a normal pace HOLES OUT
+  //    (real fire path)" — this pin sits exactly at the green centre, so that putt
+  //    runs the pure cross-slope line and too much break beats the cup. dn = "a
+  //    downhill putt runs further than the same putt uphill" — too little tilt and
+  //    the grade stops dominating the interior noise. The legal set is the
+  //    diagonal band between them, ~2–3 rows wide, and (0.037, 0.04) sits in it
+  //    with undulation free to move 0.03→0.06 at this tilt and tilt free to move
+  //    to 0.036 at this undulation.
+  //  • AND IT IS NO LONGER A COINCIDENCE. At the old tilt 0.04, undulation 0.08
+  //    was the ONLY value in 0.01–0.08 whose noise field cancelled enough break to
+  //    drop the 6ft putt at all — read the 0.040 row above, which is what every
+  //    other amplitude looks like. The reference hole was satisfying a pinned
+  //    playability invariant by luck; it now drops that putt at the same 2 of the
+  //    14 paces the test scans as it did before, while sitting a fifth clear of μ.
+  //    (That finding is also why courseSim.test.ts's "a well-judged putt straight
+  //    at the cup is HOLED — on ANY legal green" now sweeps the whole authored
+  //    grid through validateHole instead of trusting this one green.)
+  green: { d: 512, x: 18, r: 15, raise: 3.2, tiltPct: 0.037, tiltDir: Math.PI, undulation: 0.04 },
   fringeW: 1,
   hazards: [
     { kind: 'bunker', d: 300, x: 20, r: 12, depth: -1.6 }, // fairway bunker, inside the dogleg
