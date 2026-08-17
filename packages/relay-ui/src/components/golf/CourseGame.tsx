@@ -172,10 +172,10 @@ export default function CourseGame({
   // omitted, wind is random and re-rolled on replay (unchanged behaviour).
   seed?: number;
   onExit?: () => void;
-  // Fired EXACTLY ONCE per completed full round, when the end-of-round
-  // scorecard is revealed (full-round mode only — never in single-hole mode).
-  // Lets the parent record the round to the leaderboard. Optional: when
-  // omitted, nothing changes.
+  // Fired EXACTLY ONCE per completed full round, when the FINAL hole is holed
+  // out and carded (full-round mode only — never in single-hole mode). Lets the
+  // parent record the round to the leaderboard. Optional: when omitted, nothing
+  // changes.
   onRoundComplete?: (r: {
     courseId: string;
     holes: number;
@@ -246,7 +246,7 @@ export default function CourseGame({
   const [card, setCard] = useState<HoleScore[]>([]);
   const [showScorecard, setShowScorecard] = useState(false);
   const cardedRef = useRef(false); // one-shot: this hole appended to `card`.
-  const roundReportedRef = useRef(false); // one-shot: onRoundComplete fired.
+  const roundReportedRef = useRef(false); // one-shot: round/hole reported once.
 
   // Running score across the holes carded so far (full-round HUD readout).
   const scoreToPar = card.reduce((a, h) => a + (h.strokes - h.par), 0);
@@ -369,12 +369,28 @@ export default function CourseGame({
     setCard((c) => [...c, { hole: sim.hole.id, par: st.par, strokes: st.strokes }]);
   }, [single, st.holed, st.par, st.strokes, sim]);
 
+  // Full-round only: report the completed round when the FINAL hole is CARDED —
+  // NOT when a button is pressed. It used to fire from revealScorecard(), so a
+  // player who tapped "Menu" instead of "See scorecard" had the whole round (and
+  // in a tournament, their event entry) silently discarded. The card holds one
+  // entry per hole holed out, so card.length === course.holes.length IS "the
+  // round is over"; reading it HERE, not in the carding effect above, guarantees
+  // the final hole's strokes are already in the total.
+  useEffect(() => {
+    if (single || roundReportedRef.current) return;
+    if (card.length === 0 || card.length < course.holes.length) return;
+    roundReportedRef.current = true;
+    const strokes = card.reduce((a, h) => a + h.strokes, 0);
+    const par = card.reduce((a, h) => a + h.par, 0);
+    const holes = card.length;
+    onRoundComplete?.({ courseId: course.id, holes, strokes, par, toPar: strokes - par });
+  }, [single, card, course.id, course.holes.length, onRoundComplete]);
+
   // Single-hole only: when the chosen hole is holed out (the same moment the
   // single-branch "Play again" recap becomes visible), report the result to the
-  // parent EXACTLY ONCE — mirroring revealScorecard's one-shot pattern.
-  // Guarded by roundReportedRef so it fires once even across re-renders;
-  // playAgain resets the ref so a replay reports again. Full-round mode is
-  // untouched (it never enters this branch).
+  // parent EXACTLY ONCE. Guarded by roundReportedRef so it fires once even
+  // across re-renders; playAgain resets the ref so a replay reports again.
+  // Full-round mode is untouched (it never enters this branch).
   useEffect(() => {
     if (!single || !st.holed || roundReportedRef.current) return;
     roundReportedRef.current = true;
@@ -437,25 +453,9 @@ export default function CourseGame({
     resetHoleBookkeeping();
   };
 
-  // Full-round: reveal the end-of-round scorecard and report the completed round
-  // to the parent (leaderboard) EXACTLY ONCE, computed from the local card.
-  // Guarded by roundReportedRef so it fires once even if the scorecard
-  // re-renders; playRoundAgain resets the ref so a second round reports too.
-  const revealScorecard = () => {
-    setShowScorecard(true);
-    if (!roundReportedRef.current) {
-      roundReportedRef.current = true;
-      const strokes = card.reduce((a, h) => a + h.strokes, 0);
-      const par = card.reduce((a, h) => a + h.par, 0);
-      onRoundComplete?.({
-        courseId: course.id,
-        holes: card.length,
-        strokes,
-        par,
-        toPar: strokes - par,
-      });
-    }
-  };
+  // Full-round: reveal the end-of-round scorecard. PURELY PRESENTATIONAL — the
+  // round is reported by the effect above, on the final hole-out.
+  const revealScorecard = () => setShowScorecard(true);
 
   // Full-round: restart the whole round from hole 1 with a fresh scorecard AND a
   // freshly rolled round wind.
