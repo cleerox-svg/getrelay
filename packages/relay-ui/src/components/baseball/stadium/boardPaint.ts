@@ -1,146 +1,55 @@
-// The videoboard's DRAWING KIT — the op vocabulary, the palette, the type
-// scale, the legibility floor, the time quantisation and the rasteriser.
+// The videoboard's DRAWING KIT — the op vocabulary, the palette, the type scale
+// in FEET, the legibility floor, the time quantisation and the rasteriser.
 //
-// The screens themselves are in `boardScreens.ts`, split off here at the
-// 500-line builder cap (extraction, not a raised cap). The seam: this file is
-// what a screen is drawn WITH, that file is what is drawn. A seventh screen
-// touches only that one; a change to the type scale lands here and every screen
-// follows it.
+// The state shapes live in `boardState.ts`, the panel layout in `boardAtlas.ts`,
+// the screens in `boardScreens.ts` and `boardPanels.ts`, the ribbon in
+// `boardRibbon.ts`. Each split happened at the 500-line cap — extraction, not a
+// raised cap. The seam: this file is what a panel is drawn WITH; those files are
+// what is drawn. A change to the type scale lands HERE and every surface in the
+// stadium follows it.
 //
 // ⚠ THE LAYOUT IS A LIST OF OPS, NOT A SEQUENCE OF CANVAS CALLS, and that split
-// is the single most important decision in this feature. `boardOps()` is a pure
-// `(screen, frame, aspect) => BoardOp[]`: no canvas, no `three`, no clock. The
+// is the single most important decision in this feature. Every painter is a pure
+// `(state, frame, panel) => BoardOp[]`: no canvas, no `three`, no clock. The
 // rasteriser (`emitBoardOps`, at the foot of this file) does nothing but turn
 // each op into strokes. Three things follow that a canvas-first version could
 // not have:
 //
 //   • THE TESTS ASSERT THE PICTURE, NOT A SPY. "Was the distance drawn, in that
 //     position, at that size, before the exit velocity?" is a question about an
-//     array of plain objects. The alternative — `expect(ctx.fillText).toHaveBeen
-//     Called()` — is the hollow-assertion shape this project keeps finding.
-//   • LEGIBILITY IS ENFORCEABLE. `MIN_LEGIBLE_H` below is derived from the
-//     camera, and because every text op carries its own `size`, a test can walk
-//     EVERY op of EVERY screen and fail the one that is too small to read from
-//     the batter's box. That is a design rule the compiler cannot state and a
-//     screenshot can only hint at.
-//   • RESOLUTION INDEPENDENCE. Ops are fractions — `x`/`w` of the canvas WIDTH,
-//     `y`/`h`/`size` of its HEIGHT — so a low-tier 512×256 board is the same
-//     picture as a 1024×512 one, not a second layout.
+//     array of plain objects.
+//   • LEGIBILITY IS ENFORCEABLE. Every text op carries its own `size`, so a test
+//     can walk EVERY op of EVERY surface and fail the one that is too small to
+//     read from the batter's box — against that PANEL's own floor.
+//   • RESOLUTION INDEPENDENCE. Ops are fractions, so a low-tier 512×256 atlas is
+//     the same picture as a 1024×512 one, not a second layout.
 //
 // ⚠ NO CLOCK, ANYWHERE. Every animated quantity is a function of `frame`, an
-// integer the CALLER computed from `lib/scene3d/clock.ts`. See
-// `boardAnimFrame`.
+// integer the CALLER computed from `lib/scene3d/clock.ts`.
 //
-// ⚠ IT DECIDES NO GAMEPLAY. Every number in a `BoardScreen` was produced by the
-// sim and handed here. The board computes distances, points and multipliers
-// exactly as much as `swingCopy.ts` does — which is to say not at all.
+// ⚠ IT DECIDES NO GAMEPLAY. Every number in a `BoardArray` was produced by the
+// sim and handed here.
 
 import type { Board2D, BoardAlign } from './boardGlyphs';
-import { GLYPH_TRACK, GLYPH_W, strokeBoardText } from './boardGlyphs';
-
-// ---------------------------------------------------------------------------
-// The screen states
-// ---------------------------------------------------------------------------
-
-/** The accent colour of a result line. Mirrors the OUTCOME, not the copy. */
-export type BoardTone = 'gone' | 'good' | 'neutral' | 'miss';
-
-/** One side of a duel line score. */
-export interface BoardTeam {
-  name: string;
-  runs: number;
-}
-
-/**
- * Everything the board can show.
- *
- * ⚠ A DISCRIMINATED UNION SO THE DUEL IS A VARIANT, NOT A REWRITE. `duelScore`
- * already exists here and is already painted and tested, months before
- * `duelSim.ts` does — precisely so that the 3-inning mode cannot arrive and find
- * a board hard-coded to derby fields. Adding the next screen is a member plus a
- * painter plus a row in the test table; it is never a change to `scoreboard.ts`.
- *
- * Every field is a plain scalar. The board deliberately does NOT import
- * `DerbyState` or `SwingResult`: the HUD maps the sim's readout onto this shape
- * (the same way `swingCopy.ts` maps it onto a string), so the display layer has
- * no opinion about, and no coupling to, how the game is scored.
- */
-export type BoardScreen =
-  /** Pre-game / between-sessions. `label` is copy the caller owns. */
-  | { kind: 'idle'; label: string }
-  /** The derby's resting state: who is up, where we are, what it is worth. */
-  | {
-      kind: 'derbyBatter';
-      batter: string;
-      round: number;
-      rounds: number;
-      pitch: number;
-      pitches: number;
-      score: number;
-      /** The chain multiplier, when it is EARNING. `null` = not on a chain. */
-      chainX: number | null;
-      /** Longest ball of the session, ft. `null` before the first one. */
-      bestFt: number | null;
-    }
-  /**
-   * The outcome of one swing.
-   *
-   * ⚠ `line` IS `swingCopy.describeSwing(r)`, VERBATIM. The board does not own a
-   * second vocabulary for the same eight outcomes — the charter's "one
-   * implementation per concept" applied to words. The caller passes the string
-   * the HUD is already printing; this screen decides only how big it is and
-   * where it sits. `boardResultRows` splits it on the ` · ` separator that
-   * `describeSwing` itself uses, so a long line becomes two legible rows rather
-   * than one unreadable one.
-   */
-  | { kind: 'result'; line: string; tone: BoardTone }
-  /** The money moment. The only screen that animates. */
-  | {
-      kind: 'homeRun';
-      distFt: number;
-      evMph: number;
-      laDeg: number;
-      points: number;
-      chainX: number | null;
-    }
-  /** Between rounds. */
-  | {
-      kind: 'roundSummary';
-      round: number;
-      rounds: number;
-      roundScore: number;
-      homeRuns: number;
-      bestFt: number;
-      total: number;
-    }
-  /** DUEL-READY, and shipped now on purpose — see the union's note. */
-  | {
-      kind: 'duelScore';
-      away: BoardTeam;
-      home: BoardTeam;
-      inning: number;
-      half: 'top' | 'bot';
-      outs: number;
-      balls: number;
-      strikes: number;
-    };
+import { GLYPH_TRACK, GLYPH_W, GLYPH_WEIGHT, TRUNCATION_MARK, strokeBoardText } from './boardGlyphs';
+import type { BoardScreen } from './boardState';
 
 // ---------------------------------------------------------------------------
 // Time — quantised, so that "what is painted" is a finite key
 // ---------------------------------------------------------------------------
 
 /**
- * How often the animated screen re-draws, Hz. **FEEL KNOB with a measured
+ * How often the animated surfaces re-draw, Hz. **FEEL KNOB with a measured
  * cost**, and it is a texture-UPLOAD budget more than a look: a 1024×512 RGBA
- * canvas is 2.0 MB per `needsUpdate`, so 12 Hz is 24 MB/s while the home-run
- * celebration is on screen and **exactly zero** either side of it. At 60 Hz it
- * would be 120 MB/s, which is the kind of number that costs frames on a phone
- * for an effect nobody can see at 12.
+ * atlas is 2.0 MB per `needsUpdate` and the 2048×64 ribbon is another 0.5 MB, so
+ * 12 Hz is 30 MB/s while the home-run celebration is on screen and **exactly
+ * zero** either side of it. At 60 Hz it would be 150 MB/s, which is the kind of
+ * number that costs frames on a phone for an effect nobody can see at 12.
  */
 export const BOARD_ANIM_FPS = 12;
 
 /**
- * When the home-run screen stops moving, s. After this the frame index CLAMPS,
+ * When the home-run moment stops moving, s. After this the frame index CLAMPS,
  * so the paint key stops changing and the board stops uploading entirely while
  * the celebration is still on screen. Feel knob.
  */
@@ -150,41 +59,32 @@ export const BOARD_ANIM_END_S = 2.6;
 export const BOARD_ANIM_LAST_FRAME = Math.round(BOARD_ANIM_END_S * BOARD_ANIM_FPS);
 
 /**
- * The animation frame a screen is on at `tS` seconds since it appeared.
+ * The animation frame the array is on at `tS` seconds since it appeared.
  *
- * ⚠ QUANTISING HERE IS WHAT MAKES THE PICTURE A FUNCTION OF THE KEY. `boardOps`
- * takes the integer, never `tS`, so two calls that produce the same frame
+ * ⚠ QUANTISING HERE IS WHAT MAKES THE PICTURE A FUNCTION OF THE KEY. The
+ * painters take the integer, never `tS`, so two calls that produce the same frame
  * produce byte-identical ops — which is exactly the invariant the upload policy
- * in `scoreboard.ts` relies on when it skips a repaint. A painter that read
- * `tS` directly would drift silently: the key would say "unchanged" while the
- * picture had moved on.
+ * in `scoreboard.ts` relies on when it skips a repaint. A painter that read `tS`
+ * directly would drift silently: the key would say "unchanged" while the picture
+ * had moved on.
  *
  * Static screens return 0 always, so they never repaint and never upload.
  */
-export function boardAnimFrame(screen: BoardScreen, tS: number): number {
-  if (screen.kind !== 'homeRun') return 0;
+export function boardAnimFrame(main: BoardScreen, tS: number): number {
+  if (main.kind !== 'homeRun') return 0;
   if (!Number.isFinite(tS) || tS <= 0) return 0;
   return Math.min(Math.floor(tS * BOARD_ANIM_FPS), BOARD_ANIM_LAST_FRAME);
 }
 
-/**
- * A string that changes whenever the PICTURE would.
- *
- * `JSON.stringify` is chosen for a stated reason: it can produce a spurious
- * change (two objects with the same fields in a different key order), which
- * costs one extra upload, but it can never MISS one — and a missed repaint is a
- * board showing the last batter's numbers.
- */
-export function boardScreenKey(screen: BoardScreen): string {
-  return JSON.stringify(screen);
-}
-
 // ---------------------------------------------------------------------------
-// Palette and type scale
+// Palette
 // ---------------------------------------------------------------------------
 
 // Royal blue / red / white, per BASEBALL.md's Toronto homage. A colour scheme,
 // not a mark.
+
+/** The architectural frame the panels are set into — the darkest thing here. */
+export const FRAME = '#050a18';
 export const INK = '#08122b';
 export const PANEL = '#0f2050';
 const SCAN = '#0b1836';
@@ -195,56 +95,16 @@ export const DIM = '#6d8ad6';
 export const GOLD = '#ffc233';
 const GREEN = '#2fb46b';
 
-export const TONE_COLOR: Record<BoardTone, string> = {
+export const TONE_COLOR: Record<string, string> = {
   gone: GOLD,
   good: GREEN,
   neutral: RULE,
   miss: RED,
 };
 
-/**
- * ⚠ THE SMALLEST TEXT THE BOARD MAY EVER DRAW, as a fraction of board height —
- * and it is DERIVED from the camera, not chosen.
- *
- * The reference board is 100 ft × 50 ft with its face 430 ft from the plate
- * (just beyond Harbourfront's 400 ft centre-field wall). `CAMERAS.batter` stands
- * at scene [0, 3.2, 8] with a 40° VERTICAL fov, so the board is 438 ft away and
- * the harness's 900×1600 portrait frame spans
- *
- *     2 · 438 · tan 20° = 318.8 ft   over 1600 px   ⇒   5.018 px/ft
- *
- * That is the SCREENSHOT's scale. A phone is ~390 CSS px wide where the shot is
- * 900, so on the device it is 5.018 × 390/900 = **2.175 CSS px per foot** of
- * board. Taking ~10 CSS px of cap height as the floor for reading a word at a
- * glance and ~14 px as comfortable:
- *
- *     10 CSS px  ⇒  4.60 ft of glyph  ⇒  0.092 of a 50 ft board   ← this constant
- *     14 CSS px  ⇒  6.44 ft of glyph  ⇒  0.129                    ← `T_BODY`
- *
- * ⚠ AND THE HONEST CONSEQUENCE: a real videoboard sets its body copy at roughly
- * 1.5–2.5 ft, which lands at 3–5 CSS px here and cannot be read at all. This
- * board therefore runs at about **3× a real board's type scale** and carries
- * four or five rows of information where a real one carries twenty. That is a
- * design finding, not a bug — but it means "put the whole box score up there"
- * is not available, and any future screen has to be budgeted in rows.
- *
- * `scoreboard.test.ts` walks every op of every screen against this number.
- */
-export const MIN_LEGIBLE_H = 0.092;
-
-/**
- * ⚠ THE REFERENCE BOARD `MIN_LEGIBLE_H` IS DERIVED FROM — exported because it is
- * an INTEGRATION CONTRACT, not documentation.
- *
- * The board's real size and position are scene art and belong to whoever owns
- * the bowl and the truss, not to this module. But every legibility number above
- * scales linearly with `heightFt / distFt`, so a board built at, say, 60 ft wide
- * instead of 100 silently makes `MIN_LEGIBLE_H` a 6 CSS px lie and the whole
- * floor stops meaning anything. Exporting the assumption lets the integration
- * ASSERT it — `boardLegibleCssPx()` below is the one-line check — instead of
- * discovering it in a screenshot nobody could read.
- */
-export const BOARD_REF = { widthFt: 100, heightFt: 50, faceDistFt: 430 } as const;
+// ---------------------------------------------------------------------------
+// The camera, and the type scale it forces
+// ---------------------------------------------------------------------------
 
 /** `CAMERAS.batter`'s eye, scene ft, and its vertical fov. Duplicated on purpose:
  * importing `camera.ts` here would pull the rig into a module whose whole point
@@ -252,44 +112,129 @@ export const BOARD_REF = { widthFt: 100, heightFt: 50, faceDistFt: 430 } as cons
  * `scoreboard.test.ts`, so the copy cannot drift. */
 const BATTER_EYE_Z_FT = 8;
 const BATTER_FOV_DEG = 40;
-/** Portrait phone: CSS px across, and the harness frame's px across. */
+/** Portrait phone: CSS px across, and the harness frame's px across and down. */
 const PHONE_CSS_W = 390;
 const SHOT_PX_W = 900;
 const SHOT_PX_H = 1600;
 
 /**
- * How many CSS pixels of glyph a text `size` becomes on a phone, from the batter
- * camera, for a board of the given height at the given face distance.
+ * ⚠ THE REFERENCE ARRAY EVERY NUMBER BELOW IS DERIVED AGAINST — exported because
+ * it is an INTEGRATION CONTRACT, not documentation.
  *
- * Pure trigonometry, written out so the integration can re-run it against the
- * board it actually built.
+ * The array's real size and position are scene art and belong to whoever owns
+ * the bowl and the truss, not to this module. But every legibility number here
+ * scales linearly with `heightFt / faceDistFt`, so an array built at, say, 30 ft
+ * tall instead of 50 silently makes the floor a 6 CSS px lie and the whole rule
+ * stops meaning anything. `buildScoreboard` now TAKES the real geometry and
+ * THROWS when it lands under the threshold — see `scoreboard.ts`.
+ */
+export const BOARD_REF = { widthFt: 100, heightFt: 50, faceDistFt: 430 } as const;
+
+/** CSS pixels per foot of board face, on a portrait phone, from `CAMERAS.batter`. */
+export function boardCssPxPerFt(faceDistFt: number = BOARD_REF.faceDistFt): number {
+  const depth = faceDistFt + BATTER_EYE_Z_FT;
+  const frameFt = 2 * depth * Math.tan(((BATTER_FOV_DEG / 2) * Math.PI) / 180);
+  return (SHOT_PX_H / frameFt) * (PHONE_CSS_W / SHOT_PX_W);
+}
+
+/**
+ * How many CSS pixels of glyph a text `size` becomes on a phone, from the batter
+ * camera, for a surface of the given height at the given face distance.
+ *
+ * `size` is a fraction of THAT SURFACE's height — so a side column and the main
+ * panel take different fractions to reach the same pixels, which is the whole
+ * point of the per-panel derivation in `boardAtlas.ts`.
  */
 export function boardLegibleCssPx(
   size: number,
   heightFt: number = BOARD_REF.heightFt,
   faceDistFt: number = BOARD_REF.faceDistFt,
 ): number {
-  const depth = faceDistFt + BATTER_EYE_Z_FT;
-  const frameFt = 2 * depth * Math.tan(((BATTER_FOV_DEG / 2) * Math.PI) / 180);
-  const shotPxPerFt = SHOT_PX_H / frameFt;
-  const cssPxPerFt = shotPxPerFt * (PHONE_CSS_W / SHOT_PX_W);
-  return size * heightFt * cssPxPerFt;
+  return size * heightFt * boardCssPxPerFt(faceDistFt);
 }
 
-export const T_HERO = 0.32;
-export const T_HEAD = 0.19;
-export const T_TITLE = 0.155;
-export const T_BODY = 0.13;
-export const T_LABEL = 0.095;
+/**
+ * ⚠ THE SMALLEST TEXT ANY SURFACE IN THIS STADIUM MAY EVER DRAW, in CSS pixels
+ * of cap height on a phone. Not a fraction — a fraction is meaningless until you
+ * say a fraction OF WHAT, which is precisely the mistake the single-rectangle
+ * board made.
+ *
+ * ~10 CSS px is the floor for reading a word at a glance and ~14 is comfortable.
+ */
+export const MIN_LEGIBLE_CSS_PX = 10;
+
+/**
+ * The floor expressed in FEET OF GLYPH at the reference face distance. Derived:
+ * `MIN_LEGIBLE_CSS_PX / boardCssPxPerFt(430)` = 4.599 ft.
+ *
+ * ⚠ AND THE HONEST CONSEQUENCE, UNCHANGED BY THE ARRAY: a real videoboard sets
+ * body copy at roughly 1.5–2.5 ft, which lands at 3–5 CSS px here and cannot be
+ * read at all. Every surface in this stadium runs at about **3× a real board's
+ * type scale**. What the array changes is not the scale — it is the BUDGET:
+ * one 100 × 50 ft rectangle carries ten floor-height rows and 26 characters, and
+ * one row is one row for everything; four panels carry **21 rows** between them,
+ * because the strip is short but very wide, the columns are tall but very narrow,
+ * and each is budgeted against its OWN subtended size. `boardAtlas.ts` prints the
+ * measurement every run.
+ */
+export const MIN_LEGIBLE_FT = MIN_LEGIBLE_CSS_PX / boardCssPxPerFt();
+
+/**
+ * ⚠ THE TYPE SCALE IS IN FEET, AND THAT IS THE FIX FOR THE ARRAY. It used to be
+ * fractions of board height, which is only a scale at all while there is exactly
+ * one surface: the same 0.155 is 7.8 ft on the old 50 ft board, 4.6 ft in a
+ * 29.5 ft main panel and 2.6 ft on the strip — three different, mostly illegible
+ * sizes for one named role. Absolute feet is the invariant the CAMERA actually
+ * imposes, and each panel divides by its own height to get its own fraction.
+ *
+ * `label` sits EXACTLY on `MIN_LEGIBLE_FT`, so the smallest named size is the
+ * floor by construction rather than by coincidence.
+ */
+export const TYPE_FT = {
+  hero: 13.0,
+  head: 8.0,
+  title: 6.5,
+  body: 5.5,
+  label: MIN_LEGIBLE_FT,
+} as const;
+
+export type TypeKey = keyof typeof TYPE_FT;
+
+/**
+ * A panel's own type scale — everything a painter needs to lay out inside one
+ * rectangle without knowing where in the array that rectangle is.
+ *
+ * `t(k)` and `floor` are fractions of THIS PANEL's height; `aspect` is the
+ * panel's own w/h, which is what turns a width budget into a glyph size.
+ */
+export interface PanelType {
+  id: string;
+  aspect: number;
+  widthFt: number;
+  heightFt: number;
+  floor: number;
+  t(k: TypeKey): number;
+}
+
+export function panelType(id: string, widthFt: number, heightFt: number): PanelType {
+  return {
+    id,
+    aspect: widthFt / heightFt,
+    widthFt,
+    heightFt,
+    floor: MIN_LEGIBLE_FT / heightFt,
+    t: (k) => TYPE_FT[k] / heightFt,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // The op list
 // ---------------------------------------------------------------------------
 
 /**
- * One drawing instruction. `x`/`w` are fractions of the canvas WIDTH; `y`, `h`
- * and `size` are fractions of its HEIGHT. `poly.pts` is `[x0, y0, x1, y1, …]` in
- * those same two units.
+ * One drawing instruction. `x`/`w` are fractions of the surface's WIDTH; `y`,
+ * `h` and `size` are fractions of its HEIGHT. `poly.pts` is `[x0, y0, x1, y1, …]`
+ * in those same two units.
  */
 export type BoardOp =
   | { kind: 'panel'; x: number; y: number; w: number; h: number; color: string }
@@ -304,26 +249,139 @@ export type BoardOp =
     }
   | { kind: 'poly'; pts: number[]; color: string };
 
-/** Width of a run of `n` monospaced cells, in units of board HEIGHT. */
+/** Width of a run of `n` monospaced cells, in units of surface HEIGHT. */
 export const runH = (n: number) => (n === 0 ? 0 : n * (GLYPH_W + GLYPH_TRACK) - GLYPH_TRACK);
 
+/** Width of a run at a given size, as a fraction of surface WIDTH. */
+export const runW = (text: string, size: number, aspect: number) =>
+  (runH(text.length) * size) / aspect;
+
+/** A laid-out run: the text that will actually be drawn, and how big. */
+export interface Run {
+  text: string;
+  size: number;
+}
+
 /**
- * The largest size at or below `cap` that fits `text` into `maxFracW` of the
- * board's width. Monospaced advance makes this exact arithmetic rather than a
- * measure-and-retry loop — which also means it works with no canvas in sight.
+ * Set `text` into `maxFracW` of the surface's width, at or below `cap`, and
+ * NEVER below the panel's legibility floor.
+ *
+ * ⚠ IT TRUNCATES RATHER THAN SHRINKING OUT OF THE RULE, and that is the repair
+ * of a real hole. The old `fit()` returned `min(cap, maxFracW·aspect/cells)` with
+ * no floor at all, so on this module's OWN fixtures it shipped `HARBOURFRONT` at
+ * 9.9 CSS px, `MOUNTAINSIDE` at 9.9, `ALPINE MEADOWS` at 8.5 and
+ * `MAXIMILIAN LONGNAME` at 8.4 — under a 10 px floor the suite claimed to
+ * enforce, and `Harbourfront` is the real park name in `parks.ts`. It also
+ * returned a NEGATIVE size for a negative width budget, which is a glyph drawn
+ * inside out. The legibility walk missed all of it because it ran over a
+ * different fixture list than the overlap walk; both now run over both.
+ *
+ * A truncated name is still a name and the mark says so. A name at 8.4 px is a
+ * grey smear that the test suite calls legible.
  */
-export function fit(text: string, maxFracW: number, cap: number, aspect: number): number {
+export function fitRun(text: string, maxFracW: number, cap: TypeKey | number, pt: PanelType): Run {
+  const capH = typeof cap === 'number' ? cap : pt.t(cap);
+  const budget = Number.isFinite(maxFracW) && maxFracW > 0 ? maxFracW : 0;
   const cells = runH(text.length);
-  if (cells <= 0) return cap;
-  return Math.min(cap, (maxFracW * aspect) / cells);
+  if (cells <= 0) return { text, size: capH };
+
+  const ideal = Math.min(capH, (budget * pt.aspect) / cells);
+  if (ideal >= pt.floor) return { text, size: ideal };
+
+  // Below the floor: hold the floor and cut the run instead. `n` is how many
+  // cells fit at the floor — the EXACT inverse of `runH`, trailing track and
+  // all. Dropping that `+ GLYPH_TRACK` loses a whole character on a narrow
+  // column: an 18 ft side panel carries five digits at the floor (17.57 ft of
+  // the 18) and the sloppy inversion says four, so a five-digit score would
+  // print as `999…`.
+  const n = Math.floor(
+    ((budget * pt.aspect) / pt.floor + GLYPH_TRACK) / (GLYPH_W + GLYPH_TRACK) + 1e-9,
+  );
+  if (n <= 0) return { text: '', size: pt.floor };
+  if (n >= text.length) return { text, size: pt.floor };
+  const kept = text.slice(0, Math.max(0, n - 1)).trimEnd();
+  return { text: `${kept}${TRUNCATION_MARK}`, size: pt.floor };
 }
 
 export const int = (v: number) => Math.round(v).toString();
 
+/** Gap between two columns of a row, as a fraction of surface WIDTH. */
+export const GUTTER = 0.035;
+
+/**
+ * Breathing room between a caption and its value, ON TOP OF the ink.
+ *
+ * ⚠ THE LEADING IS DERIVED, NOT CHOSEN, and a fixed 0.02 was caught by the
+ * overlap walk: a stroked glyph extends half a `lineWidth` past its cell on
+ * every side, so a `label` over a `body` needs `GLYPH_WEIGHT·(a + b)/2` of gap
+ * before a single pixel of clearance exists — 0.0222 in the main panel against
+ * the 0.02 that was there. A constant that happens to work at one type scale is
+ * a collision waiting for the next panel; `stackGap` is the real quantity.
+ */
+export const LEAD = 0.012;
+
+/** The gap two stacked runs need: the round-cap ink envelope, plus `LEAD`. */
+export const stackGap = (a: number, b: number) => (GLYPH_WEIGHT * (a + b)) / 2 + LEAD;
+
+/** The height of a full-size caption-over-value stack in a panel. */
+export const stackH = (pt: PanelType) =>
+  pt.t('label') + stackGap(pt.t('label'), pt.t('body')) + pt.t('body');
+
+/**
+ * A CAPTION OVER A NUMBER — the one idiom every narrow surface in this stadium
+ * is built from: the side columns' rows, the batter card's bottom band, the
+ * pitcher panel, the celebration's payout.
+ *
+ * ⚠ IT IS ONE FUNCTION BECAUSE THE ALTERNATIVE IS FOUR COPIES OF THE SAME THREE
+ * LINES that drift apart the first time the leading changes. Charter rule 3
+ * ("one implementation per concept") is usually quoted at integrators and
+ * parks; it applies to a label and a number just as hard.
+ *
+ * Returns the ops and the height consumed, so a caller can stack them.
+ */
+export function stack(o: {
+  label: string;
+  value: string;
+  x: number;
+  y: number;
+  /** Width budget, fraction of surface width. */
+  w: number;
+  align: BoardAlign;
+  pt: PanelType;
+  color?: string;
+  /** Caption colour. Overridden only where the caption sits on a lit ground —
+   * `DIM` blue on the chain badge's red was measured unreadable in a render. */
+  labelColor?: string;
+}): { ops: BoardOp[]; h: number } {
+  const cap = fitRun(o.label, o.w, 'label', o.pt);
+  const val = fitRun(o.value, o.w, 'body', o.pt);
+  const gap = stackGap(cap.size, val.size);
+  const ops: BoardOp[] = [
+    {
+      kind: 'text',
+      text: cap.text,
+      x: o.x,
+      y: o.y,
+      size: cap.size,
+      align: o.align,
+      color: o.labelColor ?? DIM,
+    },
+    {
+      kind: 'text',
+      text: val.text,
+      x: o.x,
+      y: o.y + cap.size + gap,
+      size: val.size,
+      align: o.align,
+      color: o.color ?? WHITE,
+    },
+  ];
+  return { ops, h: cap.size + gap + val.size };
+}
+
 /** Background: flat ink plus horizontal scanlines, so it reads as an LED panel. */
-export function backdrop(bg: string): BoardOp[] {
+export function backdrop(bg: string, rows = 32): BoardOp[] {
   const ops: BoardOp[] = [{ kind: 'panel', x: 0, y: 0, w: 1, h: 1, color: bg }];
-  const rows = 32;
   for (let i = 0; i < rows; i++) {
     ops.push({ kind: 'panel', x: 0, y: (i + 0.55) / rows, w: 1, h: 0.45 / rows, color: SCAN });
   }

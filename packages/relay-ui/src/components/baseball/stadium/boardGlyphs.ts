@@ -35,9 +35,19 @@
 //     cap height does not, because the hinting that helps it at 12 px is
 //     resolved on the TEXTURE and then minified away.
 //
+// ⚠ WHAT THE HASHES ABOVE ARE AND ARE NOT. They are 64-bit digests printed as
+// sixteen hex characters, and they came from a ONE-OFF MEASUREMENT: the canvas
+// call log was dumped, replayed against a real 2D context in that Chromium and
+// the resulting PNG hashed, three launches. **That replay is not committed and
+// is therefore not a standing guard** — nothing in `scripts/` re-runs it, so it
+// cannot regress and must not be cited as though it could. An earlier draft of
+// this header called them "the same SHA-256", which they are not. What IS a
+// standing guard is the source scan in `scoreboard.test.ts` (no `fillText`, no
+// `.font =`) and `glyphTableHash()` below.
+//
 // ⚠ THE COST, STATED HONESTLY: this is a display face, not a text face. It is
 // upper-case only (input is upper-cased), monospaced, and covers A–Z, 0–9 and
-// twelve marks. Anything outside that renders as `FALLBACK` — a hollow box —
+// nineteen marks. Anything outside that renders as `FALLBACK` — a hollow box —
 // which is deliberately conspicuous rather than silently blank, because a
 // missing glyph on a scoreboard should look like a missing glyph.
 //
@@ -158,6 +168,21 @@ const GLYPH_SRC: Record<string, string> = {
   '/': '.85,0 .15,1',
   '°': '.35,.06 .6,.06 .7,.16 .7,.3 .6,.4 .35,.4 .25,.3 .25,.16 .35,.06',
   '×': '.18,.32 .82,.86|.82,.32 .18,.86',
+  // ⚠ THE SECOND BATCH, AND EVERY ONE OF THEM IS A REAL STRING THE BOARD NOW
+  // BUILDS. A card name is allowed an apostrophe — `O'BRIEN` drew the fallback
+  // box on the biggest surface in the park — the pitcher panel prints `#31`, the
+  // strip prints `(3)` for an inning in progress and the derby prints a `%`
+  // contact rate. `…` is the TRUNCATION MARK `fitRun` appends, so it is not
+  // decoration: without it a name that will not fit is cut with no signal that
+  // anything was removed. Comma is here because a four-digit score is the one
+  // number a player reads at a glance.
+  "'": '.5,.02 .42,.26',
+  ',': '.55,.86 .4,1',
+  '(': '.68,0 .35,.3 .35,.7 .68,1',
+  ')': '.32,0 .65,.3 .65,.7 .32,1',
+  '%': '.15,.02 .3,.02 .3,.22 .15,.22 .15,.02|.85,0 .15,1|.7,.78 .85,.78 .85,.98 .7,.98 .7,.78',
+  '#': '.3,.1 .2,.9|.7,.1 .6,.9|.12,.35 .82,.35|.08,.65 .78,.65',
+  '…': '.08,.99 .2,.99|.44,.99 .56,.99|.8,.99 .92,.99',
 };
 
 /** The conspicuous "no such glyph" box. Never blank — see the header. */
@@ -214,6 +239,45 @@ export function validateGlyphs(): string[] {
   return bad;
 }
 
+/**
+ * The mark `fitRun` appends when it has to cut a run short. Exported so the
+ * layout does not re-type it and so the coverage test can prove it has a glyph.
+ */
+export const TRUNCATION_MARK = '…';
+
+/**
+ * A digest of the PARSED glyph table.
+ *
+ * ⚠ THIS IS THE ASSERTION `validateGlyphs()` CANNOT MAKE, and it exists because
+ * a mutation proved the gap: swapping `E`'s and `F`'s polyline sources renders
+ * every E as an F and every F as an E, and the whole suite stayed green.
+ * `validateGlyphs` checks STRUCTURE — points in the cell, at least two per
+ * polyline — which a swap preserves exactly. Per-glyph point counts would not
+ * help either: E and F would still differ, but swapping two coordinates inside
+ * one glyph, or two glyphs with the same shape budget, would not.
+ *
+ * FNV-1a over the parsed numbers, so it hashes the PICTURE and not the source
+ * text: re-typing `.50` as `.5`, reordering whitespace or reflowing the table
+ * leaves it unchanged, while any coordinate, any polyline split and any
+ * character-to-shape assignment moves it. Object key order is Object.entries'
+ * insertion order, so the table's ORDER is part of the digest too — which is
+ * what makes a swap visible even when the two shapes are both still present.
+ */
+export function glyphTableHash(): string {
+  let h = 0x811c9dc5;
+  const feed = (s: string) => {
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+  };
+  for (const [ch, glyph] of Object.entries(GLYPHS)) {
+    feed(`${ch}:${glyph.map((line) => line.join(',')).join('|')};`);
+  }
+  feed(`FALLBACK:${FALLBACK_GLYPH.map((line) => line.join(',')).join('|')}`);
+  return h.toString(16).padStart(8, '0');
+}
+
 /** Advance from one cell origin to the next, px, for a given cap height. */
 export function boardAdvancePx(sizePx: number): number {
   return sizePx * (GLYPH_W + GLYPH_TRACK);
@@ -256,6 +320,15 @@ export function strokeBoardText(
 
   g.strokeStyle = color;
   g.lineWidth = Math.max(1, sizePx * weight);
+  // ⚠ `round`/`round` IS THE INK MODEL, NOT A LOOK. The overlap check in
+  // `scoreboard.test.ts` inflates every text box by half a `lineWidth` on all
+  // four sides, and that inflation is EXACTLY the envelope a round cap and a
+  // round join sweep. Under `miter` the apex of an `A`, `V`, `W` or `M` spikes
+  // out to `lineWidth / (2·sin(θ/2))` — for the `V`'s ~53° apex that is 2.2×
+  // the inflation — so the overlap check would silently stop describing the
+  // ink while still passing. Changing either of these two lines used to pass
+  // all 34 tests, because the recording stub did not write them down; it does
+  // now, and the emitter test asserts both.
   g.lineCap = 'round';
   g.lineJoin = 'round';
 
