@@ -17,6 +17,17 @@
 // "when the ball is hit the camera should follow it a bit", and "it's odd that I
 // can't see the ball if it's hit to left or right field".
 //
+// ⚠ IT IS NOT A SMALL MOVE, AND CALLING IT ONE WAS WRONG. This work has been
+// described as a "yaw-only pull-back" and as "aiming at the ball", both of which
+// read as a stationary camera turning its head. It is not. `batter` → `flight`
+// TRANSLATES the camera 148.2 ft — [0, 3.2, 8] to [−40, 120, 90] — while the fov
+// goes 40° → 55° and the near plane 1 → 4 ft, all inside `CAMERA_EASE_S` = 0.8 s;
+// see that constant for what that is in ft/s. And the FOLLOW alone is not a yaw
+// either: aiming at the −40° ball swings the axis 23.5° in BEARING and 2.4° in
+// ELEVATION. Nothing about the behaviour is wrong — the description was, and an
+// understated one is how a future reader decides this is safe to touch without
+// ever looking at it in motion.
+//
 // ⚠ TIME COMES FROM `lib/scene3d/clock.ts`, NEVER FROM `performance.now()`.
 // Nothing in this file reads a clock at all — `update()` takes `dtS` — which is
 // the shape that lets the screenshot harness freeze the world. `dtS === 0` must
@@ -113,11 +124,18 @@ export const CAMERAS: Record<CameraMode, CameraSpec> = {
   // of view at 900×1600 portrait is 2·atan(tan(27.5°)·0.5625) = 32.6°, i.e.
   // ±16.3° about a fixed axis — so a ball pulled to either corner (±45° of
   // spray) left the frame and was never seen again. Measured before the fix, at
-  // 105 mph / 26.5° / 2.6 s: at −40° of spray the ball is off the left edge with
-  // a sliver of tracer showing; at +40° the ball AND the whole arc are absent
-  // from the picture entirely. Widening the FOV cannot fix that (it needs 90°+,
-  // which throws the ball away to a handful of pixels); aiming at the ball can,
-  // and costs nothing.
+  // 105 mph / 26.5° / 2.6 s: at −40° of spray the ball projects to u = −0.241,
+  // 217 px off the left edge with a sliver of tracer showing; at +40° to
+  // u = +1.716, 645 px past the right edge, with the ball AND the whole arc
+  // absent from the picture entirely. (⚠ An earlier version of this note quoted
+  // −0.083 / +1.098, a pair symmetric about u ≈ 0.5075 — which only a camera at
+  // x = 0 can produce, and this one stands at x = −40. The asymmetry is exactly
+  // why the oppo corner is ~3× worse than the pull corner. See the SCENES table
+  // in `scripts/shoot-baseball.mjs` for the full correction.) Widening the FOV
+  // cannot fix that — it needs 90°+, which throws the ball away to a handful of
+  // pixels — whereas aiming at the ball can, at no cost in angular resolution.
+  // It is NOT free in motion, though: see `CAMERA_EASE_S` for the size of the
+  // move this mode is the destination of.
   flight: { pos: [-40, 120, 90], look: [-40, 60, -380], fov: 55, near: 4, follow: true },
   // The whole park. High enough to clear the back of the bowl behind home
   // (deck top 130 ft at r ≈ 160 ft), which the first framing did not and so
@@ -137,6 +155,21 @@ export const CAMERAS: Record<CameraMode, CameraSpec> = {
  * the bat meets the ball. That hold is the design intent — "hold the batter
  * camera through contact" — expressed by the curve rather than by a second
  * timer, so there is one piece of state and not two.
+ *
+ * ⚠ AND WHAT IT IS EASING IS BIG. `batter` → `flight` interpolates POSITION over
+ * 148.2 ft (|[−40, 120, 90] − [0, 3.2, 8]|), plus fov 40° → 55°, near 1 → 4 ft,
+ * and a look point slewing onto a moving ball. Over 0.8 s that averages
+ * 185 ft/s, and a quintic's peak rate is 30u²(1−u)² at u = ½ = **1.875×** its
+ * mean — so mid-move the camera is travelling ~347 ft/s. That is the honest size
+ * of the move, and it is recorded here because the same curve that gives the
+ * 190 ms hold at the START is what concentrates the speed in the MIDDLE.
+ *
+ * ⚠ THE VISUAL GATE CANNOT ADJUDICATE THIS. `follow-ease` photographs exactly
+ * one frame of it (smootherstep(0.5) = 0.5, the half-way pose, which is also
+ * where the rate peaks) and a still frame says nothing about whether a swoop of
+ * this size reads as broadcast or as motion sickness. Only real-time capture or
+ * on-device play can. See BASEBALL.md § "M2e" for the on-device watch list —
+ * the near plane sweeping 1 → 4 ft through the same 0.8 s is on it.
  */
 export const CAMERA_EASE_S = 0.8;
 
@@ -150,6 +183,17 @@ export const CAMERA_EASE_S = 0.8;
  * camera stands off a corner), shrinking as the ball slows through its arc, so
  * the ball drifts back toward centre as it hangs. Zero would be a rigid chase
  * and would look like the ball was nailed to the middle of the screen.
+ *
+ * ⚠ THAT PARAGRAPH IS AN INTENT, NOT A VERIFIED RESULT, AND THE VISUAL GATE
+ * STRUCTURALLY CANNOT VERIFY IT. Every captured frame puts the ball at exactly
+ * (0.500, 0.500) — `follow-pull` and `follow-oppo` both print it — because `?t=`
+ * / `?bt=` FREEZE the ball, and a stationary target is the converged case of
+ * `1 − e^(−dt/τ)`: `aimFor` copies it on first sight and then damps toward a
+ * point that never moves. So what the gate photographs is precisely the RIGID
+ * CHASE this comment says the constant avoids, and the 30 ft of lead is
+ * unphotographed. The arithmetic above is sound; whether it reads as speed is a
+ * claim only a real-time capture or on-device play can settle. Recorded in
+ * BASEBALL.md § "M2e" as a known limit rather than left reading as measured.
  *
  * ⚠ AN EXPONENTIAL, NOT A PER-FRAME CONSTANT `lerp(0.1)`, BECAUSE THE STEP SIZE
  * MUST NOT CHANGE THE ANSWER. `1 − e^(−dt/τ)` applied over steps summing to `T`
