@@ -189,13 +189,179 @@ describe('useGameFlow', () => {
     expect(log).toEqual([{ action: 'PUSH', pathname: '/games', state: { game: 'free' } }]);
 
     act(() => back());
-    // Free play does NOT escalate — one back is enough.
+    // UNGUARDED free play does NOT escalate — one back is enough. This is the
+    // range-practice / single-hole case: nothing to bank, so a confirm step
+    // would be pure friction.
     expect(screen.getByTestId('screen').textContent).toBe('menu');
+    expect(screen.getByTestId('paused').textContent).toBe('false');
     expect(log.map((e) => e.action)).toEqual(['PUSH', 'POP']);
     expect(depth()).toBe(0);
+    // No abandoned flag either: an unguarded session has no partial run to
+    // re-read, so the menu must not pay for an extra stats pass.
+    expect(screen.getByTestId('statsKey').textContent).toBe('0');
 
     act(() => back());
     expect(screen.getByTestId('outside')).toBeDefined();
+  });
+
+  // Both entry points are used DIRECTLY as click handlers (FogScreen does
+  // `onClick={startFree}`), so React calls them with the click event. This is
+  // why guarding is chosen by FUNCTION NAME and not by an argument: an
+  // options-object parameter would read `guardProgress` off a MouseEvent, get
+  // undefined, and silently produce an unguarded round — a protection that
+  // looks present and isn't, which is the very bug class the guard exists to
+  // kill. Zero-parameter functions cannot be mis-called that way.
+  it.each([
+    ['startFree', false],
+    ['startFreeGuarded', true],
+  ] as const)('%s ignores an argument, so it is safe as a bare onClick handler', (name, guarded) => {
+    mount();
+    const fakeClickEvent = { type: 'click', preventDefault() {}, nativeEvent: {} };
+    // Exactly what `onClick={flow[name]}` does at runtime.
+    act(() => (flow[name] as (e: unknown) => void)(fakeClickEvent));
+    act(() => back());
+
+    // Guardedness came from the name, so passing an event changed nothing.
+    expect(screen.getByTestId('paused').textContent).toBe(String(guarded));
+    expect(screen.getByTestId('screen').textContent).toBe(guarded ? 'free' : 'menu');
+  });
+
+  // A GUARDED free session — golf Course mode, baseball Derby/Duel: the screen
+  // is the same `free`, but there is a multi-hole round in flight, so a single
+  // back press must not be able to destroy it. The contract is that guarded
+  // free is byte-for-byte the guess escalation, so these mirror the guess tests
+  // above deliberately.
+  describe('guarded free (startFreeGuarded())', () => {
+    it('pushes the SAME `free` marker, so nothing else in the flow changes', () => {
+      mount();
+      act(() => flow.startFreeGuarded());
+
+      expect(screen.getByTestId('screen').textContent).toBe('free');
+      // Same key, same value: guarding is a property of the SESSION, not of
+      // the history entry. A new marker key would have to be taught to
+      // consumeHistoryEntry, the stale-marker branch and the hub's
+      // `hubGame` collision guard.
+      expect(log).toEqual([{ action: 'PUSH', pathname: '/games', state: { game: 'free' } }]);
+      expect(depth()).toBe(1);
+    });
+
+    it('back while playing pauses and re-arms, leaving history depth unchanged', () => {
+      mount();
+      act(() => flow.startFreeGuarded());
+      log = [];
+
+      act(() => back());
+
+      // The bug this exists for: pre-guard, this press went straight to the
+      // menu and the round was gone.
+      expect(screen.getByTestId('screen').textContent).toBe('free');
+      expect(screen.getByTestId('paused').textContent).toBe('true');
+      expect(log.map((e) => e.action)).toEqual(['POP', 'PUSH']);
+      expect(depth()).toBe(0); // net zero => still [A, F]
+      expect(log.at(-1)).toEqual({ action: 'PUSH', pathname: '/games', state: { game: 'free' } });
+    });
+
+    it('does not loop after re-arming: free + free-marker is the steady state', () => {
+      mount();
+      act(() => flow.startFreeGuarded());
+      log = [];
+      act(() => back());
+      const settled = log.length;
+      const settledRenders = renders;
+
+      // The re-push flips the marker back to the one matching the screen, so
+      // the follow-up run hits no branch. If it did, the paused arm would fire
+      // and the player would be thrown to the menu by their own pause press.
+      act(() => {});
+      act(() => {});
+      expect(log.length).toBe(settled);
+      expect(renders - settledRenders).toBeLessThan(3);
+      expect(screen.getByTestId('screen').textContent).toBe('free');
+      expect(screen.getByTestId('paused').textContent).toBe('true');
+    });
+
+    it('back while paused leaves to the menu, banks the partial run, and frees the tab', () => {
+      mount();
+      act(() => flow.startFreeGuarded());
+      act(() => back()); // pause
+      expect(screen.getByTestId('paused').textContent).toBe('true');
+      log = [];
+
+      act(() => back()); // escalate: leave
+
+      // The pop STANDS — no compensating push.
+      expect(log.map((e) => e.action)).toEqual(['POP']);
+      expect(screen.getByTestId('screen').textContent).toBe('menu');
+      expect(screen.getByTestId('paused').textContent).toBe('false');
+      // The abandoned marker is set the same way the guess branch sets it, so
+      // the menu re-reads local stats after the child's unmount safety net has
+      // written the partial round.
+      expect(screen.getByTestId('statsKey').textContent).toBe('1');
+
+      // History is back at the plain /games entry: a guarded round can no more
+      // trap the user in the tab than a guess game can.
+      act(() => back());
+      expect(screen.getByTestId('outside')).toBeDefined();
+    });
+
+    it('survives play → back → resume → back → back without growing the stack', () => {
+      // The header comment's ledger, replayed for the free screen:
+      mount();
+
+      act(() => flow.startFreeGuarded()); // [A, F] playing
+      act(() => back()); //                                  [A, F] paused
+      const beforeResume = log.length;
+      act(() => flow.setPaused(false)); //                    [A, F] resume: no history
+      expect(log.length).toBe(beforeResume); //               ...guard still armed
+      expect(depth()).toBe(1);
+      act(() => back()); //                                  [A, F] paused again
+      expect(screen.getByTestId('screen').textContent).toBe('free');
+      expect(screen.getByTestId('paused').textContent).toBe('true');
+      act(() => back()); //                                  [A]    menu
+
+      expect(screen.getByTestId('screen').textContent).toBe('menu');
+      expect(depth()).toBe(0); // back at the plain /games entry, five presses on
+      act(() => back()); //                                  leaves /games
+      expect(screen.getByTestId('outside')).toBeDefined();
+    });
+
+    it('does not arm the guard for the NEXT free session', () => {
+      // The staleness hazard of a ref-held flag, pinned: finish a guarded
+      // round, then start an unguarded one (course round → range practice) and
+      // the confirm step must be gone.
+      mount();
+      act(() => flow.startFreeGuarded());
+      act(() => back()); // pause
+      act(() => back()); // leave
+      expect(screen.getByTestId('screen').textContent).toBe('menu');
+      log = [];
+
+      act(() => flow.startFree()); // in by the plain door this time
+      act(() => back());
+
+      expect(screen.getByTestId('screen').textContent).toBe('menu');
+      expect(screen.getByTestId('paused').textContent).toBe('false');
+      expect(log.map((e) => e.action)).toEqual(['PUSH', 'POP']);
+      expect(depth()).toBe(0);
+    });
+
+    it('is still left cleanly by the UI exit path', () => {
+      // Guarding changes the back gesture only; the buttons still consume the
+      // marker without pausing on the way out.
+      mount();
+      act(() => flow.startFreeGuarded());
+      log = [];
+
+      act(() => {
+        flow.setScreen('results');
+        flow.consumeHistoryEntry('free');
+      });
+
+      expect(screen.getByTestId('screen').textContent).toBe('results');
+      expect(screen.getByTestId('paused').textContent).toBe('false');
+      expect(log.map((e) => e.action)).toEqual(['POP']);
+      expect(depth()).toBe(-1);
+    });
   });
 
   it('clears a stale marker in place and settles instead of looping', () => {
@@ -222,12 +388,20 @@ describe('useGameFlow', () => {
     expect(screen.getByTestId('outside')).toBeDefined();
   });
 
-  it('clears a stale legacy `fog` marker too', () => {
-    // The `fog` fallback is documented as believed-unreachable but kept; pin
-    // the read so retiring it is a deliberate act rather than an accident.
+  it('ignores the retired legacy `fog` key entirely', () => {
+    // `fog` was the pre-hub marker key, read as a fallback long after it
+    // stopped being written and documented as believed-unreachable. It is now
+    // retired, so a `fog` entry is just unrecognised state: NOT a marker, and
+    // therefore nothing to clear. Pinned so the key cannot creep back in.
     mount({ pathname: '/games', state: { fog: 'guess' } });
     expect(screen.getByTestId('screen').textContent).toBe('menu');
-    expect(log.at(-1)).toEqual({ action: 'REPLACE', pathname: '/games', state: null });
+    expect(log).toEqual([]); // no REPLACE — the hook does not recognise it
+    expect(depth()).toBe(0);
+
+    // And it is left alone rather than wiped, which is what the hub's own
+    // `hubGame` entry relies on (see routes/GamesDeepLink.test.tsx).
+    act(() => back());
+    expect(screen.getByTestId('outside')).toBeDefined();
   });
 
   it('consumeHistoryEntry() pops the marker when it is present', () => {
