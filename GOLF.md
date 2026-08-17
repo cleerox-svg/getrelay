@@ -45,6 +45,21 @@ Immersive play (`setImmersive`) hides the app chrome for the full-bleed 3D
 scenes; background music switches between a menu track and a ducked round pad
 (`lib/audio`), and every HUD carries a `MuteButton`.
 
+**Leaving a round: which sessions are GUARDED.** `useGameFlow` has two doors onto
+the free screen and the choice is a safety decision, not a style one.
+`startFreeGuarded()` buys the two-press escalation — press 1 freezes the round and
+raises `CoursePauseSheet`, press 2 banks the carded holes and leaves — and
+`startFree()` leaves in one press. Guarded: a **full Course round** and the
+**3-hole tournament**, the only free-screen sessions that card holes, i.e. where a
+single back press could destroy holes the player actually played. Unguarded, and
+deliberately so: the **daily** and **single-hole** Course play (one hole never
+cards, so there is nothing to bank and the entry is only spent by holing out) and
+**range practice** (unscored). Getting this wrong is a bug either way — an
+un-guarded round loses holes, and a guarded session whose owner does not forward
+`paused` freezes with no sheet and no way to resume — so `GolfScreen.test.tsx`
+pins it by BACK-PRESS COUNT and `GolfScreen.pause.test.tsx` walks the whole loop
+against the real `CourseGame` and the real sheet.
+
 **Friend challenges.** `NewChallengeSheet` (course / length / hole + create and
 send) drops a `relay://challenge/<id>` message on the normal composer send path;
 `ChallengeCard` renders that message in the chat rail as a live card and runs
@@ -293,6 +308,20 @@ second request, and releases the claim on failure. The per-mount `submittingRef`
 identity guards in both components are NOT sufficient on their own — a record
 read back off localStorage is a different object.
 
+⚠ **And the record is TAGGED with the challenge it was played on** — the daily's /
+event's `seed`, which the server derives from the period, so it is that period's
+identity. Persistence created a hazard losing the score did not have: a record can
+outlive its challenge (offline through the midnight rollover), and both endpoints
+take only `{strokes,toPar}` and file against whatever is CURRENT. Yesterday's hole
+would be posted as today's attempt, polluting a day the player never played, which
+is worse than the score being absent. So `GolfDaily`/`GolfTournaments` submit only
+on a tag match — never before the fetch answers, since a server that can't be
+reached can't take the POST either — and `dropStalePending`, called from the two
+chip effects that already learn today's seed, DELETES a mismatched record. Skipping
+without deleting is not enough: a dead record would hijack the hub's opening tab
+forever. An untagged record (only reachable from the build before this) is rejected
+by `readPending` rather than guessed at.
+
 Best-shot metrics are computed by a single `CourseSim.recordShot()` off `stop()`
 (shared by live fire, `simulateShot` and `simulatePutt`): longest drive = the
 first full swing's total (an OB/water opener doesn't lock it — the replay does);
@@ -375,7 +404,8 @@ Every path below resolves on disk. Root for UI paths is
 | Area | Path |
 |---|---|
 | Hub shell: Play / Arena / Clubhouse tabs, flow wiring, immersive + music, the `CourseIntent` union | `src/components/golf/GolfScreen.tsx` |
-| Persisted, submit-once pending Daily / Tournament result (`readPending` / `writePending` / `clearPending` / `submitPendingResult`) | `src/lib/golf/pendingResult.ts` |
+| Persisted, submit-once, challenge-TAGGED pending Daily / Tournament result (`readPending` / `writePending` / `clearPending` / `dropStalePending` / `submitPendingResult`) | `src/lib/golf/pendingResult.ts` |
+| Results screen shared by Mini-Golf + the range Target Challenge (score, chips, board) | `src/components/golf/GolfResultScreen.tsx` |
 | Play tab: course hero, Course + Mini-Golf pickers, range expansion, challenge CTA | `src/components/golf/GolfMenu.tsx` |
 | Arena: daily hole + streak / rapid events / boards | `src/components/golf/GolfDaily.tsx`, `GolfTournaments.tsx`, `GolfLeaderboard.tsx` |
 | Clubhouse: records + rank / cosmetics shop / season track / wallet | `src/components/golf/GolfProfile.tsx`, `GolfShop.tsx`, `GolfSeason.tsx`, `GolfWallet.tsx` |
@@ -384,7 +414,7 @@ Every path below resolves on disk. Root for UI paths is
 | Economy store (wallet / cosmetics / season, fetch-once + graceful degrade) | `src/lib/golf/economy.ts` |
 | `three`-free cosmetics render seam (`GolfCosmetics`, `GolfFrame`) | `src/lib/golf/cosmetics.ts` |
 | Pure-SVG top-down hole map for the picker | `src/components/golf/HoleThumb.tsx` |
-| Shared HUD widgets (accuracy bar, club selector, power meter, spin puck, telemetry, wind chip, mute) | `src/components/golf/shared/` |
+| Shared HUD widgets (accuracy bar, club selector, power meter, spin puck, telemetry, wind chip, mute) + the boards' `MEDALS` / `fmtToPar` | `src/components/golf/shared/` |
 | Local personal bests (localStorage), last-played course ids | `src/lib/golf/stats.ts` |
 | Hub wiring + `/games/golf` deep link | `src/routes/Games.tsx` |
 | Best-shot records API client | `src/lib/api.ts` (`getGolfRecords`/`postGolfRecords`) |
@@ -501,8 +531,14 @@ Every path below resolves on disk. Root for UI paths is
   another boolean, because a boolean has to be cleared by every exit path and two
   of golf's exit paths (the back gesture, and the guarded free screen's leave arm)
   call nothing at all — so the reset belongs on the ENTRY side. Same rule for the
-  finished score: persist it via `lib/golf/pendingResult.ts` and clear it only
-  after the POST resolves. See §1.7.
+  finished score: persist it via `lib/golf/pendingResult.ts`, TAG it with the
+  challenge it was played on, and clear it only after the POST resolves. See §1.7.
+- **⚠ `startFreeGuarded()` is a package deal.** Opting a session in means
+  forwarding `paused` AND an `onResume` to the child that owns the pause sheet.
+  Guard without forwarding and the first back press freezes the round with no
+  sheet — no resume, no exit but a second press — which is worse than the
+  unprotected exit it replaced. Guard only sessions that can lose progress; §1.1
+  lists which golf sessions those are and why.
 - **⚠ CourseSnapshot rule.** Any new MUTABLE `CourseSim` field MUST be added to
   `CourseSnapshot` + `snapshot()` + `restore()`. A guard test dumps all own data
   props independently and asserts byte-identical state after `predict()`, so it

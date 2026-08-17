@@ -46,7 +46,10 @@ const GRANDFATHERED: Record<string, number> = {
   // -round-banking wiring. Banked per this file's own rule, NOT raised.
   'CourseGame.tsx': 874,
   'RangeGame.tsx': 894,
-  'GolfScreen.tsx': 796,
+  // 796 → 751: the two results screens were the SAME 77 lines twice, differing in
+  // five values, and became GolfResultScreen.tsx. That paid for the guarded-free
+  // opt-in + pause wiring and still banked 45 lines. Banked, NOT raised.
+  'GolfScreen.tsx': 751,
   'GolfMenu.tsx': 621,
   'GolfGame.tsx': 508,
 };

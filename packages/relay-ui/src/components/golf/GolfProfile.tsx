@@ -6,16 +6,11 @@ import { getCourse } from '../../lib/golf/courses';
 import { useStore } from '../../lib/store';
 import { useEconomy, useEquippedFrame } from '../../lib/golf/economy';
 import { CoinBalance } from './CoinBalance';
+import { fmtToPar } from './shared/scoreFormat';
 import type { GolfStats, TournamentMe } from '../../lib/types';
 
-// ± to-par label. Negative (under par) is good and gets the accent colour.
-function fmtToPar(n: number | null | undefined): string {
-  if (n == null) return '—';
-  if (n === 0) return 'E';
-  return n > 0 ? `+${n}` : `−${Math.abs(n)}`;
-}
-
-// Same, but for the fractional averages (handicap / scoring average).
+// Whole-stroke ± to-par is shared (shared/scoreFormat); this is the fractional
+// variant, for the averages (handicap / scoring average).
 function fmtToParDec(n: number | null | undefined): string {
   if (n == null) return '—';
   if (Math.abs(n) < 0.05) return 'E';

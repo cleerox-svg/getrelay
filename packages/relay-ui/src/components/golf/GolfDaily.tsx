@@ -5,21 +5,11 @@ import { useEconomy } from '../../lib/golf/economy';
 import { resolveFrameById } from '../../lib/golf/cosmetics';
 import { getCourse } from '../../lib/golf/courses';
 import { submitPendingResult, type PendingResult } from '../../lib/golf/pendingResult';
+import { MEDALS, fmtToPar } from './shared/scoreFormat';
 import type {
   DailyChallenge,
   DailyLeaderboardEntry,
 } from '../../lib/types';
-
-// Medal colours for the top three, self-contained so they read both inside the
-// .golf-hub layer and on the standalone results screens (mirrors GolfLeaderboard).
-const MEDALS = ['#C9A227', '#9AA0A6', '#B0763A'];
-
-// ± to-par label: 0 → "E", positive → "+n", negative → "−n" (true minus sign).
-function fmtToPar(n: number | null | undefined): string {
-  if (n == null) return '—';
-  if (n === 0) return 'E';
-  return n > 0 ? `+${n}` : `−${Math.abs(n)}`;
-}
 
 interface Props {
   // Launch the daily's Course hole. GolfScreen threads course/holeIdx/seed
@@ -115,16 +105,23 @@ export function GolfDaily({ onPlay, pendingResult, onResultConsumed }: Props) {
     [loadBoard, onResultConsumed],
   );
 
+  // A result is only submittable once we can PROVE it belongs to the challenge
+  // now live: the record is persisted, so it can outlive the day (offline), and
+  // the POST body carries no date — yesterday's hole would be filed as today's
+  // attempt. Waiting for the fetch costs nothing, since a server we can't reach
+  // can't take the POST either; GolfScreen evicts a mismatched record.
+  const current = daily && pendingResult?.tag === String(daily.seed) ? pendingResult : null;
+
   // Fire the submit exactly once per pending result object (identity-guarded so
   // a re-render doesn't re-POST). GolfScreen clears pendingResult via
   // onResultConsumed on success, so a failed submit leaves it for the Retry.
   const submittingRef = useRef<PendingResult | null>(null);
   useEffect(() => {
-    if (pendingResult && submittingRef.current !== pendingResult) {
-      submittingRef.current = pendingResult;
-      submitPending(pendingResult);
+    if (current && submittingRef.current !== current) {
+      submittingRef.current = current;
+      submitPending(current);
     }
-  }, [pendingResult, submitPending]);
+  }, [current, submitPending]);
 
   // ---- Loading / needs-connection states ----
   if (loadError) {
@@ -239,14 +236,14 @@ export function GolfDaily({ onPlay, pendingResult, onResultConsumed }: Props) {
             Saving your score…
           </div>
         ) : null}
-        {submitState === 'error' && pendingResult ? (
+        {submitState === 'error' && current ? (
           <div className="px-4 pb-2 text-[13px]" style={{ color: 'var(--ping)' }}>
             Couldn’t submit.
             <button
               type="button"
               className="ml-2 font-semibold"
               style={{ color: 'var(--golf-accent)', background: 'transparent', border: 0 }}
-              onClick={() => submitPending(pendingResult)}
+              onClick={() => submitPending(current)}
             >
               Retry
             </button>

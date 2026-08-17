@@ -22,15 +22,16 @@
 // and then asserts on what the NEXT round is handed. There is deliberately no
 // test that exits via `onExit`: that is the path that already worked.
 //
-// ⚠ AND `onExit` IS ABOUT TO STOP BEING THE ONLY EXIT TWICE OVER. `useGameFlow`
-// now offers `startFreeGuarded()`, whose LEAVE arm (the second back press, and
-// the pause sheet's "End round" once it is wired) also calls `setScreen('menu')`
-// WITHOUT the child's `onExit`. The reset therefore cannot live in an exit
-// callback at all — it lives at the top of `startGolf()`, on the ENTRY side,
-// where every launch must pass. `flow.guarded` below opts one test into the
-// guarded door so that arm is exercised with the REAL hook today, before the
-// integration flip (this file does not, and must not, change which door
-// GolfScreen opens).
+// ⚠ AND `onExit` IS NOT THE ONLY EXIT. The multi-hole sessions — a full Course
+// round and the 3-hole tournament — now enter through `startFreeGuarded()`, whose
+// LEAVE arm (the second back press) also reaches the menu WITHOUT the child's
+// `onExit`. So the reset cannot live in an exit callback at all: it lives at the
+// top of `startGolf()`, on the ENTRY side, where every launch must pass.
+//
+// WHICH SESSIONS ARE GUARDED IS ITSELF PINNED HERE (the "back-press count"
+// tests), because it is a safety property, not a preference: guarding a session
+// with nothing to bank costs a confirm tap for no reason, and NOT guarding one
+// that cards means a single back press destroys holes the player played.
 //
 // NOTE ON "WITHOUT onExit": `onExit` is a prop of the STUBBED child, and nothing
 // in this file ever invokes it. So in every test below it is not merely untested
@@ -67,23 +68,6 @@ const seen = vi.hoisted(() => ({
   },
   tourneyPending: null as unknown,
 }));
-
-// Opts a test into the guarded free-screen door WITHOUT editing GolfScreen: the
-// real useGameFlow is used, only the door GolfScreen's `startFree` opens is
-// swapped for `startFreeGuarded`. That is exactly the one-line flip the
-// integration owner will make, so the escalation (back → pause, back → leave,
-// no onExit) can be walked against the real state machine now.
-const flow = vi.hoisted(() => ({ guarded: false }));
-vi.mock('../../lib/games/useGameFlow', async (importOriginal) => {
-  const mod = await importOriginal<typeof import('../../lib/games/useGameFlow')>();
-  return {
-    ...mod,
-    useGameFlow: () => {
-      const f = mod.useGameFlow();
-      return flow.guarded ? { ...f, startFree: f.startFreeGuarded } : f;
-    },
-  };
-});
 
 // --- the api surface both GolfScreen and the REAL GolfDaily reach for --------
 const spies = vi.hoisted(() => ({
@@ -254,15 +238,40 @@ async function pick(what: 'hole 12' | 'full round') {
 }
 
 const channels = () => screen.getByTestId('channels').textContent;
+const inRound = () => screen.queryByTestId('course') != null;
+
+/**
+ * Leave the running round by back gesture ONLY — never through `onExit`.
+ * An UNGUARDED session goes in one press; a GUARDED one takes two (the first
+ * freezes it and raises the pause sheet), and the count is asserted, since which
+ * sessions are guarded is the safety property under test.
+ */
+async function leaveByBack(expect2: boolean) {
+  act(() => back());
+  await flush();
+  expect(inRound()).toBe(expect2);
+  if (expect2) {
+    act(() => back());
+    await flush();
+    expect(inRound()).toBe(false);
+  }
+}
 
 beforeEach(() => {
   localStorage.clear();
-  flow.guarded = false;
   for (const s of Object.values(spies)) s.mockReset();
   spies.getDaily.mockResolvedValue(DAILY);
   spies.getDailyLeaderboard.mockResolvedValue({ entries: [] });
-  // No live event → the Arena tab-entry steer stays on Daily.
-  spies.getTournament.mockResolvedValue({ msLeft: 0, entry: null, entrants: 0, holes: [] });
+  // No live event → the Arena tab-entry steer stays on Daily. `seed` must match
+  // what the GolfTournaments stub launches with (555): it is the event's identity,
+  // and a pending round tagged with a DIFFERENT one is evicted as stale.
+  spies.getTournament.mockResolvedValue({
+    msLeft: 0,
+    entry: null,
+    entrants: 0,
+    holes: [],
+    seed: 555,
+  });
   spies.submitGameScore.mockResolvedValue({ best: 0 });
   spies.postDailyResult.mockResolvedValue({
     today: { strokes: 4, toPar: 0, score: 100 },
@@ -292,10 +301,9 @@ describe('GolfScreen — a back gesture out of a special round cannot corrupt th
     expect(screen.getByTestId('seed').textContent).toBe('4242');
     expect(channels()).toBe('hole/-');
 
-    // Leave WITHOUT onExit. Nothing gets to clear anything.
-    act(() => back());
-    await flush();
-    expect(screen.queryByTestId('course')).toBeNull();
+    // Leave WITHOUT onExit. One press: the daily is a single hole, so it is
+    // deliberately unguarded (nothing cards, nothing to bank).
+    await leaveByBack(false);
 
     // A casual practice hole. It must be the hole that was picked, unseeded, and
     // must NOT own the daily's reporting channel.
@@ -328,8 +336,7 @@ describe('GolfScreen — a back gesture out of a special round cannot corrupt th
   it('still posts a later FULL ROUND to the golfcourse board', async () => {
     mount();
     await playDaily();
-    act(() => back());
-    await flush();
+    await leaveByBack(false);
 
     await pick('full round');
     expect(screen.getByTestId('startHole').textContent).toBe('undefined');
@@ -370,8 +377,8 @@ describe('GolfScreen — a back gesture out of a special round cannot corrupt th
     expect(screen.getByTestId('startHole').textContent).toBe('undefined');
     expect(screen.getByTestId('seed').textContent).toBe('555');
 
-    act(() => back());
-    await flush();
+    // GUARDED: three holes and a scorecard, so it takes two presses to leave.
+    await leaveByBack(true);
 
     await pick('hole 12');
     expect(screen.getByTestId('course').textContent).toBe('augusta');
@@ -399,13 +406,18 @@ describe('GolfScreen — a back gesture out of a special round cannot corrupt th
     await flush();
     expect(spies.submitGameScore).not.toHaveBeenCalled();
 
-    // Back out and return to Events: the captured round is waiting there.
-    act(() => back());
-    await flush();
+    // Back out and return to Events: the captured round is waiting there, tagged
+    // with the event it was played on.
+    await leaveByBack(true);
     click(screen.getByRole('tab', { name: /Events/ }));
     await flush();
     expect(screen.getByTestId('tourney-pending').textContent).toBe('pending');
-    expect(seen.tourneyPending).toMatchObject({ kind: 'tournament', strokes: 12, toPar: 0 });
+    expect(seen.tourneyPending).toMatchObject({
+      kind: 'tournament',
+      tag: '555',
+      strokes: 12,
+      toPar: 0,
+    });
   });
 
   // The scenario code review called out: the round FINISHES, the result is
@@ -432,8 +444,8 @@ describe('GolfScreen — a back gesture out of a special round cannot corrupt th
     );
     await flush();
 
-    act(() => back());
-    await flush();
+    // Out through the GUARDED leave arm — two presses, and no onExit at either.
+    await leaveByBack(true);
 
     // The next normal round is the player's own pick, played as a single hole.
     await pick('hole 12');
@@ -444,46 +456,17 @@ describe('GolfScreen — a back gesture out of a special round cannot corrupt th
 
     // ...and the captured event round is STILL waiting to be submitted: the reset
     // does not throw the score away.
-    act(() => back());
-    await flush();
+    await leaveByBack(false);
     click(screen.getByRole('tab', { name: /Arena/ }));
     click(screen.getByRole('tab', { name: /Events/ }));
     await flush();
     expect(seen.tourneyPending).toMatchObject({ kind: 'tournament', strokes: 11, toPar: -1 });
   });
 
-  // The second exit that does not call onExit: the guarded free screen's LEAVE
-  // arm (second back press). Once the pause sheet is wired, "End round" reaches
-  // the menu the same way. The reset must not depend on onExit AT ALL.
-  it('resets the intent when the GUARDED leave arm exits without onExit', async () => {
-    flow.guarded = true;
-    mount();
-    await playDaily();
-    expect(screen.getByTestId('seed').textContent).toBe('4242');
-
-    // First back press: the guard escalates — the round is FROZEN, not left, so
-    // the intent is still live at this point.
-    act(() => back());
-    await flush();
-    expect(screen.getByTestId('course')).toBeTruthy();
-
-    // Second back press: the leave arm. Menu, and no onExit anywhere.
-    act(() => back());
-    await flush();
-    expect(screen.queryByTestId('course')).toBeNull();
-
-    await pick('hole 12');
-    expect(screen.getByTestId('course').textContent).toBe('augusta');
-    expect(screen.getByTestId('startHole').textContent).toBe('11');
-    expect(screen.getByTestId('seed').textContent).toBe('undefined');
-    expect(channels()).toBe('-/round');
-  });
-
   it('cannot be daily AND tournament at once — the second start replaces the first', async () => {
     mount();
     await playDaily();
-    act(() => back());
-    await flush();
+    await leaveByBack(false);
 
     // Straight into an event, with the daily never "closed".
     click(screen.getByRole('tab', { name: /Arena/ }));
@@ -496,6 +479,43 @@ describe('GolfScreen — a back gesture out of a special round cannot corrupt th
     // The daily's per-hole channel is GONE: a tournament hole cannot be filed as
     // today's daily attempt.
     expect(channels()).toBe('-/round');
+  });
+});
+
+// WHICH sessions declare unsaved progress. `startFreeGuarded()` buys a two-press
+// exit (press 1 freezes the round and raises the pause sheet, press 2 banks the
+// carded holes and leaves); `startFree()` leaves in one. Getting this wrong is a
+// bug in EITHER direction, so both are pinned, by press count.
+describe('GolfScreen — only a session that can lose holes is guarded', () => {
+  it('guards a FULL Course round — one back press must not destroy it', async () => {
+    mount();
+    await pick('full round');
+    expect(screen.getByTestId('startHole').textContent).toBe('undefined');
+    // Press 1: still in the round (frozen, sheet up — see GolfScreen.pause.test).
+    await leaveByBack(true);
+  });
+
+  it('does NOT guard single-hole Course play — nothing cards, so one press exits', async () => {
+    mount();
+    await pick('hole 12');
+    expect(screen.getByTestId('startHole').textContent).toBe('11');
+    await leaveByBack(false);
+  });
+
+  it('does NOT guard the daily — one hole, no card, and the entry is not spent', async () => {
+    mount();
+    await playDaily();
+    await leaveByBack(false);
+  });
+
+  it('guards the 3-hole tournament round', async () => {
+    mount();
+    click(screen.getByRole('tab', { name: /Arena/ }));
+    await flush();
+    click(screen.getByRole('tab', { name: /Events/ }));
+    click(screen.getByText('enter event'));
+    await flush();
+    await leaveByBack(true);
   });
 });
 
@@ -522,8 +542,7 @@ describe('GolfScreen — a finished daily result survives leaving the tab', () =
     await flush();
 
     // Back out; the Daily tab is showing again, so the POST goes out — and hangs.
-    act(() => back());
-    await flush();
+    await leaveByBack(false);
     expect(spies.postDailyResult).toHaveBeenCalledTimes(1);
     expect(spies.postDailyResult).toHaveBeenCalledWith({ strokes: 4, toPar: 0 });
 
@@ -567,8 +586,7 @@ describe('GolfScreen — a finished daily result survives leaving the tab', () =
       }),
     );
     await flush();
-    act(() => back());
-    await flush();
+    await leaveByBack(false);
     expect(spies.postDailyResult).toHaveBeenCalledTimes(1);
     // The failure is SHOWN, not swallowed, and the record is still pending.
     expect(screen.getByText(/Couldn’t submit/)).toBeTruthy();
@@ -585,5 +603,59 @@ describe('GolfScreen — a finished daily result survives leaving the tab', () =
     mount();
     await flush();
     expect(spies.postDailyResult).toHaveBeenCalledTimes(2);
+  });
+
+  // ⚠ THE HAZARD PERSISTENCE INTRODUCED, which losing the result did not have: a
+  // record can now outlive the CHALLENGE it was played on. The endpoints take
+  // only {strokes,toPar} and file against whatever is current, so a score played
+  // yesterday and stranded offline would land on TODAY's board — polluting a day
+  // the player never played, which is worse than the score being absent.
+  it('never submits a result played on an EARLIER challenge, and evicts it', async () => {
+    spies.postDailyResult.mockRejectedValue(new Error('offline'));
+
+    mount();
+    await playDaily();
+    act(() =>
+      seen.course?.onHoleComplete?.({
+        courseId: 'augusta',
+        hole: 7,
+        strokes: 2,
+        par: 4,
+        toPar: -2,
+      }),
+    );
+    await flush();
+    // Stranded: the POST fails, so the record stays pending.
+    await leaveByBack(false);
+    expect(spies.postDailyResult).toHaveBeenCalledTimes(1);
+
+    // Midnight passes. A NEW challenge is live, with a different seed.
+    spies.postDailyResult.mockClear();
+    spies.getDaily.mockResolvedValue({ ...DAILY, date: '2026-08-18', hole: 3, seed: 777 });
+
+    cleanup();
+    mount();
+    // The record is still in the slot at mount, so the hub still opens on its
+    // tab; the eviction happens when the fetch reveals the new seed.
+    expect(screen.queryByText('pick hole 12')).toBeNull();
+    await flush();
+    // That −2 is NOT filed against the new day...
+    expect(spies.postDailyResult).not.toHaveBeenCalled();
+
+    // ...and it is GONE rather than merely skipped. Observable without reaching
+    // into storage: a pending record steers the OPENING tab to Arena, so once it
+    // is evicted the hub opens on Play again. (Skipping without evicting leaves a
+    // dead record that hijacks the opening tab forever.)
+    cleanup();
+    mount();
+    expect(screen.getByText('pick hole 12')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Play today/ })).toBeNull();
+    await flush();
+    expect(spies.postDailyResult).not.toHaveBeenCalled();
+    // The new day's hole is still playable, and plays as a daily.
+    await playDaily();
+    expect(screen.getByTestId('startHole').textContent).toBe('2');
+    expect(screen.getByTestId('seed').textContent).toBe('777');
+    expect(channels()).toBe('hole/-');
   });
 });

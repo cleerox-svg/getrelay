@@ -4,6 +4,7 @@ import type { GolfGameResult } from './GolfGame';
 import { GolfDaily } from './GolfDaily';
 import { GolfTournaments } from './GolfTournaments';
 import { GolfLeaderboard } from './GolfLeaderboard';
+import { GolfResultScreen } from './GolfResultScreen';
 import { GolfMenu } from './GolfMenu';
 import type { GolfSubMode } from './GolfMenu';
 import { GolfProfile } from './GolfProfile';
@@ -22,7 +23,7 @@ import { getCourse } from '../../lib/golf/courses';
 import type { GolfCourse } from '../../lib/golf/courses';
 import { getPuttCourse } from '../../lib/golf/puttCourses';
 import { recordGolfGame, recordRangeGame, setLastPuttCourseId } from '../../lib/golf/stats';
-import { readPending, writePending } from '../../lib/golf/pendingResult';
+import { dropStalePending, readPending, writePending } from '../../lib/golf/pendingResult';
 import { HOLES as GOLF_HOLES, RANGE_BALLS } from '../../lib/golf/tuning';
 import { useStore } from '../../lib/store';
 import { useGameFlow } from '../../lib/games/useGameFlow';
@@ -49,8 +50,18 @@ type CourseIntent =
 type CoursePlan = Omit<ComponentProps<typeof CourseGame>, 'cosmetics' | 'onExit'>;
 
 export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
-  const { screen, setScreen, paused, setPaused, startGame, startFree, consumeHistoryEntry } =
-    useGameFlow();
+  // startFree vs startFreeGuarded is a per-SESSION safety decision, not a style
+  // one — see the launch sites below and useGameFlow's own header.
+  const {
+    screen,
+    setScreen,
+    paused,
+    setPaused,
+    startGame,
+    startFree,
+    startFreeGuarded,
+    consumeHistoryEntry,
+  } = useGameFlow();
   // Golf has two flows behind one chiclet: Phase-1 putting and the Phase-2
   // driving range (open practice + scored Target Challenge). golfMode picks
   // which the shared guess/free/results choreography renders; it's only
@@ -219,12 +230,19 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
   // Lightweight streak read for the Arena tab's 🔥 chip so a returning player
   // sees their run before opening the tab. Best-effort (unauthed / offline just
   // leaves it null → no chip); re-read after a daily round is submitted.
+  //
+  // It is also the one place that learns TODAY's seed without opening the tab, so
+  // it evicts a pending score played on an earlier challenge (offline through the
+  // rollover). Left alone, that record could never be filed correctly — the POST
+  // body carries no date — and would steer the opening tab to Arena forever.
   useEffect(() => {
     let cancelled = false;
     api
       .getDaily()
       .then((d) => {
-        if (!cancelled) setDailyStreak(d.streak.current);
+        if (cancelled) return;
+        setDailyStreak(d.streak.current);
+        if (dropStalePending('daily', d.seed)) setDailyPending(null);
       })
       .catch(() => undefined);
     return () => {
@@ -235,12 +253,15 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
   // Lightweight tournament read for the tab's 🏆 chip: highlight when there's a
   // live event the player hasn't entered yet (msLeft>0 && no entry). Best-effort
   // (unauthed / offline just leaves it false → no chip); re-read after a round.
+  // Evicts a round played on a CLOSED event for the same reason (see above).
   useEffect(() => {
     let cancelled = false;
     api
       .getTournament()
       .then((t) => {
-        if (!cancelled) setTourneyOpen(t.msLeft > 0 && t.entry == null);
+        if (cancelled) return;
+        setTourneyOpen(t.msLeft > 0 && t.entry == null);
+        if (dropStalePending('tournament', t.seed)) setTourneyPending(null);
       })
       .catch(() => undefined);
     return () => {
@@ -258,18 +279,27 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
   // Launch the daily's seeded Course hole (holeIdx is 0-based) through the Course
   // free screen. The intent carries the daily's own course/hole/seed, so it never
   // touches the player's Course-mode selection.
+  //
+  // ⚠ UNGUARDED, deliberately — do not "fix" this to startFreeGuarded(). One
+  // hole never cards (CourseGame only cards in round mode), so there is nothing
+  // for the pause sheet's "End round" to bank and nothing a back press destroys:
+  // abandoning costs a replay, and the entry is only spent by holing out. A
+  // confirm step would be pure friction on the shortest round in the game.
   function startDaily(courseId: string, holeIdx: number, seed: number) {
     setIntent({ kind: 'daily', courseId, holeIdx, seed });
     setGolfMode('course');
     startFree();
   }
 
-  // The seeded 3-hole tournament round, the same way. `course` is SYNTHESIZED (in
-  // GolfTournaments); with NO startHole it runs as a full round + scorecard.
+  // The seeded 3-hole tournament round. `course` is SYNTHESIZED (in
+  // GolfTournaments); with NO startHole it runs as a full round + scorecard —
+  // multi-hole progress, so it enters GUARDED: the first back press freezes the
+  // round and raises the pause sheet, the second banks the carded holes and
+  // leaves. One press at hole 3 of 3 must not be able to destroy the entry.
   function startTournament(course: GolfCourse, seed: number) {
     setIntent({ kind: 'tournament', course, seed });
     setGolfMode('course');
-    startFree();
+    startFreeGuarded();
   }
 
   // A finished normal round → the golfcourse board (server derives score from
@@ -293,18 +323,23 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
   // normal round losing its onRoundComplete).
   function coursePlan(): CoursePlan {
     switch (intent.kind) {
+      // The seed is passed twice for two different reasons: to CourseGame it
+      // replays the conditions, and to writePending it TAGS the score with the
+      // challenge it was played on, so a record that outlives the day can never
+      // be filed against a later one.
       case 'daily':
         return {
           course: getCourse(intent.courseId),
           startHole: intent.holeIdx,
           seed: intent.seed,
-          onHoleComplete: (r) => setDailyPending(writePending('daily', r)),
+          onHoleComplete: (r) => setDailyPending(writePending('daily', r, intent.seed)),
         };
       case 'tournament':
         return {
           course: intent.course,
           seed: intent.seed,
-          onRoundComplete: (r) => setTourneyPending(writePending('tournament', r)),
+          onRoundComplete: (r) =>
+            setTourneyPending(writePending('tournament', r, intent.seed)),
         };
       case 'normal':
         return {
@@ -336,6 +371,9 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
     // left. THIS is what stops a stale intent corrupting the round being started.
     setIntent({ kind: 'normal' });
     setGolfMode(mode);
+    // Set below when THIS launch is a full Course round — the one free-screen
+    // session with multi-hole progress a single back press could destroy.
+    let fullRound = false;
     if (mode === 'course') {
       // arg encodes the course choice: "<courseId>" for a full round, or
       // "<courseId>#<holeIdx>" (0-based) for single-hole play.
@@ -347,6 +385,7 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
       const holeCount = getCourse(courseId || undefined).holes.length;
       const validIdx = Number.isInteger(idx) && idx >= 0 && idx < holeCount;
       setGolfHoleIdx(validIdx ? idx : undefined);
+      fullRound = !validIdx;
     } else if (mode === 'putt') {
       // Same encoding as Course mode, but over the Mini-Golf registry:
       // "<courseId>" = full round, "<courseId>#<holeIdx>" (0-based) = single hole.
@@ -360,7 +399,12 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
     } else {
       setGolfClub(arg);
     }
-    if (mode === 'range-practice' || mode === 'course') {
+    // Only the full Course round is guarded. Range practice is unscored, and
+    // single-hole Course play cards nothing — both have nothing to bank, so they
+    // keep the one-press exit the free screen has always had.
+    if (fullRound) {
+      startFreeGuarded();
+    } else if (mode === 'range-practice' || mode === 'course') {
       startFree();
     } else {
       play();
@@ -417,7 +461,20 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
   // button takes the place of the boxed back link. course / startHole / seed / the
   // reporting channel are ALL coursePlan() — spread, since CoursePlan IS that set.
   if (screen === 'free' && golfMode === 'course') {
-    return <CourseGame cosmetics={cosmetics} {...coursePlan()} onExit={exitCourse} />;
+    return (
+      <CourseGame
+        cosmetics={cosmetics}
+        {...coursePlan()}
+        // The pause sheet. Only a GUARDED session can ever set `paused` (it is
+        // useGameFlow's escalate() that does), so on an unguarded single hole this
+        // stays false and no sheet exists — the round is never frozen with no way
+        // to resume. Resume clears the freeze; the sheet's "End round" banks the
+        // carded holes and leaves through onExit, like the header back button.
+        paused={paused}
+        onResume={() => setPaused(false)}
+        onExit={exitCourse}
+      />
+    );
   }
 
   if (screen === 'free') {
@@ -434,158 +491,56 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
     );
   }
 
+  // Both scored flows share ONE results screen (GolfResultScreen); only the
+  // numbers, the early-out wording and the chip row differ.
   if (screen === 'results' && golfMode === 'range-challenge' && golfRangeResult) {
+    const r = golfRangeResult;
     return (
-      <div className="px-4 flex flex-col gap-4">
-        <div
-          className="rounded-2xl p-5 text-center"
-          style={{ background: 'var(--card-bg)', border: '1px solid var(--separator)' }}
-        >
-          <div className="text-xs font-bold tracking-wider" style={{ color: 'var(--text-dim)' }}>
-            FINAL SCORE
-          </div>
-          <div className="text-[40px] font-bold tabular-nums fog-pop" style={{ color: 'var(--text)' }}>
-            {golfRangeResult.score.toLocaleString()}
-          </div>
-          <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
-            Best streak x{golfRangeResult.bestStreak}
-            {serverBest != null ? (
-              <span className="ml-2 font-semibold" style={{ color: 'var(--accent)' }}>
-                Best: {serverBest.toLocaleString()}
-              </span>
-            ) : null}
-          </div>
-          {golfRangeResult.roundsPlayed < RANGE_BALLS ? (
-            <div className="text-xs pt-1" style={{ color: 'var(--text-dim)' }}>
-              Ended early — {golfRangeResult.roundsPlayed}/{RANGE_BALLS} balls
-            </div>
-          ) : null}
-          {/* Per-shot chips: distance-to-pin, or Splash / Out for a miss. */}
-          <div className="flex flex-wrap justify-center gap-1.5 pt-3">
-            {golfRangeResult.perShot.map((s, i) => {
-              const miss = s.result === 'water' || s.result === 'fence';
-              const label = miss ? (s.result === 'water' ? 'Splash' : 'Out') : `${s.distToPin}yd`;
-              return (
-                <span
-                  key={i}
-                  className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-bold tabular-nums"
-                  style={{
-                    background: s.onTarget
-                      ? 'color-mix(in srgb, var(--online) 18%, transparent)'
-                      : 'color-mix(in srgb, var(--ping) 15%, transparent)',
-                    color: s.onTarget ? 'var(--online)' : 'var(--ping)',
-                  }}
-                >
-                  {s.onTarget ? '✓' : '✗'} {label}
-                </span>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="flex gap-2">
-          <button
-            type="button"
-            className="flex-1 rounded-xl py-3 text-[15px] font-bold"
-            style={{ background: 'var(--accent)', color: '#FFFFFF', border: 0 }}
-            onClick={() => startGolf('range-challenge', golfClub)}
-          >
-            Play again
-          </button>
-          <button
-            type="button"
-            className="flex-1 rounded-xl py-3 text-[15px] font-bold"
-            style={{
-              background: 'var(--card-bg)',
-              color: 'var(--text)',
-              border: '1px solid var(--separator)',
-            }}
-            onClick={() => setScreen('menu')}
-          >
-            Menu
-          </button>
-        </div>
-
-        <GolfLeaderboard refreshKey={lbKey} game="golfrange" />
-      </div>
+      <GolfResultScreen
+        score={r.score}
+        bestStreak={r.bestStreak}
+        serverBest={serverBest}
+        earlyNote={
+          r.roundsPlayed < RANGE_BALLS
+            ? `Ended early — ${r.roundsPlayed}/${RANGE_BALLS} balls`
+            : null
+        }
+        // Per-shot: distance-to-pin, or Splash / Out for a miss.
+        chips={r.perShot.map((s) => {
+          const miss = s.result === 'water' || s.result === 'fence';
+          const label = miss ? (s.result === 'water' ? 'Splash' : 'Out') : `${s.distToPin}yd`;
+          return { ok: s.onTarget, label: `${s.onTarget ? '✓' : '✗'} ${label}` };
+        })}
+        onPlayAgain={() => startGolf('range-challenge', golfClub)}
+        onMenu={() => setScreen('menu')}
+        board="golfrange"
+        refreshKey={lbKey}
+      />
     );
   }
 
   if (screen === 'results' && golfResult) {
+    const r = golfResult;
     return (
-      <div className="px-4 flex flex-col gap-4">
-        <div
-          className="rounded-2xl p-5 text-center"
-          style={{ background: 'var(--card-bg)', border: '1px solid var(--separator)' }}
-        >
-          <div className="text-xs font-bold tracking-wider" style={{ color: 'var(--text-dim)' }}>
-            FINAL SCORE
-          </div>
-          <div className="text-[40px] font-bold tabular-nums fog-pop" style={{ color: 'var(--text)' }}>
-            {golfResult.score.toLocaleString()}
-          </div>
-          <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
-            Best streak x{golfResult.bestStreak}
-            {serverBest != null ? (
-              <span className="ml-2 font-semibold" style={{ color: 'var(--accent)' }}>
-                Best: {serverBest.toLocaleString()}
-              </span>
-            ) : null}
-          </div>
-          {golfResult.roundsPlayed < GOLF_HOLES ? (
-            <div className="text-xs pt-1" style={{ color: 'var(--text-dim)' }}>
-              Ended early — {golfResult.roundsPlayed}/{GOLF_HOLES} holes
-            </div>
-          ) : null}
-          {/* Per-hole chips: strokes relative to par (E / +1 / -1). */}
-          <div className="flex flex-wrap justify-center gap-1.5 pt-3">
-            {golfResult.perHole.map((h, i) => {
-              const diff = h.strokes - h.par;
-              const label = diff === 0 ? 'E' : diff > 0 ? `+${diff}` : `${diff}`;
-              const under = diff <= 0;
-              return (
-                <span
-                  key={i}
-                  className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-bold tabular-nums"
-                  style={{
-                    background: under
-                      ? 'color-mix(in srgb, var(--online) 18%, transparent)'
-                      : 'color-mix(in srgb, var(--ping) 15%, transparent)',
-                    color: under ? 'var(--online)' : 'var(--ping)',
-                  }}
-                >
-                  H{h.hole} {label}
-                </span>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="flex gap-2">
-          <button
-            type="button"
-            className="flex-1 rounded-xl py-3 text-[15px] font-bold"
-            style={{ background: 'var(--accent)', color: '#FFFFFF', border: 0 }}
-            onClick={play}
-          >
-            Play again
-          </button>
-          <button
-            type="button"
-            className="flex-1 rounded-xl py-3 text-[15px] font-bold"
-            style={{
-              background: 'var(--card-bg)',
-              color: 'var(--text)',
-              border: '1px solid var(--separator)',
-            }}
-            onClick={() => setScreen('menu')}
-          >
-            Menu
-          </button>
-        </div>
-
-        <GolfLeaderboard refreshKey={lbKey} />
-      </div>
+      <GolfResultScreen
+        score={r.score}
+        bestStreak={r.bestStreak}
+        serverBest={serverBest}
+        earlyNote={
+          r.roundsPlayed < GOLF_HOLES
+            ? `Ended early — ${r.roundsPlayed}/${GOLF_HOLES} holes`
+            : null
+        }
+        // Per-hole: strokes relative to par (E / +1 / −1).
+        chips={r.perHole.map((h) => {
+          const diff = h.strokes - h.par;
+          const label = diff === 0 ? 'E' : diff > 0 ? `+${diff}` : `${diff}`;
+          return { ok: diff <= 0, label: `H${h.hole} ${label}` };
+        })}
+        onPlayAgain={play}
+        onMenu={() => setScreen('menu')}
+        refreshKey={lbKey}
+      />
     );
   }
 

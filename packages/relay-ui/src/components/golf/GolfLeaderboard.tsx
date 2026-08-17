@@ -4,6 +4,7 @@ import { api } from '../../lib/api';
 import { useEconomy } from '../../lib/golf/economy';
 import { resolveFrameById } from '../../lib/golf/cosmetics';
 import type { GameLeaderboardEntry } from '../../lib/types';
+import { MEDALS } from './shared/scoreFormat';
 
 interface Props {
   // Bump to force a refetch (e.g. after a score submit succeeds).
@@ -13,11 +14,6 @@ interface Props {
   // call sites are unchanged.
   game?: 'golf' | 'golfrange' | 'golfcourse';
 }
-
-// Self-contained medal colours for the top three so the accent works both
-// inside the .golf-hub layer AND on the standalone results screens (which
-// aren't wrapped in .golf-hub). gold / silver / bronze.
-const MEDALS = ['#C9A227', '#9AA0A6', '#B0763A'];
 
 // Weekly / all-time Golf leaderboard. Rows come pre-ranked from the
 // worker; the caller's own row arrives flagged `mine`. Clone of

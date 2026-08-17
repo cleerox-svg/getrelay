@@ -27,6 +27,17 @@
 // that outlived the page would strand a result forever, and a reload is
 // precisely when an interrupted request SHOULD be retried.
 //
+// WHY THE RECORD ALSO CARRIES A `tag`. Persistence introduced a hazard the
+// old lose-it-on-unmount behaviour did not have: a record can now outlive the
+// CHALLENGE it was played on. Offline through the midnight rollover and
+// yesterday's hole would be POSTed as today's attempt — the endpoints take only
+// {strokes,toPar} and file against whatever is current — which pollutes another
+// day's board and is worse than the score merely being absent. The tag is the
+// challenge's / event's `seed`, which the server derives from the period, so it
+// IS that period's identity. A consumer submits only on a tag match and
+// `dropStalePending` deletes the rest. A record with no tag can only come from
+// the pre-tag build, so `readPending` rejects it rather than guessing.
+//
 // DETERMINISM. The id comes from a persisted counter, not `Date.now()` /
 // `Math.random()` — neither is allowed anywhere a render can reach it (the
 // screenshot gate is exact-pixel).
@@ -38,6 +49,8 @@ export interface PendingResult {
   kind: PendingKind;
   /** Stable identity of this attempt; survives a remount (see the header). */
   id: number;
+  /** The challenge/event this score was played on — its seed. See the header. */
+  tag: string;
   strokes: number;
   toPar: number;
 }
@@ -80,11 +93,12 @@ export function readPending(kind: PendingKind): PendingResult | null {
     const p = JSON.parse(raw) as Partial<PendingResult>;
     if (
       typeof p.id !== 'number' ||
+      typeof p.tag !== 'string' ||
       typeof p.strokes !== 'number' ||
       typeof p.toPar !== 'number'
     )
       return null;
-    return { kind, id: p.id, strokes: p.strokes, toPar: p.toPar };
+    return { kind, id: p.id, tag: p.tag, strokes: p.strokes, toPar: p.toPar };
   } catch {
     return null;
   }
@@ -93,12 +107,18 @@ export function readPending(kind: PendingKind): PendingResult | null {
 /**
  * Persist a just-finished score as the pending result for `kind` and return the
  * record (with its fresh id) for the caller to hold in state. Replaces any
- * earlier pending result of the same kind — a replay supersedes it.
+ * earlier pending result of the same kind — a replay supersedes it. `tag` is the
+ * challenge/event seed this score was played on (see the header).
  */
-export function writePending(kind: PendingKind, score: PendingScore): PendingResult {
+export function writePending(
+  kind: PendingKind,
+  score: PendingScore,
+  tag: string | number,
+): PendingResult {
   const rec: PendingResult = {
     kind,
     id: nextId(),
+    tag: String(tag),
     strokes: score.strokes,
     toPar: score.toPar,
   };
@@ -124,6 +144,20 @@ export function clearPending(kind: PendingKind, id?: number): void {
   } catch {
     /* nothing to do — the read side treats an unreadable slot as empty */
   }
+}
+
+/**
+ * Delete the pending result for `kind` if it was played on a DIFFERENT
+ * challenge/event than the live one (`tag`), and report whether it went. A
+ * stranded record has to be deleted, not just skipped: it would otherwise steer
+ * the hub's opening tab forever and could never be filed correctly — the POST
+ * body carries no date, so the server would credit it to the CURRENT period.
+ */
+export function dropStalePending(kind: PendingKind, tag: string | number): boolean {
+  const cur = readPending(kind);
+  if (!cur || cur.tag === String(tag)) return false;
+  clearPending(kind, cur.id);
+  return true;
 }
 
 /**
