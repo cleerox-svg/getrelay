@@ -779,11 +779,35 @@ out to be wrong in an instructive way.
    still olive [134,138,32]. At tee distance that reads as shading; to a player
    who has missed into the trees it may not. Same "authored art with no frame"
    class as defects 5 and 6.
-13. **`augusta-16-redbud` cannot be exact-pixel regression-checked.** It produced
-   three different hashes across three runs *including two runs of identical
-   code* — 24–37 px at x 513–664 / y 623–634, which is the animated pond
-   surface caught at a different phase. Not a leak; a limit on what that frame
-   can prove.
+13. **Any frame with open water cannot be exact-pixel regression-checked.** First
+   caught on `augusta-16-redbud`, which produced three different hashes across
+   three runs *including two runs of identical code* — 24–37 px at
+   x 513–664 / y 623–634, the animated pond surface at a different phase.
+   ⚠ **It is not that frame only.** A later gate re-shot `augusta-12-golden-bell`
+   at an unchanged HEAD and got 68 px of variance at x 257–466 / y 623–638 — its
+   own pond. The scenes already in the documented water set are
+   `course-played-aim`, `listowel-heritage-3`, `putt-water`, `augusta-12`,
+   `augusta-16-redbud` and `augusta-16-pond`; **treat "has open water in frame"
+   as the predicate, not the list.** Everything else on those frames is exact:
+   in the same run pair hole 12's yellow was bit-identical, 5,412 px across the
+   same 54 components, so the drift render itself is fully seeded.
+14. **The near-corridor tree on hole 8 is a dogleg-layout bug.** Hole 8 plants a
+   full-size **collidable** tree at `d 332, x 0.2` — in the rough, near the
+   middle of the corridor at the dogleg corner — and five more overhang playable
+   ground by 2.4–5.3 yd. Pre-existing: that trunk has always been there and has
+   always been drawn. The cause is that the grove is laid out at a lateral
+   **x-offset** from the centerline rather than perpendicular to it, so on a
+   34° dogleg the tree line crosses the corridor it is supposed to flank.
+   **That makes it a content bug on every dogleg, not a hole-8 quirk**, and it
+   is only visible now because making a collider match its art put a second
+   volume on the same ground. Worth its own investigation.
+15. **Hole 8 is under-planted for a hole called Yellow Jasmine.** After the drift
+   was resized to its collider, yellow fell to 0.165% of frame and only the near
+   right-hand cluster reads as deliberate planting; on the before frame you would
+   name yellow as a feature of the hole, on the after you probably would not.
+   Not a defect but a tuning value: `yellowJasmine.fraction` 0.6 → ~0.85, with
+   hole 12 at 0.8 / 0.376% as the reference for "enough". Deliberately left out
+   of the collider change so the physics delta stayed reviewable on its own.
 
 **Instanced foliage — the single largest GPU win measured on this codebase.**
 The tee view's 1,034 draw calls were **559 individual meshes of tree**. There was

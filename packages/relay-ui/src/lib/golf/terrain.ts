@@ -988,6 +988,15 @@ function centerlineXAt(hole: CourseHole, d: number): number {
 //   • SHRUB_H 1.6 is 2.6–3.5 yd at course scales — 2.4–3.2 m, which is what a
 //     mature forsythia/pyracantha/nandina actually is. The first pass stood
 //     4.3–5.7 yd tall, roughly double the plant.
+//
+// ⚠ ONLY THE HEIGHT IS A SHRUB. SHRUB_R gives a radius of 5.28–6.98 yd, i.e. a
+// footprint 10.6–14.0 yd ACROSS against a ~3 yd height — about 4:1. That is not
+// one plant; it is a DRIFT of them, which is how Augusta actually plants
+// forsythia and is why hole 12's ribbon reads well. Say "drift", not "shrub",
+// when reasoning about it, because the volume `courseSim.brushShrub` damps a
+// ball inside is 11–14 yd wide, not 3 m. The visual gate caught this doc
+// conflating the two, and the next person tuning the envelope should not be
+// surprised by how much ground it covers.
 const SHRUB_R = 3.2;
 const SHRUB_H = 1.6;
 
