@@ -38,7 +38,7 @@
       "maxTriangles": 85000,
       "measured": {
         "drawCalls": 39,
-        "triangles": 61036,
+        "triangles": 63916,
         "programs": 23,
         "geometries": 27,
         "textures": 23,
@@ -129,7 +129,7 @@
       "maxTriangles": 175000,
       "measured": {
         "drawCalls": 34,
-        "triangles": 121474,
+        "triangles": 127594,
         "programs": 19,
         "geometries": 24,
         "textures": 21,
