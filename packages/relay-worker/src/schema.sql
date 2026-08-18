@@ -562,3 +562,145 @@ CREATE TABLE IF NOT EXISTS season_progress (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (user_id, season_id)      -- one progress row per user per season
 );
+
+-- ---------------------------------------------------------------------------
+-- Baseball progression: player cards (level + duplicate copies) + ranked ladder.
+--
+-- Scope note, because most of this milestone needs NO schema at all. New
+-- cosmetic slots (bat / glove / kit / walk-up) are free — the catalog is
+-- code-defined and user_equipped.slot is free-form TEXT. New game ids are free
+-- — game_scores.game is TEXT. Coins / ledger / season XP are already generic.
+-- The two things the existing tables genuinely cannot express are (a) an owned
+-- item carrying a LEVEL and a DUPLICATE-COPY COUNT — user_cosmetics is a flat
+-- one-row-per-owned-id inventory with no per-row progression state — and (b) a
+-- RANKED LADDER with trophies that move up and down (tournament_trophies is a
+-- cumulative per-event tally, not a rank). Those are the only reasons the four
+-- tables below exist; anything that fits user_cosmetics / user_equipped /
+-- currency_ledger belongs there, not here.
+--
+-- Same code-over-DB design as the golf economy: the CARD CATALOG, the SLOT set
+-- and the LADDER TIER LAYOUT all live in code, so there is no catalog table and
+-- no tier table — the DB records only per-user state.
+--
+-- CHECK policy for these four tables is deliberate and NOT uniform. SQLite
+-- cannot add a CHECK later without a full table rebuild — on D1 that's the
+-- operation behind the PR #75/#76 rollbacks — so each is a one-way door. The
+-- rule: CHECK a numeric column ONLY where it has no subtract path. `level`,
+-- `wins`, `losses` only ever increment, so a CHECK can only ever catch a bug.
+-- SPENDABLE columns get NO CHECK — `copies` (consumed by card upgrades) and
+-- `trophies` (taken away on a defeat) are guarded by the worker's
+-- read-check-write, exactly as 0013 guards user_wallet.balance, because on a
+-- spendable column a CHECK turns a clamping bug into a FAILED WRITE that loses
+-- the match result or the pack the player just opened. `best_trophies`/`tier`
+-- are written in the same statement as `trophies`, so a CHECK there fails that
+-- statement too. (The pre-existing CHECKs elsewhere in this file are all
+-- enum-membership on TEXT; these are the first numeric-range ones.)
+-- ---------------------------------------------------------------------------
+
+-- Per-user card ownership. card_id references the CODE-defined card catalog
+-- (exactly like user_cosmetics.cosmetic_id) — deliberately NOT a FK, since
+-- there is no catalog table by design. `level` is the card's upgrade level and
+-- `copies` is the duplicate count banked toward the next level; that pair is
+-- what user_cosmetics cannot carry. UNIQUE(user_id, card_id) makes a grant
+-- idempotent: pulling a card you already own is an UPDATE that bumps `copies`,
+-- never a second row. Cascades on account delete.
+--
+-- No separate by-user index: the UNIQUE(user_id, card_id) constraint's implicit
+-- index has user_id as its leftmost column, so `WHERE user_id = ?` (the card
+-- collection read) is already served by it. A standalone index on (user_id)
+-- would be a redundant prefix and pure write amplification.
+CREATE TABLE IF NOT EXISTS player_cards (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  card_id TEXT NOT NULL,                -- code-defined catalog id; NOT a FK
+  level INTEGER NOT NULL DEFAULT 1 CHECK (level >= 1),  -- monotonic: no subtract path
+  copies INTEGER NOT NULL DEFAULT 0,    -- duplicates banked toward next level; SPENT on upgrade, so no CHECK
+  acquired_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(user_id, card_id)              -- one row per card; dupes bump `copies`
+);
+
+-- The equipped card per lineup slot: one row per (user, slot). Shaped exactly
+-- like user_equipped — `slot` is a code-defined slot id ('batter', 'pitcher',
+-- 'bat', 'glove', 'coach') and PK (user_id, slot) enforces one card per slot,
+-- so equipping upserts on the PK. card_id should reference something the user
+-- owns in player_cards (enforced in code, not by FK, since the catalog is
+-- code-defined). The PK's implicit index is leftmost-on-user_id, so the
+-- whole-lineup read `WHERE user_id = ?` is served by it. Cascades on delete.
+CREATE TABLE IF NOT EXISTS user_lineup (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  slot TEXT NOT NULL,                   -- batter | pitcher | bat | glove | coach
+  card_id TEXT NOT NULL,                -- the equipped card (owned in player_cards)
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, slot)           -- one equipped card per slot
+);
+
+-- Per-user ranked ladder state. One row per user, keyed on user_id like
+-- user_wallet / tournament_trophies, so recording a result is a single
+-- INSERT ... ON CONFLICT(user_id) DO UPDATE. `trophies` is the current count
+-- (moves both directions, never below zero — the worker clamps); `tier` is the
+-- resolved rank tier index, derived in code from `trophies` and stored so
+-- leaderboard reads don't recompute it; `best_trophies` is the peak ever held.
+-- Cascades on account delete.
+CREATE TABLE IF NOT EXISTS ladder_state (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  trophies INTEGER NOT NULL DEFAULT 0,      -- current count; DECREMENTS on a loss, so no CHECK (worker clamps)
+  tier INTEGER NOT NULL DEFAULT 0,          -- resolved rank tier index (layout in code)
+  best_trophies INTEGER NOT NULL DEFAULT 0, -- peak trophies ever held
+  wins INTEGER NOT NULL DEFAULT 0 CHECK (wins >= 0),      -- monotonic
+  losses INTEGER NOT NULL DEFAULT 0 CHECK (losses >= 0),  -- monotonic
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+-- Ladder leaderboard reads, highest trophies first. The per-user read is served
+-- by the user_id PRIMARY KEY.
+CREATE INDEX IF NOT EXISTS idx_ladder_state_trophies ON ladder_state(trophies DESC);
+
+-- Pack awards. `pack_id` is a code-defined pack type. `contents` is the JSON
+-- array of rolled card ids and is written AT GRANT TIME, not on open, so the
+-- row is self-consistent from birth and the roll is auditable; `opened_at` is
+-- purely the reveal flag (NULL until revealed, so unopened packs are just
+-- `WHERE opened_at IS NULL`). Rolling at grant also means a CATALOG CHANGE
+-- BETWEEN GRANT AND OPEN CANNOT ALTER WHAT THE PLAYER WAS PROMISED, and it
+-- removes the double-encoding where "opened with an empty roll" is
+-- indistinguishable from a half-landed write. UX is unchanged — a pack rolled
+-- at grant still reveals on open. `updated_at` exists because these rows (alone
+-- among the four tables here) mutate after insert.
+--
+-- The idempotency guard is (user_id, reason, ref) — structurally IDENTICAL to
+-- idx_currency_ledger_award, and the third column is load-bearing rather than
+-- decorative. One source event routinely awards more than one thing under the
+-- SAME ref: economy.ts's addXp() reuses the ledger guard with an `xp:`-prefixed
+-- REASON exactly so its marker row doesn't collide with the coin row sharing
+-- that (user_id, ref). The same case here is one ladder tier granting both a
+-- card pack and a coin pack at ref='7'. A two-column (user_id, ref) guard would
+-- silently swallow the second: the house idiom is INSERT OR IGNORE, and callers
+-- read meta.changes < 1 as "already granted" — no throw, no log, one pack
+-- missing. So namespace the REASON ('ladder_tier', 'season_tier', 'daily',
+-- 'purchase') and let ref be the plain source id.
+--
+-- "Replay is a no-op" holds only for writes that opt in (INSERT OR IGNORE, or
+-- ON CONFLICT DO NOTHING); a bare INSERT throws UNIQUE constraint failed. And
+-- upserting against this PARTIAL index requires repeating its predicate in the
+-- conflict target — `ON CONFLICT(user_id, reason, ref) WHERE ref IS NOT NULL`
+-- — or SQLite errors "does not match any PRIMARY KEY or UNIQUE constraint".
+-- ref may be NULL only for grants deliberately opting out of the guard.
+-- Cascades on account delete.
+CREATE TABLE IF NOT EXISTS pack_grants (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  pack_id TEXT NOT NULL,                -- code-defined pack type
+  reason TEXT NOT NULL,                 -- award source class: ladder_tier, season_tier, daily, purchase
+  ref TEXT,                             -- source id within that reason; NULL opts out of the guard
+  contents TEXT NOT NULL DEFAULT '[]',  -- JSON array of rolled card ids; ROLLED AT GRANT, not on open
+  opened_at INTEGER,                    -- NULL until revealed; reveal flag only, contents already set
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL           -- rows mutate after insert (open), unlike the other three
+);
+-- Per-user pack history / unopened-pack reads, newest first.
+CREATE INDEX IF NOT EXISTS idx_pack_grants_user_time ON pack_grants(user_id, created_at DESC);
+-- Idempotency guard, structurally identical to idx_currency_ledger_award: at
+-- most one grant per (user_id, reason, ref). Partial (WHERE ref IS NOT NULL) so
+-- opted-out grants with a NULL ref aren't collapsed together.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pack_grants_award
+  ON pack_grants(user_id, reason, ref) WHERE ref IS NOT NULL;
