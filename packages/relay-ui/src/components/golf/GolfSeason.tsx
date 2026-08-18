@@ -114,6 +114,7 @@ export function GolfSeason() {
         <LoadFailure
           title="The season track needs a connection."
           detail="Couldn’t load your progress."
+          retryLabel="Retry loading the season track"
           onRetry={() => void ensureSeason(true)}
         />
       );

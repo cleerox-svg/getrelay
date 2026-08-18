@@ -147,6 +147,7 @@ export function GolfShop() {
         <LoadFailure
           title="The pro shop needs a connection."
           detail="Couldn’t load your items — your coins and skins are safe."
+          retryLabel="Retry loading the pro shop"
           onRetry={() => void ensureCosmetics(true)}
         />
       );
@@ -170,6 +171,7 @@ export function GolfShop() {
       {walletState === 'error' ? (
         <LoadFailureLine
           text="Couldn’t reach your wallet."
+          retryLabel="Retry loading your wallet"
           onRetry={() => void ensureWallet(true)}
         />
       ) : null}
@@ -179,6 +181,7 @@ export function GolfShop() {
       {cosmeticsState === 'error' ? (
         <LoadFailureLine
           text="Couldn’t refresh your items."
+          retryLabel="Retry loading your items"
           onRetry={() => void ensureCosmetics(true)}
         />
       ) : null}

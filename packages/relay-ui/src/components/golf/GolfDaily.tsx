@@ -131,6 +131,7 @@ export function GolfDaily({ onPlay, pendingResult, onResultConsumed }: Props) {
       <LoadFailure
         title="Daily needs a connection."
         detail="Couldn’t reach today’s challenge."
+        retryLabel="Retry loading today’s challenge"
         onRetry={() => setAttempt((a) => a + 1)}
       />
     );
@@ -232,7 +233,11 @@ export function GolfDaily({ onPlay, pendingResult, onResultConsumed }: Props) {
         {submitState === 'error' && current ? (
           <div className="px-4 pb-2 text-[13px]" style={{ color: 'var(--ping)' }}>
             Couldn’t submit.
-            <RetryButton className="ml-2" onClick={() => submitPending(current)} />
+            <RetryButton
+              className="ml-2"
+              ariaLabel="Retry submitting your score"
+              onClick={() => submitPending(current)}
+            />
           </div>
         ) : null}
 
@@ -268,7 +273,11 @@ export function GolfDaily({ onPlay, pendingResult, onResultConsumed }: Props) {
           {boardError ? (
             <div className="text-center py-6 text-sm" style={{ color: 'var(--text-dim)' }}>
               Couldn’t load the leaderboard.
-              <RetryButton className="block mx-auto mt-2" onClick={loadBoard} />
+              <RetryButton
+                className="block mx-auto mt-2"
+                ariaLabel="Retry loading the leaderboard"
+                onClick={loadBoard}
+              />
             </div>
           ) : board === null ? (
             <div className="text-center py-6 text-sm" style={{ color: 'var(--text-dim)' }}>
