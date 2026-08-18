@@ -59,7 +59,7 @@ import {
   reedRingAnchors,
 } from '../../lib/golf/water';
 import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
-import type { GolfCosmetics } from '../../lib/golf/cosmetics';
+import { useGolfSkin, type GolfCosmetics } from './scene/skin';
 import { BALL_R, CUP_R } from '../../lib/golf/greenPhysics';
 import type { CourseSim, CoursePrediction, CourseTrailPt } from '../../lib/golf/courseSim';
 import { windBearing, windMph } from '../../lib/golf/wind';
@@ -88,10 +88,12 @@ interface Props {
   // the accuracy bar and calls sim.fireArmed().
   onArm?: () => void;
   paused?: boolean;
-  // Equipped ball skin + trail colour (from the golf economy). Read ONCE at
-  // scene build (the ball material + tracer colour are baked in the mount
-  // effect); the default equip leaves both undefined → stock white ball + white
-  // tracer, so the pre-economy render is unchanged.
+  // Equipped ball skin + trail colour (from the golf economy). LIVE, not baked:
+  // the ball material and tracer are registered with useGolfSkin (scene/skin.ts),
+  // which applies synchronously at registration and re-applies on every later
+  // change — so an equip mid-round lands without rebuilding the scene. The
+  // default equip leaves both undefined → stock white ball + white tracer, so
+  // the pre-economy render is unchanged.
   cosmetics?: GolfCosmetics;
   /**
    * GPU instrumentation. Called from the render loop roughly every 30 frames
@@ -838,11 +840,10 @@ function buildFirstCutBand(
 }
 
 export default function CourseGL({ sim, onArm, paused, cosmetics, onStats }: Props) {
-  // Snapshot the equipped skin so the mount effect (which reads it to build the
-  // ball material + tracer colour) doesn't re-run when the parent passes a new
-  // object identity mid-round.
-  const cosmeticsRef = useRef(cosmetics);
-  cosmeticsRef.current = cosmetics;
+  // The equipped skin. The mount effect REGISTERS the ball + tracer materials
+  // with this seam, which applies the skin then and re-applies it whenever the
+  // prop changes — no rebuild, so an equip mid-round lands on the live scene.
+  const registerSkin = useGolfSkin(cosmetics);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const onArmRef = useRef(onArm);
   onArmRef.current = onArm;
@@ -1812,7 +1813,7 @@ export default function CourseGL({ sim, onArm, paused, cosmetics, onStats }: Pro
     const ballGeo = track(new THREE.SphereGeometry(BALL_R, 32, 24));
     // Dimpled ball material shared with the range (ballTexture.ts) — a dimple
     // normal map so the sun catches the surface, instead of a plain smooth sphere.
-    const ballMat = track(makeBallMaterial(track(makeDimpleNormalMap()), cosmeticsRef.current?.ball));
+    const ballMat = track(makeBallMaterial(track(makeDimpleNormalMap())));
     // The ball keeps its OWN envMap even when scene.environment is set — three
     // prefers the material's, and with it the material's envMapIntensity, which
     // is why attachSkyEnv hands back the matching value (scene/env.ts).
@@ -1846,13 +1847,14 @@ export default function CourseGL({ sim, onArm, paused, cosmetics, onStats }: Pro
     scene.add(ballShadow);
 
     // Tracer (ball flight/roll trail).
-    const tracerMat = track(new THREE.LineBasicMaterial({ color: cosmeticsRef.current?.trail?.color ?? 0xffffff, transparent: true, opacity: 0.6 }));
+    const tracerMat = track(new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 }));
     const tracerGeo = track(new THREE.BufferGeometry());
     const tracerBuf = new Float32Array(70 * 3);
     tracerGeo.setAttribute('position', new THREE.BufferAttribute(tracerBuf, 3));
     tracerGeo.setDrawRange(0, 0);
     const tracer = new THREE.Line(tracerGeo, tracerMat);
     scene.add(tracer);
+    registerSkin({ ball: ballMat, trail: tracerMat });
 
     // --- Predicted-shot aim aid (the arc + reticles + dispersion) -------
     // A bright centre arc to a landing reticle + a roll-out marker at the rest

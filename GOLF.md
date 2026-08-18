@@ -76,9 +76,27 @@ arm may say 'ready', 'error' is retryable, and the UI renders it as an error
 with a Retry (`components/golf/shared/LoadFailure.tsx`). See §3's "a failed
 load is not a loaded slice". `lib/golf/cosmetics.ts` is the
 `three`-free render seam: it resolves the equipped catalog item's `visual`
-generically (no per-id logic) into a `GolfCosmetics` the `*GL.tsx` scenes read
-ONCE at scene build — ball skin and tracer colour — plus a `GolfFrame` avatar
-overlay. Default equip renders byte-identically to the pre-economy scenes.
+generically (no per-id logic) into a `GolfCosmetics` — ball skin and tracer
+colour — plus a `GolfFrame` avatar overlay. Default equip renders
+byte-identically to the pre-economy scenes.
+
+⚠ **The scenes apply that LIVE, and used not to.** Every `*GL.tsx` snapshotted
+the prop into a ref and read it once inside its build effect
+(`makeBallMaterial(tex, cosmeticsRef.current?.ball)`); nothing wrote the
+material afterwards and `cosmetics` was in no dependency array in
+`components/golf`. So the skin applied only if the cosmetics slice happened to
+be `'ready'` at the instant the scene mounted, and an equip performed while a
+scene was alive could never apply — except on the Course, whose build effect is
+`[sim]`, where it landed at the NEXT hole's full rebuild. That is the second
+cause of "golf ball skins don't work", surviving the `LoadState` fix. `components/golf/scene/skin.ts`
+(`useGolfSkin`) is the ONE seam that fixes it for all three renderers: the build
+effect REGISTERS its ball + tracer materials (applied synchronously, so the
+first frame is right) and the hook re-applies on every `cosmetics` change. See
+§3's "a prop a scene reads once".
+And the owner of a renderer has to PASS it: `ChallengeCard` ran its whole in-chat
+round with no `cosmetics` prop at all, so a challenge was always the stock ball
+however much the player had spent. Both hub and card now take it from one
+`useGolfCosmetics()` in `economy.ts`.
 
 ### 1.2 Course mode — 4 courses, 45 authored holes
 
@@ -243,7 +261,8 @@ TOTAL is carry plus a run-out the bounce/roll core derives from the LANDING LIE.
   `greenPhysics` 15, `courseData` 14, `golf/loadState` 14,
   `golf/GolfClubhouse` 13, `scene3d/quality` 12, `scene3d/env` 12,
   `golf/GolfShop` 11, `clock` 10, `golf/scene/quality` 8, `golf/pendingScore` 8,
-  `golf/ChallengeCard` 6, `golf/GolfArena.load` 6, `scene3d/budget` 5,
+  `golf/scene/skin` 17, `golf/ChallengeCard` 7, `golf/GolfArena.load` 6,
+  `scene3d/budget` 5,
   `components/golf/budget` 4, `golf/GolfScreen.score` 4, `scene3d/stats` 4,
   `env.irradiance` 4, `golf/GolfGame.abandon` 2.
 - **In-app telemetry.** A last-shot debug panel plus a "Copy telemetry" button
@@ -466,6 +485,7 @@ Every path below resolves on disk. Root for UI paths is
 | `LoadState` + `withTimeout` (bounds a hung golf fetch into a retryable error) | `src/lib/golf/loadState.ts` |
 | The ONE failed-load UI: `LoadFailure` panel / `LoadFailureLine` banner / `RetryButton` | `src/components/golf/shared/LoadFailure.tsx` |
 | `three`-free cosmetics render seam (`GolfCosmetics`, `GolfFrame`) | `src/lib/golf/cosmetics.ts` |
+| The resolved equipped skin, memoised — the ONE hook a renderer's owner reads | `src/lib/golf/economy.ts` (`useGolfCosmetics`) |
 | Pure-SVG top-down hole map for the picker | `src/components/golf/HoleThumb.tsx` |
 | Shared HUD widgets (accuracy bar, club selector, power meter, spin puck, telemetry, wind chip, mute) + the boards' `MEDALS` / `fmtToPar` | `src/components/golf/shared/` |
 | Local personal bests (localStorage), last-played course ids | `src/lib/golf/stats.ts` |
@@ -527,7 +547,8 @@ Every path below resolves on disk. Root for UI paths is
 | Golf size ratchet (500-line cap + shrink-only grandfathers) | `src/components/golf/budget.test.ts` |
 | Shared kit: freezable virtual clock, procedural sky IBL, instanced scatter, tier POLICY, GPU instrumentation | `src/lib/scene3d/clock.ts`, `env.ts`, `instancing.ts`, `quality.ts`, `stats.ts` |
 | Shared kit contract (prose) + its mechanical enforcement | `src/lib/scene3d/README.md`, `src/lib/scene3d/budget.test.ts` |
-| Ball material (dimple normal map, PMREM mirror ball) | `src/lib/golf/ballTexture.ts` |
+| Ball material + the ONE cosmetic→material mapping (`applyBallCosmetic`) | `src/lib/golf/ballTexture.ts` |
+| The scene-side skin seam: register once, re-apply LIVE (`useGolfSkin`) — shared by Course / Range / Putt | `src/components/golf/scene/skin.ts` |
 | Headless screenshot + GPU harness (29 scenes) | `scripts/shoot-golf.mjs`, `golfpreview.html`, `src/golfpreview.tsx` |
 | Committed GPU ceilings + the game-neutral harness reporter | `scripts/budgets.golf.json`, `scripts/lib/shoot-report.mjs` |
 | Metric course data layer — largely unreachable, see §4 | `src/lib/golf/courseData.ts` |
@@ -690,6 +711,32 @@ Every path below resolves on disk. Root for UI paths is
   props independently and asserts byte-identical state after `predict()`, so it
   fails loudly if a field is forgotten. Prediction and the live shot are ONE
   integrator over ONE state — keep it that way.
+- **⚠ A PROP A SCENE READS ONCE IS A PROP THAT NEVER CHANGES.** A `*GL.tsx`
+  builds its scene in ONE effect with a near-empty dep array — `[]` for
+  `RangeGL`/`PuttGL`, `[sim]` for `CourseGL`, which therefore rebuilds once per
+  HOLE — and that must stay that way: a rebuild disposes and re-creates every
+  geometry, material and texture and drops mid-shot state. The consequence is
+  that ANY prop the build reads is frozen until the next rebuild, and
+  snapshotting it into a ref does not help: the ref tracks the prop, but nothing
+  re-reads it. The equipped ball skin and tracer colour shipped like that in all
+  three renderers for the life of the economy feature — never applying on the
+  Range and in Mini-Golf, and on the Course only at the NEXT hole, which is a
+  rebuild's worth of cost for a colour. The fix for that class is never
+  `cosmetics` in the build's dep array; it is a second, narrow effect that
+  MUTATES the built object — and it belongs in ONE shared module the scenes
+  call, not copied per scene (`components/golf/scene/skin.ts`, whose
+  `applyBallCosmetic` is also what `makeBallMaterial` constructs through, so
+  build-time and update-time cannot map a cosmetic differently). Its test cannot
+  mount a `*GL.tsx` — jsdom has no WebGL and no 2-D canvas — so
+  `scene/skin.test.tsx` pins the seam's behaviour AND asserts against the three
+  sources that each one registers and no longer carries a `cosmeticsRef`.
+  ⚠ **A guard that greps for a NAME does not survive deleting a CALL.** Two of
+  those source assertions were written as "contains `useGolfSkin(`" and a mocked
+  `ensureCosmetics` with nothing checking it — both matched a mutant that simply
+  dropped the argument / the effect, because presence-of-a-string is not
+  occurrence-of-a-behaviour. They now assert `useGolfSkin(cosmetics)` (the
+  parameter is optional, so `useGolfSkin()` typechecks and silently restores the
+  bug) and `toHaveBeenCalled()` on a real spy.
 - **⚠ Terrain winding.** The Course ground is a custom displaced
   BufferGeometry; its triangles must be wound so the top surface FRONT-faces up.
   A downward winding gets back-face culled and the whole textured ground

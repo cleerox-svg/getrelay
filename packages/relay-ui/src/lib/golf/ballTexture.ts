@@ -13,6 +13,7 @@
 // via the scene's track()/disposables pattern.
 
 import * as THREE from 'three';
+import type { GolfCosmetics } from './cosmetics';
 
 // Build the tileable dimple normal map. `size` is the canvas edge (POT).
 export function makeDimpleNormalMap(size = 256): THREE.CanvasTexture {
@@ -87,23 +88,50 @@ export function makeDimpleNormalMap(size = 256): THREE.CanvasTexture {
   return tex;
 }
 
+// The STOCK ball look — what an unskinned (ball_classic) ball is. Named because
+// it is needed in two places that MUST agree: material construction, and the
+// live re-skin when the equipped cosmetic changes under a built scene.
+const STOCK_BALL = { color: 0xffffff, roughness: 0.3, metalness: 0.02 } as const;
+
+/**
+ * Write a ball cosmetic onto an EXISTING ball material.
+ *
+ * ⚠ This is the ONE mapping from `GolfCosmetics['ball']` onto a material, and
+ * `makeBallMaterial` goes through it too — construction and live update cannot
+ * drift. An absent cosmetic (or an absent field) restores the stock value
+ * rather than leaving the previous skin's, so un-equipping back to
+ * `ball_classic` really does put the white ball back.
+ *
+ * Only uniform-level fields are touched (colour / roughness / metalness), so no
+ * shader recompile and no `needsUpdate` is required — this is safe to call on a
+ * material that is already in the scene, mid-round.
+ */
+export function applyBallCosmetic(
+  mat: THREE.MeshStandardMaterial,
+  ball?: GolfCosmetics['ball'],
+): void {
+  mat.color.set(ball?.color ?? STOCK_BALL.color);
+  mat.roughness = ball?.roughness ?? STOCK_BALL.roughness;
+  mat.metalness = ball?.metalness ?? STOCK_BALL.metalness;
+}
+
 // White ball material with a slight sheen (low roughness) and the dimple normal
 // map applied at a modest scale. Caller owns disposal of BOTH the returned
 // material and the passed-in normal map.
 //
-// `ball` is the equipped ball cosmetic (GolfCosmetics.ball) — a plain
-// {color,metalness,roughness}. When omitted (default ball_classic) the stock
-// white/low-metal look is unchanged; any provided field overrides it. `color`
-// is a CSS hex string, which THREE.Color accepts directly.
+// `ball` is the equipped ball cosmetic (GolfCosmetics.ball). When omitted
+// (default ball_classic) the stock white/low-metal look is unchanged; any
+// provided field overrides it. Scenes generally pass NOTHING here and let
+// `useGolfSkin` (components/golf/scene/skin.ts) apply the equipped skin, so the
+// skin can also change later without a rebuild.
 export function makeBallMaterial(
   normalMap: THREE.Texture,
-  ball?: { color?: string; metalness?: number; roughness?: number },
+  ball?: GolfCosmetics['ball'],
 ): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({
-    color: ball?.color ?? 0xffffff,
-    roughness: ball?.roughness ?? 0.3,
-    metalness: ball?.metalness ?? 0.02,
+  const mat = new THREE.MeshStandardMaterial({
     normalMap,
     normalScale: new THREE.Vector2(0.55, 0.55),
   });
+  applyBallCosmetic(mat, ball);
+  return mat;
 }
