@@ -167,8 +167,12 @@ const ROOF_PANEL_DEG = 7.5;
  * DIFFUSE colour cannot fix a surface that receives ~3 % of an irradiance;
  * the lift belongs to the emissive, which is a `daylight.ts` row and is where
  * it now lives. This value is unchanged and is the colour the emissive tints.
+ *
+ * ⚠ `deck` LEFT THIS OBJECT AND IS NOW `daylight.roofDeckHex`: the top faces UP,
+ * so it took the night rig full in the face at 86 % of its own daytime
+ * luminance. A per-row argument, therefore a per-row value.
  */
-export const COLORS = { deck: 0x969ba2, under: 0x6b727c };
+export const COLORS = { under: 0x6b727c };
 
 /** What the read-back says about the drawn roof at one bearing. */
 export interface RoofSample {
@@ -262,7 +266,8 @@ export function buildRoof(
     // draw call and no triangle: it is a per-column vertex colour on a loft that
     // was already there, plus one step of tint per panel so the stack reads as
     // stacked from the only camera that sees the top (`wide`).
-    decks.push(loft(inner, outer, { colors: deckColors(cols, i, panel.halfDeg) }));
+    const colors = deckColors(cols, i, panel.halfDeg, daylight.roofDeckHex);
+    decks.push(loft(inner, outer, { colors }));
     spans.push({ start: base, count: cols });
     base += cols * 2;
 
@@ -403,14 +408,14 @@ function sampleStack(
  * small — a parked stack is four of the same panel, not four different
  * buildings — and it is the shading, not the colour, that carries it.
  */
-function deckColors(count: number, panelIndex: number, halfDeg: number): Float32Array {
+function deckColors(count: number, panelIndex: number, halfDeg: number, hex: number): Float32Array {
   const arr = new Float32Array(count * 2 * 3);
   const c = new Color();
   const stack = 1 - panelIndex * 0.06;
   for (let i = 0; i < count; i++) {
     const b = -halfDeg + (2 * halfDeg * i) / (count - 1 || 1);
     const bay = Math.floor((b + 180) / ROOF_PANEL_DEG) % 2 === 0 ? 1 : 0.955;
-    c.set(COLORS.deck).multiplyScalar(bay * stack);
+    c.set(hex).multiplyScalar(bay * stack);
     for (const v of [i, count + i]) {
       arr[v * 3] = c.r;
       arr[v * 3 + 1] = c.g;

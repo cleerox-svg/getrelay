@@ -51,6 +51,62 @@ export interface Daylight {
    */
   towerGlow: number;
   /**
+   * The parked stack's TOP surface — the exterior deck, which only the `wide`
+   * camera ever sees.
+   *
+   * ⚠⚠ IT IS A ROW BECAUSE THE NIGHT FRAME HAD THE LIGHTING INVERTED, AND THIS
+   * IS THE ONE CHANNEL THAT CAN FIX IT. Measured off `daynight-night.png`, on
+   * the `wide` pair: the parked roof rendered at luminance **134.2** against a
+   * floodlit turf at **75.7** and a sky at **11.8** — the BRIGHTEST object in a
+   * night frame, and **86 %** of its own daytime value (156.9). "A dark dome" is
+   * exactly what did not render.
+   *
+   * The cause is that a `DirectionalLight` has a direction and no position, so
+   * it cannot be *under* anything. The night row aims the one directional almost
+   * straight down (`sunPos` is nearly overhead), which is right for a rig
+   * pointing at the field and wrong for every up-facing surface ABOVE the rig —
+   * and a roof 282 ft up is the only large one there is. `sunIntensity` cannot
+   * separate them, because the roof deck and the turf are both horizontal and
+   * therefore take the same `dot(N, L)`; the ratio between them is FIXED at
+   * 1.79 for every intensity. Measured, on the validated shading model in
+   * `daylight.test.ts`:
+   *
+   *     sunIntensity   roof top   turf        (both faces up — they move together)
+   *          2.60        135.5     75.9       ← shipped
+   *          2.10        120.2     64.7       ← merely "not brighter than day"
+   *          0.52         42.7     17.9       ← the roof fixed, the lights off
+   *
+   * So the only per-surface channel a shared light leaves is REFLECTANCE, which
+   * is what this row is. It is the same mechanism `trussHex` already uses for
+   * the same reason, one surface away.
+   *
+   * ⚠ THE DERIVED FLOOR IS BLACK, AND THAT IS WHY THE SHIPPED VALUE IS NOT IT.
+   * Removing the rig from this surface exactly — scaling the day albedo by the
+   * hemisphere's share of the night irradiance, `E_hemi/E_total` = (0.0059,
+   * 0.0097, 0.0197) per channel — gives `0x060b14`, which renders at luminance
+   * **0.22**: a hole in the sky, the defect `roofEmissiveHex`'s note below spent
+   * a whole round undoing. A parked roof at night is not in a vacuum; it sees
+   * city glow and the upward spill off a lit field, neither of which one
+   * hemisphere light and one downward directional can deliver.
+   *
+   * ⚠ SO THE LIFT IS ANCHORED, NOT CHOSEN. `0x44464a` is the value that renders
+   * the deck's TOP level with the stack's own SOFFIT — 38.80 against 39.03, and
+   * the soffit is the one night surface whose value was measured off a shipped
+   * PNG, reproduced to the byte by the model, and signed off by the visual gate.
+   * One object, one value: with the rig underneath it, the exterior of a parked
+   * stack sees no more light than its interior does. The blue lip (57.3) and the
+   * lattice (56.7) stay the bright things up there, which is what
+   * `roofEdgeHex`'s note asks for.
+   *
+   * The panel/bay tints in `roof.ts`'s `deckColors` still apply on top, so the
+   * stack keeps its steps: 38.8 → 30.9 across the four panels at night, against
+   * 156.9 → 138.8 by day.
+   *
+   * DAY IS UNMOVED — `0x969ba2` is `roof.ts`'s own former `COLORS.deck`, moved
+   * here verbatim so the day frame is byte-identical.
+   */
+  roofDeckHex: number;
+  /**
    * The roof's space-frame truss and the roof's UNDERSIDE, each with its own
    * emissive. Three columns, two surfaces, and the split is the fix — see
    * below.
@@ -162,9 +218,11 @@ export interface Daylight {
    * this pair is half the mechanism. `crowd.ts`'s map MULTIPLIES the seat
    * colour, so a texel can only ever darken — which means "bright points on
    * dark" cannot be authored by making the dots brighter. It is authored by
-   * making the GROUND darker (`crowdBase` ≪ 1) and raising the seat colour to
-   * compensate, so the speckle's own ×1.0 texels land bright and everything
-   * between them falls away.
+   * making the GROUND darker (`crowdBase` < 1) and raising the seat colour to
+   * compensate, so the speckle's own texels land bright and everything between
+   * them falls away. ⚠ The speckle is no longer written at ×1.0 either — see
+   * `crowdPointGain`, which is the CEILING this pair spent two rounds not
+   * having.
    *
    * ⚠ THE FIRST ATTEMPT AT THAT OVERSHOT, AND THE OWNER LOOKED AT THE FRAME.
    * `crowdBase = 0.26` with the day's 16 % speckle density made
@@ -202,6 +260,65 @@ export interface Daylight {
   crowdBase: number;
   /** Fraction of crowd texels that are a bright point. See `crowdBase`. */
   crowdSpeckle: number;
+  /**
+   * The CEILING on one bright point, as a fraction of its palette entry.
+   *
+   * ⚠⚠ THIS ROW IS THE THIRD ATTEMPT AT THE NIGHT CROWD, AND IT EXISTS BECAUSE
+   * THE FIRST TWO HAD ONLY ONE KNOB. `crowdBase` is the deck's FLOOR and the
+   * points had no ceiling at all — they were written at the full palette — so
+   * "less like television static" and "less like a black hole" were the same
+   * dial pulled in opposite directions. 0.26 was static; 0.10 was a starfield;
+   * 0.16 was the compromise, and it still measured as sensor noise:
+   *
+   *     `daynight-*.png`, `wide`      p50     p99   p99/p50
+   *     day   far upper deck        22.1    36.5      1.7
+   *     day   near bowl             18.4    73.2      4.0
+   *     night far upper deck  →      9.8   150.4     15.4      ← 9× day's
+   *     night near bowl       →      4.1   112.3     27.5      ← 6.9× day's
+   *
+   * A crowd point rendering at 150 is BRIGHTER than the floodlit turf (83) and
+   * 2.6× the blue leading edge (57) that is the building's night signature. It
+   * is not even a light: the map multiplies, so a ×1.0 texel is a WHITE LAMBERT
+   * PATCH taking the field rig full on, and white under floodlights beats green
+   * turf every time. That is what a ceiling is for.
+   *
+   * ⚠ THE CEILING IS ANCHORED: A CROWD POINT MAY NOT OUT-RENDER THE FIELD.
+   * 0.55 puts the night deck's p99 at 76.2 far / 67.5 near, just under the
+   * floodlit turf's p50 of 83.2 — so the brightest thing in a night frame is
+   * the board, then the field, then the crowd, which is the order the reference
+   * photographs have.
+   *
+   * ⚠ AND WITH A CEILING, THE FLOOR COULD GO BACK UP — which is the half the
+   * two failed passes could not reach. `crowdBase` returns to 0.26 (the value
+   * that was "static" at 16 % density and gain 1, a combination that no longer
+   * exists) and the deck's structure comes back with it. Measured on the same
+   * two patches, gain 0.55 / base 0.26:
+   *
+   *     night far upper deck        27.0    76.2      2.8   (was 9.8/150.4/15.4)
+   *     night near bowl             15.7    67.5      4.3   (was 4.1/112.3/27.5)
+   *
+   * i.e. 1.6× and 1.1× of the DAY ratio, against 9× and 6.9× before. Night
+   * SHOULD run a little hotter than day — the points stand for self-luminous
+   * screens, where by day both the points and the deck under them are lit by
+   * the same sun — but 3–5× is where the mid-tones die and nothing but the
+   * points survives, which is the "starfield" `crowdBase = 0.10` was rejected
+   * for. The near deck's p50 also comes back above the sky's 11.8: a bowl
+   * darker than the sky behind it is a hole, not a bowl.
+   *
+   * ⚠ MEASURED AND NOT SHIPPED: A BIGGER POINT. A texel is 30/`px` ft — 1.41 in
+   * at the medium tier — so a phone screen is genuinely ~2 texels, and drawing
+   * the point as a 2 × 2 block (coverage held, so a quarter as many points)
+   * looked like the fix for "no minification blending". It measured WORSE on
+   * both patches: p99 150.4 → 80.7 against gain-alone's 71.5, and p99/p50 7.3 →
+   * 8.9, because a hard 2 × 2 block is *more* reliably sampled at full strength
+   * than a lone texel is. Softness needs a falloff, not an area, and the
+   * ceiling turned out to buy more than either. Recorded so the next round does
+   * not spend itself re-deriving it.
+   *
+   * Day is exactly 1 — `crowd.ts` multiplies by it unconditionally, so the
+   * signed-off day texture is byte-identical rather than merely unchanged-ish.
+   */
+  crowdPointGain: number;
 }
 
 /**
@@ -227,6 +344,8 @@ export const DAYLIGHT: Record<DaylightId, Daylight> = {
     skyStops: [0x4f8bc9, 0x74a8dc, 0xc6dcef],
     skyBandLift: 0.16,
     towerGlow: 0.22,
+    // The sunlit exterior. Moved verbatim from `roof.ts`'s `COLORS.deck`.
+    roofDeckHex: 0x969ba2,
     // Dark metal, and it stays dark: a dark lattice on a lifted soffit IS the
     // day effect. Its own emissive only lifts it off the clipping floor, so
     // that the members read as members rather than as holes in the plate.
@@ -243,6 +362,7 @@ export const DAYLIGHT: Record<DaylightId, Daylight> = {
     seatsHex: 0x243356,
     crowdBase: 1,
     crowdSpeckle: 0.16,
+    crowdPointGain: 1,
   },
   night: {
     id: 'night',
@@ -271,6 +391,10 @@ export const DAYLIGHT: Record<DaylightId, Daylight> = {
     // A cloud lift that reads at night is a cloud lift that reads as fog.
     skyBandLift: 0.05,
     towerGlow: 1.0,
+    // 0x969ba2 → this. Not a darker paint: the same paint under the light it
+    // actually gets, which is city glow and spill and NOT the field rig. It
+    // renders at 38.80 against the soffit's 39.03. See the field's note.
+    roofDeckHex: 0x44464a,
     // Pale, and NOW carrying its own light — see the field's note. The pale
     // value was inert until `trussEmissiveHex` existed: the shared emissive put
     // the lattice 0.8 levels from the soffit it hangs under.
@@ -291,25 +415,29 @@ export const DAYLIGHT: Record<DaylightId, Daylight> = {
     // why the owner saw blue static: a periwinkle multiplied by 1.0 is a
     // periwinkle. A phone screen is white with the barest blue in it.
     seatsHex: 0xd6e0f4,
-    // 0.26 → 0.16. The map is sampled in sRGB, so this is ~0.024 in the LINEAR
-    // light the renderer works in — the deck between the points is very dark,
-    // which is what "a dark bowl with scattered points" means.
+    // ⚠ 0.26 → 0.10 → 0.16 → 0.26 AGAIN, AND THE ROUND TRIP IS THE FINDING.
+    // Every one of those was this dial trying to do two jobs: 0.26 at the day's
+    // 16 % density and an uncapped point was television static; 0.10 was a pure
+    // starfield with the vomitories, the clumps and the seat-row banding all
+    // crushed to the same black; 0.16 was the compromise and STILL measured as
+    // sensor noise (p99/p50 = 15.4 far, 27.5 near, against day's 1.7 and 4.0).
     //
-    // ⚠ AND 0.10 WAS TOO FAR, WHICH IS A SECOND MEASUREMENT AND NOT A WOBBLE.
-    // At 0.10 the bowl came out at luminance 11.5 with a 0–190 range: a pure
-    // starfield, with the vomitories, the clumps and the seat-row banding all
-    // crushed to the same black. That is "noise", and the brief asks for
-    // "texture rather than noise at 400 ft". 0.16 is 2.4× brighter in linear
-    // light — enough for the coarse octave and the tunnel mouths to read as
-    // structure — while still 6.6× below the 0.26 the owner saw as static.
-    crowdBase: 0.16,
+    // The floor was never the defect. The point's CEILING was, and it did not
+    // exist — see `crowdPointGain`, which is new and is what lets the floor
+    // come back up. At 0.26 with 3 % density and gain 0.55 the deck's mid-tones
+    // are alive again (near p50 4.1 → 15.7, above the sky's 11.8) while the
+    // points fall to 76/67, just under the floodlit turf. The number is the
+    // same; the pairing it sits in is not, and the pairing is what was static.
+    crowdBase: 0.26,
     // 16 % → 3 %. A phone is not a person: roughly one seat in thirty is holding
     // a lit screen, and 16 % of texels at this tile size is television static.
-    // At the 4:1 minification the `pitcher` camera sees, the two together take
-    // the deck's mean from 0.207 to 0.040 in linear light — a 5.2× drop with
-    // the individual points UNCHANGED at full brightness, which is exactly the
-    // "sparse, not dim" the reference asks for.
+    // At the 4:1 minification the `pitcher` camera sees, this is what makes the
+    // points SPARSE; `crowdPointGain` below is what stops each one being a
+    // full-brightness pinprick, and `crowdBase` above is what keeps the deck
+    // between them a surface rather than a void. Three rows, three jobs.
     crowdSpeckle: 0.03,
+    // A crowd point may not out-render the field. See the row's own note.
+    crowdPointGain: 0.55,
   },
 };
 

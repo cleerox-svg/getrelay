@@ -13,9 +13,22 @@
 // result lines are `swingCopy.describeSwing`'s own eight outcomes, verbatim,
 // because that is what the HUD feeds the board.
 //
+// ⚠ AND THE PARK NAME IS IMPORTED, NOT TYPED. These fixtures said
+// `HARBOURFRONT DOME` on 8 of the 13 contact-sheet cards, and a `HARBOUR` team
+// in the linescore, for the whole of the round that renamed the park — while
+// every GL shot beside them correctly read `park.name` and said SKYDOME. Dead
+// fixture text is normally harmless; here it is not, because the contact sheet
+// IS the visual-review artefact, so the branch's own evidence advertised a park
+// that no longer exists and partly exists to document an IP decision. Reading
+// `SKYDOME_NAME` makes the next rename propagate instead of rotting.
+//
 // No canvas, no `three`, no clock. Data.
 
+import { SKYDOME_NAME } from '../../../lib/baseball/parks';
 import type { BoardArray, BoardScreen, BoardSide, BoardStrip } from './boardState';
+
+/** The home park, as the board sets it. `board.ts`'s `idleBoardArray` does the same. */
+const PARK = SKYDOME_NAME.toUpperCase();
 
 const STATS: BoardSide = {
   heading: 'DERBY',
@@ -43,7 +56,7 @@ const STRIP: BoardStrip = {
   rows: [{ name: 'YOU', cells: [612, 672, null], totals: [7, 1284] }],
 };
 
-const wrap = (main: BoardScreen, items: string[] = ['HARBOURFRONT DOME', 'ROUND 3 OF 3']): BoardArray => ({
+const wrap = (main: BoardScreen, items: string[] = [PARK, 'ROUND 3 OF 3']): BoardArray => ({
   main,
   left: STATS,
   right: PITCH,
@@ -92,11 +105,11 @@ export const BOARD_STATES: BoardFixture[] = [
     note: 'pre-game — the state that must be LIT AND EMPTY, never frame-dark',
     frame: 0,
     array: {
-      main: { kind: 'idle', label: 'HARBOURFRONT DOME' },
+      main: { kind: 'idle', label: PARK },
       left: null,
       right: null,
       strip: null,
-      ribbon: { items: ['HARBOURFRONT DOME'] },
+      ribbon: { items: [PARK] },
     },
   },
   // The eight outcomes `describeSwing` can produce, VERBATIM. The whiff line is
@@ -171,7 +184,7 @@ export const BOARD_STATES: BoardFixture[] = [
     array: {
       main: {
         kind: 'duelScore',
-        away: { name: 'HARBOUR', runs: 3 },
+        away: { name: PARK, runs: 3 },
         home: { name: 'ALPINE', runs: 4 },
         inning: 3,
         half: 'bot',
@@ -185,11 +198,11 @@ export const BOARD_STATES: BoardFixture[] = [
         columns: ['1', '2', '3'],
         totals: ['R', 'H', 'E'],
         rows: [
-          { name: 'HARBOUR', cells: [1, 0, 2], totals: [3, 6, 0] },
+          { name: PARK, cells: [1, 0, 2], totals: [3, 6, 0] },
           { name: 'ALPINE', cells: [0, 4, null], totals: [4, 7, 1] },
         ],
       },
-      ribbon: { items: ['HARBOURFRONT DOME', 'BOT 3 · 2 OUT'] },
+      ribbon: { items: [PARK, 'BOT 3 · 2 OUT'] },
     },
   },
   {

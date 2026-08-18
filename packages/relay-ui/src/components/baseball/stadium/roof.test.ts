@@ -29,9 +29,15 @@
 //   5. the truss material's `emissive` wired back to `roofEmissiveHex`,
 //      i.e. the single shared emissive that made the night lattice
 //      render 0.8 levels from its own soffit                          → 1 fail
+//   6. `deckColors` fed a literal `0x969ba2` again instead of
+//      `daylight.roofDeckHex` — the shipped state before the night
+//      roof stopped being the brightest object in a night frame       → 1 fail
+//      (the deck-wiring test below. `daylight.test.ts` still passes in
+//       full, which is the same reason leg 5 exists: a table can be
+//       right and unreachable.)
 
 import { describe, expect, it } from 'vitest';
-import { Mesh, MeshLambertMaterial, Scene } from 'three';
+import { Color, Mesh, MeshLambertMaterial, Scene } from 'three';
 import { ALPINE_HEIGHTS, HARBOURFRONT } from '../../../lib/baseball/parks';
 import type { Park } from '../../../lib/baseball/parks';
 import { DAYLIGHT } from './daylight';
@@ -198,6 +204,34 @@ describe('the open roof', () => {
     // every assertion above.
     expect(DAYLIGHT.night.trussEmissiveHex).not.toBe(DAYLIGHT.night.roofEmissiveHex);
     expect(DAYLIGHT.day.trussEmissiveHex).not.toBe(DAYLIGHT.day.roofEmissiveHex);
+  });
+
+  // ⚠ THE DECK'S COLOUR IS A VERTEX ATTRIBUTE, NOT A MATERIAL COLOUR, which is
+  // why it needs its own reader. `roofStack` ships `vertexColors: true` over a
+  // white material, so `material.color` is 0xffffff on both rows and the test
+  // above cannot see the deck at all — the value lives in the buffer, tinted
+  // per bay and per panel by `deckColors`. The BRIGHTEST vertex is the one with
+  // no tint (`bay = 1`, panel 0), so it is exactly `daylight.roofDeckHex`.
+  it('paints the deck from `daylight.roofDeckHex`, per row', () => {
+    for (const light of [DAYLIGHT.day, DAYLIGHT.night]) {
+      const roof = roofOf(HARBOURFRONT, light);
+      const deck = roof.group.children.find((c) => c.name === 'roofStack') as Mesh | undefined;
+      expect(deck, `${light.id}: no roofStack mesh`).toBeDefined();
+      const attr = deck!.geometry.getAttribute('color');
+      expect(attr, `${light.id}: the deck has no vertex colours`).toBeDefined();
+      const peak = [0, 1, 2].map((c) =>
+        Math.max(...Array.from({ length: attr.count }, (_, i) => attr.getComponent(i, c))),
+      );
+      // `Color.set(hex)` decodes sRGB → linear, which is the space the buffer is
+      // in, so the expectation is built the same way rather than by hand.
+      const want = new Color(light.roofDeckHex);
+      expect(peak[0]!, `${light.id} deck r`).toBeCloseTo(want.r, 6);
+      expect(peak[1]!, `${light.id} deck g`).toBeCloseTo(want.g, 6);
+      expect(peak[2]!, `${light.id} deck b`).toBeCloseTo(want.b, 6);
+    }
+    // …and the two rows are genuinely different, which is the content of the
+    // column. A table that set them equal would satisfy everything above.
+    expect(DAYLIGHT.night.roofDeckHex).not.toBe(DAYLIGHT.day.roofDeckHex);
   });
 
   it('is DATA, not a branch: a roofless park gets no roof geometry anywhere', () => {
