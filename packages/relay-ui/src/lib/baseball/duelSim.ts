@@ -9,7 +9,9 @@
 //   batSim.swingContact       → the one oblique impulse solve (EV/LA/spray/spin)
 //   battedBallSim             → the flight, on stage 1's RK4
 //   parks.resolveFence        → home run / off the wall / foul / roof
-//   fielding.fieldBattedBall  → and THEN out / 1B / 2B / 3B / HR
+//   fielding.fieldBattedBall  → and THEN out / 1B / 2B / 3B / HR, which for a
+//                               ball on the dirt runs groundBall.groundOut —
+//                               the roll, the race, the throw and the runner
 //
 // ⚠ THIS IS `fielding.ts`'s FIRST REAL CALLER, and that is the difference
 // between the two modes. `derbySim.ts`'s header says in as many words that it
@@ -29,8 +31,11 @@
 //
 // ⚠ THE SCOPE CAP IS THE DESIGN, restated here because this is where a branch
 // would be added: no stolen bases, no errors, no substitutions, no pitching
-// changes, no defensive shifts, no pickoffs, no leads, no throws or cutoffs, and
-// baserunners advance BY FORCE ONLY. `duelRules.advanceRunners` states the
+// changes, no defensive shifts, no pickoffs, no leads, no double plays, no
+// fielder's choice, no cutoffs and no outfield assists, and baserunners advance
+// BY FORCE ONLY. ⚠ There IS a throw now — exactly one, always to first, inside
+// `groundBall.ts` — and its own header states the cap it sits under.
+// `duelRules.advanceRunners` states the forced-advance
 // simplification, states that it biases scoring DOWN, and is pinned by a test.
 // BRANCHES GROWING IN THIS FILE IS THE SIGNAL TO DESIGN THE NEXT MILESTONE.
 //
@@ -355,6 +360,10 @@ export class DuelSim {
         distFt: fence.distFt,
         bearingDeg: fence.bearingDeg,
         hangS: fence.hangS,
+        // The ROLLING PHASE's starting speed, straight off the integrator. It is
+        // the horizontal component at the bounce, not the landing speed — see
+        // `BattedFlight.landingGroundFps`.
+        landingGroundFps: flight.landingGroundFps,
         foulTerritoryFt: this.cfg.park.foulTerritoryFt,
       },
       this.isHumanBatting() ? aiDefenseRating(this.cfg.difficulty) : this.cfg.defense,

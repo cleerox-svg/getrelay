@@ -8,8 +8,12 @@
 // lands on the right axis with the right sign, and that a seed replays a game
 // pitch for pitch.
 //
-// It also PRINTS the outcome distribution, because a duel can be inside every
-// tolerance and still be a game in which nothing ever happens. ⚠ The bands on
+// It also PRINTS the outcome distribution AND the ground-ball table, because a
+// duel can be inside every tolerance and still be a game in which nothing ever
+// happens — and because the ground-ball out rate is where the one number the
+// rolling phase calibrates (`groundBall.ROLL_DECEL_DIRT_FPS2`) is measured. ⚠ The
+// rate alone is not the claim: `groundBall.test.ts` carries the structure
+// assertions that a coin-flip model hitting the same rate would fail. ⚠ The bands on
 // that table are REGRESSION FENCES rather than a calibration — roughly ±50 %
 // around the measured values — and the assertions that actually guard its SHAPE
 // are the monotonicity checks (a better AI strikes out less and walks less) plus
@@ -774,6 +778,8 @@ function autoGame(seed: number, difficulty: number, skill: number) {
     return d.value;
   };
   const lines: string[] = [];
+  /** Every batted ball that reached the ground still travelling, for the GB table. */
+  const grounders: Array<{ la: number; out: boolean; single: boolean; fielder: string }> = [];
   let guard = 0;
   while (sim.phase !== 'done') {
     // A PA cannot loop forever inside the sim — the loop is the CALLER's — so
@@ -796,20 +802,32 @@ function autoGame(seed: number, difficulty: number, skill: number) {
       sim.servePitch(aiPitchCommand(draw, skill, { balls: sim.balls, strikes: sim.strikes }));
       rec = sim.aiBat();
     }
+    if (rec.play && rec.play !== 'FOUL') {
+      grounders.push({
+        la: rec.laDeg,
+        out: rec.play === 'OUT',
+        single: rec.play === 'SINGLE',
+        fielder: rec.fielder,
+      });
+    }
     lines.push(
       `${rec.pitchId} ${rec.balls}-${rec.strikes} ${rec.outcome} ${rec.plateX.toFixed(4)} ` +
         `${rec.plateH.toFixed(4)} ${rec.evMph.toFixed(3)} ${rec.distFt.toFixed(3)} ` +
         `${rec.play ?? '-'} ${rec.pa?.outcome ?? '-'} ${sim.awayScore}-${sim.homeScore}`,
     );
   }
-  return { sim, transcript: lines.join('\n') };
+  return { sim, transcript: lines.join('\n'), grounders };
 }
 
 describe('duel — the outcome bench', () => {
   it('⚠ PRINTS the outcome distribution at three difficulties, and asserts the bands', () => {
     const N = 16;
     const rows: string[] = [];
+    const gbRows: string[] = [];
     const summary: { d: number; runs: number; k: number; bb: number; hr: number; hrBip: number }[] = [];
+    /** The ground-ball tally, pooled across difficulties. See the second table. */
+    const gbAll = { bip: 0, gb: 0, outs: 0, singles: 0, gbSingles: 0, steep: 0 };
+    const gloves: Record<string, number> = {};
     for (const d of [0.15, 0.5, 0.85]) {
       const counts: Record<string, number> = {};
       let runs = 0;
@@ -817,8 +835,24 @@ describe('duel — the outcome bench', () => {
       let pas = 0;
       let maxInn = 0;
       const scores: string[] = [];
+      const gb = { bip: 0, gb: 0, outs: 0, singles: 0, gbSingles: 0, steep: 0 };
       for (let i = 0; i < N; i++) {
-        const { sim, transcript } = autoGame(2000 + i, d, d);
+        const { sim, transcript, grounders } = autoGame(2000 + i, d, d);
+        // ⚠ THE GROUND-BALL CENSUS USES THE SAME LAUNCH-ANGLE CUT THE ARTIFACT
+        // WAS MEASURED WITH — `laDeg < 10` — so the before and after numbers are
+        // the same measurement and not two different ones.
+        for (const b of grounders) {
+          gb.bip++;
+          if (b.la < -20) gb.steep++;
+          if (b.single) gb.singles++;
+          if (b.la >= 10) continue;
+          gb.gb++;
+          if (b.out) {
+            gb.outs++;
+            gloves[b.fielder] = (gloves[b.fielder] ?? 0) + 1;
+          }
+          if (b.single) gb.gbSingles++;
+        }
         runs += sim.awayScore + sim.homeScore;
         pitches += sim.pitchCount;
         pas += sim.paCount;
@@ -858,6 +892,19 @@ describe('duel — the outcome bench', () => {
           `  ${row.hrBip.toFixed(0).padStart(4)}  ${String(maxInn).padStart(3)}` +
           `   ${g('single')}/${g('double')}/${g('triple')}   ${scores.join(' ')}`,
       );
+      gbAll.bip += gb.bip;
+      gbAll.gb += gb.gb;
+      gbAll.outs += gb.outs;
+      gbAll.singles += gb.singles;
+      gbAll.gbSingles += gb.gbSingles;
+      gbAll.steep += gb.steep;
+      gbRows.push(
+        `  ${d.toFixed(2)}   ${String(gb.bip).padStart(4)}   ${String(gb.gb).padStart(3)}` +
+          `   ${String(gb.outs).padStart(6)}   ${((100 * gb.outs) / Math.max(1, gb.gb))
+            .toFixed(1)
+            .padStart(6)} %   ${String(gb.singles).padStart(3)}   ${String(gb.gbSingles).padStart(4)}` +
+          `   ${((100 * gb.gbSingles) / Math.max(1, gb.singles)).toFixed(0).padStart(4)} %`,
+      );
     }
     // eslint-disable-next-line no-console
     console.log(
@@ -866,14 +913,63 @@ describe('duel — the outcome bench', () => {
         rows.join('\n') +
         '\n  MLB reference: K 22 %, BB 8.5 %, HR 3 % of PA, ~5 % of balls in play.\n' +
         '  This is an ARCADE duel and sits deliberately above the home-run line.\n' +
-        '  ⚠ ONLY K/PA AND BB/PA MAY BE READ AGAINST THAT REFERENCE. runs/game and the\n' +
-        '    1B column are dominated by fielding.ts\'s landing-point limitation — every\n' +
-        '    ground ball is a base hit, so ~89 % of the singles above are grounders that\n' +
-        '    should mostly have been outs, and the run environment is HIGHER than a real\n' +
-        '    one. duelRules.ts nets that against the forced-advance rule. Not calibration.\n' +
+        '  ⚠ THE ROLLING PHASE MOVED EVERY COLUMN OF THIS TABLE. Before it, the numbers\n' +
+        '    at 0.15/0.50/0.85 were runs 5.06/6.19/8.25 and 1B 79/94/153, because every\n' +
+        '    ground ball was a base hit. They are now what is printed above. runs/game is\n' +
+        '    no longer dominated by that artifact, so it may be READ — though it is still\n' +
+        '    not calibrated to anything, and duelRules.ts\'s forced-advance rule still\n' +
+        '    biases it DOWN. K/PA and BB/PA remain the two clean comparisons.\n' +
         '  Bands below are regression fences (~±50 %); the shape guards are the\n' +
         '  monotonicity checks and HR/BIP.\n',
     );
+    // eslint-disable-next-line no-console
+    console.log(
+      `\n[GROUND BALLS — the rolling phase, ${N} seeded games per difficulty]\n` +
+        '  diff    BIP    GB   GB→out     rate    1B  of GB   share\n' +
+        gbRows.join('\n') +
+        `\n\n  POOLED: ${gbAll.outs} of ${gbAll.gb} ground balls retired — ` +
+        `${((100 * gbAll.outs) / gbAll.gb).toFixed(1)} %, against MLB's ~72 %.\n` +
+        `  Putouts by position: ${Object.entries(gloves)
+          .sort((a, b) => b[1] - a[1])
+          .map(([k, v]) => `${k} ${v}`)
+          .join(', ')}\n` +
+        `  ⚠ THE PITCHER LEADING THAT COLUMN IS THE *BATTING* MODEL SHOWING THROUGH, not\n` +
+        `    the fielding one: ${((100 * gbAll.steep) / gbAll.bip).toFixed(
+          0,
+        )} % of this bench's balls in play leave the bat below −20°,\n` +
+        '    land within a few feet of the plate and die in front of the mound. A real\n' +
+        '    spray chart is not that steep and a real pitcher takes ~2 % of putouts. That\n' +
+        '    is a note about `batSim`/`ai`, and it is not fixable in `groundBall.ts`.\n' +
+        "  ⚠ BEFORE THE ROLLING PHASE: 3.4 % at difficulty 0.50 (84 singles, 3 outs from\n" +
+        '    87 ground balls) and 6.5 % at 0.85 — there was no 6-3 groundout in the game.\n' +
+        '  ⚠ AND THE RATE IS NOT THE CLAIM ON ITS OWN. `ROLL_DECEL_DIRT_FPS2` is fitted\n' +
+        '    to it, so a model that made every grounder a coin flip would land here too.\n' +
+        '    The claim is this table AND groundBall.test.ts\'s structure assertions —\n' +
+        '    at a fielder is an out, through a hole is a hit, and the same slow roller is\n' +
+        '    a hit down the third-base line and an out down the first-base line.\n',
+    );
+
+    // ⚠ THE GROUND-BALL FENCE. Wide, like the others — but its FLOOR is the one
+    // number in this file that is a real regression test rather than a fence:
+    // the model this replaced scored 3.4 %, so anything that quietly restores a
+    // landing-point lookup lands two-thirds of the way below this line.
+    const pooled = (100 * gbAll.outs) / gbAll.gb;
+    expect(gbAll.gb, 'ground balls in the sample').toBeGreaterThan(100);
+    expect(pooled, 'pooled ground-ball out rate').toBeGreaterThan(60);
+    expect(pooled, 'pooled ground-ball out rate').toBeLessThan(84);
+    // …and it has to hold at EVERY difficulty, not just pooled: a rate that was
+    // 90 % at one skill and 45 % at another would pool to the target and be
+    // wrong twice.
+    for (const row of gbRows) {
+      const rate = Number(row.split('%')[0]!.trim().split(/\s+/).pop());
+      expect(rate, `per-difficulty ground-ball out rate (${row.trim()})`).toBeGreaterThan(55);
+      expect(rate, `per-difficulty ground-ball out rate (${row.trim()})`).toBeLessThan(90);
+    }
+    // ⚠ AND THE PUTOUTS HAVE TO BE SPREAD. One fielder making every play would
+    // be a geometry bug that the aggregate rate cannot see — and it is exactly
+    // what a broken throw-distance or a deleted alignment row would look like.
+    const infieldGloves = ['P', '3B', 'SS', '2B', '1B'].filter((p) => (gloves[p] ?? 0) > 0);
+    expect(infieldGloves, `putouts: ${JSON.stringify(gloves)}`).toHaveLength(5);
 
     // ⚠ WHAT THESE BANDS ARE AND ARE NOT. They are REGRESSION FENCES, not a
     // calibration: each is set roughly ±50 % around the measured value, wide
@@ -883,14 +979,16 @@ describe('duel — the outcome bench', () => {
     // caught by `hrBip` and by nothing else here. The MONOTONICITY checks below
     // are the assertions that actually guard the shape.
     //
-    // ⚠ AND `runs/game` AND THE 1B COLUMN ARE NOT CALIBRATION EVIDENCE. Both are
+    // ⚠ AND `runs/game` AND THE 1B COLUMN USED TO CARRY A DISCLAIMER HERE, which
+    // the rolling phase retired along with the artifact behind it. Both were
     // dominated by `fielding.ts`'s landing-point limitation — every ground ball
-    // is a base hit, so 89 % of the singles in this table are grounders that
-    // should mostly have been outs. `duelRules.ts`'s base-advancement section
-    // nets that against the forced-advance rule and states the conclusion: the
-    // duel's run environment is HIGHER than a real one until the rolling phase
-    // lands. K/PA and BB/PA are untouched by the artifact and are the two
-    // columns that may honestly be read against MLB.
+    // was a base hit — and both moved hard when `groundBall.ts` landed: runs at
+    // the three difficulties went 5.06/6.19/8.25 → 4.69/3.50/3.13 and the 1B
+    // column 79/94/153 → 36/31/28. They are readable now. They are still not
+    // CALIBRATED to anything — nothing here is fitted to a run environment — and
+    // `duelRules.ts`'s forced-advance rule still biases them DOWN, which is now
+    // the only stated bias rather than the smaller of two. K/PA and BB/PA remain
+    // the two columns with a published number to be read against.
     for (const r of summary) {
       // A game where nothing happens is the failure this bench exists to catch.
       expect(r.runs, `diff ${r.d}: runs/game`).toBeGreaterThan(3);

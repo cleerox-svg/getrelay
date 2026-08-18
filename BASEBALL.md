@@ -111,7 +111,14 @@ test**, or an **explicitly-labelled feel knob**. There is no fifth category.
 | infield arc radius | 95 ft | **published data** | the skinned-infield grass line, struck from the rubber (reference unverified; the *centre* is the ambiguity — see below) |
 | infield dirt edge | `r(β) = d·cos β + √(95² − (d·sin β)²)` | **derived** | plate-centred distance to that arc, `d = RUBBER_D_FT`. 155.5 ft at 0°, 127.6 at the foul line. A FUNCTION: the arc is struck from the rubber and the lookup asks in plate polars |
 | `XB_DEPTH_DATUM_FT` | 155.5 ft | **feel knob** | where extra-base depth credit is measured from. Deliberately FLAT, `= r(0)`, and argued on the constant — the throw back goes to a base, which does not move when the grass line curves |
-| `GROUND_INTERCEPT_FT`, `XB_*`, `DEFENSE_SPAN` | 26 ft, 68/130 ft, ±15 % | **feel knobs** | the fielding lookup's bands — see the fielding section |
+| `XB_*`, `DEFENSE_SPAN` | 68/130 ft, ±15 % | **feel knobs** | the fielding lookup's bands — see the fielding section |
+| fielder GROUND reaction | 0.2 s | **published data** | human simple visual reaction; a grounder has no route to read, which is what the other 0.3 s of the 0.5 s above pays for (reference unverified) |
+| `ROLL_DECEL_DIRT_FPS2` | 70 ft/s² | **calibrated** | the ONE free parameter of the rolling phase, solved against MLB's ~72 % ground-ball out rate over 144 seeded games. 2.2 g, and bounce-dominated rather than a rolling resistance — see the rolling-phase section |
+| `ROLL_GRASS_RATIO` | 1.25× | **feel knob** | grass is slower than clay; the ORDERING is real, the magnitude could not be sourced, and it is pinned LOW and held while the constant above is fitted |
+| infield throw velocity | 80 mph | **published data** | Statcast infield arm-strength average; one number, never a per-position table (reference unverified) |
+| glove-to-release | 0.7 s | **published data** | Statcast's catcher EXCHANGE time, taken unadjusted — see the rolling-phase section for why it is not nudged |
+| home to first | 4.3 s | **published data** | MLB average on a competitive run. One number: handedness and sprint speed are CARD stats, not fielding inputs |
+| base path | 90 ft | **published data** | the rule book. First base is `(FOUL_LINE_DEG, 90 ft)`, **derived** from it and `parks.FOUL_LINE_DEG` |
 
 **Air density.** `airDensity(elevFt, tempF, rh)` = standard-atmosphere
 barometric pressure `p(h) = p₀(1 − 6.87535e-6·h)^5.2559`, then the ideal gas law
@@ -791,13 +798,29 @@ corrected, and the fixed-ν choice is better supported than before.
 
 ### Fielding — the smallest model in the game
 
-Landing point + hang time + **one** defender rating → out / 1B / 2B / 3B / HR.
-No stolen bases, errors, substitutions, shifts, positioning, throws, cutoffs or
-baserunner state. `fielding.ts` is 323 lines against a 500-line cap, and the cap
-is the design — a third of it is the argument for the infield arc below.
+A ball in the air is a landing point + a hang time + **one** defender rating; a
+ball on the ground **rolls, is raced for, and is thrown to first**. Out / 1B /
+2B / 3B / HR. No stolen bases, errors, substitutions, shifts, double plays,
+fielder's choice, cutoffs, relays, outfield assists or baserunner state.
 
-- **The alignment is a constant** — seven standing positions, polar from the
-  plate. That constant *is* the "no shifts" rule expressed as data.
+**Three modules along a real seam**, none near the 500-line cap, and the split
+was forced by the cap rather than by taste:
+
+| | |
+| --- | --- |
+| `fielders.ts` (244) | where the defence stands, how fast it gets anywhere, and where the dirt ends |
+| `groundBall.ts` (407) | the ball on the GROUND: roll → race → throw → runner |
+| `fielding.ts` (213) | the ball in the AIR, and the one place a batted ball becomes a result |
+
+- **The alignment is a constant** — eight standing positions, polar from the
+  plate. That constant *is* the "no shifts" rule expressed as data. ⚠ **The
+  PITCHER is now in it and the catcher is not.** The list used to say "neither is
+  ever the nearest fielder to a batted ball's LANDING POINT", which was true of a
+  landing-point model and became false the moment the ball started rolling: a
+  grounder up the middle passes within a few feet of the rubber, and ~20 % of the
+  bench's balls in play leave the bat inside ±10° of dead centre. The catcher
+  stays out because the only balls he fields are bunts and balls that die within
+  ~30 ft of the plate, and this game has neither.
 - **The dirt edge is an ARC, not a circle**, and it is a function of bearing.
   See below: this is the one thing M1's visual gate found, and it is physics.
 - **Reach ramps.** `react (0.5 s) → accelerate (1.8 s to 27 ft/s) → sprint`. The
@@ -820,17 +843,114 @@ is the design — a third of it is the argument for the infield arc below.
   read by the geometry alone. A narrowing foul wedge is a model this does not
   have, and the two-field split is the honest way to say so.
 
-⚠ **The stated limitation, pinned by a test.** The model reads the ball's
+### The rolling phase — the landing-point limitation, fixed
+
+⚠ **This section used to be a confession.** It read: the model reads the ball's
 *landing point*, and a ground ball does not stop where it lands — it rolls to the
-fielder, who throws. A routine grounder to short lands 25.1 ft from him with
-0.55 s of usable time, in which he covers **2.3 ft**; `GROUND_INTERCEPT_FT = 26`
-is a labelled feel knob standing in for the roll and the throw, and setting it to
-0 makes every routine ground ball a base hit (mutation-verified, 2 tests). A
-second clause caps any unfielded ball landing on the dirt at a **single** — load
-bearing, not tidy: a chopper landing 7 ft in front of the plate is 100 ft from
-the nearest fielder's *standing spot*, and without it the miss arithmetic scores
-it a double. When the duel wants real infield play the fix is a rolling phase,
-and both are deleted rather than tuned.
+fielder, who throws — so `GROUND_INTERCEPT_FT = 26` is a labelled feel knob
+standing in for both, and *"when the duel wants real infield play the fix is a
+rolling phase, and both are deleted rather than tuned."* The derby never
+exercised it (a derby has no defence). The duel did, and it dominated the game:
+**274 balls in play at difficulty 0.50, 87 ground balls, 84 singles and 3 outs —
+a 3.4 % ground-ball out rate against MLB's ~72 %**, with no 6-3 groundout
+anywhere in the game.
+
+`groundBall.ts` is that rolling phase. `GROUND_INTERCEPT_FT` is **deleted**.
+
+**Four steps and there is no fifth.**
+
+1. **The ball rolls** outward along its bearing from where it landed, starting at
+   its own horizontal landing speed (`BattedFlight.landingGroundFps`, derived by
+   the integrator) and decelerating piecewise-analytically — dirt inside the arc,
+   grass outside it, `v² = v₀² − 2as` on each. ⚠ **There is no bounce-retention
+   knob**, because the angle dependence is already in that ground speed: at
+   95 mph off the bat, a ball topped at −45° keeps **71 %** of its landing speed
+   along the ground and a grazing one at −2° keeps **99 %**, so the chopper rolls
+   69 ft where the screamer rolls 126.
+2. **Every fielder races it.** ⚠ **The race is a CONSTRAINT, not a distance
+   comparison**, and getting that backwards is the easy bug: a fielder may take
+   the ball at a point only if he can *be* there **no later than the ball** — the
+   ball does not wait at a spot he arrives at two seconds late. The one exception
+   is the stopping point, where it does wait; that single `max` is the whole of
+   "he ran it down".
+3. **He throws to first** — `THROW_RELEASE_S` plus the distance from the pickup
+   point at `THROW_SPEED_FPS`. ⚠ The **first baseman fielding it himself** is not
+   a branch: it is the same throw, 21.7 ft long, taking 0.18 s.
+4. **The runner is `RUNNER_HOME_TO_FIRST_S`.** Sooner is an out.
+
+⚠ **ONE FREE PARAMETER, AND IT IS LABELLED HONESTLY.**
+`ROLL_DECEL_DIRT_FPS2 = 70` is **calibrated** against a target outside itself —
+MLB's ~72 % ground-ball out rate over 144 seeded duels — with every other number
+published or pinned. Everything else is published in the weak sense (80 mph arm,
+0.7 s exchange, 4.3 s home-to-first, 0.2 s ground reaction, 90 ft base path) or
+derived. `ROLL_GRASS_RATIO = 1.25` is an explicitly-labelled **feel knob**: the
+ordering (grass is slower than clay) is real, the magnitude could not be sourced,
+and an earlier draft of its comment claimed it was unobservable — **measuring it
+proved that false**, so it is pinned low and held.
+
+⚠ **AND WHAT THE FITTED CONSTANT ABSORBS, STATED.** 70 ft/s² is **2.2 g**, which
+is not a rolling resistance: it is a *bounce-dominated effective deceleration
+over the first hundred feet*, the only stretch the model ever decides anything
+on. It also absorbs the model's largest simplification — `fielders.ts` gives an
+infielder a **standing sprinter's** ramp, which under-states the 10–40 ft a
+grounder actually asks for. Two consequences follow and both are real: the long
+tail is over-decelerated (a 91 mph grounder comes to rest ~150 ft out, where a
+real one is still moving), and 70–90 mph grounders die in front of the infield
+and are retired a little too often. The fix for both is a fielding-radius term
+applied *consistently* to the air lookup and the ground race with `XB_*` re-fitted
+underneath — a slice of its own.
+
+⚠ **THE RATE IS NOT THE CLAIM.** A model that made every grounder a coin flip
+would hit 72 % too. So the structure is asserted separately, and the sharpest
+rows are **mirrored pairs** — the same batted ball at ±the same bearing, called
+differently, because first base is on one side of the diamond and the throw from
+the left side is 80–100 ft longer:
+
+| batted ball | pickup | throw | play | vs 4.30 s |
+| --- | --- | --- | --- | --- |
+| sharp two-hopper at the SS (95/−6°/−19°) | 135 ft, 1.38 s | 125 ft | 3.15 s | **OUT** |
+| …its mirror at the 2B (95/−6°/+19°) | 135 ft, 1.38 s | 67 ft | 2.65 s | **OUT** |
+| through the 5-6 hole (102/−3°/−28°) | 176 ft, 2.57 s | 173 ft | 4.74 s | **SAFE** |
+| …its mirror, the 3-4 hole (+28°) | 176 ft, 2.57 s | 94 ft | 4.07 s | **OUT** |
+| slow roller down the 3B line (55/−5°/−44°) | 64 ft, 2.77 s | 109 ft | 4.40 s | **SAFE** |
+| …its mirror, the 1B line (+44°) | 64 ft, 2.77 s | 26 ft | 3.69 s | **OUT** |
+| comebacker to the mound (95/−8°/0°) | 60 ft, 0.48 s | 64 ft | 1.72 s | **OUT** |
+
+⚠ **ONE MUTATION SURVIVED AND IT IS UNOBSERVABLE, NOT UNTESTED** — the same
+category the infield cap was recorded in. `groundOut` minimises the whole PLAY
+time rather than the PICKUP time, because charging a slow roller trades a later
+pickup for a shorter throw. Swapping the objective fails nothing: over 7,068
+balls swept across the dirt the two return the same play to within 1e-9 s and 0
+calls differ. That is a small theorem rather than luck — taking the ball a foot
+deeper costs `1/v_ball` and saves at most `1/v_throw`, so a charge can only pay
+while the ball still outruns the 117 ft/s throw, and a ball a fielder has caught
+up with is slower than that. Two attempts to kill it (a named "the defence
+charges" row, then a full optimality sweep over every legal fielder/pickup pair)
+both passed the mutant, so it is **measured every run** instead. The optimality
+sweep stays: it is what kills the shortest-throw objective, which nothing else
+caught.
+
+⚠ **WHAT THE ROLLING PHASE DID TO THE DUEL.** Every column moved.
+
+| difficulty | runs/game | 1B/2B/3B | K/PA | BB/PA | GB→out |
+| --- | --- | --- | --- | --- | --- |
+| 0.15 | 5.06 → **4.69** | 79/17/3 → **36/19/9** | 38.4 → 41.3 % | 11.6 → 10.6 % | — → **64.5 %** |
+| 0.50 | 6.19 → **3.50** | 94/23/3 → **31/20/0** | 34.8 → 34.5 % | 5.8 → 5.4 % | 3.4 % → **70.5 %** |
+| 0.85 | 8.25 → **3.13** | 153/41/9 → **28/27/6** | 21.0 → 22.7 % | 1.5 → 2.6 % | 6.5 % → **81.3 %** |
+
+Pooled: **185 of 255 ground balls retired, 72.5 %**, against MLB's ~72 %. The
+run environment is now plausible for a three-inning game, and `runs/game` and the
+1B column are READABLE rather than dominated — still not calibrated to anything,
+and `duelRules.advanceRunners`'s forced-advance rule still biases them DOWN,
+which is now the only stated bias rather than the smaller of two.
+
+⚠ **ONE THING THE PUTOUT COLUMN SAYS ABOUT A DIFFERENT FILE.** The pitcher leads
+it (P 48, SS 47, 2B 46, 1B 29, 3B 15) where a real pitcher takes ~2 %. That is
+the **batting** model showing through, not the fielding one: 11 % of the bench's
+balls in play leave the bat below −20°, land within a few feet of the plate and
+die in front of the mound. A real spray chart is not that steep. It is a note
+about `batSim`/`ai` and it is not fixable in `groundBall.ts`.
+
 
 ⚠ **The infield edge is an arc struck from the RUBBER — fixed in the geometry,
 after two goes at fixing the label.** Stage 4 shipped `INFIELD_DEPTH_FT =
@@ -974,8 +1094,12 @@ the render layer; contact resolves at the true physical state.
 | `packages/relay-ui/src/lib/baseball/parks.ts` | The park as DATA + `fenceAt` (pchip through the sampled wall), the roof mechanic (`roofClosed`, `parkConditions` — exactly-zero wind and pinned air when shut) and `resolveFence` (analytic fence crossing → homeRun/offWall/foul/roof/inPlay). Owns `SKYDOME_NAME`, the one line a name revert touches. Read by the physics AND by the geometry |
 | `packages/relay-ui/src/lib/baseball/parkValidate.ts` | `validatePark()` and its bounds table. Extracted from `parks.ts` at the 500-line cap when the published profile added `backstopFt` and `surroundings` — everything in it runs at AUTHORING time and none of it is in the shipped chunk, so the split is a bundle win as well as a cap one |
 | `packages/relay-ui/src/lib/baseball/parks.test.ts` | The park bench: prints the fence tables (pchip vs linear, with the knot-slope jump), the roof-open weather draw, the roof ceiling ladder, the wind-bearing histogram, the wind boost against an independent ground-frame RK4, and the altitude ladder; asserts the 400/395 wall boundary, the foul pole, `wind === 0` under a shut roof, byte-identical trajectories across seeds, the uniform bearing window, a TRIPWIRE on golf's wind sampler, and the altitude result against the published 25–30 ft band |
-| `packages/relay-ui/src/lib/baseball/fielding.ts` | The deliberately tiny defence: fixed alignment, a ramped reach, one defender rating, → out / 1B / 2B / 3B / HR, and `infieldDepthFt(β)` — the 95 ft arc, read by the lookup AND by `stadium/field.ts`. 323 lines, and the cap is the design |
-| `packages/relay-ui/src/lib/baseball/fielding.test.ts` | The fielding bench: prints the reach ladder and a named batted-ball ladder; asserts the catch boundary exactly on the reach, the single/double index boundary, the foul-territory boundary, the rating's ±15 % span, and the landing-point limitation |
+| `packages/relay-ui/src/lib/baseball/fielders.ts` | The DEFENCE, underneath both layers: the fixed alignment (now with the pitcher in it), the acceleration ramp and its exact inverse `timeToCoverS`, the two reaction times, the one rating's multiplier, and `infieldDepthFt(β)` — the 95 ft arc, read by the air lookup, by the ROLL and by `stadium/field.ts`. Extracted from `fielding.ts` when the rolling phase landed, because two consumers reaching for it through each other is an import cycle. 244 lines |
+| `packages/relay-ui/src/lib/baseball/groundBall.ts` | THE ROLLING PHASE — the ball on the ground, from the bounce to the bag: a piecewise-analytic roll across the grass line, a race in which a fielder may take the ball only at a point he reaches no later than it does, one throw to one base, and a published runner. 407 lines, and its header states the cap (no double plays, no fielder's choice, no cutoffs, no errors) |
+| `packages/relay-ui/src/lib/baseball/fielding.ts` | The LOOKUP: foul pops, the catch in the air, the extra-base index, and the hand-off to the roll for anything that lands on the dirt. Down to 213 lines from 346 — the extraction, not a raised cap |
+| `packages/relay-ui/src/lib/baseball/fielders.test.ts` | The defence bench: prints the reach ladder, the ramp read the other way, and the infield-edge table; asserts the ramp's INVERSE composes to the identity, that the alignment is fixed data with the pitcher on the rubber, and the 95 ft arc's defining property |
+| `packages/relay-ui/src/lib/baseball/groundBall.test.ts` | The rolling-phase bench: prints the roll table, the bounce decomposition by launch angle, the GROUND BALL LADDER with its three mirrored pairs, a bearing sweep and an exit-velocity sweep; asserts the closed form, the race CONSTRAINT, the optimality of the reported play, the rating's monotonicity — and MEASURES the one unobservable mutation |
+| `packages/relay-ui/src/lib/baseball/fielding.test.ts` | The fielding bench: prints the batted-ball ladder, the datum counterfactual and the end-to-end chain; asserts the catch boundary exactly on the reach, the single/double index boundary, the foul-territory boundary, the rating's ±15 % span, and that EVERY ball landing on the dirt is handed to the roll |
 | `packages/relay-ui/src/lib/baseball/derbyScoring.ts` | THE PAYOUT, and the LEAF of the derby's module graph — it imports nothing from the game, so `derbyRules` can check it against the format's derived cap with no cycle. One clamped scorer (`swingPoints`) that every outcome goes through, `validatePayoutCap` on the live config path and the full `validateDerbyPayout` sweep in the bench. Extracted at the 500-line cap in the M2 feel pass |
 | `packages/relay-ui/src/lib/baseball/contactWindow.ts` | The bat GEOMETRY — `BAT_TIP_M`, `BAT_HANDLE_LIMIT_M` and the bisection that inverts `contactGeometry`. Three unrelated consumers (`derbySim`, `TimingBar`, the benches) and no knowledge of the format. Extracted at the same cap, same pass |
 | `packages/relay-ui/src/lib/baseball/rng.ts` | THE seeded stream: `simDraw(state)` plus mulberry32's STEP, carried as a plain NUMBER so `snapshot()` can be total. Extracted from `derbyRules.ts` when the duel needed the identical stream — two three-line mixers in two sibling modes is "one implementation per concept" failing quietly |
@@ -1147,9 +1271,9 @@ the render layer; contact resolves at the true physical state.
   and **never** converts a home run (a 125 mph home run apexes 200.3 ft) — the
   dimension exists and is asserted; there is no deflection model. (3) A 400 ft
   *carry* to a 400 ft fence is **not** a home run; the asserted boundary is on the
-  distance at wall height, and the ~9 ft difference is printed. (4) Fielding reads
-  the landing point, so the roll and the throw are missing and two labelled knobs
-  stand in for them.
+  distance at wall height, and the ~9 ft difference is printed. (4) Fielding read
+  the landing point, so the roll and the throw were missing and two labelled
+  knobs stood in for them — ⚠ **since fixed**; see the rolling-phase section.
   **Twenty-three mutations were watched to fail** and reverted, each against the
   whole 124-test suite: the fence made linear (1), its monotonicity limiter
   removed (1), the fence extrapolated past the foul lines (2), a "tiny" wind under
@@ -2012,11 +2136,12 @@ the render layer; contact resolves at the true physical state.
   rule is pinned by a table test that asserts `advanceRunners([_,2,_], 1).runs`
   is 0. Extra innings are the ordinary rule of baseball; `MAX_INNINGS = 9` is a
   **BOUND, not a rule**, and the bench prints the longest game any seed produced.
-  ⚠ **BUT THE NET RUN ENVIRONMENT IS HIGHER THAN A REAL ONE, NOT LOWER** — see
-  (5) below. The forced-advance rule suppresses scoring; `fielding.ts`'s
-  landing-point limitation inflates it by more, and the two are now netted in one
-  place (`duelRules.ts`'s base-advancement section) rather than argued in two
-  files that never met.
+  ⚠ **AT THE TIME THE NET RUN ENVIRONMENT WAS HIGHER THAN A REAL ONE, NOT
+  LOWER** — see (5) below. The forced-advance rule suppressed scoring;
+  `fielding.ts`'s landing-point limitation inflated it by more. ⚠ **The rolling
+  phase removed the larger of the two**, so this rule is now the ONLY bias on the
+  run environment and it points DOWN; `duelRules.ts`'s base-advancement section
+  carries the netting and the numbers.
   **(2) THE COMMAND MAP IS DERIVED FROM THE ZONE, NOT PICKED.** One scalar
   accuracy-bar stop has to become a two-dimensional displacement, so it needs a
   magnitude and an axis, and one sentence fixes both: at `|e| = 1` the
@@ -2065,6 +2190,11 @@ the render layer; contact resolves at the true physical state.
   **(4) THE OUTCOME TABLE — 16 seeded games per difficulty, AI against AI at the
   same skill on both sides.**
 
+  ⚠ **SUPERSEDED BY THE ROLLING PHASE** — the table below is the duel as it
+  shipped in this stage, kept because the rolling-phase section reads against it.
+  The current numbers are in that section's before/after table and in
+  `duelSim.test.ts`'s printed output.
+
   | difficulty | runs/game | pitches | PA/game | K/PA | BB/PA | HR/PA | HR per ball in play | 1B/2B/3B |
   | --- | --- | --- | --- | --- | --- | --- | --- | --- |
   | 0.15 | 5.06 | 100 | 29.0 | 38.4 % | 11.6 % | 8.6 % | 17 % | 79/17/3 |
@@ -2073,10 +2203,10 @@ the render layer; contact resolves at the true physical state.
 
   MLB reference: K 22 %, BB 8.5 %, HR 3 % of plate appearances and ~5 % of balls
   in play. Representative finals at 0.50: **10-2, 7-4, 1-0, 7-6, 11-4**.
-  ⚠ **ONLY K/PA AND BB/PA ARE LEGITIMATE COMPARISONS.** `runs/game` and the 1B
-  column are **dominated by the ground-ball artifact in (5)** — 89 % of the
-  singles in this table are grounders that should mostly have been outs — and
-  must not be read as a calibration result until the rolling phase lands. The
+  ⚠ **AT THE TIME, ONLY K/PA AND BB/PA WERE LEGITIMATE COMPARISONS.** `runs/game`
+  and the 1B column were **dominated by the ground-ball artifact in (5)** — 89 %
+  of the singles in this table are grounders that should mostly have been outs.
+  The rolling phase removed that artifact and both columns are readable now. The
   bands on this table are **regression fences at roughly ±50 %**, not a
   calibration; the assertions that guard its shape are the monotonicity checks
   (a better AI strikes out less and walks less at every step) and `HR per ball in
@@ -2086,7 +2216,10 @@ the render layer; contact resolves at the true physical state.
   called zone and a plate appearance ends before four balls can accumulate; and
   93 pitches for three innings is long against the 2.5–4 min brief. Both are feel
   knobs for the stage-2 pass, not model defects.
-  **(5) WHAT `fielding.ts` COULD NOT ANSWER,** reported rather than papered over
+  **(5) WHAT `fielding.ts` COULD NOT ANSWER** — ⚠ **NOW ANSWERED**, by the
+  rolling phase; the ground-ball out rate is 3.4 % → **72.5 %** and the section
+  above carries the model, the calibration and the before/after. Kept as written
+  because it is the measurement that justified the slice. Reported rather than papered over
   in `duelSim`, and **measured** rather than described. Its landing-point
   limitation, which the derby never exercised because a derby has no defence, is
   **load-bearing in a duel**: the clause that caps any unfielded ball landing on
@@ -2249,10 +2382,15 @@ the render layer; contact resolves at the true physical state.
   400 ft fly at 5200 ft) is inside the published band without one. If a park ever
   "plays big", the honest dials are its fence data and its air — never a
   multiplier on carry.
-- **Fielding reads the LANDING POINT, so there is no roll and no throw.** Two
-  labelled knobs stand in for them (`GROUND_INTERCEPT_FT`, and the cap that makes
-  any unfielded ball on the dirt a single). Do not tune them to fix an infield
-  outcome; the fix is a rolling phase, and then both are deleted.
+- **A ground ball ROLLS, and the constant that says how fast absorbs the model's
+  other simplifications.** `ROLL_DECEL_DIRT_FPS2` is the rolling phase's one free
+  parameter and it is 2.2 g — bounce-dominated over the first hundred feet, not a
+  rolling resistance, and partly standing in for a fielder ramp that is a standing
+  sprinter's. Two consequences are real and printed: the long tail is
+  over-decelerated (a 91 mph grounder comes to rest ~150 ft out), and 70–90 mph
+  grounders are retired a little too often. Do not tune it to fix one call; the
+  honest fix is a fielding-radius term applied to BOTH layers with `XB_*` re-fitted
+  underneath it.
 - **"On the dirt" is a FUNCTION of bearing; "how deep" is a flat datum.** They
   were one constant only because a wrong plate-centred circle happened to equal
   the arc's centre-field crossing. `infieldDepthFt(β)` answers the first and

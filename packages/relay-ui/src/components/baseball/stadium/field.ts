@@ -5,13 +5,16 @@
 // ⚠ EVERY RADIUS IN HERE COMES FROM DATA. The grass and the warning track are
 // cut to `fenceAt(park, β)` sampled degree by degree, so the turf ends exactly
 // where the wall the sim resolves against stands. The infield dirt's outer edge
-// is `infieldDepthFt(β)` — `fielding.ts`'s own function, not a second copy of
-// it. Home plate is `PLATE_WIDTH_FT` / `PLATE_DEPTH_FT` from `zone.ts`. The foul
+// is `infieldDepthFt(β)` — `fielders.ts`'s own function, not a second copy of
+// it. (It lived in `fielding.ts` until the rolling phase split the defence into
+// three modules along a real seam; the function is character-identical, the
+// geometry did not move, and one import line did.) Home plate is
+// `PLATE_WIDTH_FT` / `PLATE_DEPTH_FT` from `zone.ts`. The foul
 // lines are `FOUL_LINE_DEG`. A builder that hard-codes a distance is a bug the
 // visual gate is meant to catch.
 //
 // ⚠ THE DIRT USED TO BE DRAWN WRONG-LOOKING BECAUSE IT WAS COMPUTED WRONG, AND
-// THAT LOOP HAS NOW CLOSED. `fielding.ts` shipped a plate-centred 155.5 ft
+// THAT LOOP HAS NOW CLOSED. The fielder model shipped a plate-centred 155.5 ft
 // circle where the real 95 ft arc is struck from the RUBBER; this file drew that
 // circle rather than a prettier one, on the principle that a wrong shared number
 // should become visible instead of staying an internal detail. It did: the M1
@@ -58,7 +61,7 @@ import {
 } from 'three';
 import type { CanvasTexture, Side } from 'three';
 import { fenceAt, FOUL_LINE_DEG } from '../../../lib/baseball/parks';
-import { infieldDepthFt } from '../../../lib/baseball/fielding';
+import { infieldDepthFt } from '../../../lib/baseball/fielders';
 import { PLATE_DEPTH_FT, PLATE_WIDTH_FT } from '../../../lib/baseball/zone';
 import { at, fan, loft, mergeGeometries, planarUV, polygon, quad, ring } from './geom';
 import type { StadiumCtx, StadiumPart } from './geom';

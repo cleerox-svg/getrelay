@@ -90,8 +90,21 @@ export interface BattedFlight {
   apexFt: number;
   /** WORLD landing point (z = 0 exactly, by interpolation). */
   landing: Vec3;
-  /** Speed on landing, mph — what the fielding model reads. */
+  /** Speed on landing, mph. */
   landingSpeedMph: number;
+  /**
+   * GROUND speed on landing, ft/s — the horizontal component, and the number the
+   * ROLLING PHASE starts from (`groundBall.rollPath`).
+   *
+   * ⚠ IT IS THE HORIZONTAL COMPONENT AND NOT THE SPEED, which is the whole point
+   * of it being a separate field. A grazing screamer and a topped chopper can
+   * land at the same 139 ft/s and roll at 138 and 104 respectively, because one
+   * of them is spending most of its velocity going down. The vertical component
+   * is what the bounce takes; the horizontal component is what carries on. The
+   * angle dependence of a ground ball's roll is entirely in this number, which
+   * is why no bounce-retention knob is needed downstream.
+   */
+  landingGroundFps: number;
   evMph: number;
   laDeg: number;
   sprayDeg: number;
@@ -227,6 +240,7 @@ export function simulateBattedBall(
     apexFt: apex,
     landing: endP,
     landingSpeedMph: vLen(endV) * FPS_TO_MPH,
+    landingGroundFps: Math.hypot(endV.x, endV.y),
     evMph: speed * FPS_TO_MPH,
     laDeg: (Math.atan2(launch.v.z, Math.hypot(launch.v.x, launch.v.y)) * 180) / Math.PI,
     sprayDeg: (sprayAngle(launch.v) * 180) / Math.PI,
