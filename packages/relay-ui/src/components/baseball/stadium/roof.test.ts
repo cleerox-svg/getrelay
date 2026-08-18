@@ -26,9 +26,12 @@
 //      (the foul lines, and the monotone/symmetry sweep)
 //   4. `dropFt` of row 0 changed 0 → 6, i.e. the top of the stack no
 //      longer at the park's own ceiling                               → 1 fail
+//   5. the truss material's `emissive` wired back to `roofEmissiveHex`,
+//      i.e. the single shared emissive that made the night lattice
+//      render 0.8 levels from its own soffit                          → 1 fail
 
 import { describe, expect, it } from 'vitest';
-import { Scene } from 'three';
+import { Mesh, MeshLambertMaterial, Scene } from 'three';
 import { ALPINE_HEIGHTS, HARBOURFRONT } from '../../../lib/baseball/parks';
 import type { Park } from '../../../lib/baseball/parks';
 import { DAYLIGHT } from './daylight';
@@ -45,7 +48,7 @@ const TEST_SEED = 20260816;
  * `trussCells`, so the cheapest tier would test a roof with no lattice; the
  * shipped tier is what the gate photographs.
  */
-function ctxFor(park: Park): StadiumCtx {
+function ctxFor(park: Park, daylight = DAYLIGHT.day): StadiumCtx {
   const owned: Array<{ dispose(): void }> = [];
   return {
     scene: new Scene(),
@@ -56,12 +59,12 @@ function ctxFor(park: Park): StadiumCtx {
     park,
     quality: pickStadiumQuality({} as never, 'medium'),
     seed: TEST_SEED,
-    daylight: DAYLIGHT.day,
+    daylight,
   };
 }
 
-const roofOf = (park: Park) => {
-  const ctx = ctxFor(park);
+const roofOf = (park: Park, daylight = DAYLIGHT.day) => {
+  const ctx = ctxFor(park, daylight);
   return buildRoof(ctx, buildStands(ctx));
 };
 
@@ -166,6 +169,35 @@ describe('the open roof', () => {
       if (!s) continue;
       expect(s.peakFt, `peak at ${b}°`).toBeCloseTo(HARBOURFRONT.roofPeakFt, 3);
     }
+  });
+
+  // ⚠ THE WIRING, WHICH IS A DIFFERENT QUESTION FROM THE VALUES.
+  // `daylight.test.ts` asserts that the truss and the soffit are far enough
+  // apart in rendered luminance to read as a lattice. It cannot see WHICH
+  // column each material was handed — and the defect that made the night truss
+  // invisible was exactly that: one emissive column wired to both materials, a
+  // pale `trussHex` that never reached a pixel, and every existing test green.
+  // So the wiring is asserted where the materials are, on BOTH rows.
+  it('gives the truss and the underside SEPARATE emissives, from their own columns', () => {
+    for (const light of [DAYLIGHT.day, DAYLIGHT.night]) {
+      const roof = roofOf(HARBOURFRONT, light);
+      const matOf = (name: string) => {
+        const mesh = roof.group.children.find((c) => c.name === name) as Mesh | undefined;
+        expect(mesh, `${light.id}: no mesh named ${name}`).toBeDefined();
+        return mesh!.material as MeshLambertMaterial;
+      };
+      expect(matOf('roofUnderside').emissive.getHex(), `${light.id} underside`).toBe(
+        light.roofEmissiveHex,
+      );
+      expect(matOf('roofTruss').emissive.getHex(), `${light.id} truss`).toBe(light.trussEmissiveHex);
+      expect(matOf('roofTruss').color.getHex(), `${light.id} truss colour`).toBe(light.trussHex);
+      expect(matOf('roofLip').emissive.getHex(), `${light.id} lip`).toBe(light.roofEdgeEmissiveHex);
+    }
+    // …and the two emissives are genuinely different values at night, which is
+    // the whole content of the split. A table that set them equal would satisfy
+    // every assertion above.
+    expect(DAYLIGHT.night.trussEmissiveHex).not.toBe(DAYLIGHT.night.roofEmissiveHex);
+    expect(DAYLIGHT.day.trussEmissiveHex).not.toBe(DAYLIGHT.day.roofEmissiveHex);
   });
 
   it('is DATA, not a branch: a roofless park gets no roof geometry anywhere', () => {

@@ -159,9 +159,14 @@ const ROOF_PANEL_DEG = 7.5;
  * ⚠ THE UNDERSIDE IS DARK, NOT BLACK, AND THE FIRST RENDER WAS BLACK. It faces
  * DOWN, so the only light reaching it is the hemisphere's GROUND colour at
  * roughly half weight — 0x2a2e36 under that is indistinguishable from 0x000000
- * and the roof read as a hole punched in the sky. These are the values that
- * survive being lit from one side only. The truss stays the darkest thing in
- * the group, because "picked out against the underside" is the whole effect.
+ * and the roof read as a hole punched in the sky.
+ *
+ * ⚠ AND 0x6b727c DID NOT SURVIVE IT EITHER, which is a correction to the line
+ * that used to end this comment. Measured off `flight.png`: this colour renders
+ * at luminance **14.07** against a 175 sky — the same hole, one stop up. A
+ * DIFFUSE colour cannot fix a surface that receives ~3 % of an irradiance;
+ * the lift belongs to the emissive, which is a `daylight.ts` row and is where
+ * it now lives. This value is unchanged and is the colour the emissive tints.
  */
 const COLORS = { deck: 0x969ba2, under: 0x6b727c };
 
@@ -289,12 +294,17 @@ export function buildRoof(
   deck.castShadow = true;
   group.add(deck);
 
-  // ⚠ THE UNDERSIDE AND THE TRUSS CARRY AN EMISSIVE AT NIGHT, AND IT IS NOT A
-  // FLOURISH. Both face DOWN, so an overhead night rig reaches neither and the
-  // whole roof renders black — which loses the element that frames the tower in
-  // the one shot `homerun` and `flight` are composing. The alternative is a
-  // second light pointing up, which the shadow budget refuses. See
-  // `daylight.trussHex`.
+  // ⚠ THE UNDERSIDE AND THE TRUSS EACH CARRY AN EMISSIVE, AND IT IS NOT A
+  // FLOURISH. Both face DOWN, so neither the sun nor an overhead night rig
+  // reaches either and the whole roof renders black — which loses the element
+  // that frames the tower in the one shot `homerun` and `flight` are composing.
+  // The alternative is a second light pointing up, which the shadow budget
+  // refuses.
+  //
+  // ⚠ TWO EMISSIVES, NOT ONE SHARED. A shared emissive adds the SAME number to
+  // both surfaces, and it dominates the diffuse term here, so it cannot make a
+  // lattice read against the plate it hangs under — measured at 0.8 luminance
+  // levels apart at night. See `daylight.trussEmissiveHex` for the numbers.
   const underGeo = track(mergeGeometries(unders));
   for (const g of unders) g.dispose();
   const under = new Mesh(
@@ -333,7 +343,7 @@ export function buildRoof(
       track(
         new MeshLambertMaterial({
           color: daylight.trussHex,
-          emissive: daylight.roofEmissiveHex,
+          emissive: daylight.trussEmissiveHex,
           side: DoubleSide,
         }),
       ),

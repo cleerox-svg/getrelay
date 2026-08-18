@@ -51,26 +51,80 @@ export interface Daylight {
    */
   towerGlow: number;
   /**
-   * The roof's space-frame truss, and the emissive both it and the roof's
-   * underside carry.
+   * The roof's space-frame truss and the roof's UNDERSIDE, each with its own
+   * emissive. Three columns, two surfaces, and the split is the fix — see
+   * below.
    *
    * ⚠ THIS IS THE ONE PLACE A LIGHT WOULD OTHERWISE HAVE BEEN ADDED, and it is
    * an owner note off a reference photograph: from inside the bowl looking up
    * through the roof opening, the truss reads as a **pale, brightly-lit
-   * lattice** against the night sky — it catches the stadium lighting from
-   * below. Ours was `0x272b32` under an overhead rig, i.e. black.
+   * lattice** — it catches the stadium lighting from below. Ours was
+   * `0x272b32` under an overhead rig, i.e. black.
    *
    * The honest way to render an upward wash with ONE directional light is not a
-   * second light: it is a paler surface plus a small EMISSIVE term, which is
-   * `MeshLambertMaterial`'s own channel and costs nothing. The roof's underside
-   * takes the same emissive, because it has the same problem for the same
-   * reason — it faces DOWN, so an overhead rig gives it nothing at all.
+   * second light: it is a paler surface plus an EMISSIVE term, which is
+   * `MeshLambertMaterial`'s own channel and costs nothing — no draw call, no
+   * triangle, no shadow pass.
    *
-   * In daylight both are zero and the truss keeps the dark value `roof.ts`
-   * derived, because "picked out against a pale underside" is the day effect and
-   * lifting it would flatten exactly what that file is about.
+   * ⚠⚠ WHY THERE ARE NOW TWO EMISSIVES WHERE THERE WAS ONE. Both surfaces
+   * face DOWN, so `HemisphereLight` gives them 100 % of `hemiGroundHex` and the
+   * sun gives them nothing at all — which makes the emissive, not the diffuse
+   * colour, the dominant term in what they render at. One SHARED emissive
+   * therefore adds the same number to both and cannot separate them:
+   *
+   *   • NIGHT, measured off `night-homerun.png` and reproduced exactly by the
+   *     shading model in `daylight.test.ts`: soffit **L 39.03**, truss
+   *     **L 39.81**. **0.8 levels apart.** The pale `0x9aa3b0` above was doing
+   *     nothing at all — `0x2f3742` swamped it ~50:1 — so the "pale, brightly-lit
+   *     lattice" this comment has claimed since it was written HAS NEVER BEEN
+   *     RENDERED. It photographed as a flat slab with the blue lip on top.
+   *   • DAY, both were zero, so both fell to the bottom of the range: soffit
+   *     **L 14.07**, truss **L 0.00** — the truss was clipping to literal black.
+   *
+   * So `trussEmissiveHex` is its own column. `roofEmissiveHex` is now the
+   * UNDERSIDE'S ALONE, which is what its name always said and what `roof.ts`
+   * always wanted.
+   *
+   * ⚠ AND THE DAY ROW IS NO LONGER ZERO, WHICH IS A REVERSAL OF THE LINE THAT
+   * USED TO END THIS COMMENT. It said day should stay black because "picked out
+   * against a pale underside" is the day effect — correct about the effect,
+   * wrong about the pixels: the underside was not pale, it was L 14 against a
+   * L 175 sky, and the truss it was supposed to pick out was L 0. The frame read
+   * as a HOLE PUNCHED IN THE SKY, and the parked stack (`roof.ts`) is roughly
+   * FOUR TIMES the area of the ring it replaced — measured off the shot diff,
+   * **6.89 % of the whole 900 × 1600 `flight` frame** and 6.23 % of `homerun`,
+   * i.e. about a fifth of the top third of each — so what was a thin dark strip
+   * became the most conspicuous mass in the picture. The same authoring that
+   * was defensible on a strip is not defensible on a slab.
+   *
+   * The day emissive is authored **two stops over the physics**, on exactly the
+   * precedent the backstop pad and this same underside already set: a surface
+   * that faces away from the only sun is carried by the fill alone, and the
+   * visual gate has twice confirmed that two stops of author's licence reads
+   * with no visible cost. It is not arbitrary — it stands in for a term the one
+   * hemisphere light structurally cannot deliver. A `HemisphereLight` gives a
+   * straight-down normal the GROUND colour and nothing else, but the soffit of a
+   * PARKED, open roof sees open sky across three sides of a ±11° wedge. Both
+   * day emissives are therefore a fraction of `hemiSkyHex` — 0.055 for the
+   * underside, 0.010 for a member that is mostly shaded by its own panel — which
+   * is why they are cool rather than the warm cast of the ground bounce.
+   *
+   * At night the story is the other one: `roofEmissiveHex` is the field rig
+   * bouncing off a pale soffit, and `trussEmissiveHex` is 0.07 of `sunHex`, the
+   * same rig catching the lattice. The night SOFFIT does not move — the mass
+   * already reads against the sky, and `roofEdgeHex`'s blue leading edge is
+   * composed against exactly that gap.
+   *
+   * Resulting luminances (Rec.709 on the sRGB bytes, the units the crowd and
+   * soffit measurements are all quoted in):
+   *
+   *   DAY    soffit 14.07 → **54.4**   truss  0.00 → **6.9**
+   *   NIGHT  soffit 39.03 → 39.03      truss 39.81 → **56.7**
+   *
+   * `daylight.test.ts` asserts the separations rather than the hexes.
    */
   trussHex: number;
+  trussEmissiveHex: number;
   roofEmissiveHex: number;
   /**
    * ⚠ THE ROOF'S LEADING EDGE — THE BUILDING'S NIGHT SIGNATURE, and the owner's
@@ -173,8 +227,15 @@ export const DAYLIGHT: Record<DaylightId, Daylight> = {
     skyStops: [0x4f8bc9, 0x74a8dc, 0xc6dcef],
     skyBandLift: 0.16,
     towerGlow: 0.22,
+    // Dark metal, and it stays dark: a dark lattice on a lifted soffit IS the
+    // day effect. Its own emissive only lifts it off the clipping floor, so
+    // that the members read as members rather than as holes in the plate.
     trussHex: 0x272b32,
-    roofEmissiveHex: 0x000000,
+    trussEmissiveHex: 0x121518,
+    // 0x000000 → this. 0.055 of `hemiSkyHex` — the sky the soffit of a parked
+    // roof sees from three open sides, which a straight-down normal under one
+    // hemisphere light cannot be given any other way. L 14.07 → 54.4.
+    roofEmissiveHex: 0x343a40,
     roofEdgeHex: 0x4a4f58,
     roofEdgeEmissiveHex: 0x000000,
     fasciaHex: 0x121620,
@@ -210,8 +271,15 @@ export const DAYLIGHT: Record<DaylightId, Daylight> = {
     // A cloud lift that reads at night is a cloud lift that reads as fog.
     skyBandLift: 0.05,
     towerGlow: 1.0,
-    // Pale, and carrying its own light — see the field's note.
+    // Pale, and NOW carrying its own light — see the field's note. The pale
+    // value was inert until `trussEmissiveHex` existed: the shared emissive put
+    // the lattice 0.8 levels from the soffit it hangs under.
     trussHex: 0x9aa3b0,
+    // 0.07 of `sunHex` — the rig, caught from below. L 39.81 → 56.7 against an
+    // unmoved 39.03 soffit. Deliberately level with the blue lip's 57.3 rather
+    // than over it: the lip is the building's signature and it keeps that by
+    // being the most SATURATED thing up there, not the brightest.
+    trussEmissiveHex: 0x40434b,
     roofEmissiveHex: 0x2f3742,
     roofEdgeHex: 0x2f6bff,
     roofEdgeEmissiveHex: 0x1e46b4,
