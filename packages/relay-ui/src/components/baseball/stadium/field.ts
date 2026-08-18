@@ -141,7 +141,6 @@ const GRAIN_TILE_FT = { grass: 26, track: 9, dirt: 4.5 };
  * undifferentiated fan covering 39.6 % of the primary batting frame.
  */
 const COLORS = {
-  apron: 0x63625d, // foul ground / concourse
   grassA: 0x2f6b33, // the dark mow band
   grassB: 0x428a41, // the light one
   track: 0xa8562f, // crushed brick — REDDER than the clay, on purpose
@@ -274,7 +273,7 @@ function mownGrass(
   return g;
 }
 
-export function buildField({ scene, track, park, quality }: StadiumCtx): FieldPart {
+export function buildField({ scene, track, park, quality, daylight }: StadiumCtx): FieldPart {
   const group = new Group();
   group.name = 'field';
 
@@ -333,7 +332,14 @@ export function buildField({ scene, track, park, quality }: StadiumCtx): FieldPa
       [0, Y.apron, 0],
       ring(-180, 180, quality.bowlStepDeg, () => ({ r: apronRadiusFt, y: Y.apron })),
     ),
-    mat(COLORS.apron),
+    // ⚠ THE ONE GROUND COLOUR THAT IS A LIGHTING ROW AND NOT A CONSTANT. It is
+    // the only surface here OUTSIDE the bowl, so it is the only one the night
+    // rig does not light — and an up-facing surface under an overhead rig it is
+    // not standing in reads BRIGHTER at night than by day unless its
+    // reflectance says otherwise. `daylightSpec.ts`'s `apronHex` has the
+    // measurement; the day value is this file's own former `COLORS.apron`,
+    // moved there verbatim.
+    mat(daylight.apronHex),
     'apron',
   );
 

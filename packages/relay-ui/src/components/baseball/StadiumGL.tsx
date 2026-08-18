@@ -42,6 +42,7 @@ import {
   PCFSoftShadowMap,
   PerspectiveCamera,
   Scene,
+  SRGBColorSpace,
   Vector3,
   WebGLRenderer,
 } from 'three';
@@ -131,6 +132,36 @@ const REPLAY_GAP_S = 0.8;
  * rests on the standalone scene having one tower rather than a nightly one.
  */
 const DEFAULT_SEED = 20260816;
+
+/**
+ * ⚠⚠ THE RENDERER'S TRANSFER FUNCTION — AND IT IS A CONSTANT SO THAT SOMETHING
+ * CAN PIN IT.
+ *
+ * `stadium/daylight.test.ts` reproduces FIVE golden pixels off THREE shipped
+ * PNGs to the byte, and its header used to claim that "if `StadiumGL` ever
+ * changes tone mapping, exposure, colour space or the light rig, THIS FILE
+ * FAILS FIRST". Measured, three quarters of that was false: the model
+ * hard-coded ACES and an exposure of 1 and imported nothing from this file, so
+ * moving `exposure` from 1 to golf's 1.15 — an entirely plausible edit — passed
+ * **967 / 967**, and nothing anywhere named `outputColorSpace` at all. Only the
+ * light rig bound.
+ *
+ * A golden pixel is only evidence about a renderer if the model and the
+ * renderer share the transfer function, so they now share this object
+ * literally: the three fields below are what the renderer is configured with,
+ * and `daylight.test.ts` feeds the same `exposure` into its own ACES curve.
+ * Change any of them and the goldens move together, which is the failure the
+ * claim always described.
+ *
+ * `exposure` is the DEFAULT of a prop, not a baked constant — `setExposure`
+ * remains a live API. What is pinned is the value every shipped scene and the
+ * whole screenshot harness actually render at.
+ */
+export const RENDER_TRANSFER = {
+  toneMapping: ACESFilmicToneMapping,
+  outputColorSpace: SRGBColorSpace,
+  exposure: 1,
+} as const;
 
 export interface StadiumStats {
   drawCalls: number;
@@ -286,7 +317,8 @@ export interface StadiumGLProps {
    */
   seed?: number;
   /**
-   * Tone-mapping exposure. A PARAMETER, not a baked constant.
+   * Tone-mapping exposure. A PARAMETER, not a baked constant — but its DEFAULT
+   * is `RENDER_TRANSFER.exposure`, which is pinned. See that constant.
    */
   exposure?: number;
   /** `?quality=` override, plumbed from the URL — see `stadium/quality.ts`. */
@@ -348,7 +380,7 @@ export default function StadiumGL({
   mode = 'wide',
   daylight = 'day',
   seed = DEFAULT_SEED,
-  exposure = 1,
+  exposure = RENDER_TRANSFER.exposure,
   qualityOverride = null,
   scaleReference = false,
   aiming = false,
@@ -400,7 +432,12 @@ export default function StadiumGL({
     const renderer = new WebGLRenderer({ antialias: true, alpha: false });
     const quality = pickStadiumQuality(renderer, qualityOverride);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, quality.pixelRatioCap));
-    renderer.toneMapping = ACESFilmicToneMapping;
+    renderer.toneMapping = RENDER_TRANSFER.toneMapping;
+    // ⚠ SET, NOT INHERITED. three's default already IS sRGB; writing it makes
+    // the assumption a line of code that `daylight.test.ts` can pin, rather
+    // than a library default that a major-version bump could move underneath
+    // five golden pixels.
+    renderer.outputColorSpace = RENDER_TRANSFER.outputColorSpace;
     renderer.toneMappingExposure = initialRef.current.exposure;
     renderer.shadowMap.enabled = quality.shadows;
     renderer.shadowMap.type = PCFSoftShadowMap;
