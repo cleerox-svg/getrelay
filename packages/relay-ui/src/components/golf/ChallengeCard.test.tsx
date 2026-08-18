@@ -65,12 +65,15 @@ vi.mock('./CourseGame', () => ({
 }));
 
 vi.mock('../Avatar', () => ({ Avatar: () => null }));
+// The card loads the cosmetics catalog itself: a challenge round is played from
+// the chat rail, where GolfScreen has never mounted to load it. `ensureCosmetics`
+// is a spy, not a bare async function, because the test below ASSERTS it was
+// called — a stub would let the whole effect be deleted with every test green.
+const economy = vi.hoisted(() => ({ ensureCosmetics: vi.fn(async () => undefined) }));
 vi.mock('../../lib/golf/economy', () => {
   const state = {
     ensureWallet: async () => undefined,
-    // The card loads the cosmetics catalog itself: a challenge round is played
-    // from the chat rail, where GolfScreen has never mounted to load it.
-    ensureCosmetics: async () => undefined,
+    ensureCosmetics: economy.ensureCosmetics,
   };
   return {
     useEconomy: (sel: (s: typeof state) => unknown) => sel(state),
@@ -102,6 +105,7 @@ beforeEach(() => {
   // once-only claim map is module scope (deliberately — that is what survives a
   // remount), so reusing an id across tests would alias a settled claim.
   localStorage.setItem('relay.golfPendingSeq', String(Math.floor(Math.random() * 1e6) + 1e6));
+  economy.ensureCosmetics.mockClear();
   spies.getChallenge.mockReset();
   spies.submitChallengeResult.mockReset();
   spies.submitGameScore.mockReset();
@@ -132,8 +136,11 @@ describe('ChallengeCard — the round it runs is skinned', () => {
     // stock white ball however much the player had spent.
     render(<ChallengeCard id="ch-1" />);
     await flush();
-    click('Play your round');
+    // Merely SEEING a challenge in a chat must not fetch the golf catalog.
+    expect(economy.ensureCosmetics).not.toHaveBeenCalled();
 
+    click('Play your round');
+    expect(economy.ensureCosmetics).toHaveBeenCalled();
     expect(screen.getByTestId('ball-skin').textContent).toBe('#FFD700');
   });
 });

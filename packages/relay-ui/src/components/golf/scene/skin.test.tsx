@@ -220,7 +220,11 @@ describe('every golf renderer goes through the shared skin seam', () => {
   for (const file of ['CourseGL.tsx', 'RangeGL.tsx', 'PuttGL.tsx']) {
     it(`${file} registers its materials with useGolfSkin`, () => {
       const src = read(file);
-      expect(src).toContain('useGolfSkin(');
+      // `useGolfSkin(` on its own is not enough: the parameter is OPTIONAL, so
+      // `useGolfSkin()` typechecks, passes every behavioural test above (they
+      // exercise the hook directly) and freezes that scene at the stock ball
+      // for good — the original bug, walking straight past its own guard.
+      expect(src).toContain('useGolfSkin(cosmetics)');
       expect(src).toContain('registerSkin(');
     });
 

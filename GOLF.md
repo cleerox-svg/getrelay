@@ -81,13 +81,14 @@ colour — plus a `GolfFrame` avatar overlay. Default equip renders
 byte-identically to the pre-economy scenes.
 
 ⚠ **The scenes apply that LIVE, and used not to.** Every `*GL.tsx` snapshotted
-the prop into a ref and read it once inside its `useEffect(..., [])` build
+the prop into a ref and read it once inside its build effect
 (`makeBallMaterial(tex, cosmeticsRef.current?.ball)`); nothing wrote the
 material afterwards and `cosmetics` was in no dependency array in
 `components/golf`. So the skin applied only if the cosmetics slice happened to
 be `'ready'` at the instant the scene mounted, and an equip performed while a
-scene was alive could never apply — the second cause of "golf ball skins don't
-work", surviving the `LoadState` fix. `components/golf/scene/skin.ts`
+scene was alive could never apply — except on the Course, whose build effect is
+`[sim]`, where it landed at the NEXT hole's full rebuild. That is the second
+cause of "golf ball skins don't work", surviving the `LoadState` fix. `components/golf/scene/skin.ts`
 (`useGolfSkin`) is the ONE seam that fixes it for all three renderers: the build
 effect REGISTERS its ball + tracer materials (applied synchronously, so the
 first frame is right) and the hook re-applies on every `cosmetics` change. See
@@ -711,20 +712,31 @@ Every path below resolves on disk. Root for UI paths is
   fails loudly if a field is forgotten. Prediction and the live shot are ONE
   integrator over ONE state — keep it that way.
 - **⚠ A PROP A SCENE READS ONCE IS A PROP THAT NEVER CHANGES.** A `*GL.tsx`
-  builds its scene in a `useEffect(..., [])` and that must stay that way — a
-  rebuild disposes and re-creates every geometry, material and texture and drops
-  mid-shot state. The consequence is that ANY prop the build reads is frozen at
-  mount, and snapshotting it into a ref does not help: the ref tracks the prop,
-  but nothing re-reads it. The equipped ball skin and tracer colour shipped like
-  that in all three renderers for the life of the economy feature. The fix for
-  that class is never `cosmetics` in the build's dep array; it is a second,
-  narrow effect that MUTATES the built object — and it belongs in ONE shared
-  module the scenes call, not copied per scene (`components/golf/scene/skin.ts`,
-  whose `applyBallCosmetic` is also what `makeBallMaterial` constructs through,
-  so build-time and update-time cannot map a cosmetic differently). Its test
-  cannot mount a `*GL.tsx` — jsdom has no WebGL and no 2-D canvas — so
+  builds its scene in ONE effect with a near-empty dep array — `[]` for
+  `RangeGL`/`PuttGL`, `[sim]` for `CourseGL`, which therefore rebuilds once per
+  HOLE — and that must stay that way: a rebuild disposes and re-creates every
+  geometry, material and texture and drops mid-shot state. The consequence is
+  that ANY prop the build reads is frozen until the next rebuild, and
+  snapshotting it into a ref does not help: the ref tracks the prop, but nothing
+  re-reads it. The equipped ball skin and tracer colour shipped like that in all
+  three renderers for the life of the economy feature — never applying on the
+  Range and in Mini-Golf, and on the Course only at the NEXT hole, which is a
+  rebuild's worth of cost for a colour. The fix for that class is never
+  `cosmetics` in the build's dep array; it is a second, narrow effect that
+  MUTATES the built object — and it belongs in ONE shared module the scenes
+  call, not copied per scene (`components/golf/scene/skin.ts`, whose
+  `applyBallCosmetic` is also what `makeBallMaterial` constructs through, so
+  build-time and update-time cannot map a cosmetic differently). Its test cannot
+  mount a `*GL.tsx` — jsdom has no WebGL and no 2-D canvas — so
   `scene/skin.test.tsx` pins the seam's behaviour AND asserts against the three
   sources that each one registers and no longer carries a `cosmeticsRef`.
+  ⚠ **A guard that greps for a NAME does not survive deleting a CALL.** Two of
+  those source assertions were written as "contains `useGolfSkin(`" and a mocked
+  `ensureCosmetics` with nothing checking it — both matched a mutant that simply
+  dropped the argument / the effect, because presence-of-a-string is not
+  occurrence-of-a-behaviour. They now assert `useGolfSkin(cosmetics)` (the
+  parameter is optional, so `useGolfSkin()` typechecks and silently restores the
+  bug) and `toHaveBeenCalled()` on a real spy.
 - **⚠ Terrain winding.** The Course ground is a custom displaced
   BufferGeometry; its triangles must be wound so the top surface FRONT-faces up.
   A downward winding gets back-face culled and the whole textured ground
