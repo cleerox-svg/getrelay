@@ -11,7 +11,7 @@
 //
 // ⚠ AND IT INVENTS NO GEOMETRY. The frame is `zone.RULE_ZONE` — the same four
 // numbers `isStrike` calls a strike and `pitchSim` aims at — so the box the
-// player sees is the box the sim uses. `derbyRules.RETICLE_REACH_FT` is what
+// player sees is the box the sim uses. `batterAim.RETICLE_REACH_FT` is what
 // bounds how far outside it the reticle may be dragged, and the HUD clamps to
 // the identical constant. One source, three consumers.
 //
@@ -34,7 +34,7 @@ import type { StadiumCtx } from './geom';
  * Reticle radius, scene ft.
  *
  * ⚠ FEEL KNOB, and a DISPLAY one — it is not the contact tolerance. The real
- * tolerance is `derbyRules.RETICLE_FULL_MISS_FT` (0.667 ft, where the aim
+ * tolerance is `batterAim.RETICLE_FULL_MISS_FT` (0.667 ft, where the aim
  * residual has faded fully in) and it is a smooth shoulder, not a rim: drawing
  * a circle at that radius would tell the player there is a hard edge where the
  * sim has a fade. This is drawn a little inside it, as a "here" mark.

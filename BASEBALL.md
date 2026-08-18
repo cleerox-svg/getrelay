@@ -978,6 +978,15 @@ the render layer; contact resolves at the true physical state.
 | `packages/relay-ui/src/lib/baseball/fielding.test.ts` | The fielding bench: prints the reach ladder and a named batted-ball ladder; asserts the catch boundary exactly on the reach, the single/double index boundary, the foul-territory boundary, the rating's ±15 % span, and the landing-point limitation |
 | `packages/relay-ui/src/lib/baseball/derbyScoring.ts` | THE PAYOUT, and the LEAF of the derby's module graph — it imports nothing from the game, so `derbyRules` can check it against the format's derived cap with no cycle. One clamped scorer (`swingPoints`) that every outcome goes through, `validatePayoutCap` on the live config path and the full `validateDerbyPayout` sweep in the bench. Extracted at the 500-line cap in the M2 feel pass |
 | `packages/relay-ui/src/lib/baseball/contactWindow.ts` | The bat GEOMETRY — `BAT_TIP_M`, `BAT_HANDLE_LIMIT_M` and the bisection that inverts `contactGeometry`. Three unrelated consumers (`derbySim`, `TimingBar`, the benches) and no knowledge of the format. Extracted at the same cap, same pass |
+| `packages/relay-ui/src/lib/baseball/rng.ts` | THE seeded stream: `simDraw(state)` plus mulberry32's STEP, carried as a plain NUMBER so `snapshot()` can be total. Extracted from `derbyRules.ts` when the duel needed the identical stream — two three-line mixers in two sibling modes is "one implementation per concept" failing quietly |
+| `packages/relay-ui/src/lib/baseball/batterAim.ts` | THE reticle/tap → `Swing` mapping, shared by the derby AND the duel: the calibrated reference undercut, the assist shoulder as a per-mode MODULATOR (`ReticleAssist`), the pull/oppo intent, `aimSwing` with the resultant overlap test, and `aimErrorForUndercutIn`, which inverts the shoulder. Moved UP out of `derbyRules.ts` rather than forked sideways; not one number changed and the derby's ~180 goldens are the proof |
+| `packages/relay-ui/src/lib/baseball/duelRules.ts` | The duel's format (3 innings, the three count rules, the extras BOUND), the arsenal as data with a `chase` column, the DERIVED command map `pitchLocation`, the forced-advance base rules, `DUEL_ASSIST`, and the throwing config validator. The scope cap is written in its header the way `fielding.ts` writes its own |
+| `packages/relay-ui/src/lib/baseball/duelInnings.ts` | The half-inning STATE MACHINE — `applyPa`, `advanceHalf`, `isWalkOff`, `halfIsOver`, `countAfter`, `paOutcomeOf`, the line score. Pure, and it takes a `Situation` structurally, so "an inning ended on the wrong out count" is a one-line test instead of a game replay |
+| `packages/relay-ui/src/lib/baseball/duelState.ts` | The duel's readouts and the snapshot/restore pair, carrying the same ⚠ RULE about totality `derbyState.ts` states |
+| `packages/relay-ui/src/lib/baseball/duelSim.ts` | The duel LOOP, and `fielding.ts`'s FIRST REAL CALLER: pitch → `aimSwing` → `swingContact` → `simulateBattedBall` → `resolveFence` → `fieldBattedBall`, then the count, the bases, the halves and the game-over condition. Writes no physics; does not import `PITCH_TEMPO` |
+| `packages/relay-ui/src/lib/baseball/ai.ts` | ONE AI, BOTH roles, because the human alternates halves. On the mound: a count-tilted weighted draw over the arsenal, a corner to aim at, and a stop error. At the plate: TWO different reads of the same pitch — a late, good one for the swing/take decision and an early, poor GUESS for where the hands go. Seeded draws only, a FIXED number per decision |
+| `packages/relay-ui/src/lib/baseball/duelSim.test.ts` | The duel bench: prints the command ladder, the forced-advance base table, the assist plateau comparison and the OUTCOME DISTRIBUTION at three difficulties; asserts the count rules, the base rules, every game-over condition, the walk-off, byte-identical replay, snapshot totality and the outcome bands |
+| `packages/relay-ui/src/lib/baseball/ai.test.ts` | The AI bench: prints the arsenal tilt, the mound table and the plate table; asserts the fixed draw count, that every published pitch stays reachable at every count and difficulty, and — the failure mode it exists for — that difficulty MOVES every lever and moves it the right way |
 | `packages/relay-ui/src/components/baseball/stadium/stands.ts` | The BANDED bowl: a `PROFILE` of stations (seats / dark fascia / emissive LED ribbon), lofted band by band and merged into ONE lit shell + ONE unlit ribbon strip + the skirt. Owns `bowlInnerRadiusFt` (the fair wall, the foul-ground offset curve, the backstop clamp) and the one procedural crowd texture — speckle and vomitories, no crowd mesh, gated by `quality.seatTexturePx` |
 | `packages/relay-ui/src/components/baseball/stadium/centrefield.ts` | The centre-field ELEVATION — the structural frame the board array is recessed into, the hotel window band, the banners and flags — plus the recess `stands.ts` cuts in the deck for it. Owns the recess and therefore owns `CENTREFIELD_BOARD`, the board's real `{ widthFt, heightFt, faceDistFt, sillFt, bearingDeg }`, which the board slice takes. Builds NO board |
 | `packages/relay-ui/src/components/baseball/stadium/grain.ts` | THE one seeded two-octave surface-noise tile, built ONCE and `.clone()`d per surface with a different `repeat` — golf's six identical turf normal maps are the anti-pattern this is written against. A MULTIPLIER around white, so it can never shift a surface's hue |
@@ -1986,9 +1995,138 @@ the render layer; contact resolves at the true physical state.
   geometry as **`CENTREFIELD_BOARD`** — `{ widthFt: 100, heightFt: 50,
   faceDistFt: 430, sillFt: 26, bearingDeg: 0 }`, unchanged from the size the
   gate verified. **No board is mounted here.**
-- **Stage 5 — game & scene.** `derbySim.ts`, `duelSim.ts` (3 innings, 3 outs, no
-  steals/errors/subs/shifts), `ai.ts`, the crowd/lights/skyline builders, HUDs,
-  and the budget / determinism / IP guard tests.
+- **M4 stage 1 — the DUEL, headless.** → **Done.** Seven new modules, no
+  components, no physics written: `duelRules.ts` (483), `duelInnings.ts` (260),
+  `duelState.ts` (327), `duelSim.ts` (480), `ai.ts` (377), `batterAim.ts` (381)
+  and `rng.ts` (34), all inside the 500-line cap, plus `duelSim.test.ts` and
+  `ai.test.ts`. Every number the duel reports comes out of a module that was
+  calibrated before it existed; what is new is the bookkeeping, the command map
+  and the opponent.
+  **(1) THE FORMAT AND ITS HARD CAP.** 3 innings, 3 outs, 4 balls, 3 strikes, a
+  foul at two strikes stays at two. No stolen bases, no errors, no substitutions,
+  no shifts, no pickoffs, no leads, no throws. Baserunners advance **by force
+  only** — a single moves every runner one base and a walk moves only the forced
+  ones — which is a **stated rule, not a model**, and it biases scoring **DOWN**
+  in every one of its omissions (a real single scores from second more often than
+  not; a real fly ball with a man on third and one out often scores him). The
+  rule is pinned by a table test that asserts `advanceRunners([_,2,_], 1).runs`
+  is 0. Extra innings are the ordinary rule of baseball; `MAX_INNINGS = 9` is a
+  **BOUND, not a rule**, and the bench prints the longest game any seed produced.
+  ⚠ **BUT THE NET RUN ENVIRONMENT IS HIGHER THAN A REAL ONE, NOT LOWER** — see
+  (5) below. The forced-advance rule suppresses scoring; `fielding.ts`'s
+  landing-point limitation inflates it by more, and the two are now netted in one
+  place (`duelRules.ts`'s base-advancement section) rather than argued in two
+  files that never met.
+  **(2) THE COMMAND MAP IS DERIVED FROM THE ZONE, NOT PICKED.** One scalar
+  accuracy-bar stop has to become a two-dimensional displacement, so it needs a
+  magnitude and an axis, and one sentence fixes both: at `|e| = 1` the
+  displacement is the CALLED zone's half-width and half-height, so **a full miss
+  on a pitch aimed at dead centre lands exactly on the called corner** — the
+  boundary between a strike and a ball. ⚠ ON the boundary is still a STRIKE:
+  `zone.isStrike` is inclusive on every edge (a centre exactly on the line is a
+  strike, because the alternative makes a grazing pitch a ball and its mirror
+  image a strike), so `|e| = 1` is the last strike and anything past it is a
+  ball. An earlier draft of this line said "the first pitch that is not a
+  strike", which is off by the boundary itself; `duelRules.ts` words it
+  correctly and the test asserts both sides of it. The axis is the arm slot
+  (early ⇒ up and arm side), mirrored through `zone.armSideX` once. The sim takes
+  numbers, never gestures.
+  **(3) THE FINDING, AND IT IS THE ONE WORTH READING.** The reticle assist
+  shoulder is a labelled feel knob calibrated **for a home run derby**, and
+  played as a duel it made the game unplayable. An aim error under **3.33 in**
+  moves the swing's undercut by less than a tenth of an inch — i.e. reproduces
+  the CALIBRATED reference swing, 101 mph at 27°, 411 ft, over the wall at every
+  bearing at SkyDome — and 3.33 in is **54 %** of the 6.147 in at which contact
+  is lost altogether. Measured over 24 seeded duels: **40 % of balls in play left
+  the park, 6 singles against 47 home runs, 21 runs a game**.
+  ⚠ **AND NO AI KNOB FIXES IT.** The plateau's share of the contact range is
+  `(0.10/2.14)^(1/(p+1))` — it depends on the fade POWER alone. Narrowing
+  `fullMissIn` rescales both edges together and leaves the ratio at 54 %;
+  widening the AI's aim or timing spread only adds whiffs, because
+  `P(home run | contact)` is a ratio the spread cancels out of. All eight AI feel
+  knobs were swept and none of them moves it.
+  So the shoulder became a **modulator on the one implementation** —
+  `batterAim.ReticleAssist`, defaulting to the derby's pair so nothing there
+  moved — and the duel carries `DUEL_ASSIST`. ⚠ **The two numbers are NOT the
+  same category**, and an earlier draft of this entry called both calibrated:
+  `fadePower = 1.5` is a **FEEL KNOB with a measured consequence** (the plateau
+  share is `(δ/2.14)^(1/(p+1))`, in which the width CANCELS, so it is a pure
+  function of `p` and no `p` can be calibrated to it; the δ = 0.10 in that
+  defines "plateau" is itself picked for being invisible). `fullMissIn = 12` is
+  the one **calibrated** number, solved against a target outside itself — the
+  derby's contact edge. The exact width is **12.42 in**; 12 is that rounded and
+  gives 6.02 in against 6.147, **2.0 %** short. So the duel is not harder to make
+  CONTACT with, only harder to SQUARE UP; measured in 2-D rather than on the
+  vertical alone the duel edge is equal or wider in eleven of twelve directions.
+  `P(home run | contact)` roughly halves — **40.1 % → 19.0 %** over an
+  area-uniform 8 in aim disc at perfect timing, **24.2 % → 12.1 %** with the tap
+  swept across the contact window. `duelSim.test.ts` prints and asserts both
+  plateau fractions and the 12.42 solve.
+  **(4) THE OUTCOME TABLE — 16 seeded games per difficulty, AI against AI at the
+  same skill on both sides.**
+
+  | difficulty | runs/game | pitches | PA/game | K/PA | BB/PA | HR/PA | HR per ball in play | 1B/2B/3B |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | 0.15 | 5.06 | 100 | 29.0 | 38.4 % | 11.6 % | 8.6 % | 17 % | 79/17/3 |
+  | 0.50 | 6.19 | 93 | 28.9 | 34.8 % | 5.8 % | 8.7 % | 15 % | 94/23/3 |
+  | 0.85 | 8.25 | 94 | 33.4 | 21.0 % | 1.5 % | 6.7 % | 9 % | 153/41/9 |
+
+  MLB reference: K 22 %, BB 8.5 %, HR 3 % of plate appearances and ~5 % of balls
+  in play. Representative finals at 0.50: **10-2, 7-4, 1-0, 7-6, 11-4**.
+  ⚠ **ONLY K/PA AND BB/PA ARE LEGITIMATE COMPARISONS.** `runs/game` and the 1B
+  column are **dominated by the ground-ball artifact in (5)** — 89 % of the
+  singles in this table are grounders that should mostly have been outs — and
+  must not be read as a calibration result until the rolling phase lands. The
+  bands on this table are **regression fences at roughly ±50 %**, not a
+  calibration; the assertions that guard its shape are the monotonicity checks
+  (a better AI strikes out less and walks less at every step) and `HR per ball in
+  play`, the one band known to bite on a real defect.
+  ⚠ **Two honest weaknesses in that table.** The difficulty-0.85 pitcher issues
+  essentially no walks (1.5 %), because he throws 64 % of his pitches in the
+  called zone and a plate appearance ends before four balls can accumulate; and
+  93 pitches for three innings is long against the 2.5–4 min brief. Both are feel
+  knobs for the stage-2 pass, not model defects.
+  **(5) WHAT `fielding.ts` COULD NOT ANSWER,** reported rather than papered over
+  in `duelSim`, and **measured** rather than described. Its landing-point
+  limitation, which the derby never exercised because a derby has no defence, is
+  **load-bearing in a duel**: the clause that caps any unfielded ball landing on
+  the dirt at a SINGLE means **every ground ball is a base hit**. A topped ball
+  lands ~4 ft from the plate, 105 ft from the nearest fielder's standing spot,
+  and is scored a single every time — there is no 6-3 groundout anywhere in this
+  game. Over the bench's own 16 seeds at difficulty 0.50: **274 balls in play, 87
+  ground balls (launch angle < 10°), of which 84 singles and 3 outs** — a
+  **3.4 %** ground-ball out rate against MLB's ~72 %, and **89 % of every single
+  in the table above** (92 % at difficulty 0.85). That is exactly the "when the
+  duel wants real infield play the fix is a rolling phase" its own constant
+  predicts, and it is now a duel-visible, measured fact rather than a note. It is
+  also the bias that makes the duel's run environment HIGHER than a real one
+  despite the forced-advance rule pushing the other way; `duelRules.ts` nets the
+  two on one page. Two smaller ones: the
+  interface has no way to express a sacrifice fly (a caught fly with a man on
+  third is a plain OUT, consistent with forced-advance-only), and `'roof'` falls
+  through its outcome switch to the ordinary miss arithmetic, which is correct
+  per `parks.ts` but is undocumented in `fielding.ts`.
+  **(6) TWENTY-ONE MUTATIONS WERE WATCHED,** against a verified-green baseline
+  with the pristine source byte-compared back after each; the full table with
+  observed failure counts is in `duelSim.test.ts`'s header. **Three survived the
+  first pass**, and those three are worth more than the eighteen that did not:
+  *(a)* swapping the walk and strikeout checks in `paOutcomeOf` failed nothing,
+  because one pitch moves one number and **no legal count can reach four balls
+  and three strikes at once** — UNREACHABLE, not merely unobserved, the same
+  category `fielding.ts` records for its infield cap. *(b)* clearing the outs and
+  bases on a finished game survived because the assertion only covered the
+  bottom-half branch while the mutation lived in the top-half one. *(c)*
+  `applyPa` spreading the whole live sim back through a structural `Situation`
+  survived because it is behaviourally invisible today. Closed by, respectively:
+  the exclusivity property over all 60 legal count × outcome pairs plus the
+  ordering on the impossible input; the final state asserted on BOTH game-over
+  branches; and a STRUCTURAL assertion that the machine returns exactly the six
+  `Situation` keys. All twenty-one now fail.
+- **M4 stage 2 — the duel's HUD and scene.** The pitching slingshot
+  (`pullAim` released into an `AccuracyBar` sweep, handed to `servePitch` as an
+  intended location plus a stop error), the batting HUD reusing the derby's
+  reticle and timing bar, the videoboard wiring, and the camera modes for a
+  pitcher's half. None of it exists yet; stage 1 is headless on purpose.
 
 ## Gotchas
 

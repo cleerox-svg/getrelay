@@ -688,6 +688,12 @@ describe('the track', () => {
     // Guard the guard: a glob that stops matching must not pass over zero files.
     expect(names).toContain('pitchSim.ts');
     expect(names).toContain('airPhysics.ts');
+    // ⚠ NAMED EXPLICITLY, not merely covered by the glob. The duel's loop and
+    // its AI are the two files most likely to reach for a tempo — a swing takes
+    // TRUE physical seconds and the plausible-and-wrong repair is to divide —
+    // so a glob that stopped matching them must fail here rather than pass.
+    expect(names).toContain('duelSim.ts');
+    expect(names).toContain('ai.ts');
     for (const name of names) {
       // Comments are allowed to NAME it — that is how the rule stays visible.
       // Code is not, so strip comment lines and block-comment bodies first.

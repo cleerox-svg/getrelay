@@ -27,8 +27,10 @@ const SIM_DIR = dirname(fileURLToPath(import.meta.url));
 // property of the SIM, which is what a replay re-runs. ip.test.ts has the
 // opposite need — a trademark must not appear anywhere, render layer included —
 // so it deliberately widens to components/baseball and .tsx.
-// Stage 4 note: when duelSim/ai.ts land they are `lib/baseball/*.ts` and are
-// covered automatically; a sim that ever moves under components/ is not.
+// M4 note: `duelSim.ts` and `ai.ts` landed and ARE `lib/baseball/*.ts`, so they
+// are covered — and they are now named explicitly below as well, because "the
+// glob covers it" and "the glob still matches it" are different claims. A sim
+// that ever moves under components/ is not covered at all.
 /** Every `.ts` source under lib/baseball, tests included — replays must be pure too. */
 function simSources(): Array<{ name: string; text: string }> {
   return readdirSync(SIM_DIR)
@@ -62,6 +64,12 @@ describe('determinism guard', () => {
     // silently become a no-op that "passes" over zero files.
     expect(files.length).toBeGreaterThan(0);
     expect(files.map((f) => f.name)).toContain('airPhysics.ts');
+    // The duel's loop and its AI, named rather than trusted to the glob: the AI
+    // is the one file in this directory whose whole job is to make choices, and
+    // a `Math.random` in it would break a replay without breaking a single
+    // physics number.
+    expect(files.map((f) => f.name)).toContain('duelSim.ts');
+    expect(files.map((f) => f.name)).toContain('ai.ts');
 
     const violations: string[] = [];
     for (const { name, text } of files) {
