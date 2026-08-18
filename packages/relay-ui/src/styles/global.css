@@ -1721,6 +1721,12 @@ html.beta .composer-capsule {
   background: rgba(232, 193, 90, 0.16);
   color: var(--cc-gold);
 }
+/* A played round that has NOT reached the server. Deliberately the loudest
+   pill on the card: the failure it replaces was rendered as a blank score. */
+.challenge-state.is-unsaved {
+  background: rgba(240, 73, 46, 0.2);
+  color: var(--cc-salmon);
+}
 .challenge-meta {
   display: flex;
   flex-wrap: wrap;
@@ -1858,6 +1864,40 @@ html.beta .composer-capsule {
   color: #ffe08a;
   background: rgba(255, 202, 74, 0.12);
   border: 1px solid rgba(255, 202, 74, 0.22);
+}
+/* Unsent-round strip — the round is on disk, the POST failed, here is Retry. */
+.challenge-unsaved {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  font-size: 12.5px;
+  line-height: 1.35;
+  padding: 10px 11px;
+  border-radius: 12px;
+  color: rgba(255, 255, 255, 0.78);
+  background: rgba(240, 73, 46, 0.12);
+  border: 1px solid rgba(240, 73, 46, 0.25);
+}
+.challenge-retry {
+  flex: none;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+}
+.challenge-retry:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+.challenge-retry:focus-visible {
+  outline: 2px solid var(--cc-salmon);
+  outline-offset: 2px;
 }
 .challenge-outcome {
   margin-top: 13px;

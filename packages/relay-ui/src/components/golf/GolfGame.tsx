@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
-import { api } from '../../lib/api';
+import { submitGameScoreDurably } from '../../lib/golf/pendingScore';
 import { getPuttCourse, type PuttCourse } from '../../lib/golf/puttCourses';
 import type { GolfCosmetics } from '../../lib/golf/cosmetics';
 import { PuttSim } from '../../lib/golf/puttSim';
@@ -164,8 +164,10 @@ export function GolfGame({
   // Abandon safety net: unmounted mid-round (route change, tab switch,
   // navbar link, or the second back press while paused) with >=1
   // completed hole and nothing reported yet: record the partial score
-  // directly. No setState here — the whole route may be unmounting. The
-  // POST is fire-and-forget; local stats always update.
+  // directly. No setState here — the whole route may be unmounting, so this
+  // path can neither show an error nor hold a retry. That is exactly why the
+  // board entry is PERSISTED rather than fire-and-forget: a rejected POST
+  // leaves it queued and GolfScreen's next mount flushes it.
   useEffect(() => {
     return () => {
       if (advanceTimerRef.current != null) window.clearTimeout(advanceTimerRef.current);
@@ -175,14 +177,12 @@ export function GolfGame({
       reportedRef.current = true;
       const finalScore = totalScore(perHole);
       recordGolfGame(finalScore, longestStreak(perHole));
-      api
-        .submitGameScore({
-          score: finalScore,
-          rounds: perHole.length,
-          bestStreak: longestStreak(perHole),
-          game: 'golf',
-        })
-        .catch(() => undefined);
+      void submitGameScoreDurably({
+        score: finalScore,
+        rounds: perHole.length,
+        bestStreak: longestStreak(perHole),
+        game: 'golf',
+      }).catch(() => undefined); // on disk already; just no unhandled rejection
     };
   }, []);
 

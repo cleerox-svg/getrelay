@@ -5,6 +5,13 @@ import CourseGame from './CourseGame';
 import { api } from '../../lib/api';
 import { getCourse } from '../../lib/golf/courses';
 import { useEconomy } from '../../lib/golf/economy';
+import {
+  enqueuePendingScore,
+  pendingScoresFor,
+  readPendingScores,
+  submitPendingScore,
+  type PendingScoreEntry,
+} from '../../lib/golf/pendingScore';
 import type { Challenge, ChallengeParticipant } from '../../lib/types';
 
 // Format a to-par relative to par: 0 → "E", positive → "+n", negative → "−n"
@@ -21,11 +28,24 @@ function fmtToPar(n: number): string {
 // no cross-tab navigation.
 export function ChallengeCard({ id }: { id: string }) {
   const [ch, setCh] = useState<Challenge | null>(null);
+  // A to-par the player has PLAYED but the server has not acknowledged. Held
+  // separately from `ch` so a refetch cannot wipe it, and so a stranded entry
+  // picked up on a later mount still reads as played instead of as `—`.
+  const [pendingToPar, setPendingToPar] = useState<number | null>(null);
   const [failed, setFailed] = useState(false);
   const [playing, setPlaying] = useState(false);
-  // One-shot: a round's result is submitted at most once, even though
+  // Did the round the player just finished actually REACH the server?
+  // 'unsaved' is the state that used to be invisible — the card refetched and
+  // re-rendered a `—` as though nothing had been played. See runSubmit().
+  const [save, setSave] = useState<'idle' | 'saving' | 'unsaved'>('idle');
+  // One-shot: a round's result is CAPTURED at most once, even though
   // CourseGame's "Play round again" resets its own onRoundComplete guard.
+  // Retrying a failed submit re-sends the SAME persisted entries; it never
+  // re-captures, so this stays latched.
   const submittedRef = useRef(false);
+  // The persisted entries for the round just played, so Retry re-submits those
+  // exact attempts (same ids → the once-only claim still holds).
+  const queuedRef = useRef<PendingScoreEntry[]>([]);
   // Wallet refresh after a win-completing submit so the hub coin chip updates.
   // Pulled as a stable action ref (no re-render subscription); degrades
   // gracefully when the economy store is empty (unauthed / offline).
@@ -46,6 +66,21 @@ export function ChallengeCard({ id }: { id: string }) {
     };
   }, [id]);
 
+  // A round from an EARLIER mount whose POST failed and is still on disk. Show
+  // it as played and retry it — otherwise the server's "unplayed" answer would
+  // render `—` over a round the player actually finished.
+  useEffect(() => {
+    const queued = pendingScoresFor(id);
+    const mine = queued.find((e) => e.kind === 'challenge');
+    if (!mine) return;
+    queuedRef.current = queued;
+    submittedRef.current = true;
+    setPendingToPar(mine.kind === 'challenge' ? mine.toPar : null);
+    void runSubmit(queued);
+    // runSubmit is a stable function declaration in this component's body.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
   if (failed) {
     return <span className="challenge-chip">Challenge unavailable</span>;
   }
@@ -53,7 +88,12 @@ export function ChallengeCard({ id }: { id: string }) {
     return <span className="challenge-chip">Loading challenge…</span>;
   }
 
-  const mySide: ChallengeParticipant = ch[ch.mine];
+  const serverSide: ChallengeParticipant = ch[ch.mine];
+  // Until the server has my score, an unsent-but-played to-par stands in for it.
+  const mySide: ChallengeParticipant =
+    serverSide.toPar == null && pendingToPar != null
+      ? { ...serverSide, toPar: pendingToPar }
+      : serverSide;
   const otherSide: ChallengeParticipant =
     ch[ch.mine === 'challenger' ? 'opponent' : 'challenger'];
   const course = getCourse(ch.course ?? undefined);
@@ -109,53 +149,71 @@ export function ChallengeCard({ id }: { id: string }) {
         ? `Tie  ·  +${awarded} coins`
         : 'Tie';
 
-  // Shared one-shot submit for both the full-round (onRoundComplete) and the
-  // single-hole (onHoleComplete) callbacks: record the challenge to-par,
-  // optimistically clear "your turn", count the play on the golfcourse board,
-  // then refetch. `rounds` is the completed round's holes, or 1 for a hole.
+  // Shared one-shot capture for both the full-round (onRoundComplete) and the
+  // single-hole (onHoleComplete) callbacks. `rounds` is the completed round's
+  // holes, or 1 for a hole.
   function submitResult(courseId: string, toPar: number, rounds: number) {
     if (submittedRef.current) return;
     submittedRef.current = true;
-    // Optimistically record my to-par so the card leaves "your turn" even if
-    // the refetch below fails.
-    setCh((prev) =>
-      prev
-        ? ({ ...prev, [prev.mine]: { ...prev[prev.mine], toPar } } as Challenge)
-        : prev,
-    );
-    // Always settle the challenge. Only a FULL round also counts on the shared
-    // golfcourse board/profile — a single challenge hole's to-par isn't
-    // comparable to a full round (it would outrank real rounds and inflate
-    // rounds-played), so single-hole challenges settle the head-to-head only.
-    const tasks: Promise<unknown>[] = [api.submitChallengeResult(id, toPar)];
+    setPendingToPar(toPar);
+    // PERSIST BEFORE THE POST. Everything below can fail; nothing below can
+    // lose the round. Always settle the challenge — only a FULL round also
+    // counts on the shared golfcourse board/profile, because a single
+    // challenge hole's to-par isn't comparable to a full round (it would
+    // outrank real rounds and inflate rounds-played).
+    const queued = [enqueuePendingScore({ kind: 'challenge', challengeId: id, toPar })];
     if (rounds > 1) {
-      tasks.push(
-        api.submitGameScore({
-          game: 'golfcourse',
-          course: courseId,
-          toPar,
-          rounds,
-          bestStreak: 0,
-          score: 0,
+      queued.push(
+        enqueuePendingScore({
+          kind: 'game',
+          body: {
+            game: 'golfcourse',
+            course: courseId,
+            toPar,
+            rounds,
+            bestStreak: 0,
+            score: 0,
+          },
         }),
       );
     }
-    Promise.allSettled(tasks)
-      .then(() => api.getChallenge(id))
-      .then((res) => {
-        setCh(res.challenge);
-        // If this submission SETTLED the match, the worker may have credited me
-        // coins — a win OR a tie both pay the viewer (a loss pays 0, but a
-        // refresh is harmless). The card only renders challenges I'm in, so any
-        // completion is a completion I participate in: force-refresh the wallet
-        // so the hub coin chip reflects the new balance. ensureWallet swallows
-        // its own errors, so this is a no-op when unauthed / offline.
-        if (res.challenge.status === 'complete') {
-          void ensureWallet(true);
-        }
-      })
-      .catch(() => undefined)
-      .finally(() => setPlaying(false));
+    queuedRef.current = queued;
+    void runSubmit(queued);
+  }
+
+  // Submit (or RE-submit) persisted entries and inspect every settled result.
+  //
+  // ⚠ `Promise.allSettled` NEVER REJECTS. This used to be
+  // `allSettled(tasks).then(refetch).catch(() => undefined)`, so a rejected
+  // `submitChallengeResult` flowed into the `.then()`, the refetch answered
+  // "unplayed", and the card rendered `—` for a round that had been played and
+  // was now gone. A `rejected` entry is a failure and is treated as one here.
+  async function runSubmit(queued: PendingScoreEntry[]) {
+    setSave('saving');
+    // Only what is still ON DISK. A Retry after a partial failure must not
+    // re-POST the half that already landed.
+    const live = readPendingScores();
+    const todo = queued.filter((e) => live.some((l) => l.id === e.id));
+    const settled = await Promise.allSettled(todo.map((e) => submitPendingScore(e)));
+    setPlaying(false);
+    if (settled.some((r) => r.status === 'rejected')) {
+      // Every failed entry is still on disk. Surface it and offer Retry.
+      setSave('unsaved');
+      return;
+    }
+    setSave('idle');
+    // Refetch to pick up the settled match. A failure HERE is a stale VIEW, not
+    // a lost round — the result did land — so it must not claim otherwise.
+    try {
+      const res = await api.getChallenge(id);
+      setCh(res.challenge);
+      // A completion may have credited me coins (a win OR a tie pays the
+      // viewer). Force-refresh the wallet so the hub chip agrees. ensureWallet
+      // swallows its own errors, so this no-ops when unauthed / offline.
+      if (res.challenge.status === 'complete') void ensureWallet(true);
+    } catch {
+      /* the next mount refetches */
+    }
   }
 
   // Colour the mono score chip by state: pending "—" is dim; a submitted score
@@ -186,8 +244,25 @@ export function ChallengeCard({ id }: { id: string }) {
 
   // State pill: my move → "Your turn", I've played and I'm waiting → "Waiting",
   // settled → "Final". Mirrors the myTurn/waiting/complete derivation above.
-  const stateText = myTurn ? 'Your turn' : waiting ? 'Waiting' : complete ? 'Final' : '';
-  const stateClass = myTurn ? 'is-turn' : waiting ? 'is-wait' : 'is-done';
+  // A round that did not reach the server outranks all of them — "Waiting" over
+  // an unsent score would be a lie, and it is the state the old code hid.
+  const unsaved = save === 'unsaved';
+  const stateText = unsaved
+    ? 'Not saved'
+    : myTurn
+      ? 'Your turn'
+      : waiting
+        ? 'Waiting'
+        : complete
+          ? 'Final'
+          : '';
+  const stateClass = unsaved
+    ? 'is-unsaved'
+    : myTurn
+      ? 'is-turn'
+      : waiting
+        ? 'is-wait'
+        : 'is-done';
 
   // The opponent has locked in a score while the match is still open (the usual
   // async flow: challenger plays first, then it's my turn) — surface that.
@@ -239,7 +314,23 @@ export function ChallengeCard({ id }: { id: string }) {
             </div>
           ) : null}
 
-          {myTurn ? (
+          {unsaved ? (
+            <div className="challenge-unsaved" role="alert">
+              <span>
+                Your round{pendingToPar != null ? ` (${fmtToPar(pendingToPar)})` : ''} didn’t
+                reach the server. It’s saved on this device.
+              </span>
+              <button
+                type="button"
+                className="challenge-retry"
+                onClick={() => void runSubmit(queuedRef.current)}
+              >
+                Retry
+              </button>
+            </div>
+          ) : save === 'saving' ? (
+            <div className="challenge-wait">Saving your round…</div>
+          ) : myTurn ? (
             <button
               type="button"
               className="challenge-play"
