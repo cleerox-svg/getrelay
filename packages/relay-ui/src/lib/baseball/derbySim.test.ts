@@ -117,19 +117,21 @@ import { BAT_SPEED_MPH, LOC_DISTANCE_IN, SWEET_SPOT_M } from './bat';
 import { contactGeometry, swingContact } from './batSim';
 import { BAT_HANDLE_LIMIT_M, BAT_TIP_M, contactWindowS } from './contactWindow';
 import {
+  PULL_INTENT_MAX_IN,
+  RETICLE_FADE_POWER,
+  RETICLE_FULL_MISS_IN,
+  SWING_UNDERCUT_IN,
+  pullIntentOffsetIn,
+  reticleResidual,
+} from './batterAim';
+import {
   DERBY_MIX,
   DERBY_ROUNDS,
   MAX_POINTS_PER_PITCH,
   PITCHES_PER_ROUND,
-  PULL_INTENT_MAX_IN,
-  RETICLE_FADE_POWER,
-  RETICLE_FULL_MISS_IN,
   SERVE_SPREAD,
-  SWING_UNDERCUT_IN,
   derbyDraw,
   perPitchCap,
-  pullIntentOffsetIn,
-  reticleResidual,
   validateDerbyFormat,
   validateDerbyMix,
 } from './derbyRules';

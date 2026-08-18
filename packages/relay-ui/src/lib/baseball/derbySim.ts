@@ -39,20 +39,14 @@
 // keep the tempo out of it.
 
 import { vLen, vec3 } from './airPhysics';
-import { LOC_DISTANCE_IN, M_PER_FT, SWEET_SPOT_M } from './bat';
-import { contactGeometry, swingContact } from './batSim';
-import type { Swing } from './batSim';
+import { aimSwing, clampReticle } from './batterAim';
+import { swingContact } from './batSim';
 import { simulateBattedBall } from './battedBallSim';
-import { BAT_HANDLE_LIMIT_M, BAT_TIP_M } from './contactWindow';
 import {
   DERBY_MIX,
-  RETICLE_REACH_FT,
   SERVE_SPREAD,
-  SWING_UNDERCUT_IN,
   derbyDraw,
   perPitchCap,
-  pullIntentOffsetIn,
-  reticleResidual,
   resolveDerbyConfig,
 } from './derbyRules';
 import type { DerbyConfig, DerbyPhase, ResolvedConfig } from './derbyRules';
@@ -67,9 +61,7 @@ import type { PitchId } from './pitches';
 import { simulatePitch } from './pitchSim';
 import type { PitchResult } from './pitchSim';
 import { isBarrel } from './tuning';
-import { FT_TO_IN, IN_TO_FT } from './units';
-import { RULE_ZONE, armSideX, reticleToPlate } from './zone';
-import type { Handedness } from './zone';
+import { reticleToPlate } from './zone';
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
@@ -128,9 +120,9 @@ export class DerbySim {
 
   /** Place the reticle, REPORT ft. Between pitches — there is no time pressure. */
   setReticle(x: number, h: number): void {
-    if (!Number.isFinite(x) || !Number.isFinite(h)) throw new Error('reticle must be finite');
-    this.reticleX = clamp(x, RULE_ZONE.left - RETICLE_REACH_FT, RULE_ZONE.right + RETICLE_REACH_FT);
-    this.reticleH = clamp(h, RULE_ZONE.bottom - RETICLE_REACH_FT, RULE_ZONE.top + RETICLE_REACH_FT);
+    const c = clampReticle(x, h);
+    this.reticleX = c.x;
+    this.reticleH = c.h;
   }
 
   /**
@@ -277,52 +269,25 @@ export class DerbySim {
     }
 
     const timingErrorS = tapTimeS - pr.plate.t;
-    // The reticle's aim MISS, faded through the two-radius shoulder: near the
-    // centre the batter adjusts and the swing carries its reference undercut,
-    // and the residual grows smoothly into the real geometric miss, so the
-    // geometry beyond the knob is untouched physics. See `reticleResidual`.
-    const dx = pr.plate.x - this.reticleX;
-    const dh = pr.plate.h - this.reticleH;
-    const k = reticleResidual(Math.hypot(dx, dh));
-    const undercutIn = SWING_UNDERCUT_IN + dh * k * FT_TO_IN;
-    // The batter stands on his own arm side of the plate, so "away from the
-    // batter" is the opposite sign. One mirror, read from zone.ts.
-    const away = -armSideX(this.cfg.batterHand);
-    const lateralIn = away * dx * k * FT_TO_IN;
-    // …and the reticle's ABSOLUTE placement is the pull/oppo intent, which is
-    // the one input that moves spray without moving timing. `derbyRules` argues
-    // it; here it is just the fourth field of the same `Swing`.
-    const horizontalOffsetIn = pullIntentOffsetIn(this.reticleX, this.cfg.batterHand);
-    const swing: Swing = {
+    // The ONE reticle/tap → Swing mapping, shared with the duel. Its whole
+    // argument — the four axes, the two readings of reticle x, the resultant
+    // overlap test, the missing jamming — lives on `batterAim.aimSwing`.
+    const aim = aimSwing({
       hand: this.cfg.batterHand,
+      plateX: pr.plate.x,
+      plateH: pr.plate.h,
+      plateSpeedFps: vLen(pr.plate.v),
+      reticleX: this.reticleX,
+      reticleH: this.reticleH,
       timingErrorS,
-      undercutIn,
-      horizontalOffsetIn,
-      aimZM: SWEET_SPOT_M + lateralIn * IN_TO_FT * M_PER_FT,
       batSpeedMph: this.cfg.batSpeedMph,
-    };
-
-    const geom = contactGeometry(vLen(pr.plate.v), swing);
-    // ⚠ THE OVERLAP TEST IS THE RESULTANT, NOT THE VERTICAL ALONE. `undercutIn`
-    // and `horizontalOffsetIn` are the two components of ONE line-of-centres
-    // offset in the plane across the bat — `swingContact` tilts n̂ by
-    // `asin(component / LOC_DISTANCE_IN)` on each — so what has to stay inside
-    // R_ball + R_bat is their hypotenuse. Testing only the vertical would let a
-    // full-intent swing on a badly missed pitch make contact through the corner
-    // of a square it has no business being in. Still DERIVED, no knob added:
-    // declaring intent spends part of the same 2.70 in budget, which is the
-    // honest price of asking to pull.
-    const missIn = Math.hypot(undercutIn, horizontalOffsetIn);
-    const onBat =
-      Number.isFinite(geom.contactZM) &&
-      geom.contactZM <= BAT_TIP_M &&
-      geom.contactZM >= BAT_HANDLE_LIMIT_M &&
-      missIn <= LOC_DISTANCE_IN;
-    if (!onBat) {
+    });
+    const { undercutIn, lateralIn } = aim;
+    if (!aim.onBat) {
       return { ...base, outcome: 'whiff', timingErrorS, undercutIn, lateralIn };
     }
 
-    const contact = swingContact({ v: pr.plate.v, omega: pr.omega }, swing);
+    const contact = swingContact({ v: pr.plate.v, omega: pr.omega }, aim.swing);
     const cond = parkConditions(this.cfg.park, this.cfg.roofClosed, this.conditionsSeed);
     // Hit where the ball actually is: the plate crossing height, not a nominal.
     const flight = simulateBattedBall(
@@ -348,7 +313,7 @@ export class DerbySim {
       timingErrorS,
       undercutIn,
       lateralIn,
-      contactZM: geom.contactZM,
+      contactZM: aim.contactZM,
       chainIndex,
       // ⚠ EVERY OUTCOME GOES THROUGH THE ONE SCORER, and the cap it is handed is
       // the CONFIG's, never the constant — an overridden `pitchesPerRound` must
