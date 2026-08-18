@@ -49,7 +49,10 @@ const GRANDFATHERED: Record<string, number> = {
   // 796 → 751: the two results screens were the SAME 77 lines twice, differing in
   // five values, and became GolfResultScreen.tsx. That paid for the guarded-free
   // opt-in + pause wiring and still banked 45 lines. Banked, NOT raised.
-  'GolfScreen.tsx': 751,
+  // 751 → 738: the three board-submit sites collapsed onto one durable channel
+  // in useBoardSubmit.ts (persist-before-POST + retry), which also took
+  // serverBest/lbKey with it. Banked.
+  'GolfScreen.tsx': 738,
   'GolfMenu.tsx': 621,
   'GolfGame.tsx': 508,
 };

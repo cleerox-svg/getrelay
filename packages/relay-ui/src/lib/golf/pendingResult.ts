@@ -69,7 +69,13 @@ const KEYS: Record<PendingKind, string> = {
 /** Monotonic attempt counter, shared by both kinds so no two ids collide. */
 const SEQ_KEY = 'relay.golfPendingSeq';
 
-function nextId(): number {
+/**
+ * The next attempt id. EXPORTED because `pendingScore.ts` (the queue for board /
+ * challenge submits) draws its entry ids from this same counter: one counter
+ * across every unsent golf result means an id names exactly one attempt, which
+ * is what makes the once-only claim survive a remount.
+ */
+export function nextPendingId(): number {
   let n = 0;
   try {
     n = Number(localStorage.getItem(SEQ_KEY)) || 0;
@@ -117,7 +123,7 @@ export function writePending(
 ): PendingResult {
   const rec: PendingResult = {
     kind,
-    id: nextId(),
+    id: nextPendingId(),
     tag: String(tag),
     strokes: score.strokes,
     toPar: score.toPar,

@@ -24,6 +24,7 @@ import type { GolfCourse } from '../../lib/golf/courses';
 import { getPuttCourse } from '../../lib/golf/puttCourses';
 import { recordGolfGame, recordRangeGame, setLastPuttCourseId } from '../../lib/golf/stats';
 import { dropStalePending, readPending, writePending } from '../../lib/golf/pendingResult';
+import { useBoardSubmit } from './useBoardSubmit';
 import { HOLES as GOLF_HOLES, RANGE_BALLS } from '../../lib/golf/tuning';
 import { useStore } from '../../lib/store';
 import { useGameFlow } from '../../lib/games/useGameFlow';
@@ -80,8 +81,8 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
   const [golfPuttHoleIdx, setGolfPuttHoleIdx] = useState<number | undefined>(undefined);
   const [golfResult, setGolfResult] = useState<GolfGameResult | null>(null);
   const [golfRangeResult, setGolfRangeResult] = useState<RangeGameResult | null>(null);
-  const [serverBest, setServerBest] = useState<number | null>(null);
-  const [lbKey, setLbKey] = useState(0);
+  // The board channel: durable submit + the state that renders its answer.
+  const { serverBest, lbKey, postScore, resetBest } = useBoardSubmit();
 
   // Daily Challenge + Rapid Tournament play, both through the Course free screen
   // (see CourseIntent). A finished score is PERSISTED (lib/golf/pendingResult)
@@ -184,19 +185,13 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
     // Profile card reads the 'golfcourse' board, so this figure isn't shown
     // there today; it's stored for future per-board breakdowns.
     const toPar = golfResult.perHole.reduce((s, h) => s + (h.strokes - h.par), 0);
-    api
-      .submitGameScore({
-        score: golfResult.score,
-        rounds: golfResult.roundsPlayed,
-        bestStreak: golfResult.bestStreak,
-        game: 'golf',
-        toPar,
-      })
-      .then((r) => {
-        setServerBest(r.best);
-        setLbKey((k) => k + 1);
-      })
-      .catch(() => undefined);
+    postScore({
+      score: golfResult.score,
+      rounds: golfResult.roundsPlayed,
+      bestStreak: golfResult.bestStreak,
+      game: 'golf',
+      toPar,
+    });
   }, [screen, golfResult]);
 
   // Driving-range Target Challenge twin. Records to the SEPARATE range
@@ -213,18 +208,12 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
       return;
     submittedGolfRangeRef.current = golfRangeResult;
     recordRangeGame(golfRangeResult.score, golfRangeResult.bestStreak);
-    api
-      .submitGameScore({
-        score: golfRangeResult.score,
-        rounds: golfRangeResult.roundsPlayed,
-        bestStreak: golfRangeResult.bestStreak,
-        game: 'golfrange',
-      })
-      .then((r) => {
-        setServerBest(r.best);
-        setLbKey((k) => k + 1);
-      })
-      .catch(() => undefined);
+    postScore({
+      score: golfRangeResult.score,
+      rounds: golfRangeResult.roundsPlayed,
+      bestStreak: golfRangeResult.bestStreak,
+      game: 'golfrange',
+    });
   }, [screen, golfMode, golfRangeResult]);
 
   // Lightweight streak read for the Arena tab's 🔥 chip so a returning player
@@ -272,7 +261,7 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
   function play() {
     setGolfResult(null);
     setGolfRangeResult(null);
-    setServerBest(null);
+    resetBest();
     startGame();
   }
 
@@ -303,19 +292,17 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
   }
 
   // A finished normal round → the golfcourse board (server derives score from
-  // toPar, so we send score:0).
+  // toPar, so we send score:0). A full 18 is the most expensive thing a player
+  // can lose, so it goes through the same durable path as the other two.
   function postCourseRound(r: { courseId: string; holes: number; toPar: number }) {
-    api
-      .submitGameScore({
-        game: 'golfcourse',
-        course: r.courseId,
-        toPar: r.toPar,
-        rounds: r.holes,
-        bestStreak: 0,
-        score: 0,
-      })
-      .then(() => setLbKey((k) => k + 1))
-      .catch(() => undefined);
+    postScore({
+      game: 'golfcourse',
+      course: r.courseId,
+      toPar: r.toPar,
+      rounds: r.holes,
+      bestStreak: 0,
+      score: 0,
+    });
   }
 
   // THE one switch: every play-shaping prop comes off the same discriminant, so

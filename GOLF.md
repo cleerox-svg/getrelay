@@ -235,13 +235,16 @@ TOTAL is carry plus a run-out the bounce/roll core derives from the LANDING LIE.
 - **Headless harness** (vitest). `pnpm --filter @relay/ui test` drives the REAL
   sims and prints per-club / per-layout dynamics tables with regression-failing
   assertions. **Tune against this and against device telemetry — never guess.**
-  Current golf + `scene3d` coverage: **669 tests across 21 files** —
+  Current golf + `scene3d` coverage — recomputed after merging the load-state and
+  durable-submit work; both sides of this merge added files, so neither branch's
+  count was right on its own:
   `courses.test.ts` 338, `courseSim` 73, `puttCourses` 35, `foliage` 30,
   `terrain` 26, `puttSim` 22, `instancing` 16, `rangeSim` 15, `greenPhysics` 15,
   `courseData` 14, `golf/economy` 12, `scene3d/quality` 12, `scene3d/env` 12,
-  `clock` 10, `golf/scene/quality` 8, `golf/GolfShop` 8, `golf/GolfClubhouse` 6,
-  `scene3d/budget` 5, `components/golf/budget` 4, `scene3d/stats` 4,
-  `env.irradiance` 4.
+  `clock` 10, `golf/scene/quality` 8, `golf/GolfShop` 8, `golf/pendingScore` 8,
+  `golf/GolfClubhouse` 6, `golf/ChallengeCard` 6, `scene3d/budget` 5,
+  `components/golf/budget` 4, `golf/GolfScreen.score` 4, `scene3d/stats` 4,
+  `env.irradiance` 4, `golf/GolfGame.abandon` 2.
 - **In-app telemetry.** A last-shot debug panel plus a "Copy telemetry" button
   (last 30 shots as JSON) so real device numbers can be diffed against the
   harness.
@@ -283,6 +286,46 @@ code path:
   rides this path; the rapid tournament plays a full round and captures
   `onRoundComplete` itself (so it posts to the event, NOT to `golfcourse`, and
   there is no double-post).
+
+**⚠ AND EVERY ONE OF THOSE SUBMITS IS DURABLE — a rejected POST may not eat the
+round.** All three board paths, plus `ChallengeCard`'s, were written as
+`api.submitGameScore(...).catch(() => undefined)`, and the challenge one as
+`Promise.allSettled([...]).then(refetch).catch(() => undefined)`. **`allSettled`
+never rejects**, so on that path a rejected `submitChallengeResult` flowed
+straight into the `.then()`, the card refetched, the server said "unplayed" and
+the card rendered a `—` and a "Play your round" button over a round that had just
+been played and was now gone — no retry, no local record, nothing shown. The
+`submitGameScore` paths were half-mitigated (`recordGolfGame`/`recordRangeGame`
+write the LOCAL best first) but lost the BOARD entry, and the exactly-once ref
+meant it was never retried on that mount. So:
+
+- **`lib/golf/pendingScore.ts`** is a persisted QUEUE of unsent board /
+  challenge submits — same idiom as `pendingResult.ts`, same id counter
+  (`nextPendingId`), same claim semantics (one request per attempt id, second
+  caller gets the first promise, clear on success, RELEASE THE CLAIM ON FAILURE).
+  It is a second SHAPE, not a second mechanism, and it has to be: `pendingResult`
+  is one slot per kind (a daily attempt SUPERSEDES the last; four unsent board
+  rows do not), its `tag` is a PERIOD identity with an inverted stale policy
+  (delete a mismatch — here an old entry must be RETRIED, the challenge id is in
+  the URL and a board row is period-less), and its payload is exactly
+  `{strokes,toPar}`. The file header states all three.
+- **`components/golf/useBoardSubmit.ts`** is the hub's ONE board channel:
+  `postScore` (durable) plus `serverBest`/`lbKey`, and the mount effect that
+  FLUSHES the queue. That flush is the only retry available to
+  `GolfGame`/`RangeGame`'s unmount abandon net, which banks a partial round from
+  a cleanup function and therefore may not `setState`, show an error or re-run
+  itself (`DerbyGame`'s `bank()`/`finish()` split, same constraint).
+- **`ChallengeCard` INSPECTS the settled results.** A `rejected` entry is a
+  failure: the card keeps the played to-par on screen (from the persisted entry,
+  so a remount recovers it too), shows a **"Not saved"** pill and a **Retry**,
+  and re-sends only the entries still on disk. A failed REFETCH after a
+  successful submit is a stale view, not a lost round, and is not reported as
+  one.
+
+`pendingScore.test.ts`, `ChallengeCard.test.tsx`, `GolfScreen.score.test.tsx` and
+`GolfGame.abandon.test.tsx` all make the REJECTION the primary case — the resolved
+arm is asserted once each, at the end. Three separate times on this project a
+promise's rejected arm shipped unexercised and cost real user data.
 
 **Which of those three a Course round is wired to comes from ONE discriminated
 union** — `CourseIntent` in `GolfScreen` (`normal` | `daily` | `tournament`),
@@ -410,6 +453,8 @@ Every path below resolves on disk. Root for UI paths is
 |---|---|
 | Hub shell: Play / Arena / Clubhouse tabs, flow wiring, immersive + music, the `CourseIntent` union | `src/components/golf/GolfScreen.tsx` |
 | Persisted, submit-once, challenge-TAGGED pending Daily / Tournament result (`readPending` / `writePending` / `clearPending` / `dropStalePending` / `submitPendingResult`) | `src/lib/golf/pendingResult.ts` |
+| Persisted QUEUE of unsent BOARD / CHALLENGE submits — persist-before-POST, once-only claim, retry on flush | `src/lib/golf/pendingScore.ts` |
+| The hub's one board channel: durable `postScore` + `serverBest`/`lbKey` + the mount flush | `src/components/golf/useBoardSubmit.ts` |
 | Results screen shared by Mini-Golf + the range Target Challenge (score, chips, board) | `src/components/golf/GolfResultScreen.tsx` |
 | Play tab: course hero, Course + Mini-Golf pickers, range expansion, challenge CTA | `src/components/golf/GolfMenu.tsx` |
 | Arena: daily hole + streak / rapid events / boards | `src/components/golf/GolfDaily.tsx`, `GolfTournaments.tsx`, `GolfLeaderboard.tsx` |
@@ -585,6 +630,18 @@ Every path below resolves on disk. Root for UI paths is
   three now distinguish the failure, and `economy.test.ts` / `GolfShop.test.tsx`
   / `GolfClubhouse.test.tsx` pin both directions (the honest error appears AND
   the false empty-state copy does not).
+- **⚠ A REJECTED SUBMIT IS NOT A SUBMITTED SCORE, AND `Promise.allSettled` NEVER
+  REJECTS.** Any path that sends a score the player earned persists it FIRST
+  (`lib/golf/pendingScore.ts`) and treats a rejection as a failure — surfaced
+  where a person can see it, retried where they can't. Two shapes are banned
+  outright on a submit path: `.catch(() => undefined)` on a POST that carries a
+  round (it discards the round and there is nothing left to retry), and feeding
+  `Promise.allSettled` into a `.then()` as though a rejected entry could not be
+  in it. If you use `allSettled`, INSPECT the settled array; the only place it
+  may be used without inspection is `flushPendingScores`, where a failed entry
+  simply stays queued. This class has cost real user data three times here —
+  `ChallengeCard`, the four `submitGameScore` sites, and `DerbyGame.bank()`,
+  which silently discarded 12 of 13 competently-played derby sessions.
 - **⚠ ONE intent for Course play, and never a flag per flow.** What a Course
   round IS (normal / daily / tournament) lives in a single discriminated union in
   `GolfScreen`, switched on once. Adding a new flow means a new `kind` — NOT

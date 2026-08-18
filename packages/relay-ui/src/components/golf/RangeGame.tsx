@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
-import { api } from '../../lib/api';
+import { submitGameScoreDurably } from '../../lib/golf/pendingScore';
 import { RangeSim } from '../../lib/golf/rangeSim';
 import type { RangeState, ShotResult } from '../../lib/golf/rangeSim';
 import { DEFAULT_CLUB_ID } from '../../lib/golf/clubs';
@@ -356,7 +356,9 @@ export function RangeGame({
   finishRef.current = finishNow;
 
   // Abandon safety net: unmounted mid-round with >=1 ball hit and nothing
-  // reported yet → bank the partial run directly. Mirrors GolfGame.
+  // reported yet → bank the partial run directly. Mirrors GolfGame, including
+  // why the board entry is PERSISTED: no setState is possible here, so a
+  // rejected POST has to survive on disk for GolfScreen's next mount to flush.
   useEffect(() => {
     if (!isChallenge) return;
     return () => {
@@ -367,14 +369,12 @@ export function RangeGame({
       const finalScore = perShot.reduce((s, x) => s + x.points, 0);
       const streak = longestStreak(perShot);
       recordRangeGame(finalScore, streak);
-      api
-        .submitGameScore({
-          score: finalScore,
-          rounds: perShot.length,
-          bestStreak: streak,
-          game: 'golfrange',
-        })
-        .catch(() => undefined);
+      void submitGameScoreDurably({
+        score: finalScore,
+        rounds: perShot.length,
+        bestStreak: streak,
+        game: 'golfrange',
+      }).catch(() => undefined); // on disk already; just no unhandled rejection
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
