@@ -44,6 +44,7 @@ import { BALL_RADIUS_FT } from '../../../lib/baseball/airPhysics';
 import { sampleTrack } from '../../../lib/baseball/pitchSim';
 import type { PitchTrack } from '../../../lib/baseball/pitchSim';
 import type { BattedTrack } from '../../../lib/baseball/battedBallSim';
+import { buildBallTexture } from './ballSkin';
 import { buildTracer } from './tracer';
 import type { TracerHandle } from './tracer';
 import type { StadiumCtx, StadiumPart } from './geom';
@@ -55,8 +56,43 @@ import type { StadiumCtx, StadiumPart } from './geom';
 const PITCH_TRACER_COLOR = 0xffe14d;
 const BATTED_TRACER_COLOR = 0xff5533;
 
-/** Ball albedo. FEEL KNOB — off-white leather, no seams at this milestone. */
+/** Ball albedo. FEEL KNOB — off-white leather. `ballSkin.ts` cuts the seams. */
 const BALL_COLOR = 0xf7f4ea;
+
+/**
+ * Canvas WIDTH of the seam map, px, capped against the tier's own texture
+ * budget. `grainPx` is 0 / 256 / 512 across the three tiers, so this is 0 / 128
+ * / 128 — the cap is deliberate and it is sized from the SHOT, not from the
+ * tier: measured off the shipped PNGs the ball is **33 px** across at its
+ * largest anywhere in the game (`contact`) and 28 px in `batter`, so a
+ * 128 × 64 equirectangular map already puts more than two texels on every
+ * rendered pixel of it. 512 would be 16× the memory for detail no camera can
+ * reach.
+ */
+const BALL_SKIN_PX = 128;
+
+/**
+ * The ball's RESTING ORIENTATION, radians. FEEL KNOB, and it is a constant
+ * rather than a rotation because of an arithmetic result that is worth writing
+ * down: the ball is NOT spun.
+ *
+ * ⚠ A TRUE SPIN WOULD BE ALIASING, NOT ANIMATION. The reference four-seamer is
+ * 2400 rpm = 40 rev/s. `FIXED_MS` is 1/120 s, so the ball turns **120° per
+ * substep** and, at `PITCH_TEMPO = 0.55`, **66° per rendered frame** — an order
+ * of magnitude past the ~5 rev/s a human eye can track, and past the Nyquist
+ * limit of the frame rate itself, so what a spun ball would actually draw is a
+ * uniformly random orientation every frame. That is temporal noise dressed as
+ * physics, and it would also make the frozen `t=` harness shots depend on a
+ * quantity no viewer can read. What a hitter really reads at 2400 rpm is the
+ * stable POLE of the spin axis against blurred bands, which needs motion blur
+ * or an axis-aligned band map — a different piece of work, recorded here rather
+ * than faked with a slow spin.
+ *
+ * So the seams are here for identity, size and the shading cue a curved seam
+ * gives a sphere — not for reading rotation. This tilt just keeps a pole off
+ * the camera axis so a seam is in view from every one of the four modes.
+ */
+const BALL_TILT = { x: 0.62, y: 0.9, z: 0.28 };
 
 /**
  * Buffer sizes, DERIVED from the substep and the sims' own flight bounds so a
@@ -194,18 +230,23 @@ const sceneFromReport = (d: number, x: number, h: number): [number, number, numb
 const sceneFromWorld = (x: number, y: number, z: number): [number, number, number] => [y, z, x];
 
 export function buildFlight(ctx: StadiumCtx, opts: FlightOptions): FlightHandle {
-  const { scene, track } = ctx;
+  const { scene, track, quality } = ctx;
   const group = new Group();
   group.name = 'flight';
 
   // A UNIT sphere, scaled per frame. One geometry, whatever the render radius
   // does — rebuilding a SphereGeometry to change a radius is the allocation
   // pattern `tracer.ts` exists to avoid, applied to the ball.
+  // The seams. `null` at a tier with maps off or with no DOM, in which case the
+  // ball ships its flat albedo and nothing else about the scene changes.
+  const skin = quality.grainPx > 0 ? buildBallTexture(BALL_SKIN_PX) : null;
+  if (skin) track(skin);
   const ball = new Mesh(
     track(new SphereGeometry(1, 16, 12)),
-    track(new MeshLambertMaterial({ color: BALL_COLOR })),
+    track(new MeshLambertMaterial({ color: BALL_COLOR, ...(skin ? { map: skin } : {}) })),
   );
   ball.name = 'ball';
+  ball.rotation.set(BALL_TILT.x, BALL_TILT.y, BALL_TILT.z);
   // See SHADOW_COLOR's note: the ball is deliberately not in the shadow set.
   ball.castShadow = false;
   ball.receiveShadow = false;

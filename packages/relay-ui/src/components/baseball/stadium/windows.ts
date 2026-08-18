@@ -49,6 +49,35 @@ export interface WindowGridOpts {
    * shared material is only shareable if the map has somewhere neutral in it.
    */
   plainTopFraction?: number;
+  /**
+   * What the UNTOUCHED lane is painted at, as a fraction of white — the wall
+   * between two openings AND the `plainTopFraction` band, which is the same
+   * canvas value. `1` is white, i.e. "leave the surface exactly as authored",
+   * and it is the DEFAULT so that every existing caller's canvas is unchanged
+   * byte for byte.
+   *
+   * ⚠⚠ IT IS THE ONLY WAY A MULTIPLYING MAP CAN MAKE A WINDOW BRIGHTER THAN A
+   * WALL, and that is not a stylistic point — it is the same arithmetic
+   * `crowd.ts` is built on. `map` MULTIPLIES the surface's colour, so a texel
+   * can only ever DARKEN: at `wallGain = 1` a "lit" window is authored at
+   * `rgba(255,236,190, ~0.9)` over white, i.e. ×0.9 of the wall beside it, so
+   * the lit windows in this map have never been lit — they have been *slightly
+   * less bright than the concrete*. Measured on `daynight-night.png`'s tallest
+   * high-rise: wall L 85.8, lit window L 75.2 — the window was DARKER.
+   *
+   * Pulling the wall lane down instead inverts it. The surface colour becomes
+   * the colour of a LIT WINDOW and the wall is a fraction of it, which is
+   * exactly `seatsHex` / `crowdBase`'s mechanism one building further out.
+   *
+   * ⚠ IT IS A CANVAS LEVEL, NOT A LINEAR MULTIPLIER, and the distinction is
+   * load-bearing because the caller's number has to be predictable. The canvas
+   * is sampled as `SRGBColorSpace`, so three decodes it: a lane painted at
+   * `0.58` of white multiplies the surface by `toLinear(round(255·0.58)/255)` =
+   * **0.2961** in the light the shading actually happens in.
+   * `daylight.test.ts` reproduces that quantisation exactly rather than
+   * assuming the fraction, which is why its skyline goldens land on the byte.
+   */
+  wallGain?: number;
   rng: () => number;
 }
 
@@ -60,6 +89,19 @@ export interface WindowGridOpts {
  * canvas whatever grid it is asked for; the caller's UVs decide its shape on the
  * building.
  */
+/**
+ * The BYTE the untouched lane is painted at, for a given `wallGain`.
+ *
+ * ⚠ EXPORTED SO THERE IS ONE OF IT. `daylight.test.ts` has to reproduce this
+ * quantisation exactly — its skyline goldens land on the byte only because the
+ * effective linear multiplier is `toLinear(wallLaneByte(g)/255)`, not `g` — and
+ * a second copy of `Math.round(255 * g)` in a test is precisely the kind of
+ * hand-transcribed constant that let a hard-coded `0x6b727c` drift away from
+ * `roof.ts` in that same file.
+ */
+export const wallLaneByte = (wallGain: number): number =>
+  Math.max(0, Math.min(255, Math.round(255 * wallGain)));
+
 export function buildWindowTexture(opts: WindowGridOpts): CanvasTexture | null {
   const { px, cols, rows, litFraction, rng } = opts;
   if (px <= 0 || cols <= 0 || rows <= 0 || typeof document === 'undefined') return null;
@@ -70,7 +112,11 @@ export function buildWindowTexture(opts: WindowGridOpts): CanvasTexture | null {
   if (!ctx) return null;
   const w = canvas.width;
   const h = canvas.height;
-  ctx.fillStyle = '#ffffff';
+  // `1` writes literally `#ffffff`, so an unchanged caller's canvas is
+  // byte-identical rather than merely close. See `wallGain`.
+  const gain = opts.wallGain ?? 1;
+  const lane = wallLaneByte(gain);
+  ctx.fillStyle = gain >= 1 ? '#ffffff' : `rgb(${lane},${lane},${lane})`;
   ctx.fillRect(0, 0, w, h);
 
   const fillU = opts.fillU ?? 0.62;

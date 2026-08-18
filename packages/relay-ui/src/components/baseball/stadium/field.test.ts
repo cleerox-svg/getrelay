@@ -19,10 +19,16 @@
 //      grey concourse, the `wide` shot's car park)                 → 1 fail
 //   3. the infield drawn as a solid fan again (no grass cutouts)   → 2 fail
 //   4. the warning track's inner ring set to the wall (no track)   → 1 fail
+//   5. `mat(daylight.apronHex)` back to a literal 0x63625d — the
+//      SHIPPED defect, the concourse OUTSIDE the bowl rendering at
+//      four times the seating inside it                            → 1 fail
+//      (the apron-wiring test below. `daylight.test.ts` still passes
+//      in full, which is `roof.test.ts`'s reason for existing applied
+//      to the ground: a table can be right and unreachable.)
 
 import { describe, expect, it } from 'vitest';
 import { Scene } from 'three';
-import type { BufferGeometry, Mesh } from 'three';
+import type { BufferGeometry, Mesh, MeshLambertMaterial } from 'three';
 import { ALPINE_HEIGHTS, fenceAt, FOUL_LINE_DEG, HARBOURFRONT } from '../../../lib/baseball/parks';
 import type { Park } from '../../../lib/baseball/parks';
 import { infieldDepthFt } from '../../../lib/baseball/fielding';
@@ -44,7 +50,7 @@ const log = (s: string) => {
   console.log(s);
 };
 
-function build(park: Park) {
+function build(park: Park, light = DAYLIGHT.day) {
   const owned: Array<{ dispose(): void }> = [];
   const ctx: StadiumCtx = {
     scene: new Scene(),
@@ -54,7 +60,7 @@ function build(park: Park) {
     }) as StadiumCtx['track'],
     park,
     seed: TEST_SEED,
-    daylight: DAYLIGHT.day,
+    daylight: light,
     // The DEFAULT tier, because `fenceStepDeg` decides how finely the turf and
     // the dirt arc are sampled and the shipping tier is the one to measure.
     quality: pickStadiumQuality({
@@ -211,5 +217,30 @@ describe('the skinned infield', () => {
     );
     expect(all - skin).toBeGreaterThan(4000);
     for (const r of owned) r.dispose();
+  });
+});
+
+/**
+ * ⚠ THE APRON'S COLOUR IS A LIGHTING ROW, AND NOTHING ELSE COULD SEE IT.
+ * `daylight.test.ts` can say what `apronHex` RENDERS at in both rows; it cannot
+ * say whether the mesh was handed that column or a literal, and the defect it
+ * was added for is exactly the literal. Same argument, same shape and same file
+ * split as `roof.test.ts`'s deck-wiring test one surface up.
+ */
+describe('the concourse takes its colour from the lighting row', () => {
+  it('the apron material is `daylight.apronHex`, on BOTH rows', () => {
+    for (const light of [DAYLIGHT.day, DAYLIGHT.night]) {
+      const { byName, owned } = build(HARBOURFRONT, light);
+      const apron = byName.get('apron');
+      expect(apron, `${light.id}: no apron mesh`).toBeDefined();
+      expect((apron!.material as MeshLambertMaterial).color.getHex(), `${light.id} apron`).toBe(
+        light.apronHex,
+      );
+      for (const r of owned) r.dispose();
+    }
+    // …and the two rows are genuinely different values, which is the whole
+    // content of the column. A table that set them equal would satisfy every
+    // assertion above and still ship the inversion.
+    expect(DAYLIGHT.night.apronHex).not.toBe(DAYLIGHT.day.apronHex);
   });
 });

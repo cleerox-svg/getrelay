@@ -46,6 +46,12 @@
 //     PNGs this run just wrote and measures the deck's own luminance spread
 //     against the day frame's. See its header: the crowd has beaten this suite
 //     three times and twice a human had to be the instrument.
+//   • THE NIGHT MASSES, IN THE SAME PIXELS. Same function, second half. Three
+//     surfaces have now shipped the SAME inversion — a roof deck at 86 % of its
+//     own daytime luminance, a concourse at 81 %, a skyline at 65 % — because
+//     one `DirectionalLight` has a direction and no position, so a rig aimed at
+//     the field lights everything that is not the field too. Each was found by
+//     a human looking at a PNG. See `NIGHT_MASS_PATCHES`.
 //
 // ⚠ SwiftShader validates composition, geometry and materials but NOT real-GPU
 // behaviour. "Renders fine in SwiftShader" is not evidence of on-device safety —
@@ -1753,10 +1759,66 @@ const CROWD_PATCHES = [
   // Upper deck, ~400 ft out, between two fascia LED lines. No ribbon text.
   { id: 'far upper deck', rect: [220, 515, 140, 45], dayP50: [16, 30] },
   // The lower bowl behind the plate, the nearest seating this camera reaches.
-  { id: 'near bowl', rect: [440, 1090, 220, 80], dayP50: [12, 26] },
+  //
+  // ⚠ 220×80 → 210×60, AND THE TRIM IS A FINDING, NOT A TIDY-UP. The bottom
+  // right 122 texels of the old rect were not crowd at all — they were the
+  // CONCOURSE outside the bowl, showing through at (656–659, 1155+) at the old
+  // night apron's exact (67,70,76). That is 0.7 % of the rect and it was the
+  // whole of its p99: darkening the concourse moved this patch's night peak
+  // from 67.5 to 58.9 with nothing about the crowd having changed. A "crowd
+  // point" that is actually a car park is the same class of defect `dayP50`
+  // exists to catch, one order of magnitude smaller — the band could not see
+  // it because the day p50 barely moves (18.4 → 19.3, both inside 12–26). The
+  // trimmed rect is 0 apron texels; measured, night p99/p50 is 3.5 against a
+  // day 3.8.
+  { id: 'near bowl', rect: [440, 1090, 210, 60], dayP50: [12, 26] },
 ];
 /** The floodlit field, in the same frame — the reference the peak is judged on. */
 const TURF_PATCH = { id: 'turf', rect: [400, 700, 120, 60], dayP50: [85, 120] };
+
+/**
+ * ⚠⚠ THE OTHER HALF OF THE NIGHT FRAME: EVERY LARGE SURFACE THE LIGHT RIG DOES
+ * NOT REACH, AND THE RULE IS ONE LINE — IT MUST BE MATERIALLY DARKER THAN IT IS
+ * BY DAY.
+ *
+ * A `DirectionalLight` has a direction and no position, so a rig that is
+ * conceptually "inside the bowl pointing down at the field" is, to everything
+ * else in the scene, a light of infinite reach. Three surfaces have now shipped
+ * the same inversion — the parked roof deck at 86 % of its own daytime
+ * luminance, the concourse at 81 %, and the skyline at 65 % with the tower's
+ * concrete shaft rendering at 96.1 against a floodlit turf at 83.2. Every one
+ * of them passed the whole suite: the geometry is right, the draw calls are
+ * right, the day/night pair is byte-identical, and a human had to look at a PNG.
+ *
+ * So it is measured here, in pixels, on the same `daynight` pair the crowd is.
+ * The ratio is against each patch's OWN day figure rather than an absolute
+ * level, so it survives an art pass that repaints the surface, and each rect
+ * carries a `dayP50` band on the same guard-the-guard principle as
+ * `CROWD_PATCHES`: a rect that has drifted off the thing it is named after
+ * SKIPS rather than passes.
+ *
+ * MUTATIONS WATCHED TO FAIL (each reverted, counts as observed, exit 1):
+ *   1. `night.apronHex` back to 0x63625d — the shipped concourse   → 1 fail
+ *      (69.8 against a day 86.4, 81 %)
+ *   2. `night.cityWallGain` back to 1 and the night ramp back to
+ *      the day concrete — the shipped skyline                      → 1 fail
+ *      (85.8 against a day 132.4, 65 %)
+ *   3. the concourse rect moved onto the bowl                      → 1 fail
+ *      (guard-the-guard: day p50 29.1, outside its 78–95 band, and
+ *      the real leg is SKIPPED rather than passed on it — it would
+ *      have read 113 % and failed for the wrong reason)
+ */
+const NIGHT_MASS_PATCHES = [
+  // The ground disc outside the bowl, bottom of frame. `field.ts` does not
+  // grain the apron, so this rect is 100 % one colour and the p50 IS the
+  // surface.
+  { id: 'concourse', rect: [80, 1400, 200, 120], dayP50: [78, 95] },
+  // The tallest high-rise, top of frame. 57 % of the rect is facade; the rest
+  // is its window grid, which is why the p50 and not the mean is read.
+  { id: 'skyline body', rect: [330, 60, 40, 130], dayP50: [125, 140] },
+];
+/** How much of its own DAY luminance a surface outside the rig may keep. */
+const NIGHT_MASS_MAX_OF_DAY = 0.5;
 const CROWD_MAX_NIGHT_RATIO = 3;
 /** How far over the turf's own p50 a crowd point may reach. */
 const CROWD_MAX_PEAK_OVER_TURF = 1.2;
@@ -1882,6 +1944,43 @@ function checkNightBowl(reports) {
         `"${patch.id}" peaks at ${n.p99.toFixed(1)} at night against floodlit turf at ` +
           `${turfNight.p50.toFixed(1)} — the crowd map MULTIPLIES a Lambert seat, so a texel ` +
           `over the field is a white patch out-shining the floodlights`,
+      );
+    }
+  }
+
+  // --- the surfaces OUTSIDE the rig. See `NIGHT_MASS_PATCHES`.
+  console.log('\n· NIGHT MASSES  surfaces the rig does not reach, read back out of the PNGs');
+  console.log('    patch              day p50   night p50   night/day   ceiling');
+  for (const patch of NIGHT_MASS_PATCHES) {
+    const d = patchStats(day, patch.rect);
+    const n = patchStats(night, patch.rect);
+    const frac = n.p50 / Math.max(d.p50, 0.01);
+    console.log(
+      `    ${patch.id.padEnd(16)} ${d.p50.toFixed(1).padStart(7)} ${n.p50.toFixed(1).padStart(11)}` +
+        ` ${(frac * 100).toFixed(0).padStart(10)} % ${(NIGHT_MASS_MAX_OF_DAY * 100).toFixed(0).padStart(9)} %`,
+    );
+    const [lo, hi] = patch.dayP50;
+    if (d.p50 < lo || d.p50 > hi) {
+      violations.push(
+        `the "${patch.id}" patch reads day p50 ${d.p50.toFixed(1)}, outside its declared ` +
+          `${lo}–${hi} band — the rectangle is no longer on the surface it names, so the ` +
+          `night figure beside it is measuring something else`,
+      );
+      continue;
+    }
+    if (frac > NIGHT_MASS_MAX_OF_DAY) {
+      violations.push(
+        `"${patch.id}" renders at ${n.p50.toFixed(1)} at night against ${d.p50.toFixed(1)} by day ` +
+          `(${(frac * 100).toFixed(0)} %, ceiling ${(NIGHT_MASS_MAX_OF_DAY * 100).toFixed(0)} %) — one ` +
+          `DirectionalLight has a direction and no position, so the field rig is lighting a ` +
+          `surface it is not standing in. Reflectance is the only channel that can separate them`,
+      );
+    }
+    if (n.p50 < 1) {
+      violations.push(
+        `"${patch.id}" renders at ${n.p50.toFixed(1)} at night — that is CLIPPED, not dark. ` +
+          `The exactly-derived "rig removed" albedo is black for every one of these surfaces; ` +
+          `a hole in the frame is the other failure mode, not the fix`,
       );
     }
   }

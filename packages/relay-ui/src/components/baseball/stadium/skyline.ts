@@ -68,8 +68,6 @@ const FACADE_TILE_FT = 34;
 /** Texture `v` above which the facade map carries no openings. SCENE-ONLY. */
 const FACADE_PLAIN_TOP = 0.1;
 
-const COLORS = { cityLo: 0x6d7683, cityHi: 0x99a4b2 };
-
 /** World-derived facade UVs — see `FACADE_TILE_FT`. */
 function facadeUV(g: BufferGeometry, tileFt: number): BufferGeometry {
   const pos = g.getAttribute('position');
@@ -97,7 +95,7 @@ export interface SkylinePart extends StadiumPart {
   setGlow(level: number, offsetV: number): void;
 }
 
-export function buildSkyline({ scene, track, park, quality, seed }: StadiumCtx): SkylinePart {
+export function buildSkyline({ scene, track, park, quality, seed, daylight }: StadiumCtx): SkylinePart {
   const group = new Group();
   group.name = 'skyline';
   scene.add(group);
@@ -120,8 +118,16 @@ export function buildSkyline({ scene, track, park, quality, seed }: StadiumCtx):
   // The high-rises. Placed on the far side of the bowl in a band of bearings, at
   // distances that put them outside every camera's near geometry and inside the
   // 6000 ft far plane. Seeded, so the city is the same city every run.
-  const lo = new Color(COLORS.cityLo);
-  const hi = new Color(COLORS.cityHi);
+  // ⚠ THE CITY'S TINT IS A LIGHTING ROW, NOT A CONSTANT HERE, and the two rows
+  // are not two shades of the same thing. By day it is concrete, palest at the
+  // top of the ramp because that is aerial perspective. At night it is the
+  // colour of a LIT WINDOW, because `windows.ts`'s map multiplies and
+  // `daylight.cityWallGain` is what pulls the concrete DOWN off it. See
+  // `daylightSpec.ts`'s `cityLoHex` / `cityWallGain` — including the
+  // measurement that says these buildings were the brightest mass in a night
+  // frame, brighter than the floodlit turf.
+  const lo = new Color(daylight.cityLoHex);
+  const hi = new Color(daylight.cityHiHex);
   const mix = new Color();
   for (let i = 0; i < BUILDINGS; i++) {
     const bearingDeg = -118 + 236 * (i / (BUILDINGS - 1)) + (rng() * 2 - 1) * 6;
@@ -164,6 +170,9 @@ export function buildSkyline({ scene, track, park, quality, seed }: StadiumCtx):
     fillU: 0.55,
     fillV: 0.45,
     plainTopFraction: FACADE_PLAIN_TOP,
+    // The wall between two openings, AND the plain lane the tower's concrete
+    // shells sample — so the shaft falls with the city off one column.
+    wallGain: daylight.cityWallGain,
     rng,
   });
   if (facade) track(facade);

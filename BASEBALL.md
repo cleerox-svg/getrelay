@@ -982,6 +982,10 @@ the render layer; contact resolves at the true physical state.
 | `packages/relay-ui/src/components/baseball/stadium/centrefield.ts` | The centre-field ELEVATION — the structural frame the board array is recessed into, the hotel window band, the banners and flags — plus the recess `stands.ts` cuts in the deck for it. Owns the recess and therefore owns `CENTREFIELD_BOARD`, the board's real `{ widthFt, heightFt, faceDistFt, sillFt, bearingDeg }`, which the board slice takes. Builds NO board |
 | `packages/relay-ui/src/components/baseball/stadium/grain.ts` | THE one seeded two-octave surface-noise tile, built ONCE and `.clone()`d per surface with a different `repeat` — golf's six identical turf normal maps are the anti-pattern this is written against. A MULTIPLIER around white, so it can never shift a surface's hue |
 | `packages/relay-ui/src/components/baseball/stadium/crowd.ts` | The crowd as ONE procedural texture, extracted from `stands.ts` at the cap: clumps (the octave that survives minification), speckle, seat rows, and a four-section super-tile with a seeded per-section vomitory so the lattice is not periodic |
+| `packages/relay-ui/src/components/baseball/stadium/daylightSpec.ts` | The SHAPE of a lighting row and the argument for every column — extracted from `daylight.ts` at the 500-line cap, types and prose only, so it costs the bundle nothing. `daylight.ts` re-exports the two type names, so not one of the fourteen import sites moved |
+| `packages/relay-ui/src/components/baseball/stadium/daylight.ts` | The two ROWS. Day/night as DATA, read by the composer, the sky, the roof, the tower, the crowd, the FIELD and the SKYLINE. Cosmetic by hard rule: nothing in it is ever handed to `lib/baseball`, and `shared/prefs.test.ts` runs the carry ladder both ways to prove it |
+| `packages/relay-ui/src/components/baseball/stadium/daylight.test.ts` | The rendered-levels bench: a VALIDATED five-line Lambert+ACES model that reproduces TEN golden pixels off THREE shipped PNGs to the byte, over three surface families (down-facing, up-facing, camera-facing vertical). Reads `StadiumGL.RENDER_TRANSFER`, so tone mapping, exposure and colour space are pinned rather than assumed |
+| `packages/relay-ui/src/components/baseball/stadium/ballSkin.ts` | The ball's SEAMS as one procedural equirectangular map — a closed-form curve that lies exactly on the unit sphere (`c² = 4ab`), a distance field to it, and a stitch phase on ARC LENGTH. The one texture in the directory that WANTS mipmaps, and `ballSkin.test.ts` integrates the shipped classifier to say why |
 | `packages/relay-ui/src/components/baseball/stadium/windows.ts` | A facade of windows as one seeded map, with a plain lane so one material can serve a glazed surface and an unglazed one. Two callers — the hotel band and the skyline — and one implementation |
 | `packages/relay-ui/src/components/baseball/stadium/sky.ts` | The graded sky dome: zenith→horizon ramp, haze band, seeded cloud banding. Deliberately NOT grained — see M3b(4) |
 | `packages/relay-ui/src/components/baseball/stadium/skyline.ts` | The city outside the bowl — a tapered concrete tower with an observation pod plus sixteen high-rises, ALL in one merged mesh and one draw call, seeded, and built only for a park whose `surroundings` say `'city'` |
@@ -2195,6 +2199,37 @@ the render layer; contact resolves at the true physical state.
   10 ft wall and `offWall` under the published 8 ft one with nothing in the
   resolver having changed. Assert a quarter of an inch either side and PRINT the
   exact row.
+- **⚠ A `DirectionalLight` HAS A DIRECTION AND NO POSITION, SO A "FIELD RIG"
+  LIGHTS EVERYTHING THAT IS NOT THE FIELD TOO — and this has now shipped THREE
+  TIMES on three different surfaces.** The night row aims the one directional
+  nearly straight down, which is right for the turf and wrong for every surface
+  the rig is not standing inside: the parked roof deck rendered at **86 %** of
+  its own daytime luminance, the concourse at **81 %**, and the skyline at
+  **65 %** with the landmark tower's concrete shaft at **96.1** against a
+  floodlit turf at **83.2** — an unlit object 1,250 ft outside the park, the
+  brightest large mass in a night frame. `sunIntensity` cannot separate them:
+  two surfaces with the same normal hold a FIXED ratio at every intensity, and
+  the concourse proves it independently of the deck — their night
+  `E_hemi/E_total` triples agree to four places. **Reflectance is the only
+  per-surface channel a shared light leaves**, so each is a `daylight.ts`
+  column. The exactly-derived "rig removed" albedo is BLACK for all three
+  (0.22, 0.00 and 0.14 rendered), so every shipped value is a lift and every
+  lift is anchored to something already measured — the deck to the stack's own
+  soffit, the concourse to the deck's own per-channel factor, the city to the
+  sky dome's horizon stop. Every one of the three passed the whole suite and
+  was found by a human looking at a PNG; the guards are now
+  `daylight.test.ts`'s dark-mass tests and the harness's `NIGHT_MASS_PATCHES`.
+- **⚠ A MULTIPLYING MAP CANNOT MAKE ANYTHING BRIGHTER, so "lit" has to be
+  authored as a DARKER SURROUND.** `crowd.ts` learned this for the night crowd;
+  `windows.ts` had the identical defect and nobody had measured it. A "lit"
+  window is `rgba(255,236,190, ~0.9)` over a white wall lane, i.e. ×0.9 of the
+  concrete beside it — measured, the tallest high-rise's lit windows rendered
+  **74.9 against a wall at 85.8** at night and **119.7 against 132.4** by day.
+  The lit windows in that map had never been lit. The fix is `cityWallGain`
+  (pull the wall lane down) plus a tint that IS the window colour — and the
+  tint has to carry the colour temperature too, because both night lights are
+  blue and a neutral tint renders a neutral window (measured: (73,76,74) grey
+  sparkle at exactly the same luminance as the shipped warm (100,73,43)).
 - **A park's SURROUNDINGS are data, exactly like its roof.** The skyline builder
   reads `park.surroundings` and returns an empty group for anything that is not
   `'city'`; its first version did not and put a 790 ft downtown communications
