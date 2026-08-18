@@ -239,10 +239,11 @@ TOTAL is carry plus a run-out the bounce/roll core derives from the LANDING LIE.
   durable-submit work; both sides of this merge added files, so neither branch's
   count was right on its own:
   `courses.test.ts` 338, `courseSim` 73, `puttCourses` 35, `foliage` 30,
-  `terrain` 26, `puttSim` 22, `instancing` 16, `rangeSim` 15, `greenPhysics` 15,
-  `courseData` 14, `golf/economy` 12, `scene3d/quality` 12, `scene3d/env` 12,
-  `clock` 10, `golf/scene/quality` 8, `golf/GolfShop` 8, `golf/pendingScore` 8,
-  `golf/GolfClubhouse` 6, `golf/ChallengeCard` 6, `scene3d/budget` 5,
+  `terrain` 26, `golf/economy` 24, `puttSim` 22, `instancing` 16, `rangeSim` 15,
+  `greenPhysics` 15, `courseData` 14, `golf/loadState` 14,
+  `golf/GolfClubhouse` 13, `scene3d/quality` 12, `scene3d/env` 12,
+  `golf/GolfShop` 11, `clock` 10, `golf/scene/quality` 8, `golf/pendingScore` 8,
+  `golf/ChallengeCard` 6, `golf/GolfArena.load` 6, `scene3d/budget` 5,
   `components/golf/budget` 4, `golf/GolfScreen.score` 4, `scene3d/stats` 4,
   `env.irradiance` 4, `golf/GolfGame.abandon` 2.
 - **In-app telemetry.** A last-shot debug panel plus a "Copy telemetry" button
@@ -630,6 +631,34 @@ Every path below resolves on disk. Root for UI paths is
   three now distinguish the failure, and `economy.test.ts` / `GolfShop.test.tsx`
   / `GolfClubhouse.test.tsx` pin both directions (the honest error appears AND
   the false empty-state copy does not).
+  ⚠ **"ALL of them failed" IS NOT THE CONDITION — "nothing that answered proves
+  otherwise" IS.** `GolfProfile` fans out FIVE requests and its first fix
+  demanded 5-of-5 failures before it would admit a problem, which left the
+  identical lie one endpoint-subset away and SHIPPING: the three `getGolfStats`
+  calls failing while `getGolfRecords` / `getTournamentMe` answered empty still
+  rendered "No rounds yet. Play your first round." to a player with a full
+  history, with no error and no retry. An empty answer from a subset is not
+  evidence of an empty life. The condition is `anyFailed && !hasAnything` →
+  unknown; a partial failure that DID surface real numbers still renders the
+  card. Over- and under-reporting are separate mutations and both are asserted —
+  a one-sided assertion is exactly what let this through.
+  ⚠ **A SUPERSEDED ANSWER MUST NOT LAND.** Nothing here is cancellable (the api
+  client takes no `AbortSignal`), so `force` alone never stopped the read it
+  replaced: a slow `/economy/wallet` in flight, a `purchase()` writing balance
+  470 and a fresh ledger, then the pre-purchase answer arriving REVERTED the
+  balance to 670 and blanked the ledger — reachable from `GolfSeason`, which
+  mounts `ensureWallet()` and gates Claim on `claimable`. `economy.ts` keeps a
+  per-slice GENERATION: every read takes one when it starts, every mutation
+  takes one when it writes the server's read-after-write, and a request whose
+  generation is stale drops its `set()` (both arms — a stale FAILURE must not
+  mark a slice we have since loaded). A dropped write can leave a slice at
+  'loading' with nothing in flight; that is deliberate and safe, because it is
+  not 'ready' so the next `ensure*()` refetches, and every "Loading…" branch is
+  gated on having no data at all.
+  - Retry affordances are NAMED for what they retry (`RetryButton`'s
+    `ariaLabel`): every one of them used to have the accessible name "Retry",
+    and `GolfShop` can render two at once, so a test reaching for "Retry" was
+    asserting against whichever came first in the DOM.
 - **⚠ A REJECTED SUBMIT IS NOT A SUBMITTED SCORE, AND `Promise.allSettled` NEVER
   REJECTS.** Any path that sends a score the player earned persists it FIRST
   (`lib/golf/pendingScore.ts`) and treats a rejection as a failure — surfaced

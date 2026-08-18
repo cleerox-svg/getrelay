@@ -60,9 +60,10 @@ function relTime(ms: number): string {
 }
 
 // The Profile sub-tab of the golf hub: the player's card. Pulls the three
-// server stat buckets (course / mini-golf / range) plus best-shot records on
-// mount; every request degrades gracefully (unauthed / offline just renders
-// the empty state). Identity (avatar / name / PIN) comes from the store.
+// server stat buckets (course / mini-golf / range) plus best-shot records and
+// the trophy case on mount. A request that fails is never reported as a fact
+// about the player: if nothing that answered proves a history, the card says it
+// could not load and offers a Retry (see `anyFailed` below).
 export function GolfProfile() {
   const me = useStore((s) => s.me);
   // The viewer's own equipped frame + coin balance for the card header. The hub
@@ -83,17 +84,23 @@ export function GolfProfile() {
   const [records, setRecords] = useState<GolfRecords | null>(null);
   const [tourney, setTourney] = useState<TournamentMe | null>(null);
   const [loaded, setLoaded] = useState(false);
-  // ⚠ Every one of these requests failing is NOT the same fact as a player with
-  // no rounds, and the card used to render both as "No rounds yet. Play your
-  // first round." — telling a player with a full history that their card was
-  // empty. Count the failures so the all-failed case can say so and retry.
-  const [allFailed, setAllFailed] = useState(false);
+  // ⚠ A REQUEST THAT FAILED IS NOT A ROUND THAT WAS NEVER PLAYED, AND "SOME of
+  // them failed" IS THE SHIPPING CASE. The card used to render both as "No
+  // rounds yet. Play your first round." — telling a player with a full history
+  // that their card was empty. The first fix only caught 5-of-5 failures, which
+  // left the identical lie one endpoint-subset away: the three getGolfStats
+  // calls failing while getGolfRecords / getTournamentMe answer EMPTY still
+  // rendered the newcomer copy, with no error and no retry. So track whether
+  // ANY request failed; combined with `hasAnything` below that separates the
+  // three facts — we know you have played, we know you have not, and we do NOT
+  // know. Only the last one is an error state.
+  const [anyFailed, setAnyFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     setLoaded(false);
-    setAllFailed(false);
+    setAnyFailed(false);
     let failures = 0;
     function soft<T>(p: Promise<T>): Promise<T | null> {
       return withTimeout(p).catch(() => {
@@ -115,7 +122,7 @@ export function GolfProfile() {
       setRangeStats(range);
       setRecords(rec);
       setTourney(tm);
-      setAllFailed(failures === requests.length);
+      setAnyFailed(failures > 0);
       setLoaded(true);
     });
     return () => {
@@ -214,10 +221,15 @@ export function GolfProfile() {
 
       {!loaded ? (
         <div className="golf-empty">Loading your card…</div>
-      ) : allFailed ? (
+      ) : anyFailed && !hasAnything ? (
+        // UNKNOWN, not empty: something failed and nothing that answered proves
+        // a history, so we cannot tell a veteran from a newcomer. Say so and
+        // offer the retry. (A partial failure that DID surface real numbers
+        // falls through to the card — those numbers are the server's.)
         <LoadFailure
           title="Couldn’t load your card."
           detail="Your rounds and records are safe — this is a connection problem."
+          retryLabel="Retry loading your card"
           onRetry={() => setAttempt((a) => a + 1)}
         />
       ) : !hasAnything ? (

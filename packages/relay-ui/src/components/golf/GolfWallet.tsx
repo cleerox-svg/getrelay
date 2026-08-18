@@ -54,7 +54,11 @@ export function GolfWallet() {
       {/* An unreachable wallet is its OWN state — never "no coin activity yet",
           which reads as "you have earned nothing". */}
       {walletState === 'error' && ledger.length > 0 ? (
-        <LoadFailureLine text="Couldn’t refresh your wallet." onRetry={() => void ensureWallet(true)} />
+        <LoadFailureLine
+          text="Couldn’t refresh your wallet."
+          retryLabel="Retry loading your wallet"
+          onRetry={() => void ensureWallet(true)}
+        />
       ) : null}
 
       {isFirstLoad(walletState) && ledger.length === 0 ? (
@@ -63,6 +67,7 @@ export function GolfWallet() {
         <LoadFailure
           title="Couldn’t reach your wallet."
           detail="Your coins are safe on the server — this is a connection problem."
+          retryLabel="Retry loading your wallet"
           onRetry={() => void ensureWallet(true)}
         />
       ) : ledger.length === 0 ? (
