@@ -5,6 +5,8 @@ import type { GolfRecords } from '../../lib/api';
 import { getCourse } from '../../lib/golf/courses';
 import { useStore } from '../../lib/store';
 import { useEconomy, useEquippedFrame } from '../../lib/golf/economy';
+import { withTimeout } from '../../lib/golf/loadState';
+import { LoadFailure } from './shared/LoadFailure';
 import { CoinBalance } from './CoinBalance';
 import { fmtToPar } from './shared/scoreFormat';
 import type { GolfStats, TournamentMe } from '../../lib/types';
@@ -81,31 +83,45 @@ export function GolfProfile() {
   const [records, setRecords] = useState<GolfRecords | null>(null);
   const [tourney, setTourney] = useState<TournamentMe | null>(null);
   const [loaded, setLoaded] = useState(false);
+  // ⚠ Every one of these requests failing is NOT the same fact as a player with
+  // no rounds, and the card used to render both as "No rounds yet. Play your
+  // first round." — telling a player with a full history that their card was
+  // empty. Count the failures so the all-failed case can say so and retry.
+  const [allFailed, setAllFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
-      api.getGolfStats('golfcourse').catch(() => null),
-      api.getGolfStats('golf').catch(() => null),
-      api.getGolfStats('golfrange').catch(() => null),
-      api
-        .getGolfRecords()
-        .then((r) => r.records)
-        .catch(() => null),
-      api.getTournamentMe().catch(() => null),
-    ]).then(([course, putt, range, rec, tm]) => {
+    setLoaded(false);
+    setAllFailed(false);
+    let failures = 0;
+    function soft<T>(p: Promise<T>): Promise<T | null> {
+      return withTimeout(p).catch(() => {
+        failures += 1;
+        return null;
+      });
+    }
+    const requests = [
+      soft(api.getGolfStats('golfcourse')),
+      soft(api.getGolfStats('golf')),
+      soft(api.getGolfStats('golfrange')),
+      soft(api.getGolfRecords().then((r) => r.records)),
+      soft(api.getTournamentMe()),
+    ] as const;
+    Promise.all(requests).then(([course, putt, range, rec, tm]) => {
       if (cancelled) return;
       setCourseStats(course);
       setPuttStats(putt);
       setRangeStats(range);
       setRecords(rec);
       setTourney(tm);
+      setAllFailed(failures === requests.length);
       setLoaded(true);
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [attempt]);
 
   // Best to-par: lowest recorded to-par across per-course bests and recent
   // rounds (server has no single top-level field for it). Falls back to null.
@@ -198,6 +214,12 @@ export function GolfProfile() {
 
       {!loaded ? (
         <div className="golf-empty">Loading your card…</div>
+      ) : allFailed ? (
+        <LoadFailure
+          title="Couldn’t load your card."
+          detail="Your rounds and records are safe — this is a connection problem."
+          onRetry={() => setAttempt((a) => a + 1)}
+        />
       ) : !hasAnything ? (
         <div className="golf-empty">
           <b>No rounds yet.</b>

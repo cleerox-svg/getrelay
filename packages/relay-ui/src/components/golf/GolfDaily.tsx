@@ -5,6 +5,8 @@ import { useEconomy } from '../../lib/golf/economy';
 import { resolveFrameById } from '../../lib/golf/cosmetics';
 import { getCourse } from '../../lib/golf/courses';
 import { submitPendingResult, type PendingResult } from '../../lib/golf/pendingResult';
+import { withTimeout } from '../../lib/golf/loadState';
+import { LoadFailure, RetryButton } from './shared/LoadFailure';
 import { MEDALS, fmtToPar } from './shared/scoreFormat';
 import type {
   DailyChallenge,
@@ -55,8 +57,9 @@ export function GolfDaily({ onPlay, pendingResult, onResultConsumed }: Props) {
     let cancelled = false;
     setDaily(null);
     setLoadError(false);
-    api
-      .getDaily()
+    // Timed out, so a hung request becomes a retryable error instead of a
+    // permanent spinner (same rule as GolfTournaments).
+    withTimeout(api.getDaily())
       .then((d) => {
         if (!cancelled) setDaily(d);
       })
@@ -70,8 +73,7 @@ export function GolfDaily({ onPlay, pendingResult, onResultConsumed }: Props) {
 
   const loadBoard = useCallback(() => {
     setBoardError(false);
-    api
-      .getDailyLeaderboard()
+    withTimeout(api.getDailyLeaderboard())
       .then((r) => setBoard(r.entries))
       .catch(() => setBoardError(true));
   }, []);
@@ -126,20 +128,11 @@ export function GolfDaily({ onPlay, pendingResult, onResultConsumed }: Props) {
   // ---- Loading / needs-connection states ----
   if (loadError) {
     return (
-      <div className="golf-empty">
-        <b>Daily needs a connection.</b>
-        <br />
-        Couldn’t reach today’s challenge.
-        <br />
-        <button
-          type="button"
-          className="mt-2 font-semibold"
-          style={{ color: 'var(--golf-accent)', background: 'transparent', border: 0 }}
-          onClick={() => setAttempt((a) => a + 1)}
-        >
-          Retry
-        </button>
-      </div>
+      <LoadFailure
+        title="Daily needs a connection."
+        detail="Couldn’t reach today’s challenge."
+        onRetry={() => setAttempt((a) => a + 1)}
+      />
     );
   }
   if (!daily) {
@@ -239,14 +232,7 @@ export function GolfDaily({ onPlay, pendingResult, onResultConsumed }: Props) {
         {submitState === 'error' && current ? (
           <div className="px-4 pb-2 text-[13px]" style={{ color: 'var(--ping)' }}>
             Couldn’t submit.
-            <button
-              type="button"
-              className="ml-2 font-semibold"
-              style={{ color: 'var(--golf-accent)', background: 'transparent', border: 0 }}
-              onClick={() => submitPending(current)}
-            >
-              Retry
-            </button>
+            <RetryButton className="ml-2" onClick={() => submitPending(current)} />
           </div>
         ) : null}
 
@@ -282,14 +268,7 @@ export function GolfDaily({ onPlay, pendingResult, onResultConsumed }: Props) {
           {boardError ? (
             <div className="text-center py-6 text-sm" style={{ color: 'var(--text-dim)' }}>
               Couldn’t load the leaderboard.
-              <button
-                type="button"
-                className="block mx-auto mt-2 font-semibold"
-                style={{ color: 'var(--golf-accent)', background: 'transparent', border: 0 }}
-                onClick={loadBoard}
-              >
-                Retry
-              </button>
+              <RetryButton className="block mx-auto mt-2" onClick={loadBoard} />
             </div>
           ) : board === null ? (
             <div className="text-center py-6 text-sm" style={{ color: 'var(--text-dim)' }}>

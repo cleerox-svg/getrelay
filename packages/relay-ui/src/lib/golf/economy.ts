@@ -6,11 +6,27 @@
 // all import from here without pulling the lazy `three` chunk.
 //
 // Loading is lazy + cached: callers invoke ensure*() which fetches once and
-// then no-ops while a copy is in the store. Mutations (purchase / equip /
-// claim) update the cache in place from the server's read-after-write payloads,
-// so the shop, the hub balance chip and the golf renderer all stay in sync
-// without a refetch. Every fetch degrades gracefully (unauthed / offline just
-// leaves the slice empty → the economy UI hides itself).
+// then no-ops while a GOOD copy is in the store.
+//
+// ⚠ A FAILED FETCH IS NOT A LOADED SLICE. Each slice carries a `LoadState`
+// (see loadState.ts), not a `loaded` boolean. This is a fixed production bug,
+// not a style preference: the old code set `loaded: true` in the catch arm, so
+// one failed /economy/wallet left `balance: null` behind a guard that never
+// retried, and the shop rendered "Need more coins" on every item of a
+// 670-coin wallet for the whole session. The same shape sank cosmetics — a
+// failed fetch meant "you own nothing", so a purchased, equipped ball skin
+// silently stopped applying. Rules:
+//
+//   1. Only the SUCCESS arm may set 'ready'. The catch arm sets 'error'.
+//   2. 'error' is retryable — ensure*() refetches from it with no `force`.
+//   3. Data already in the store SURVIVES a failed refresh (a forced refetch
+//      that fails must not blank a balance we legitimately know).
+//   4. The UI must render 'error' as an error with a retry, never as an empty
+//      catalog or an unaffordable price. See `affordability()`.
+//
+// Mutations (purchase / equip / claim) update the cache in place from the
+// server's read-after-write payloads, so the shop, the hub balance chip and the
+// golf renderer all stay in sync without a refetch.
 
 import { create } from 'zustand';
 import { api, ApiError } from '../api';
@@ -22,6 +38,7 @@ import type {
   WalletLedgerEntry,
 } from '../types';
 import { resolveFrame, type GolfFrame } from './cosmetics';
+import { withTimeout, type LoadState } from './loadState';
 
 const DEFAULT_EQUIPPED: EquippedCosmetics = {
   ball: 'ball_classic',
@@ -30,20 +47,22 @@ const DEFAULT_EQUIPPED: EquippedCosmetics = {
 };
 
 interface EconomyState {
-  // Wallet
+  // Wallet. `balance` is null until a fetch SUCCEEDS — null means UNKNOWN, not
+  // zero, and must never be rendered as "can't afford" (see affordability()).
   balance: number | null;
   ledger: WalletLedgerEntry[];
-  walletLoaded: boolean;
+  walletState: LoadState;
   // Cosmetics
   catalog: Cosmetic[];
   owned: string[];
   equipped: EquippedCosmetics;
-  cosmeticsLoaded: boolean;
+  cosmeticsState: LoadState;
   // Season
   season: SeasonResponse | null;
-  seasonLoaded: boolean;
+  seasonState: LoadState;
 
-  // Fetch-once loaders (no-op while a copy is cached; force refetches).
+  // Fetch-once loaders. No-op while a READY copy is cached; retry from 'error';
+  // join an in-flight request rather than duplicating it. `force` refetches.
   ensureWallet: (force?: boolean) => Promise<void>;
   ensureCosmetics: (force?: boolean) => Promise<void>;
   ensureSeason: (force?: boolean) => Promise<void>;
@@ -54,56 +73,98 @@ interface EconomyState {
   claim: (tier: number) => Promise<void>;
 }
 
+// In-flight request per slice, so two components mounting at once (the hub
+// header + the shop) share ONE request and both settle on the same answer.
+type Slice = 'wallet' | 'cosmetics' | 'season';
+const inFlight: Partial<Record<Slice, Promise<void>>> = {};
+
+/**
+ * Run `job` for `slice`, sharing a request that is already in flight unless the
+ * caller explicitly forced a refetch (a forced refresh follows a mutation, so
+ * an older in-flight read would answer with pre-mutation data).
+ */
+function share(slice: Slice, force: boolean, job: () => Promise<void>): Promise<void> {
+  if (!force) {
+    const running = inFlight[slice];
+    if (running) return running;
+  }
+  const started = job().finally(() => {
+    if (inFlight[slice] === started) delete inFlight[slice];
+  });
+  inFlight[slice] = started;
+  return started;
+}
+
+// Test seam: drop any shared in-flight promises between cases.
+export function __resetEconomyInFlight(): void {
+  for (const k of Object.keys(inFlight) as Slice[]) delete inFlight[k];
+}
+
 export const useEconomy = create<EconomyState>((set, get) => ({
   balance: null,
   ledger: [],
-  walletLoaded: false,
+  walletState: 'idle',
   catalog: [],
   owned: [],
   equipped: DEFAULT_EQUIPPED,
-  cosmeticsLoaded: false,
+  cosmeticsState: 'idle',
   season: null,
-  seasonLoaded: false,
+  seasonState: 'idle',
 
-  ensureWallet: async (force = false) => {
-    if (!force && get().walletLoaded) return;
-    try {
-      const w = await api.getWallet();
-      set({ balance: w.balance, ledger: w.ledger, walletLoaded: true });
-    } catch {
-      set({ walletLoaded: true });
-    }
+  ensureWallet: (force = false) => {
+    if (!force && get().walletState === 'ready') return Promise.resolve();
+    return share('wallet', force, async () => {
+      set({ walletState: 'loading' });
+      try {
+        const w = await withTimeout(api.getWallet());
+        set({ balance: w.balance, ledger: w.ledger, walletState: 'ready' });
+      } catch {
+        // Keep whatever balance/ledger we already knew — a failed REFRESH must
+        // not blank a good balance — but mark the slice failed so the UI can
+        // say so and a Retry can refetch.
+        set({ walletState: 'error' });
+      }
+    });
   },
 
-  ensureCosmetics: async (force = false) => {
-    if (!force && get().cosmeticsLoaded) return;
-    try {
-      const c = await api.getCosmetics();
-      set({
-        catalog: c.catalog,
-        owned: c.owned,
-        equipped: c.equipped,
-        cosmeticsLoaded: true,
-      });
-    } catch {
-      set({ cosmeticsLoaded: true });
-    }
+  ensureCosmetics: (force = false) => {
+    if (!force && get().cosmeticsState === 'ready') return Promise.resolve();
+    return share('cosmetics', force, async () => {
+      set({ cosmeticsState: 'loading' });
+      try {
+        const c = await withTimeout(api.getCosmetics());
+        set({
+          catalog: c.catalog,
+          owned: c.owned,
+          equipped: c.equipped,
+          cosmeticsState: 'ready',
+        });
+      } catch {
+        set({ cosmeticsState: 'error' });
+      }
+    });
   },
 
-  ensureSeason: async (force = false) => {
-    if (!force && get().seasonLoaded) return;
-    try {
-      const s = await api.getSeason();
-      set({ season: s, seasonLoaded: true });
-    } catch {
-      set({ seasonLoaded: true });
-    }
+  ensureSeason: (force = false) => {
+    if (!force && get().seasonState === 'ready') return Promise.resolve();
+    return share('season', force, async () => {
+      set({ seasonState: 'loading' });
+      try {
+        const s = await withTimeout(api.getSeason());
+        set({ season: s, seasonState: 'ready' });
+      } catch {
+        set({ seasonState: 'error' });
+      }
+    });
   },
 
   purchase: async (cosmeticId) => {
     const res = await api.purchaseCosmetic(cosmeticId);
     set((st) => ({
       balance: res.balance,
+      // The server just told us the balance, so the wallet slice is authoritative
+      // again even if its own fetch had failed.
+      walletState: 'ready',
       owned: st.owned.includes(cosmeticId) ? st.owned : [...st.owned, cosmeticId],
     }));
     // The purchase moved coins → the ledger is stale; refresh it best-effort.
@@ -119,6 +180,7 @@ export const useEconomy = create<EconomyState>((set, get) => ({
     const res = await api.claimSeasonTier(tier);
     set((st) => ({
       balance: res.balance,
+      walletState: 'ready',
       season: st.season
         ? { ...st.season, claimed: res.claimed, claimable: res.claimable }
         : st.season,
@@ -132,6 +194,22 @@ export const useEconomy = create<EconomyState>((set, get) => ({
 // Narrow an unknown thrown value to its ApiError code for message mapping.
 export function economyErrorCode(e: unknown): string {
   return e instanceof ApiError ? e.code : 'http_error';
+}
+
+/**
+ * Can the player afford `price`? THREE answers, not two.
+ *
+ * ⚠ `balance === null` is UNKNOWN, not broke. Collapsing it to `balance != null
+ * && balance >= price` is the bug that made a 670-coin wallet render "Need more
+ * coins" on a 200-coin item: an unreachable wallet was reported to the player
+ * as a fact about their money. An unknown balance disables the buy button with
+ * an UNKNOWN affordance and an error the player can retry.
+ */
+export type Affordability = 'yes' | 'no' | 'unknown';
+
+export function affordability(balance: number | null, price: number): Affordability {
+  if (balance == null) return 'unknown';
+  return balance >= price ? 'yes' : 'no';
 }
 
 // ---- Selector hooks -----------------------------------------------------

@@ -1524,6 +1524,22 @@ html.beta .composer-capsule {
   font-weight: 700;
 }
 
+/* One-line "couldn't load that" banner + Retry (shared/LoadFailure.tsx). Used
+   where the screen still has content to show, so the failure must be visible
+   without replacing it. */
+.golf-loadfail {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--golf-flag);
+  background: color-mix(in srgb, var(--golf-flag) 12%, transparent);
+}
+
 /* ---- ranks board segmented control ---- */
 .golf-seg {
   display: flex;

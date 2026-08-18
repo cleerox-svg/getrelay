@@ -69,8 +69,12 @@ the round in a `CourseGame` overlay — no cross-tab navigation. Backed by
 
 **Coin economy.** `lib/golf/economy.ts` is a small zustand store (deliberately
 outside the messenger `lib/store.ts`) caching wallet, cosmetics catalog /
-ownership / equip, and the season track, each behind a fetch-once `ensure*()`
-that degrades to empty when unauthed or offline. `lib/golf/cosmetics.ts` is the
+ownership / equip, and the season track, each behind a fetch-once `ensure*()`.
+Each slice carries a **`LoadState`** (`lib/golf/loadState.ts`:
+`idle | loading | ready | error`), never a `loaded` boolean — only the SUCCESS
+arm may say 'ready', 'error' is retryable, and the UI renders it as an error
+with a Retry (`components/golf/shared/LoadFailure.tsx`). See §3's "a failed
+load is not a loaded slice". `lib/golf/cosmetics.ts` is the
 `three`-free render seam: it resolves the equipped catalog item's `visual`
 generically (no per-id logic) into a `GolfCosmetics` the `*GL.tsx` scenes read
 ONCE at scene build — ball skin and tracer colour — plus a `GolfFrame` avatar
@@ -231,12 +235,13 @@ TOTAL is carry plus a run-out the bounce/roll core derives from the LANDING LIE.
 - **Headless harness** (vitest). `pnpm --filter @relay/ui test` drives the REAL
   sims and prints per-club / per-layout dynamics tables with regression-failing
   assertions. **Tune against this and against device telemetry — never guess.**
-  Current golf + `scene3d` coverage: **643 tests across 18 files** —
+  Current golf + `scene3d` coverage: **669 tests across 21 files** —
   `courses.test.ts` 338, `courseSim` 73, `puttCourses` 35, `foliage` 30,
   `terrain` 26, `puttSim` 22, `instancing` 16, `rangeSim` 15, `greenPhysics` 15,
-  `courseData` 14, `scene3d/quality` 12, `scene3d/env` 12, `clock` 10,
-  `golf/scene/quality` 8, `scene3d/budget` 5, `components/golf/budget` 4,
-  `scene3d/stats` 4, `env.irradiance` 4.
+  `courseData` 14, `golf/economy` 12, `scene3d/quality` 12, `scene3d/env` 12,
+  `clock` 10, `golf/scene/quality` 8, `golf/GolfShop` 8, `golf/GolfClubhouse` 6,
+  `scene3d/budget` 5, `components/golf/budget` 4, `scene3d/stats` 4,
+  `env.irradiance` 4.
 - **In-app telemetry.** A last-shot debug panel plus a "Copy telemetry" button
   (last 30 shots as JSON) so real device numbers can be diffed against the
   harness.
@@ -411,7 +416,9 @@ Every path below resolves on disk. Root for UI paths is
 | Clubhouse: records + rank / cosmetics shop / season track / wallet | `src/components/golf/GolfProfile.tsx`, `GolfShop.tsx`, `GolfSeason.tsx`, `GolfWallet.tsx` |
 | Coin balance pill (shop bar, hub header, profile) | `src/components/golf/CoinBalance.tsx` |
 | Friend challenges: create+send sheet, live in-chat card | `src/components/golf/NewChallengeSheet.tsx`, `ChallengeCard.tsx` |
-| Economy store (wallet / cosmetics / season, fetch-once + graceful degrade) | `src/lib/golf/economy.ts` |
+| Economy store (wallet / cosmetics / season; per-slice `LoadState`, shared in-flight request, `affordability()`) | `src/lib/golf/economy.ts` |
+| `LoadState` + `withTimeout` (bounds a hung golf fetch into a retryable error) | `src/lib/golf/loadState.ts` |
+| The ONE failed-load UI: `LoadFailure` panel / `LoadFailureLine` banner / `RetryButton` | `src/components/golf/shared/LoadFailure.tsx` |
 | `three`-free cosmetics render seam (`GolfCosmetics`, `GolfFrame`) | `src/lib/golf/cosmetics.ts` |
 | Pure-SVG top-down hole map for the picker | `src/components/golf/HoleThumb.tsx` |
 | Shared HUD widgets (accuracy bar, club selector, power meter, spin puck, telemetry, wind chip, mute) + the boards' `MEDALS` / `fmtToPar` | `src/components/golf/shared/` |
@@ -554,6 +561,30 @@ Every path below resolves on disk. Root for UI paths is
   bits) and untouched on the pond (rim spread + waterline fraction over all 18
   ponds), both in `courses.test.ts`. Before this there was **no pond-levelness
   assertion anywhere in `lib/golf`**, which is exactly why the class shipped.
+- **⚠ A FAILED LOAD IS NOT A LOADED SLICE, AND AN UNKNOWN BALANCE IS NOT
+  "BROKE".** Every cached golf fetch carries a `LoadState`
+  (`lib/golf/loadState.ts`), never a `loaded` boolean, because a boolean has to
+  be set in the catch arm too and then a failure is indistinguishable from a
+  successful empty answer. Shipped consequence, found in production against the
+  real D1 rows: `ensureWallet`'s `catch { set({ walletLoaded: true }) }` left
+  `balance: null` behind an `if (loaded) return` guard that never retried, so a
+  **670-coin wallet rendered "Need more coins" on a 200-coin item for the whole
+  session**, and the identical shape in `ensureCosmetics` reported an owned,
+  equipped ball skin as un-owned — the "skins don't work" report. The rules:
+  - only the SUCCESS arm may set `'ready'`; the catch arm sets `'error'`;
+  - `'error'` is retryable — a plain `ensure*()` from the next mount refetches;
+  - data already in the store survives a failed REFRESH (never blank a balance
+    you legitimately know);
+  - the UI SURFACES `'error'` via `shared/LoadFailure.tsx` — do not invent a
+    second retry idiom — and `affordability()` returns three answers
+    (`yes | no | unknown`), so a null balance disables a purchase with an
+    UNKNOWN affordance, never a false "Need more coins";
+  - a hung request is bounded by `withTimeout()`, or a spinner is forever.
+  The same conflation lived in `GolfWallet` ("No coin activity yet"),
+  `GolfSeason` ("No active season") and `GolfProfile` ("No rounds yet") — all
+  three now distinguish the failure, and `economy.test.ts` / `GolfShop.test.tsx`
+  / `GolfClubhouse.test.tsx` pin both directions (the honest error appears AND
+  the false empty-state copy does not).
 - **⚠ ONE intent for Course play, and never a flag per flow.** What a Course
   round IS (normal / daily / tournament) lives in a single discriminated union in
   `GolfScreen`, switched on once. Adding a new flow means a new `kind` — NOT
