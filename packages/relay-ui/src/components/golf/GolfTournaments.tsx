@@ -7,6 +7,8 @@ import { getCourse } from '../../lib/golf/courses';
 import type { GolfCourse } from '../../lib/golf/courses';
 import { synthTournamentCourse } from '../../lib/golf/tournamentCourse';
 import { submitPendingResult, type PendingResult } from '../../lib/golf/pendingResult';
+import { withTimeout } from '../../lib/golf/loadState';
+import { LoadFailure, RetryButton } from './shared/LoadFailure';
 import { MEDALS, fmtToPar } from './shared/scoreFormat';
 import type {
   Tournament,
@@ -110,8 +112,10 @@ export function GolfTournaments({ onPlay, pendingResult, onResultConsumed }: Pro
     setSubmitState('idle');
     setImproved(null);
     setBoard(null);
-    api
-      .getTournament()
+    // ⚠ Timed out, not merely awaited: a request that never settles used to
+    // leave "Loading the live event…" up forever, indistinguishable from one
+    // still in flight, with no error and no retry.
+    withTimeout(api.getTournament())
       .then((t) => {
         if (!cancelled) setTourney(t);
       })
@@ -126,8 +130,7 @@ export function GolfTournaments({ onPlay, pendingResult, onResultConsumed }: Pro
   const loadBoard = useCallback((s: 'global' | 'friends') => {
     setBoardError(false);
     setBoard(null);
-    api
-      .getTournamentLeaderboard(s)
+    withTimeout(api.getTournamentLeaderboard(s))
       .then((r) => setBoard(r.entries))
       .catch(() => setBoardError(true));
   }, []);
@@ -181,20 +184,11 @@ export function GolfTournaments({ onPlay, pendingResult, onResultConsumed }: Pro
   // ---- Loading / needs-connection states ----
   if (loadError) {
     return (
-      <div className="golf-empty">
-        <b>Tournaments need a connection.</b>
-        <br />
-        Couldn’t reach the live event.
-        <br />
-        <button
-          type="button"
-          className="mt-2 font-semibold"
-          style={{ color: 'var(--golf-accent)', background: 'transparent', border: 0 }}
-          onClick={() => setAttempt((a) => a + 1)}
-        >
-          Retry
-        </button>
-      </div>
+      <LoadFailure
+        title="Tournaments need a connection."
+        detail="Couldn’t reach the live event."
+        onRetry={() => setAttempt((a) => a + 1)}
+      />
     );
   }
   if (!tourney) {
@@ -315,14 +309,7 @@ export function GolfTournaments({ onPlay, pendingResult, onResultConsumed }: Pro
         {submitState === 'error' && current ? (
           <div className="px-4 pb-2 text-[13px]" style={{ color: 'var(--ping)' }}>
             Couldn’t submit.
-            <button
-              type="button"
-              className="ml-2 font-semibold"
-              style={{ color: 'var(--golf-accent)', background: 'transparent', border: 0 }}
-              onClick={() => submitPending(current)}
-            >
-              Retry
-            </button>
+            <RetryButton className="ml-2" onClick={() => submitPending(current)} />
           </div>
         ) : null}
 
@@ -342,14 +329,11 @@ export function GolfTournaments({ onPlay, pendingResult, onResultConsumed }: Pro
           {closed ? (
             <div className="pt-2 text-center text-[12px]" style={{ color: 'var(--text-dim)' }}>
               A new event opens shortly —
-              <button
-                type="button"
-                className="ml-1 font-semibold"
-                style={{ color: 'var(--golf-accent)', background: 'transparent', border: 0 }}
+              <RetryButton
+                className="ml-1"
+                label="refresh"
                 onClick={() => setAttempt((a) => a + 1)}
-              >
-                refresh
-              </button>
+              />
             </div>
           ) : null}
         </div>
@@ -391,14 +375,7 @@ export function GolfTournaments({ onPlay, pendingResult, onResultConsumed }: Pro
           {boardError ? (
             <div className="text-center py-6 text-sm" style={{ color: 'var(--text-dim)' }}>
               Couldn’t load the leaderboard.
-              <button
-                type="button"
-                className="block mx-auto mt-2 font-semibold"
-                style={{ color: 'var(--golf-accent)', background: 'transparent', border: 0 }}
-                onClick={() => loadBoard(scope)}
-              >
-                Retry
-              </button>
+              <RetryButton className="block mx-auto mt-2" onClick={() => loadBoard(scope)} />
             </div>
           ) : board === null ? (
             <div className="text-center py-6 text-sm" style={{ color: 'var(--text-dim)' }}>
