@@ -39,6 +39,13 @@
 //   • THE FRAMING — is the ball actually in the picture. `checkBall` asserts
 //     `Object3D.visible`, which is explicitly NOT the same thing; `checkFraming`
 //     projects the drawn ball through the drawing camera and asks.
+//   • THE NIGHT BOWL, IN PIXELS. Everything above reads the scene graph, and
+//     the night crowd's defect is invisible to every one of them — correct
+//     geometry, correct draw calls, an identical day/night pair, and a frame
+//     that photographs as television static. `checkNightBowl` decodes the two
+//     PNGs this run just wrote and measures the deck's own luminance spread
+//     against the day frame's. See its header: the crowd has beaten this suite
+//     three times and twice a human had to be the instrument.
 //
 // ⚠ SwiftShader validates composition, geometry and materials but NOT real-GPU
 // behaviour. "Renders fine in SwiftShader" is not evidence of on-device safety —
@@ -50,7 +57,8 @@
 
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
+import { inflateSync } from 'node:zlib';
 import path from 'node:path';
 
 const pkgDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -108,9 +116,35 @@ const SCENES = {
   'pitch-4seam': { query: 'scene=batter&pitch=ff&t=0.30', label: 'pitch-4seam' },
   'pitch-curve': { query: 'scene=batter&pitch=cu&t=0.35', label: 'pitch-curve' },
   'pitch-sweeper': { query: 'scene=batter&pitch=st&t=0.35', label: 'pitch-sweeper' },
-  // The ball just off the bat, from the box, and the same ball near its apex
-  // from the upper deck.
-  contact: { query: 'scene=batter&pitch=ff&bt=0.12', label: 'contact' },
+  // ⚠ THE BALL JUST OFF THE BAT — AND IT WAS NOT IN THE PICTURE. At the shipped
+  // `bt = 0.12` the drawn ball projects to (0.016, −0.123) through the `batter`
+  // camera, i.e. **197 px above the top crop** and hard against the left edge:
+  // a scene whose entire caption is "the ball just off the bat", gating nothing.
+  // It was invisible to every other check in this file because `checkBall`
+  // asserts `Object3D.visible`, which its own note is at pains to say is NOT
+  // "in this picture".
+  //
+  // RE-TIMED, not re-framed, because the framing is load-bearing elsewhere:
+  // `CAMERAS.batter` is the camera `boardPaint.ts` derives the whole board
+  // legibility floor from, and `pitch-4seam` / `aim` / `board` are all composed
+  // against it. Measured, same camera, same swing (105 mph / 26.5° / −12°):
+  //
+  //     bt      ball on screen        margin to the nearest crop
+  //     0.02    (0.370, 0.423)        the bat is still in it — no separation
+  //     0.06    (0.187, 0.140)        168 px top, 126 px left   ← shipped
+  //     0.08    (0.120, 0.036)         58 px top — one bad frame from gone
+  //     0.12    (0.016, −0.123)       197 px OFF the top        ← was shipped
+  //
+  // 0.06 s is ~9 ft off the bat at 105 mph, which is the separation the caption
+  // claims, with a whole ball-flight's worth of margin before the crop.
+  // `expectBallInFrame` + `ballMarginPx` is what stops it drifting back out.
+  contact: {
+    query: 'scene=batter&pitch=ff&bt=0.06',
+    label: 'contact',
+    expectBallInFrame: true,
+    ballMarginPx: 40,
+  },
+  // …and the same ball near its apex from the upper deck.
   homerun: { query: 'scene=flight&pitch=ff&bt=2.6', label: 'homerun' },
   // The DERBY's aim aid: the rule-zone frame and the reticle, drawn as geometry
   // at the plate rather than as a DOM overlay. Placed low and to the pull side
@@ -742,15 +776,65 @@ function checkReport(report) {
  */
 const BOARD_MAX_UPLOADS = 3;
 
+/**
+ * Which parks MUST carry a board. `board.ts` builds nothing unless
+ * `park.surroundings === 'city'` — the same "content is data, not a branch"
+ * rule `roofPeakFt` gets — so this is the park-side predicate, read out of
+ * `parks.ts` exactly as `checkRoof` reads `roofPeakFt`.
+ *
+ * MUTATIONS WATCHED TO FAIL (each reverted, counts as observed, exit 1):
+ *   1. `CENTREFIELD_BOARD.sillFt` 26 → 400, so the bowl's own deck top
+ *      falls under the sill and `board.ts` returns `scoreboard: null` —
+ *      the EXACT failure this rewrite exists for                      → 1 fail
+ *      (`batter`: "park harbourfront has surroundings='city' and must
+ *      carry a centre-field board, and NONE was built". The superseded
+ *      branch printed `none (park has no centre-field structure)` and
+ *      exited 0 on the identical scene.)
+ *   2. `shouldHaveBoard` inverted, to reach the MIRROR leg — which is
+ *      unreachable while `board.ts` owns the same predicate, and is a
+ *      guard on a future edit rather than on today's tree             → 2 fail
+ *      (`batter` on the mirror, `park-alpine` on the must-have leg)
+ */
+const shouldHaveBoard = (report) => report.surroundings === 'city';
+
 function checkBoard(report) {
   const b = report.board;
   if (!b) {
-    console.log('  BOARD  none (park has no centre-field structure)');
-    // A park with no board must not be paying for one either — that is the
-    // `scoreboard: null` branch, and its absence here is what proves it taken.
-    return [];
+    // ⚠ THIS BRANCH USED TO PRINT AN UNKNOWN AS A FACT AND RETURN SUCCESS. It
+    // said `none (park has no centre-field structure)` on the strength of the
+    // REPORT having no board field, which is not the same statement at all —
+    // and the gap between them is a real, reachable defect: `board.ts` returns
+    // `{ scoreboard: null, panels: [] }` whenever `surroundings` is not `city`
+    // OR the bowl's `deckTopFt` falls under `CENTREFIELD_BOARD.sillFt` (26 ft).
+    // Trip either and the array, the ribbon map and the tower's feed ALL
+    // vanish at once, while this gate printed a reassuring sentence and exited
+    // 0. `checkRoof` three functions down was rewritten to close exactly this
+    // shape, and the fence walk calls its own version `fence unmeasurable at
+    // N°` and counts it a violation.
+    const must = shouldHaveBoard(report);
+    console.log(
+      `  BOARD  none — park=${report.parkId} surroundings=${report.surroundings}` +
+        `${must ? '  ✗ and a city park MUST carry one' : ' (no centre-field structure)'}`,
+    );
+    return must
+      ? [
+          `park ${report.parkId} has surroundings='city' and must carry a centre-field ` +
+            `board, and NONE was built — check park.surroundings and stands.deckTopFt ` +
+            `against CENTREFIELD_BOARD.sillFt`,
+        ]
+      : [];
   }
   const violations = [];
+  // …and the mirror, which is the leg `checkRoof` calls "a roofless park drew
+  // roof geometry": a park with no city around it must not be paying for a
+  // board either, and its absence is what proves the `scoreboard: null` branch
+  // is reached rather than merely written.
+  if (!shouldHaveBoard(report)) {
+    violations.push(
+      `park ${report.parkId} has surroundings='${report.surroundings}' and built a ` +
+        `centre-field board anyway — that branch is data, not decoration`,
+    );
+  }
   const wFt = b.geometry.widthFt;
   console.log(
     `  BOARD  ${wFt}×${b.geometry.heightFt} ft at ${b.geometry.faceDistFt} ft` +
@@ -1258,6 +1342,13 @@ function countAtOrBefore(times, t) {
  * (`flight` at t = 0.30 s, the pitch still below the bottom crop) is a fact
  * about the framing, not a regression, and a gate that fails on correct data is
  * worth as little as one that passes on wrong data.
+ *
+ * MUTATION WATCHED TO FAIL (reverted, counts as observed, exit 1):
+ *   1. `contact` back to `bt = 0.12`, the shipped timing               → 1 fail
+ *      ("the ball is OFF FRAME at (0.016, −0.123) (needs 40 px of
+ *      clearance from every edge)"). Before this scene declared
+ *      `expectBallInFrame` nothing in the run could see it: `checkBall`
+ *      passed on the same frame, because `Object3D.visible` was true.
  */
 function checkFraming(report) {
   const p = report.ballScreen;
@@ -1266,15 +1357,27 @@ function checkFraming(report) {
     `  FRAME  mode ${String(cam?.mode).padEnd(7)} ease ${(cam?.progress ?? 0).toFixed(3)}` +
       `  aim (${(cam?.target ?? []).map((v) => v.toFixed(1)).join(', ')})` +
       `   ball on screen ${p ? `(${p[0].toFixed(3)}, ${p[1].toFixed(3)})` : '— (off frustum)'}` +
+      `${report.expectBallInFrame ? `  must be in frame${report.ballMarginPx ? ` ≥${report.ballMarginPx} px clear` : ''}` : ''}` +
       `   clock ${report.clockNow ?? '—'} ms`,
   );
   if (!report.expectBallInFrame) return [];
   if (!p) return ['the ball is outside the camera frustum in a scene that must contain it'];
-  const inFrame = p[0] >= 0 && p[0] <= 1 && p[1] >= 0 && p[1] <= 1;
+  // ⚠ `ballMarginPx` IS NOT DECORATION. `0 ≤ u,v ≤ 1` is the right bound for the
+  // three `follow-*` scenes, whose claim is only that the camera TRACKS — a ball
+  // one pixel inside the crop is a tracking camera. It is the wrong bound for
+  // `contact`, whose claim is that a human can SEE the ball leaving the bat: a
+  // ball at v = 0.004 satisfies "in frame" and photographs as a smear on the
+  // edge. Scenes that are a PICTURE of the ball ask for real clearance, in
+  // pixels of the actual crop, so the number means the same thing on both axes.
+  const m = report.ballMarginPx ?? 0;
+  const mu = m / VIEWPORT.width;
+  const mv = m / VIEWPORT.height;
+  const inFrame = p[0] >= mu && p[0] <= 1 - mu && p[1] >= mv && p[1] <= 1 - mv;
   return inFrame
     ? []
     : [
-        `the ball is OFF FRAME at (${p[0].toFixed(3)}, ${p[1].toFixed(3)}) — the camera is not ` +
+        `the ball is OFF FRAME at (${p[0].toFixed(3)}, ${p[1].toFixed(3)})` +
+          `${m ? ` (needs ${m} px of clearance from every edge)` : ''} — the camera is not ` +
           `following it, which is the defect this scene exists to catch`,
       ];
 }
@@ -1593,6 +1696,198 @@ function checkBattedTracer(report) {
   return violations;
 }
 
+/* ------------------------------------------------------- the night bowl */
+
+/**
+ * ⚠⚠ THE ONE CHECK IN THIS FILE THAT READS THE ACTUAL PIXELS, AND IT EXISTS
+ * BECAUSE THE CROWD HAS NOW BEATEN THIS SUITE THREE TIMES.
+ *
+ * Every other number here comes out of the scene graph, and the night crowd's
+ * defect is invisible to all of them: the geometry is right, the draw calls are
+ * right, the day/night pair is identical in every counted quantity, and the
+ * frame still photographs as television static. Twice it was "fixed" by moving
+ * `daylight.crowdBase` and twice a human had to look at a PNG to find out it
+ * had not been. So the third fix ships with the measurement attached.
+ *
+ * WHAT IS MEASURED, and why it is a RATIO rather than a level. Absolute
+ * luminance is a legitimate authoring choice and moves whenever the lighting
+ * does; what makes a deck read as *noise* is the SPREAD between its bright
+ * points and the deck under them, with nothing alive in between. So each patch
+ * is measured in BOTH rows of the same pair and the night figure is judged
+ * against its own day figure — the day crowd is the one a human signed off.
+ *
+ *   patch              day p50/p99  ratio     night, as shipped before / after
+ *   far upper deck      22.1/36.5     1.7      9.8/150.4 = 15.4  →  27.0/76.2 = 2.8
+ *   near bowl           18.4/73.2     4.0      4.1/112.3 = 27.5  →  15.7/67.5 = 4.3
+ *
+ * Night SHOULD run hotter than day — the points stand for self-luminous phone
+ * screens, where by day both the points and the deck under them take the same
+ * sun — so parity is the wrong bar. `CROWD_MAX_NIGHT_RATIO` is 3× the day
+ * figure: it passes the shipped 1.6× and 1.1×, and fails the 9.1× and 6.9× that
+ * two rounds of gate output described in prose and no test could see.
+ *
+ * ⚠ AND THE SECOND LEG IS THE PEAK, MEASURED AGAINST THE FIELD. A crowd point
+ * is not a light — the crowd map MULTIPLIES a Lambert seat colour — so a texel
+ * that renders brighter than the floodlit turf is a white patch out-shining the
+ * thing the floodlights are pointed at. The turf patch is read from the same
+ * PNG, so this leg follows the lighting instead of pinning a constant to it.
+ *
+ * ⚠ GUARD THE GUARD. These are hand-placed rectangles on a 900 × 1600 `wide`
+ * frame, so the failure mode is a rect that has slid off the deck and is
+ * quietly measuring turf or sky. Every patch therefore declares the band its
+ * DAY p50 must land in, and a patch outside it is a violation in its own right
+ * — the check reports that it can no longer see what it is named after rather
+ * than passing on whatever it hit.
+ *
+ * MUTATIONS WATCHED TO FAIL (each reverted, counts as observed, exit 1):
+ *   1. `night.crowdBase` back to 0.16 — the state two rounds shipped  → 2 fail
+ *      (BOTH patches, on the SPREAD leg: 4.4× and 4.0× the day ratio)
+ *   2. `night.crowdPointGain` back to 1 — no ceiling on a point       → 3 fail
+ *      (both patches on the PEAK leg at 151.4 and 113.5 against a
+ *      floodlit 83.2, and the far patch on the spread leg too)
+ *   3. the far patch's rect moved onto the turf                       → 1 fail
+ *      (the guard-the-guard leg: day p50 95.0 outside its 16–30 band,
+ *      and the two real legs are SKIPPED rather than passed on it)
+ */
+const CROWD_PATCHES = [
+  // Upper deck, ~400 ft out, between two fascia LED lines. No ribbon text.
+  { id: 'far upper deck', rect: [220, 515, 140, 45], dayP50: [16, 30] },
+  // The lower bowl behind the plate, the nearest seating this camera reaches.
+  { id: 'near bowl', rect: [440, 1090, 220, 80], dayP50: [12, 26] },
+];
+/** The floodlit field, in the same frame — the reference the peak is judged on. */
+const TURF_PATCH = { id: 'turf', rect: [400, 700, 120, 60], dayP50: [85, 120] };
+const CROWD_MAX_NIGHT_RATIO = 3;
+/** How far over the turf's own p50 a crowd point may reach. */
+const CROWD_MAX_PEAK_OVER_TURF = 1.2;
+
+/**
+ * Minimal 8-bit non-interlaced PNG reader — IHDR, IDAT, un-filter. Forty lines
+ * and no dependency, which is the whole reason it is here: rule 6 of the
+ * charter is zero new runtime dependencies, and a screenshot harness that needs
+ * an image library to read its own output would be the first crack in it.
+ */
+function readPng(file) {
+  const buf = readFileSync(file);
+  let off = 8;
+  let w = 0;
+  let h = 0;
+  let ch = 0;
+  const idat = [];
+  while (off < buf.length) {
+    const len = buf.readUInt32BE(off);
+    const type = buf.toString('ascii', off + 4, off + 8);
+    const data = buf.subarray(off + 8, off + 8 + len);
+    if (type === 'IHDR') {
+      w = data.readUInt32BE(0);
+      h = data.readUInt32BE(4);
+      if (data[8] !== 8 || data[12] !== 0) throw new Error('not 8-bit non-interlaced');
+      ch = data[9] === 6 ? 4 : data[9] === 2 ? 3 : 0;
+      if (!ch) throw new Error(`colour type ${data[9]}`);
+    } else if (type === 'IDAT') idat.push(data);
+    else if (type === 'IEND') break;
+    off += 12 + len;
+  }
+  const raw = inflateSync(Buffer.concat(idat));
+  const stride = w * ch;
+  const out = Buffer.alloc(h * stride);
+  let p = 0;
+  for (let y = 0; y < h; y++) {
+    const f = raw[p++];
+    const cur = out.subarray(y * stride, (y + 1) * stride);
+    const prev = y > 0 ? out.subarray((y - 1) * stride, y * stride) : null;
+    for (let x = 0; x < stride; x++) {
+      const a = x >= ch ? cur[x - ch] : 0;
+      const b = prev ? prev[x] : 0;
+      const c = prev && x >= ch ? prev[x - ch] : 0;
+      let v = raw[p + x];
+      if (f === 1) v += a;
+      else if (f === 2) v += b;
+      else if (f === 3) v += (a + b) >> 1;
+      else if (f === 4) {
+        const q = a + b - c;
+        const pa = Math.abs(q - a);
+        const pb = Math.abs(q - b);
+        const pc = Math.abs(q - c);
+        v += pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+      }
+      cur[x] = v & 255;
+    }
+    p += stride;
+  }
+  return { width: w, channels: ch, data: out };
+}
+
+/** Rec.709 percentiles over a rectangle — the units every soffit and crowd figure is in. */
+function patchStats(img, [x0, y0, w, h]) {
+  const l = [];
+  for (let y = y0; y < y0 + h; y++) {
+    for (let x = x0; x < x0 + w; x++) {
+      const i = (y * img.width + x) * img.channels;
+      l.push(0.2126 * img.data[i] + 0.7152 * img.data[i + 1] + 0.0722 * img.data[i + 2]);
+    }
+  }
+  l.sort((a, b) => a - b);
+  const q = (f) => l[Math.min(l.length - 1, Math.floor(f * (l.length - 1)))];
+  return { p50: q(0.5), p90: q(0.9), p99: q(0.99), ratio: q(0.99) / Math.max(q(0.5), 0.01) };
+}
+
+function checkNightBowl(reports) {
+  if (!ids.includes('daynight-day') || !ids.includes('daynight-night')) return [];
+  if (!reports.get('daynight-day') || !reports.get('daynight-night')) return [];
+  const violations = [];
+  let day;
+  let night;
+  try {
+    day = readPng(path.join(outDir, `${SCENES['daynight-day'].label}.png`));
+    night = readPng(path.join(outDir, `${SCENES['daynight-night'].label}.png`));
+  } catch (e) {
+    return [`could not read the day/night PNGs back: ${String(e)}`];
+  }
+  const turfDay = patchStats(day, TURF_PATCH.rect);
+  const turfNight = patchStats(night, TURF_PATCH.rect);
+  console.log('\n· NIGHT BOWL  luminance of the crowd deck, read back out of the PNGs');
+  console.log('    patch              day p50    p99  ratio  |  night p50    p99  ratio');
+  const rows = [...CROWD_PATCHES, TURF_PATCH];
+  for (const patch of rows) {
+    const d = patch === TURF_PATCH ? turfDay : patchStats(day, patch.rect);
+    const n = patch === TURF_PATCH ? turfNight : patchStats(night, patch.rect);
+    console.log(
+      `    ${patch.id.padEnd(16)} ${d.p50.toFixed(1).padStart(7)} ${d.p99.toFixed(1).padStart(6)}` +
+        ` ${d.ratio.toFixed(1).padStart(6)}  | ${n.p50.toFixed(1).padStart(9)}` +
+        ` ${n.p99.toFixed(1).padStart(6)} ${n.ratio.toFixed(1).padStart(6)}`,
+    );
+    // (0) THE RECT STILL SEES WHAT IT IS NAMED AFTER.
+    const [lo, hi] = patch.dayP50;
+    if (d.p50 < lo || d.p50 > hi) {
+      violations.push(
+        `the "${patch.id}" patch reads day p50 ${d.p50.toFixed(1)}, outside its declared ` +
+          `${lo}–${hi} band — the rectangle is no longer on the surface it names, so every ` +
+          `figure beside it is measuring something else`,
+      );
+      continue;
+    }
+    if (patch === TURF_PATCH) continue;
+    // (1) THE SPREAD. See the header — a ratio, against this patch's own day figure.
+    if (n.ratio > CROWD_MAX_NIGHT_RATIO * d.ratio) {
+      violations.push(
+        `"${patch.id}" runs p99/p50 = ${n.ratio.toFixed(1)} at night against ${d.ratio.toFixed(1)} ` +
+          `by day (${(n.ratio / d.ratio).toFixed(1)}×, ceiling ${CROWD_MAX_NIGHT_RATIO}×) — bright ` +
+          `points on a dead deck is sensor noise, not a crowd`,
+      );
+    }
+    // (2) THE PEAK, against the floodlit field in the same frame.
+    if (n.p99 > CROWD_MAX_PEAK_OVER_TURF * turfNight.p50) {
+      violations.push(
+        `"${patch.id}" peaks at ${n.p99.toFixed(1)} at night against floodlit turf at ` +
+          `${turfNight.p50.toFixed(1)} — the crowd map MULTIPLIES a Lambert seat, so a texel ` +
+          `over the field is a white patch out-shining the floodlights`,
+      );
+    }
+  }
+  return violations;
+}
+
 /**
  * ⚠ THE DAY / NIGHT TOGGLE IS COSMETIC, ASSERTED ACROSS TWO SCENES.
  *
@@ -1728,6 +2023,7 @@ async function main() {
           const st = sim.derby.getState();
           return {
             parkId: sim.parkId,
+            surroundings: sim.surroundings,
             roofPeakFt: sim.roofPeakFt,
             foulTerritoryFt: sim.foulTerritoryFt,
             derby: { phase: st.phase, rounds: st.rounds, pitchesPerRound: st.pitchesPerRound },
@@ -1767,6 +2063,7 @@ async function main() {
         // because `report` is `{ err }` when the handle is broken.
         if (report && !report.err) {
           report.expectBallInFrame = !!SCENES[id].expectBallInFrame;
+          report.ballMarginPx = SCENES[id].ballMarginPx ?? 0;
           reports.set(id, report);
         }
 
@@ -1813,6 +2110,11 @@ async function main() {
   if (pairBad.length) {
     failed++;
     console.error(`✗ day/night pair FAILED — ${pairBad.join('; ')}`);
+  }
+  const bowlBad = checkNightBowl(reports);
+  if (bowlBad.length) {
+    failed++;
+    console.error(`✗ night bowl FAILED — ${bowlBad.join('; ')}`);
   }
 
   // `saved` counts scenes that PASSED, not scenes whose PNG got written — the

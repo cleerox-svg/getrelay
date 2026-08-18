@@ -98,6 +98,16 @@ interface BaseballHandle {
     parkId: string;
     roofPeakFt: number;
     foulTerritoryFt: number;
+    /**
+     * ⚠ THE PREDICATE FOR THE CENTRE-FIELD BOARD, AND IT IS EXPOSED FOR THE
+     * SAME REASON `roofPeakFt` IS. `board.ts` builds nothing at all unless
+     * `surroundings === 'city'`, so without this the harness can only see that
+     * its REPORT has no board field — not that the PARK has no board — and a
+     * board that silently vanished (a typo'd `surroundings`, a bowl whose deck
+     * top drops below the 26 ft sill) reads exactly like a park that never had
+     * one. `checkBoard`'s note has the failure written out.
+     */
+    surroundings: string;
     /** What `parks.ts` says the wall is at a bearing (pchip, not the knots). */
     fenceAt(bearingDeg: number): { distFt: number; heightFt: number };
     /**
@@ -357,6 +367,7 @@ w.__baseball = {
     parkId: park.id,
     roofPeakFt: park.roofPeakFt,
     foulTerritoryFt: park.foulTerritoryFt,
+    surroundings: park.surroundings,
     fenceAt: (deg) => fenceAt(park, deg),
     derby,
     pitch: {

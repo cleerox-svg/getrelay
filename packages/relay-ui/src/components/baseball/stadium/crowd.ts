@@ -48,22 +48,34 @@
 // dark bowl with points scattered through it, and the points were BLUE because
 // a multiply cannot make a navy seat white.
 //
-// Both faults are `daylight.ts` rows now — `crowdSpeckle` (16 % by day, 3 % at
-// night: a phone is not a person) and `seatsHex` becoming a pale cool white so
-// the map is a MASK rather than a tint. Measured on the same patch after:
+// ⚠⚠ AND THE FIRST TWO FIXES FOR IT BOTH FAILED, WHICH IS WHY THERE IS NOW A
+// THIRD ROW. Both turned `crowdBase` — the deck's FLOOR — because it was the
+// only dial there was: 0.26 was static, 0.10 was a starfield with the
+// vomitories and the coarse octave crushed to the same black, 0.16 was the
+// compromise. On the third look the compromise measured as noise too, and the
+// number that says so is a RATIO rather than a level, because a level is a
+// legitimate authoring choice and a spread is not:
 //
-//     patch                      before               after
-//     night deck @ ~400 ft       mean 27.81  sd 29.18  →  mean 17.31  sd 27.40
-//                                range 0.1–132.8       →  range 0.0–189.5
-//     day deck @ ~115 ft         mean 20.43  sd  3.65  →  mean 19.78  sd  3.66
-//     day deck @ ~400 ft         mean 20.81  sd  6.01  →  mean 19.58  sd  5.86
+//     `daynight-*.png`, `wide`        p50     p99   p99/p50
+//     day   far upper deck           22.1    36.5      1.7
+//     day   near bowl                18.4    73.2      4.0
+//     night far upper deck            9.8   150.4     15.4   ← 9× day's
+//     night near bowl                 4.1   112.3     27.5   ← 6.9× day's
 //
-// i.e. at night the GROUND fell by 38 % while the peak rose by 43 % — sd/mean
-// went 1.05 → 1.58, which is the difference between a field of similar values
-// and bright points on dark — and the DAY crowd, which was signed off, did not
-// move. `crowdBase` was taken to 0.10 first and that was too far: the
-// vomitories and the coarse octave crushed to the same black and the deck read
-// as noise rather than texture. 0.16 is where both survive.
+// The floor was never the defect: the POINT had no ceiling. This map multiplies
+// a Lambert seat colour, so a ×1.0 texel over the night's pale `seatsHex` is a
+// WHITE PATCH taking the field rig full on — it rendered at 150 against
+// floodlit turf at 83, i.e. the crowd out-shone the thing the floodlights point
+// at. `daylight.crowdPointGain` caps it, and WITH a ceiling the floor could go
+// back up to 0.26 and take the deck's structure with it:
+//
+//     night far upper deck           27.0    76.2      2.8   ← 1.6× day's
+//     night near bowl                15.7    67.5      4.3   ← 1.1× day's
+//
+// The DAY crowd, which was signed off, is byte-identical through all of it —
+// `crowdPointGain` is exactly 1 there and the multiply is the identity.
+// `scripts/shoot-baseball.mjs`'s `checkNightBowl` is where those numbers are
+// now measured and asserted, off the PNGs, every run.
 //
 // ⚠ EVERY RANDOM NUMBER COMES FROM THE CALLER'S SEEDED `mulberry32`. Two runs of
 // the screenshot harness must produce byte-identical PNGs; one `Math.random`
@@ -76,6 +88,7 @@ import {
   RepeatWrapping,
   SRGBColorSpace,
 } from 'three';
+import type { Daylight } from './daylight';
 
 /**
  * Seating sections per texture tile.
@@ -131,9 +144,9 @@ const CLUMP_AMP = 0.34;
 export function buildCrowdTexture(
   px: number,
   rng: () => number,
-  base = 1,
-  speckle = 0.16,
+  light: Pick<Daylight, 'crowdBase' | 'crowdSpeckle' | 'crowdPointGain'>,
 ): CanvasTexture | null {
+  const { crowdBase: base, crowdSpeckle: speckle } = light;
   if (px <= 0 || typeof document === 'undefined') return null;
   const w = px * SECTIONS_PER_TILE;
   const canvas = document.createElement('canvas');
@@ -170,8 +183,8 @@ export function buildCrowdTexture(
   // header says it is "untouched white so a fascia band can share the one
   // texture"; now it is.
   band(FASCIA_V0, 1, '#ffffff', 0, SECTIONS_PER_TILE);
-  // ⚠ `base` IS 1 IN DAYLIGHT AND 0.13 AT NIGHT. This map MULTIPLIES the seat
-  // colour, so a texel can only ever DARKEN — "bright points on dark" is
+  // ⚠ `base` IS 1 BY DAY AND WELL UNDER IT AT NIGHT. This map MULTIPLIES the
+  // seat colour, so a texel can only ever DARKEN — "bright points on dark" is
   // therefore authored by dropping the GROUND and raising the seat colour to
   // match (`daylight.seatsHex`), never by brightening the dots. At night that
   // seat colour IS a pale white and this map is therefore a MASK rather than a
@@ -214,9 +227,10 @@ export function buildCrowdTexture(
       }
     }
   }
-  // --- OCTAVE 2: per-texel speckle, which carries the close view. Never
-  // individuals — one or two texels each, which is also all a seat is worth.
+  // --- OCTAVE 2: the bright points — per-texel, which carries the close view.
+  // Never individuals: one or two texels each, which is also all a seat is worth.
   const dots = Math.round(w * seatRows * Math.max(0, Math.min(1, speckle)));
+  const gain = Math.max(0, Math.min(1, light.crowdPointGain));
   for (let n = 0; n < dots; n++) {
     const x = Math.floor(rng() * w);
     const y = seatY0 + Math.floor(rng() * seatRows);
@@ -234,7 +248,13 @@ export function buildCrowdTexture(
     // variation is visible; it changes the day texture by at most the tint it
     // was always supposed to have. At night it is what makes a point a POINT
     // rather than a slightly-less-dark clump.
-    for (let c = 0; c < 3; c++) img.data[i + c] = rgb[c] ?? 255;
+    //
+    // ⚠ AND `gain` IS THE POINT'S CEILING — see `daylight.crowdPointGain`. At
+    // day it is exactly 1, so this multiply is the identity and the signed-off
+    // day texture is byte-identical. It is the knob the two failed night passes
+    // did not have: with only `crowdBase` to turn, "less static" and "less
+    // black" are the SAME dial pulling opposite ways.
+    for (let c = 0; c < 3; c++) img.data[i + c] = Math.round((rgb[c] ?? 255) * gain);
   }
   ctx.putImageData(img, 0, 0);
 

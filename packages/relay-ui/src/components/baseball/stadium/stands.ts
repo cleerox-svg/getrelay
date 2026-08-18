@@ -360,12 +360,7 @@ export function buildStands({ scene, track, park, quality, daylight }: StadiumCt
 
   const shellGeo = track(mergeGeometries(lit));
   for (const g of lit) g.dispose();
-  const crowd = buildCrowdTexture(
-    quality.seatTexturePx,
-    rng,
-    daylight.crowdBase,
-    daylight.crowdSpeckle,
-  );
+  const crowd = buildCrowdTexture(quality.seatTexturePx, rng, daylight);
   if (crowd) track(crowd);
   const shell = new Mesh(
     shellGeo,

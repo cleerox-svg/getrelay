@@ -18,8 +18,12 @@
 // overlap, so the extremes were never checked for legibility and shipped
 // `HARBOURFRONT` at 9.9 CSS px, `ALPINE MEADOWS` at 8.5 and
 // `MAXIMILIAN LONGNAME` at 8.4 against a 10 px floor the file claimed to
-// enforce. `HARBOURFRONT` is the real park's name. Two domains is how a suite
-// with 34 green assertions misses four violations of its own headline rule, so
+// enforce. `HARBOURFRONT` was the home park's display name when that was
+// measured — it is `SkyDome` now (`parks.ts`), and the string stays here as a
+// twelve-character STRESS INPUT rather than as a claim about the park; the
+// shipped fixture list in `boardFixtures.ts` reads `SKYDOME_NAME`. Two domains
+// is how a suite with 34 green assertions misses four violations of its own
+// headline rule, so
 // there is now exactly one: `ALL_STATES`.
 
 import { describe, expect, it } from 'vitest';
@@ -27,6 +31,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chainMultiplier } from '../../../lib/baseball/derbyChain';
+import { PARKS } from '../../../lib/baseball/parks';
 import { DERBY_OUTCOMES } from '../../../lib/baseball/derbyScoring';
 import type { SwingResult } from '../../../lib/baseball/derbyState';
 import { describeSwing } from '../shared/swingCopy';
@@ -42,6 +47,7 @@ import {
   strokeBoardText,
   validateGlyphs,
 } from './boardGlyphs';
+import { BOARD_STATES } from './boardFixtures';
 import type { Board2D } from './boardGlyphs';
 import { CAMERAS } from './camera';
 import {
@@ -1687,3 +1693,53 @@ describe('board determinism guard', () => {
  * the last render was taken of.
  */
 const GLYPH_TABLE_HASH = '159f209c';
+
+/**
+ * ⚠ THE FIXTURE TABLE, WALKED — WHICH MAKES ITS OWN HEADER TRUE.
+ *
+ * `boardFixtures.ts` opens by saying it is "one table, TWO consumers ... the
+ * pixel harness photographs these and `scoreboard.test.ts` can walk the same
+ * rows and assert". Until now nothing walked it, and the cost showed up exactly
+ * where an unwalked fixture costs most: the park was renamed to `SkyDome` and
+ * 8 of the 13 contact-sheet cards went on reading `HARBOURFRONT DOME`, plus a
+ * `HARBOUR` team in the linescore — so the branch's own visual-review artefact
+ * advertised a park that does not exist, beside GL shots that all correctly read
+ * `park.name`. Typecheck, unit tests and the screenshot harness were all green:
+ * a string nobody compares to anything cannot rot loudly.
+ *
+ * MUTATION WATCHED TO FAIL (reverted, counts as observed):
+ *   1. `boardFixtures.PARK` back to the literal `'HARBOURFRONT DOME'` → 1 fail
+ *      ("fixtures name parks that do not exist: HARBOURFRONT DOME")
+ */
+describe('the board fixture table', () => {
+  /** Every park label a fixture sets — the strings the contact sheet advertises. */
+  const parkLabels = () => {
+    const out: string[] = [];
+    for (const f of BOARD_STATES) {
+      // `overflow` is the DELIBERATELY absurd row — every field on it is too
+      // long on purpose, so its ribbon is a truncation input and not a venue.
+      if (f.id === 'overflow') continue;
+      if (f.array.main.kind === 'idle') out.push(f.array.main.label);
+      // The first ribbon item is the venue ident on every card that has one —
+      // see `wrap`'s default and the `duel` row.
+      const first = f.array.ribbon?.items[0];
+      if (first && first === first.toUpperCase() && !/\d/.test(first)) out.push(first);
+    }
+    return out;
+  };
+
+  it('never advertises a park `parks.ts` does not have', () => {
+    const real = new Set(PARKS.map((p) => p.name.toUpperCase()));
+    const labels = parkLabels();
+    // Guard the guard: a `wrap` that stopped setting a ribbon would make this
+    // walk vacuous, and vacuous is how the rot got in.
+    expect(labels.length).toBeGreaterThan(8);
+    const stale = labels.filter((l) => !real.has(l));
+    expect(stale, `fixtures name parks that do not exist: ${[...new Set(stale)].join(', ')}`).toEqual([]);
+  });
+
+  it('has unique ids — the contact sheet is keyed on them', () => {
+    const ids = BOARD_STATES.map((f) => f.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
