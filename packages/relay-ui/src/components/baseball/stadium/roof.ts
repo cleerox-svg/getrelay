@@ -168,7 +168,7 @@ const ROOF_PANEL_DEG = 7.5;
  * the lift belongs to the emissive, which is a `daylight.ts` row and is where
  * it now lives. This value is unchanged and is the colour the emissive tints.
  */
-const COLORS = { deck: 0x969ba2, under: 0x6b727c };
+export const COLORS = { deck: 0x969ba2, under: 0x6b727c };
 
 /** What the read-back says about the drawn roof at one bearing. */
 export interface RoofSample {

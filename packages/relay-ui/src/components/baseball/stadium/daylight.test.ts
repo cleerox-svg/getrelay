@@ -60,6 +60,7 @@
 import { describe, expect, it } from 'vitest';
 import { DAYLIGHT } from './daylight';
 import type { Daylight } from './daylight';
+import { COLORS as ROOF_COLORS } from './roof';
 
 /* ------------------------------------------------------------------ model */
 
@@ -108,7 +109,12 @@ const chromaOf = (rgb: RGB) => Math.max(...rgb) - Math.min(...rgb);
 const bytesOf = (hex: number): RGB => [(hex >> 16) & 255, (hex >> 8) & 255, hex & 255];
 
 /** `roof.ts`'s `COLORS.under`, quoted so a change there fails here. */
-const UNDER_HEX = 0x6b727c;
+// ⚠ IMPORTED, NOT QUOTED. This was a hand-copied 0x6b727c whose comment claimed
+// "a change there fails here" — it did not, because roof.ts's COLORS was not
+// exported. Measured: dropping `under` to a near-black 0x1a1c20 (the exact
+// hole-in-the-sky defect this file exists to catch) passed 967/967, and every
+// luminance figure below was then measuring a colour the scene no longer drew.
+const UNDER_HEX = ROOF_COLORS.under;
 
 const soffit = (row: Daylight) => renderPx(UNDER_HEX, row.roofEmissiveHex, row);
 const truss = (row: Daylight) => renderPx(row.trussHex, row.trussEmissiveHex, row);

@@ -75,7 +75,7 @@ const BACKSPIN_RPM = 2200;
 
 /** Run the ladder and return every number it produces, as a string. */
 function ladder(): string {
-  const c = parkConditions(HARBOURFRONT, false, 1);
+  const c = parkConditions(HARBOURFRONT, true, 1);
   return LADDER.map((ev) => {
     const f = simulateBattedBall(
       launchFromAngles(ev, LA_DEG, 0, BACKSPIN_RPM, 0, vec3(0, 0, 3)),
@@ -135,7 +135,7 @@ describe('the daylight preference cannot reach the physics', () => {
     // flights apart: one degree of launch angle is worth ~1 ft of carry and the
     // string must change.
     const perturbed = (() => {
-      const c = parkConditions(HARBOURFRONT, false, 1);
+      const c = parkConditions(HARBOURFRONT, true, 1);
       const f = simulateBattedBall(
         launchFromAngles(90, LA_DEG + 1, 0, BACKSPIN_RPM, 0, vec3(0, 0, 3)),
         c.air,
