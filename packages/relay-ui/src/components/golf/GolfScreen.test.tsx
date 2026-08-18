@@ -61,6 +61,7 @@ import { GolfScreen } from './GolfScreen';
 const seen = vi.hoisted(() => ({
   course: null as null | {
     course: { id: string };
+    cosmetics?: { ball?: { color?: string } };
     startHole?: number;
     seed?: number;
     onHoleComplete?: (r: { courseId: string; hole: number; strokes: number; par: number; toPar: number }) => void;
@@ -94,6 +95,8 @@ vi.mock('./CourseGame', () => ({
         <span data-testid="channels">
           {`${p.onHoleComplete ? 'hole' : '-'}/${p.onRoundComplete ? 'round' : '-'}`}
         </span>
+        {/* The equipped ball skin the round is played with. */}
+        <span data-testid="ball-skin">{p.cosmetics?.ball?.color ?? 'none'}</span>
       </div>
     );
   },
@@ -165,6 +168,7 @@ vi.mock('../../lib/golf/economy', () => {
   return {
     useEconomy: (sel: (s: typeof state) => unknown) => sel(state),
     useEquippedFrame: () => undefined,
+    useGolfCosmetics: () => ({ ball: { color: '#FFD700' } }),
   };
 });
 
@@ -486,6 +490,17 @@ describe('GolfScreen — a back gesture out of a special round cannot corrupt th
 // exit (press 1 freezes the round and raises the pause sheet, press 2 banks the
 // carded holes and leaves); `startFree()` leaves in one. Getting this wrong is a
 // bug in EITHER direction, so both are pinned, by press count.
+describe('GolfScreen — the round it launches is skinned', () => {
+  it('hands the equipped cosmetics to a Course round', async () => {
+    // The hub is where the cosmetics slice is loaded, so this is the ONE place
+    // that must not forget to forward it; a scene given no cosmetics renders the
+    // stock ball no matter how live the skin seam is.
+    mount();
+    await pick('full round');
+    expect(screen.getByTestId('ball-skin').textContent).toBe('#FFD700');
+  });
+});
+
 describe('GolfScreen — only a session that can lose holes is guarded', () => {
   it('guards a FULL Course round — one back press must not destroy it', async () => {
     mount();

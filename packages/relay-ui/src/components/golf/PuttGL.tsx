@@ -10,7 +10,7 @@ import {
 } from '../../lib/golf/puttObstacles';
 import { puttHeightAt, puttGradientAt } from '../../lib/golf/puttField';
 import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
-import type { GolfCosmetics } from '../../lib/golf/cosmetics';
+import { useGolfSkin, type GolfCosmetics } from './scene/skin';
 import {
   addSkyDome,
   makeTurfColor,
@@ -168,8 +168,7 @@ export default function PuttGL({
   cosmetics,
   onStats,
 }: Props) {
-  const cosmeticsRef = useRef(cosmetics);
-  cosmeticsRef.current = cosmetics;
+  const registerSkin = useGolfSkin(cosmetics);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
@@ -847,7 +846,8 @@ export default function PuttGL({
     // --- Ball -----------------------------------------------------------
     const ballGeo = track(new THREE.SphereGeometry(BALL_R, 32, 24));
     const dimpleTex = track(makeDimpleNormalMap());
-    const ballMat = track(makeBallMaterial(dimpleTex, cosmeticsRef.current?.ball));
+    const ballMat = track(makeBallMaterial(dimpleTex));
+    registerSkin({ ball: ballMat });
     // The ball keeps its OWN envMap even when scene.environment is set — three
     // prefers the material's, and with it the material's envMapIntensity, which
     // is why attachSkyEnv hands back the matching value (scene/env.ts).

@@ -4,7 +4,7 @@ import { RangeSim } from '../../lib/golf/rangeSim';
 import type { RangeEvent } from '../../lib/golf/rangeSim';
 import { play, unlockAudio } from '../../lib/audio';
 import { makeBallMaterial, makeDimpleNormalMap } from '../../lib/golf/ballTexture';
-import type { GolfCosmetics } from '../../lib/golf/cosmetics';
+import { useGolfSkin, type GolfCosmetics } from './scene/skin';
 import {
   addSkyDome,
   makeContactShadowTexture,
@@ -84,8 +84,9 @@ interface Props {
   targetId?: string | null;
   paused?: boolean;
   onEvent?: (e: RangeEvent) => void;
-  // Equipped ball skin + tracer colour (golf economy). Read once at scene
-  // build; default equip → stock white ball + red Toptracer, unchanged.
+  // Equipped ball skin + tracer colour (golf economy). LIVE, not baked — the
+  // materials are registered with useGolfSkin (scene/skin.ts), which re-applies
+  // on every change; default equip → stock white ball + red Toptracer, unchanged.
   cosmetics?: GolfCosmetics;
   /**
    * GPU instrumentation — `renderer.info` plus the resolved tier, roughly every
@@ -178,9 +179,10 @@ export default function RangeGL({
   const hostRef = useRef<HTMLDivElement | null>(null);
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
-  // Snapshot the equipped skin for the mount effect (ball material + tracer).
-  const cosmeticsRef = useRef(cosmetics);
-  cosmeticsRef.current = cosmetics;
+  // The equipped skin. The mount effect REGISTERS the ball + tracer materials
+  // with this seam, which applies the skin then and re-applies it whenever the
+  // prop changes — no rebuild, so an equip mid-session lands on the live scene.
+  const registerSkin = useGolfSkin(cosmetics);
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
   const onStatsRef = useRef(onStats);
@@ -525,7 +527,7 @@ export default function RangeGL({
 
     const ballGeo = track(new THREE.SphereGeometry(BALL_R, 32, 24));
     const dimpleTex = track(makeDimpleNormalMap());
-    const ballMat = track(makeBallMaterial(dimpleTex, cosmeticsRef.current?.ball));
+    const ballMat = track(makeBallMaterial(dimpleTex));
     // The ball keeps its OWN envMap even when scene.environment is set — three
     // prefers the material's, and with it the material's envMapIntensity, which
     // is why attachSkyEnv hands back the matching value (scene/env.ts).
@@ -800,13 +802,12 @@ export default function RangeGL({
     const tracerGeo = track(new THREE.BufferGeometry());
     const tracerAttr = new THREE.BufferAttribute(tracerPos, 3);
     tracerGeo.setAttribute('position', tracerAttr);
-    const tracerMat = track(
-      new THREE.LineBasicMaterial({ color: cosmeticsRef.current?.trail?.color ?? 0xff4d4d, transparent: true, opacity: 0.9, fog: false }),
-    );
+    const tracerMat = track(new THREE.LineBasicMaterial({ color: 0xff4d4d, transparent: true, opacity: 0.9, fog: false }));
     const tracer = new THREE.Line(tracerGeo, tracerMat);
     tracer.frustumCulled = false;
     tracer.visible = false;
     scene.add(tracer);
+    registerSkin({ ball: ballMat, trail: tracerMat });
     let tracerCount = 0;
 
     // --- Impact FX: surface-appropriate particles + decals -------------

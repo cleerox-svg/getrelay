@@ -115,6 +115,7 @@ vi.mock('../../lib/golf/economy', () => {
   return {
     useEconomy: (sel: (s: typeof state) => unknown) => sel(state),
     useEquippedFrame: () => undefined,
+    useGolfCosmetics: () => ({}),
   };
 });
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
+import { useEffect, useRef, useState, type ComponentProps } from 'react';
 import { GolfGame } from './GolfGame';
 import type { GolfGameResult } from './GolfGame';
 import { GolfDaily } from './GolfDaily';
@@ -17,8 +17,7 @@ import { RangeGame } from './RangeGame';
 import type { RangeGameResult } from './RangeGame';
 import CourseGame from './CourseGame';
 import { api } from '../../lib/api';
-import { useEconomy, useEquippedFrame } from '../../lib/golf/economy';
-import { resolveGolfCosmetics } from '../../lib/golf/cosmetics';
+import { useEconomy, useEquippedFrame, useGolfCosmetics } from '../../lib/golf/economy';
 import { getCourse } from '../../lib/golf/courses';
 import type { GolfCourse } from '../../lib/golf/courses';
 import { getPuttCourse } from '../../lib/golf/puttCourses';
@@ -116,21 +115,16 @@ export function GolfScreen({ onExitToHub }: { onExitToHub: () => void }) {
   const [board, setBoard] = useState<'golf' | 'golfcourse' | 'golfrange'>('golfcourse');
 
   // Golf economy: cache the equipped cosmetics + wallet once so the render seam
-  // (below) and the hub header chip are ready before the first round. The
-  // resolved GolfCosmetics is memoised on [catalog, equipped] for a STABLE
-  // identity — the GL scenes read it once at build, so a new object each render
-  // would needlessly churn. Default equip → an empty object → the stock look.
+  // (below) and the hub header chip are ready before the first round. If the
+  // fetch is still in flight when a scene mounts, the scene re-skins itself when
+  // it lands (components/golf/scene/skin.ts) — it no longer has to be ready
+  // first. Default equip → an empty object → the stock look.
   const me = useStore((s) => s.me);
-  const catalog = useEconomy((s) => s.catalog);
-  const equipped = useEconomy((s) => s.equipped);
   const balance = useEconomy((s) => s.balance);
   const ensureCosmetics = useEconomy((s) => s.ensureCosmetics);
   const ensureWallet = useEconomy((s) => s.ensureWallet);
   const frame = useEquippedFrame();
-  const cosmetics = useMemo(
-    () => resolveGolfCosmetics(catalog, equipped),
-    [catalog, equipped],
-  );
+  const cosmetics = useGolfCosmetics();
   useEffect(() => {
     void ensureCosmetics();
     void ensureWallet();

@@ -41,10 +41,12 @@ vi.mock('../../lib/api', () => ({ api: spies }));
 // buttons stand in for holing out; nothing else about the round matters here.
 vi.mock('./CourseGame', () => ({
   default: (p: {
+    cosmetics?: { ball?: { color?: string } };
     onHoleComplete?: (r: { courseId: string; toPar: number }) => void;
     onRoundComplete?: (r: { courseId: string; toPar: number; holes: number }) => void;
   }) => (
     <div>
+      <span data-testid="ball-skin">{p.cosmetics?.ball?.color ?? 'none'}</span>
       {p.onHoleComplete ? (
         <button type="button" onClick={() => p.onHoleComplete!({ courseId: 'augusta', toPar: 2 })}>
           hole out
@@ -63,9 +65,20 @@ vi.mock('./CourseGame', () => ({
 }));
 
 vi.mock('../Avatar', () => ({ Avatar: () => null }));
+// The card loads the cosmetics catalog itself: a challenge round is played from
+// the chat rail, where GolfScreen has never mounted to load it. `ensureCosmetics`
+// is a spy, not a bare async function, because the test below ASSERTS it was
+// called — a stub would let the whole effect be deleted with every test green.
+const economy = vi.hoisted(() => ({ ensureCosmetics: vi.fn(async () => undefined) }));
 vi.mock('../../lib/golf/economy', () => {
-  const state = { ensureWallet: async () => undefined };
-  return { useEconomy: (sel: (s: typeof state) => unknown) => sel(state) };
+  const state = {
+    ensureWallet: async () => undefined,
+    ensureCosmetics: economy.ensureCosmetics,
+  };
+  return {
+    useEconomy: (sel: (s: typeof state) => unknown) => sel(state),
+    useGolfCosmetics: () => ({ ball: { color: '#FFD700' } }),
+  };
 });
 
 /** An open challenge, my move, single hole (hole index 6 of Augusta). */
@@ -92,6 +105,7 @@ beforeEach(() => {
   // once-only claim map is module scope (deliberately — that is what survives a
   // remount), so reusing an id across tests would alias a settled claim.
   localStorage.setItem('relay.golfPendingSeq', String(Math.floor(Math.random() * 1e6) + 1e6));
+  economy.ensureCosmetics.mockClear();
   spies.getChallenge.mockReset();
   spies.submitChallengeResult.mockReset();
   spies.submitGameScore.mockReset();
@@ -113,6 +127,23 @@ function click(label: string) {
 function myScore(): string {
   return screen.getAllByText(/^(—|E|\+\d+|−\d+)$/)[0]?.textContent ?? '';
 }
+
+describe('ChallengeCard — the round it runs is skinned', () => {
+  it('plays the challenge with the EQUIPPED ball, and loads the catalog itself', async () => {
+    // A challenge is played from the chat rail, so GolfScreen — the only other
+    // thing that loads /economy/cosmetics for a round — may never have mounted.
+    // The card passed no `cosmetics` at all, so an in-chat round was ALWAYS the
+    // stock white ball however much the player had spent.
+    render(<ChallengeCard id="ch-1" />);
+    await flush();
+    // Merely SEEING a challenge in a chat must not fetch the golf catalog.
+    expect(economy.ensureCosmetics).not.toHaveBeenCalled();
+
+    click('Play your round');
+    expect(economy.ensureCosmetics).toHaveBeenCalled();
+    expect(screen.getByTestId('ball-skin').textContent).toBe('#FFD700');
+  });
+});
 
 describe('ChallengeCard — a failed submit is not an unplayed round', () => {
   it('⚠ does NOT re-render the round as unplayed when submitChallengeResult REJECTS', async () => {
