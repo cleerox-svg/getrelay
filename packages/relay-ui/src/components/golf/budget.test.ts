@@ -52,7 +52,10 @@ const GRANDFATHERED: Record<string, number> = {
   // 751 → 738: the three board-submit sites collapsed onto one durable channel
   // in useBoardSubmit.ts (persist-before-POST + retry), which also took
   // serverBest/lbKey with it. Banked.
-  'GolfScreen.tsx': 738,
+  // 738 → 732: the resolved-cosmetics memo became useGolfCosmetics() in
+  // economy.ts, so the in-chat ChallengeCard could share it instead of running
+  // a golf round with no skin at all. Banked.
+  'GolfScreen.tsx': 732,
   'GolfMenu.tsx': 621,
   'GolfGame.tsx': 508,
 };

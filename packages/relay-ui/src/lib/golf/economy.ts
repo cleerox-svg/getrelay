@@ -31,6 +31,7 @@
 // server's read-after-write payloads, so the shop, the hub balance chip and the
 // golf renderer all stay in sync without a refetch.
 
+import { useMemo } from 'react';
 import { create } from 'zustand';
 import { api, ApiError } from '../api';
 import type {
@@ -40,7 +41,7 @@ import type {
   SeasonResponse,
   WalletLedgerEntry,
 } from '../types';
-import { resolveFrame, type GolfFrame } from './cosmetics';
+import { resolveFrame, resolveGolfCosmetics, type GolfCosmetics, type GolfFrame } from './cosmetics';
 import { withTimeout, type LoadState } from './loadState';
 
 const DEFAULT_EQUIPPED: EquippedCosmetics = {
@@ -276,9 +277,22 @@ export function affordability(balance: number | null, price: number): Affordabil
 }
 
 // ---- Selector hooks -----------------------------------------------------
-// These return the RESOLVED render/frame shapes. GolfScreen memoises the
-// GolfCosmetics object for stable renderer identity; here we keep the inputs
-// (catalog + equipped) as the memo deps.
+// These return the RESOLVED render/frame shapes, so no caller re-derives them.
+
+/**
+ * The equipped ball + trail, resolved for the GL scenes.
+ *
+ * Memoised on [catalog, equipped] for a STABLE identity: the scenes re-apply
+ * the skin from a `[cosmetics]` effect (components/golf/scene/skin.ts), and a
+ * fresh object every render would churn it. EVERY owner of a golf renderer must
+ * use this — a caller that forgets simply renders the stock ball, which is what
+ * an in-chat challenge round did.
+ */
+export function useGolfCosmetics(): GolfCosmetics {
+  const catalog = useEconomy((s) => s.catalog);
+  const equipped = useEconomy((s) => s.equipped);
+  return useMemo(() => resolveGolfCosmetics(catalog, equipped), [catalog, equipped]);
+}
 
 // The equipped avatar frame overlay (or null for frame_none / unloaded).
 export function useEquippedFrame(): GolfFrame | null {

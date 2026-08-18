@@ -4,7 +4,7 @@ import { Avatar } from '../Avatar';
 import CourseGame from './CourseGame';
 import { api } from '../../lib/api';
 import { getCourse } from '../../lib/golf/courses';
-import { useEconomy } from '../../lib/golf/economy';
+import { useEconomy, useGolfCosmetics } from '../../lib/golf/economy';
 import {
   enqueuePendingScore,
   pendingScoresFor,
@@ -50,6 +50,15 @@ export function ChallengeCard({ id }: { id: string }) {
   // Pulled as a stable action ref (no re-render subscription); degrades
   // gracefully when the economy store is empty (unauthed / offline).
   const ensureWallet = useEconomy((s) => s.ensureWallet);
+  // The player's equipped ball/trail, for the round this card runs. The catalog
+  // is fetched here too: a challenge is played from the CHAT rail, so GolfScreen
+  // — which is what usually loads it — may never have mounted this session.
+  const ensureCosmetics = useEconomy((s) => s.ensureCosmetics);
+  const cosmetics = useGolfCosmetics();
+
+  useEffect(() => {
+    void ensureCosmetics();
+  }, [ensureCosmetics]);
 
   useEffect(() => {
     let cancelled = false;
@@ -354,6 +363,7 @@ export function ChallengeCard({ id }: { id: string }) {
         ? createPortal(
         <CourseGame
           course={course}
+          cosmetics={cosmetics}
           // Single-hole challenge: play just the chosen hole and submit on
           // onHoleComplete. Full-round challenge: play the whole course and
           // submit on onRoundComplete. Both funnel to the same one-shot submit.
