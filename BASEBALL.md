@@ -567,17 +567,92 @@ by `Δt`, `θ_c = −ω·Δt·v_p/(ωd + v_p)` and `R_c = d/cos θ_c`.
 
 ### The park — data, and three mechanics that come out of it
 
-A park is a **data entry and zero code**: `parks.ts` holds the `Park` shape, the
-generic fence/roof/air machinery, and a `validatePark()` that
-`parks.test.ts` runs against a deliberately-broken park (14 distinct complaints,
-asserted individually). Adding a venue is a row in `PARKS`.
+A park is a **data entry and zero code**: `parks.ts` holds the `Park` shape and
+the generic fence/roof/air machinery, and `parkValidate.ts` holds a
+`validatePark()` that `parks.test.ts` runs against a deliberately-broken park
+(16 distinct complaints, asserted individually). Adding a venue is a row in
+`PARKS`.
 
-**M1's home park is `Harbourfront Dome`** — original name, Toronto homage:
-−45° 328 ft, −22° 375, 0° 400, +22° 375, +45° 328, a uniform 10 ft wall,
-250 ft of elevation, a retractable roof 282 ft up, 28 ft of foul ground. A second
-park, `Alpine Heights` at 5200 ft, exists so that **altitude can be measured**
-rather than asserted — it is deeper, asymmetric, and carries a 16 ft wall in
-left-centre so the height column is exercised by something.
+**M1's home park is `SkyDome`**, and its dimensions are **published data**:
+
+| station | distance | wall height |
+| --- | --- | --- |
+| LF line | 328 ft | 14 ft 4 in |
+| LC | 368 ft | 11 ft 2 in |
+| LC alley | 381 ft | 12 ft 9 in |
+| CF | **400 ft** | **8 ft 0 in** |
+| RC alley | 372 ft | 10 ft 9 in |
+| RC | 359 ft | 14 ft 4 in |
+| RF line | 328 ft | 12 ft 7 in |
+
+plus a 60 ft backstop, 28 ft of foul ground down the lines, 250 ft of elevation
+and a retractable roof 282 ft up. A published dimension is a **fact** — the same
+category as the ball's mass — and nothing in the physics is ever fitted to one.
+
+> ⚠ **THE NAME IS AN OWNER DECISION, RECORDED RATHER THAN ARGUED.** `SkyDome` is
+> the former official name of a real venue; the trademark exposure (registrations
+> historically maintained, residual goodwill in a former official name) was put
+> to the owner on **2026-08-17** and the owner chose to ship it. It is their
+> product and their risk to price. What this repo owes is that the decision is
+> *visible* and *cheap to reverse*: the display name is the single exported
+> constant `SKYDOME_NAME` in `parks.ts`, the park **id** does not move (it is a
+> persistence key), and `ip.test.ts` now lists the name as a **banned real-park
+> name with a dated, one-row exception**. That shape matters: the guard's list
+> had no entry for it at all, which would have let the *next* legacy name through
+> in silence. `ip.test.ts` also asserts each exception is live, carries a date
+> and names its reversal path — so reverting `SKYDOME_NAME` makes the exception
+> itself a test failure.
+>
+> ⚠ **THAT LAST CLAUSE WAS FALSE AS SHIPPED, AND IS NOW TRUE.** The liveness
+> check asked only whether the term appeared *anywhere* in the scanned files, and
+> three things satisfied it independently of what the park is called: the
+> constant's own identifier (`SKYDOME_NAME` matches `/\bskydome\b/i`, so the
+> variable vouched for its own value), the comments explaining the decision, and
+> two test-table headers (`parks.test.ts`'s `[SKYDOME FENCE …]`,
+> `fielding.test.ts`'s `[END TO END — SkyDome …]`) in files that ship nothing.
+> Measured: reverting the constant, renaming the identifier and deleting the
+> prose each left all three tests **green**. The check now requires the term in a
+> **string literal of a non-test source** — text that reaches a user's eyes — and
+> all three probes fail. The probe table is at the foot of `ip.test.ts`. The
+> lesson generalises past this one row: a source-reading guard that greps raw
+> text is satisfied by *talking about* the thing it polices.
+
+⚠ **The bearings are ours; the distances are not.** A published profile names
+*positions* ("LC alley"), not angles, so the seven are placed at even 15°
+intervals in the order the profile lists them — no invented precision. What the
+order *does* fix is that the distances are monotone on each half with dead centre
+the strict maximum, so Fritsch–Carlson's zero slope at an extremum puts the
+park's deepest point exactly on the published 400 ft.
+
+⚠ **The backstop and the foul-ground depth are two fields now**, and that split
+is a gameplay bug avoided rather than tidiness. `foulTerritoryFt` is read by
+`fielding.ts` as the depth of a uniform catchable band running the *whole length*
+of the foul line; setting it to the published 60 ft backstop made a **437 ft ball
+5° foul a CATCH**. A real park has the stands almost on the line in the corners
+and a deep well behind the plate, which is two numbers. `backstopFt` is
+geometry-only (nothing in the physics reads it) and `stands.ts` clamps the bowl's
+offset curve to it — the two hand over at |β| ≈ 72.8°, asserted in closed form.
+
+⚠ **The height column now inverts the usual assumption**: dead centre is the
+**deepest** wall in the park *and* the **lowest** (8 ft), while both corners are
+over 12 ft and left is 14 ft 4 in. That is a real gameplay effect and it is
+measured, not asserted — see the trough result in the M3 roadmap entry.
+
+⚠ **And it is the first data in this repo the height interpolant can get wrong.**
+Every knot used to carry a uniform 10 ft, so `pchipAt` on the height column was
+reproducing a constant and a stage-4 mutation that pinned the height to its first
+sample changed nothing at this park. Four local extrema later, that mutation
+fails 7 tests. `parks.test.ts` asserts the property the choice rests on directly:
+**no bearing reports a distance or a height outside the envelope of the two knots
+bounding it** — measured worst overshoot **0.000e+0 ft** over the whole span at
+both parks, where deleting Fritsch–Carlson's extremum guard fails 10 tests.
+
+A second park, `Alpine Heights` at 5200 ft, exists so that **altitude can be
+measured** rather than asserted — it is deeper, asymmetric, and carries a 16 ft
+wall in left-centre. It also carries `surroundings: 'none'` against SkyDome's
+`'city'`, which is the same "content is data, not a branch" rule the roof obeys:
+the skyline builder returns an empty group for it rather than putting a downtown
+tower on a mountain.
 
 **The fence between samples is a monotone cubic Hermite** (Fritsch–Carlson /
 pchip, in `pchip.ts` with the full argument). A wall is piecewise *smooth*, not
@@ -674,10 +749,20 @@ uses; snapping to a substep moves a home-run call by most of a foot of wall
 
 ⚠ **A 400 ft *carry* is not a 400 ft home run**, and the tests say which 400 they
 mean. A ball whose carry is exactly 400 ft lands at the base of a 400 ft wall and
-is **in play**; clearing a 10 ft wall there takes ~409 ft of carry. The asserted
-boundary is on the *distance at wall height* — `distanceAtHeight(flight, 10)` —
-which is the quantity the resolver actually compares: 400 ft clears (10.000 ft at
-the fence), 395 ft does not (4.560 ft at the fence, off the wall).
+is **in play**; clearing the published 8 ft wall there takes **407.2 ft** of
+carry. The asserted boundary is on the *distance at wall height* —
+`distanceAtHeight(flight, wall.heightFt)` — which is the quantity the resolver
+actually compares: 400 ft + ¼ in clears, 395 ft does not (2.509 ft at the fence,
+off the wall).
+
+⚠ **And the exactly-400.000 row is now BRACKETED rather than sat on.**
+`resolveFence`'s height test is strict (`pz > wall.heightFt`), so a ball bisected
+to arrive at exactly wall height at exactly the fence is a coin flip on the last
+bit. It happened to land on `homeRun` under the old uniform 10 ft wall and lands
+on `offWall` under the published 8 ft one, **with nothing about the resolver
+having changed** — a boundary test whose verdict depends on which side of a float
+a bisection stops is not measuring the boundary. The clearing row is a quarter of
+an inch over and the exact row is *printed* with whatever the resolver calls it.
 
 ### Altitude is derived — and the like-for-like number is inside the band
 
@@ -728,7 +813,12 @@ is the design — a third of it is the argument for the infield arc below.
   single at 0.0 and an out at 1.0.
 - Off the wall is **never** an out; a corner (|bearing| ≥ 30°) is a triple.
 - A foul pop is caught only inside the park's own `foulTerritoryFt`, so that
-  field is live data rather than decoration.
+  field is live data rather than decoration — ⚠ and it is priced as a UNIFORM
+  band of that depth running the whole length of the foul line, which is why the
+  published 60 ft BACKSTOP could not be poured into it. Setting it to 60 made a
+  437 ft ball 5° foul a catch. The backstop is `backstopFt`, a separate field,
+  read by the geometry alone. A narrowing foul wedge is a model this does not
+  have, and the two-field split is the honest way to say so.
 
 ⚠ **The stated limitation, pinned by a test.** The model reads the ball's
 *landing point*, and a ground ball does not stop where it lands — it rolls to the
@@ -881,12 +971,21 @@ the render layer; contact resolves at the true physical state.
 | `packages/relay-ui/src/lib/baseball/battedBallSim.test.ts` | The carry bench and stage 3's central experiment: prints the carry-ladder residual table in both airs, the spin sensitivity, the altitude ladder and the end-to-end undercut sweep; asserts the model's goldens, the +58 ft residual as a finding, and the lift structure |
 | `packages/relay-ui/src/lib/baseball/pchip.ts` | Monotone cubic Hermite (Fritsch–Carlson) + the argument for it against linear and against a natural cubic. Extracted from `parks.ts` at the 500-line cap — extraction, not a raised cap |
 | `packages/relay-ui/src/lib/baseball/pchip.test.ts` | The interpolator bench, added by stage 4's audit — `pchip.ts` shipped with no test and a mutation that zeroed every interior knot slope moved the fence 4.97 ft with the suite still green. Asserts interpolation, exact reproduction of a straight line, no-overshoot against an unlimited Hermite, locality, zero slope at an extremum, the degenerate cases, and GOLDEN off-knot fence distances |
-| `packages/relay-ui/src/lib/baseball/parks.ts` | The park as DATA + `fenceAt` (pchip through the sampled wall), the roof mechanic (`roofClosed`, `parkConditions` — exactly-zero wind and pinned air when shut), `resolveFence` (analytic fence crossing → homeRun/offWall/foul/roof/inPlay) and `validatePark()`. Read by the physics AND by stage 4's geometry |
+| `packages/relay-ui/src/lib/baseball/parks.ts` | The park as DATA + `fenceAt` (pchip through the sampled wall), the roof mechanic (`roofClosed`, `parkConditions` — exactly-zero wind and pinned air when shut) and `resolveFence` (analytic fence crossing → homeRun/offWall/foul/roof/inPlay). Owns `SKYDOME_NAME`, the one line a name revert touches. Read by the physics AND by the geometry |
+| `packages/relay-ui/src/lib/baseball/parkValidate.ts` | `validatePark()` and its bounds table. Extracted from `parks.ts` at the 500-line cap when the published profile added `backstopFt` and `surroundings` — everything in it runs at AUTHORING time and none of it is in the shipped chunk, so the split is a bundle win as well as a cap one |
 | `packages/relay-ui/src/lib/baseball/parks.test.ts` | The park bench: prints the fence tables (pchip vs linear, with the knot-slope jump), the roof-open weather draw, the roof ceiling ladder, the wind-bearing histogram, the wind boost against an independent ground-frame RK4, and the altitude ladder; asserts the 400/395 wall boundary, the foul pole, `wind === 0` under a shut roof, byte-identical trajectories across seeds, the uniform bearing window, a TRIPWIRE on golf's wind sampler, and the altitude result against the published 25–30 ft band |
 | `packages/relay-ui/src/lib/baseball/fielding.ts` | The deliberately tiny defence: fixed alignment, a ramped reach, one defender rating, → out / 1B / 2B / 3B / HR, and `infieldDepthFt(β)` — the 95 ft arc, read by the lookup AND by `stadium/field.ts`. 323 lines, and the cap is the design |
 | `packages/relay-ui/src/lib/baseball/fielding.test.ts` | The fielding bench: prints the reach ladder and a named batted-ball ladder; asserts the catch boundary exactly on the reach, the single/double index boundary, the foul-territory boundary, the rating's ±15 % span, and the landing-point limitation |
 | `packages/relay-ui/src/lib/baseball/derbyScoring.ts` | THE PAYOUT, and the LEAF of the derby's module graph — it imports nothing from the game, so `derbyRules` can check it against the format's derived cap with no cycle. One clamped scorer (`swingPoints`) that every outcome goes through, `validatePayoutCap` on the live config path and the full `validateDerbyPayout` sweep in the bench. Extracted at the 500-line cap in the M2 feel pass |
 | `packages/relay-ui/src/lib/baseball/contactWindow.ts` | The bat GEOMETRY — `BAT_TIP_M`, `BAT_HANDLE_LIMIT_M` and the bisection that inverts `contactGeometry`. Three unrelated consumers (`derbySim`, `TimingBar`, the benches) and no knowledge of the format. Extracted at the same cap, same pass |
+| `packages/relay-ui/src/components/baseball/stadium/stands.ts` | The BANDED bowl: a `PROFILE` of stations (seats / dark fascia / emissive LED ribbon), lofted band by band and merged into ONE lit shell + ONE unlit ribbon strip + the skirt. Owns `bowlInnerRadiusFt` (the fair wall, the foul-ground offset curve, the backstop clamp) and the one procedural crowd texture — speckle and vomitories, no crowd mesh, gated by `quality.seatTexturePx` |
+| `packages/relay-ui/src/components/baseball/stadium/centrefield.ts` | The centre-field ELEVATION — the structural frame the board array is recessed into, the hotel window band, the banners and flags — plus the recess `stands.ts` cuts in the deck for it. Owns the recess and therefore owns `CENTREFIELD_BOARD`, the board's real `{ widthFt, heightFt, faceDistFt, sillFt, bearingDeg }`, which the board slice takes. Builds NO board |
+| `packages/relay-ui/src/components/baseball/stadium/grain.ts` | THE one seeded two-octave surface-noise tile, built ONCE and `.clone()`d per surface with a different `repeat` — golf's six identical turf normal maps are the anti-pattern this is written against. A MULTIPLIER around white, so it can never shift a surface's hue |
+| `packages/relay-ui/src/components/baseball/stadium/crowd.ts` | The crowd as ONE procedural texture, extracted from `stands.ts` at the cap: clumps (the octave that survives minification), speckle, seat rows, and a four-section super-tile with a seeded per-section vomitory so the lattice is not periodic |
+| `packages/relay-ui/src/components/baseball/stadium/windows.ts` | A facade of windows as one seeded map, with a plain lane so one material can serve a glazed surface and an unglazed one. Two callers — the hotel band and the skyline — and one implementation |
+| `packages/relay-ui/src/components/baseball/stadium/sky.ts` | The graded sky dome: zenith→horizon ramp, haze band, seeded cloud banding. Deliberately NOT grained — see M3b(4) |
+| `packages/relay-ui/src/components/baseball/stadium/skyline.ts` | The city outside the bowl — a tapered concrete tower with an observation pod plus sixteen high-rises, ALL in one merged mesh and one draw call, seeded, and built only for a park whose `surroundings` say `'city'` |
+| `packages/relay-ui/src/components/baseball/stadium/field.test.ts` | The ground bench, added because the visual gate could not see a face-down field: asserts every ground normal points UP, that the turf covers foul ground to the foot of the stands, that the warning track is the band it claims to be, and that the infield is an ANNULUS with 6,881 ft² of grass in it rather than a solid fan |
 | `packages/relay-ui/src/components/baseball/stadium/camera.ts` | The four camera PLACEMENTS + the rig that moves between them: a quintic transition and a damped follow point, both driven by a `dtS` ARGUMENT so `lib/scene3d/clock.ts` can freeze them. `follow` is a column, true for `flight` alone; `batter` is `false` because that frame is what the swing is timed against. Extracted from `StadiumGL.tsx` when the table acquired state |
 | `packages/relay-ui/src/components/baseball/shared/swingCopy.ts` | The derby's readout COPY — `describeSwing`, `coachSwing`, `parkCopyNumbers`. Pure `SwingResult → string`, so every outcome is testable in a millisecond instead of only through a 24-pitch mounted session |
 | `packages/relay-ui/src/lib/baseball/determinism.test.ts` | Source-reading guard: no `Math.random`, `Date.now`, `performance.` or `new Date` in any baseball source |
@@ -1020,7 +1119,8 @@ the render layer; contact resolves at the true physical state.
   quintic) and the fixed kinematic viscosity (15 tests, including stage 1's own
   plate-speed calibration).
 - **Stage 4 — parks, fences, roof, fielding.** → **Done.** `parks.ts` (the `Park`
-  shape, `Harbourfront Dome` and `Alpine Heights` as data, `fenceAt`, the roof
+  shape, the home park (then `Harbourfront Dome`, renamed at M3) and `Alpine
+  Heights` as data, `fenceAt`, the roof
   mechanic, `resolveFence`, `validatePark`), `pchip.ts` (extracted at the cap),
   `fielding.ts` (225 lines), and a wind term in `battedBallSim` implemented as an
   **exact Galilean boost** so there is still exactly one integrator. 28 new tests
@@ -1054,7 +1154,9 @@ the render layer; contact resolves at the true physical state.
   noise: removing the infield-hit cap changed nothing because an unclamped depth
   term was silently doing the same job (two mechanisms covering one case, so
   neither was tested), and pinning the fence *height* to its first sample changed
-  nothing because M1's wall is a uniform 10 ft. Both are now asserted. ⚠ The
+  nothing because M1's wall was a uniform 10 ft (⚠ that mutation now fails 7
+  tests — see M3, where the published height column arrived). Both are now
+  asserted. ⚠ The
   first repair was itself half-right and stage 4b finished it: the clamp it
   restored is **unreachable**, so the file still had one live mechanism and one
   dead one. The dead branch is now deleted.
@@ -1154,6 +1256,12 @@ the render layer; contact resolves at the true physical state.
 - **M2 — art, and four things the gate photographed.** Recorded here so they are
   not lost, and deliberately **not** fixed in the M1 follow-up pass. The list is
   in **priority order**, and the ordering changed at M2e — see the first item.
+  > ⚠ **THREE OF THE FOUR ARE CLOSED AT M3** — the bowl, the roof ring and the
+  > infield grass; see the M3 entry below for what each cost and what it
+  > measured. **The green foul-line fringe is NOT**, and it is the one item on
+  > this list that got no attention, so it stays here rather than being quietly
+  > dropped. The near-bowl transparency filed under the first item is also
+  > untouched and is still a near-plane question, not a material one.
   - **The bowl is not a building — and M2e promoted it to FIRST.** It is an open
     lofted ribbon with no back and no seat deck, and the apron disc runs to
     570 ft past the bowl's 459–531 ft outer edge, so bare ground shows beyond the
@@ -1176,6 +1284,17 @@ the render layer; contact resolves at the true physical state.
     sliver behind home and along the sides (clamped by `MIN_BAND_FT`), which from
     above projects as a 2 px dark wire across the field and reads as an artifact.
     Proven to be the roof: the roofless Alpine shot has no such lines.
+    ⚠ **SUPERSEDED — THE RING ITSELF WAS THE DEFECT, not its degenerate ends.**
+    An owner note off the open-roof references (*"you can see how the dome
+    collapses behind the outfield; then to the left and right you see the
+    skyline"*) says a retractable roof has no OPEN state that is a band of even
+    depth at every bearing — it nests its moving panels into a stack over one
+    side. `stadium/roof.ts` now builds that stack (four panels, ±11°, 250 ft deep
+    behind centre, nothing at the lines) and `MIN_BAND_FT`, `ROOF_BAND_FT` and
+    `ROOF_SPLIT_DEG` are deleted with it. That file and `roof.test.ts` carry the
+    derivation; the harness's `checkRoof` — which used to demand a measurable
+    roof at all five fence bearings, i.e. **asserted the ring** and would have
+    failed a correct collapse by design — now asserts the intended PROFILE.
   - **A ~1.5 in green fringe outside the foul lines**, from parallax on
     `field.ts`'s anti-z-fighting layer stack (0.18 ft of height offset displaces
     the edge ~0.1 ft laterally at batter-eye height). Cosmetic now, worse once
@@ -1334,7 +1453,11 @@ the render layer; contact resolves at the true physical state.
   that demonstrate it, plus a first-run tip quoting the park's own two fence
   numbers that retires itself on the player's first home run.
   ⚠ **And the sweep is ASYMMETRIC at a symmetric park, which is a MODEL DEFECT
-  and is NOT taught.** +0.2 ft beats −0.3 ft where the ±22° samples are both
+  and is NOT taught.** (⚠ M3 note: the park is no longer symmetric, so the
+  HOME-RUN half of this argument is confounded and the assertion moved onto the
+  CARRY column, which no fence can reach and which did not move. The defect is
+  unchanged; only the evidence for it had to be narrowed.) +0.2 ft beats −0.3 ft
+  where the ±22° samples are both
   375 ft, and it wins on CARRY (401.8 against 387.4 ft) — that is `eA` climbing
   toward the handle in a rigid bat with no `e(z)`, i.e. § "The collision"'s "the
   model has no jamming at all", arriving in gameplay. The copy therefore says
@@ -1436,6 +1559,16 @@ the render layer; contact resolves at the true physical state.
   the fixed-axis projection every run — `ball on screen (1.074, 1.333)`. The
   recomputation above reproduces that as **(1.0738, 1.3333)** through the same
   code path that produced the two corrected rows.
+  ⚠ **EVERY NUMBER IN (2) IS MEASURED AT `CAMERAS.flight.pos.x = −40`, AND THAT
+  STAND HAS SINCE MOVED TO −12** with its static `look` decoupled and yawed
+  5.55° toward the landmark. The corner pair is now (−0.632, 0.473) /
+  (+1.334, 0.463) and the printed control is (0.521, 1.329); the corner standoff
+  asymmetry falls 11.9 % → 3.6 %, and the oppo corner is no longer the worse of
+  the two. The REASONING above — a symmetric pair out of an asymmetric rig is a
+  tell, and a counterfactual is checked against a printed control — is what
+  survives, and it is what caught the arithmetic both times. `stadium/camera.ts`
+  carries the current derivation and the trade it costs in the four scenes where
+  the camera follows the ball.
   **(3) THE CAMERA NOW FOLLOWS, through the machinery that already existed.**
   `CAMERAS` had four modes and nothing switched between them during play except
   one hard CUT to `flight` at contact. The placements moved to
@@ -1578,6 +1711,277 @@ the render layer; contact resolves at the true physical state.
     roof-open pair and **no `night` scene**. Roof state is exercised only
     STRUCTURALLY, via `park-alpine-*` (Harbourfront's 282 ft ring against
     Alpine's absence of one), never as an open/closed pair at the same park.
+- **M3 — the art pass, and the park becomes SkyDome.** → **Done.** The owner
+  played the live build and passed M2's "is this fun" gate, so this round is
+  ART plus one data change that turned out to be gameplay. **No physics constant
+  moved**; `C_D`, `C_L`, `e_T`, the Reynolds band, `ν` and every aero golden are
+  untouched, and the carry column of the aim sweep is byte-identical to M2's.
+  **(1) THE PARK IS RENAMED AND ITS FENCE IS PUBLISHED DATA.** Seven stations of
+  distance AND height, a 60 ft backstop, the whole profile in § "The park". The
+  name is an owner decision dated in `parks.ts` and in `ip.test.ts`'s
+  one-row exception; see that section for why the exception is written as an
+  exception to a BANNED term rather than as an absent one.
+  **(2) THE DEAD-CENTRE TROUGH MOVED, AND THE REASON IS THE HEIGHT COLUMN.**
+  Same seeds, same swings, the carry column unchanged row for row:
+
+  | reticle X | HR before | HR after | carry (unchanged) |
+  | --- | --- | --- | --- |
+  | −0.30 ft | 69.1 % | 67.7 % | 387.8 ft |
+  | −0.20 | 69.8 | **80.6** | 400.4 |
+  | −0.10 | 59.7 | 70.1 | 405.8 |
+  | **0.00** | **54.9** | **67.7** | 406.6 |
+  | +0.10 | 80.2 | 94.8 | 404.8 |
+  | +0.20 | 96.2 | **100.0** | 401.7 |
+  | +0.30 | 97.2 | 97.2 | 397.0 |
+  | +0.40 | 82.3 | 82.3 | 389.5 |
+
+  Trough/peak **0.565 → 0.677**: dead centre is still the worst viable aim — the
+  trap survives and the HUD's coaching line still has something true to say —
+  but it is a **shallower** trap, because centre field is now the deepest wall in
+  the park AND the lowest (8 ft against a uniform 10, while the corners gained
+  4½ ft). The pull shoulder also **narrowed**: −0.3 ft is now no better than the
+  middle (both 67.7 %) because left field carries 14 ft 4 in on the line and
+  11–12 ft through the gaps, so the asserted pull representative moved from −0.3
+  to −0.2. All of it is GOLDEN-pinned, so the next fence edit is a diff.
+  ⚠ **And one clause had to be re-argued rather than re-recorded.** "The sweep is
+  asymmetric at a SYMMETRIC park" was the whole evidence that the `e(z)`-less bat
+  has no jamming; the park is no longer symmetric, so the HOME-RUN column is
+  confounded and is no longer evidence about the bat. The assertion moved onto
+  **carry**, which no fence can reach and which is unchanged — the defect stays
+  pinned, on a measurement the data change cannot touch.
+  ⚠ **The skill curve compressed further and the number is reported, not
+  restored.** The park plays smaller, so every skill level scores more and the
+  top squashes: good 4630 → 5745, perfect 5254 → 6171, good→perfect **1.135× →
+  1.074×**. Nothing in the chain mechanic moved. The bound is re-recorded at 1.05
+  and joined by the *structural* version of the same claim — the chain must open
+  the gap the flat payout leaves by ≥1.5× (measured 1.79×) — because tuning a
+  payout to hide a fence change is the failure this file exists to prevent.
+  **(3) THE BOWL IS A BUILDING.** A `PROFILE` of ten stations — three seating
+  decks in deep navy, four dark fascia edges and **two emissive ribbon-board
+  bands** — lofted band by band (so every seam is crisp) and merged into **one**
+  lit shell plus **one** unlit strip. The crowd is speckle in ONE procedural
+  texture, with the vomitory tunnel mouths and the aisles in the same tile; there
+  is no crowd mesh and there will not be one, and `quality.seatTexturePx` is its
+  only knob. Sections are laid out by **arc length**, not by angle: the bowl's
+  radius varies nearly 10× between the 60 ft backstop and centre field, so an
+  equal-angle tile came out stretched 2.5:1 in the `pitcher` frame and 2:1 in
+  every outfield frame off one square texture.
+  **(4) THE ROOF UNDERSIDE IS A SPACE FRAME.** Two ring chords plus a zigzag web
+  and a radial post per cell, 96 cells, merged into one draw call and ~1,700
+  triangles. Light exterior, dark underside — two single-sided sheets rather than
+  one double-sided one, because a `DoubleSide` ring shows the same colour from
+  above and below and the contrast IS the reference. `MIN_BAND_FT` 5 → 30 closes
+  the M2 finding that the ring degenerated behind the plate into a 2 px wire that
+  read as an artifact.
+  **(5) THE TURF IS MOWN AND THE INFIELD HAS GRASS IN IT.** One unshared-vertex
+  cell grid, one draw call: concentric 22 ft arcs in the outfield and radial
+  wedges inside the skinned arc, with the radial levels ABSOLUTE (levels
+  proportional to the local wall distance made the stripes ripple as the bearing
+  swept). The infield dirt is an annulus between the base-path diamond inset 8 ft
+  and `infieldDepthFt`, plus a 13 ft plate circle — **6,881 ft² of grass inside
+  the 95 ft arc against the ~7,000 ft² the M2 list estimated**, and that closes
+  the M1 gate's real finding (it blamed the arc RADIUS; the cause was a solid
+  fan). Foul ground is turf out to the foot of the stands instead of the concrete
+  apron showing through. The warning track is a distinctly redder crushed-brick
+  against a browner clay. **Dirt falls from 39.6 % of the batting frame to
+  30.4 %, turf rises 9.7 % → 19.3 %** (pixel classification, and it reproduces
+  the M2 note's 39.6 % on the old shot exactly, which is what makes it a
+  measurement).
+  **(6) A SKYLINE.** A tapered concrete tower with an observation pod and sixteen
+  high-rises, one merged mesh, one draw call, seeded. Architecture is a typology
+  and a silhouette, not trade dress; every vertex is generated from a profile
+  written in the file. Its bearing was chosen against a FRUSTUM, not by taste:
+  the `flight` camera's horizontal half-FOV is 16.3° about a fixed axis, so the
+  first placement at −38° projected 34° off-axis and was simply not in the
+  picture.
+  ⚠ **GPU: 22 → 26 draws and 2,249 → 15,060 triangles at the worst scene**,
+  against ceilings of **40 and 120,000**. Four extra calls bought a banded bowl,
+  a truss, a mown field and a city, and that is the merge discipline working:
+  authored naively it would have been ~40 more. Neither ceiling moved. Shadow map
+  stays 1024²; the skyline is deliberately not a shadow caster, since the sun's
+  ortho volume is sized from the bowl (±630 ft) and widening it to hold a 790 ft
+  tower 1,250 ft out would spend the infield's texels on nothing.
+  ⚠ **THE VISUAL GATE COULD NOT SEE THE WORST DEFECT OF THE PASS, AND THAT IS THE
+  MOST USEFUL THING THIS ROUND FOUND.** The mown-turf grid's first winding put
+  every normal at −y, so a `FrontSide` material drew **nothing** and every camera
+  photographed the grey concrete apron underneath the field — and **all fifteen
+  scenes passed**. The harness checks draw calls, triangles, fence distances read
+  back out of the vertex buffer, the tracer against the sim, the reveal and the
+  framing; none of those is "is the grass visible". A human found it in one
+  glance. `stadium/field.test.ts` now asserts every ground normal points UP,
+  from the built geometry, which is the assertion that would have caught it.
+  **Twenty mutations were watched to fail** — the headers of
+  `stadium/{geom,stands,field,skyline}.test.ts` list them with their fail counts
+  — **and three were watched to PASS and then repaired**, all three of which are
+  worth more than the ones that died:
+  ⚠ **(a) `bowlInnerRadiusFt` had TWO clamps doing one job.** `Math.min(atLine,…)`
+  appeared inside the offset expression AND again on the way out, so deleting the
+  outer one changed nothing at any bearing — the same shape as `fielding.ts`'s
+  unreachable `Math.max(0, …)`. The dead clamp is deleted and both survivors are
+  now observable.
+  ⚠ **(b) The skyline test's "the tower reaches the ground" clause swept up a
+  neighbouring high-rise.** Its 200 ft axis radius contained a building whose own
+  footing at y = 0 satisfied the clause, so deleting the tower's base shell
+  passed. 70 ft contains the tower's widest ring (52 ft) and nothing else.
+  ⚠ **(c) The infield's "there is a hole in it" clause was a vertex count**, and
+  a vertex count cannot express that shape: "no dirt vertices between 20 and
+  100 ft" is false of the real geometry (the inner ring dips to 82 ft near the
+  lines) AND true of a solid fan, which has an apex and a rim and nothing
+  between. It reads the inner edge's radius against the base-path diamond now —
+  119.3 ft at dead centre where a fan gives 155.5.
+  **Determinism:** all 15 scenes byte-identical across two consecutive full runs,
+  with a seeded skyline, a seeded ribbon palette and a seeded crowd texture in
+  the scene. **Bundle:** `three` is still its own 537.85 kB chunk, unchanged to
+  the byte and to the hash, and the main entry chunk is **846.11 kB before and
+  after**; `StadiumGL`'s own lazy chunk grew 18.26 → 25.50 kB.
+- **M3b — the art audit's seven findings, and two of them inverted.** →
+  **Done.** All render-side; **no physics constant moved** and no aero golden
+  changed. 15/15 scenes byte-identical across two consecutive full runs, worst
+  scene **29 draws / 16,292 triangles** against the unchanged 40 / 120,000
+  ceilings.
+
+  **(1) THE IP EXCEPTION DID NOT SELF-RETIRE, AND THE DOCUMENTED PROPERTY WAS
+  FALSE.** `ip.test.ts` and this file both promised that reverting
+  `SKYDOME_NAME` makes the allowlist a test failure. Measured: it did not.
+  Deleting the `PERMITTED` row failed (2 tests) and an unused extra term failed
+  (1), but **reverting the name, renaming the identifier to `PARK_NAME`, and
+  deleting the prose all stayed GREEN**. Three things kept the term "live"
+  independently of what the park is called: the constant's own identifier
+  (`SKYDOME_NAME` matches `/\bskydome\b/i`), the comments explaining the
+  decision, and two test-table headers in files that ship nothing. The liveness
+  check now requires the term in a **string literal of a non-test source** —
+  text that reaches a user's eyes — via a small comments-first scanner whose
+  behaviour is pinned on fixtures. All five probes now fail. The general lesson
+  is in the file: a source-reading guard that greps raw text is satisfied by
+  *talking about* the thing it polices.
+
+  **(2) THE NEAR DIRT WEDGE IS NOT A CAMERA-HEIGHT BUG — THE RELATIONSHIP RUNS
+  THE OTHER WAY.** The `batter` eye at 3.2 ft is a crouching catcher's, and
+  raising it to 5.5 ft does move the plate-circle rim from y = 1076 to y ≈ 1315
+  and halve the brown band. But the 13 ft skinned circle is centred on the PLATE
+  and so is the strike zone, so nothing moves one without moving the other:
+  raising the eye with the look direction held puts the zone bottom at v = 1.140,
+  **224 px below the bottom of the picture**, and re-aiming to recover it gives
+  the whole gain back. Holding the zone framed exactly as M2c framed it, the best
+  reachable dirt band per eye height is monotone the WRONG way — 346 px at
+  3.2 ft, 419 at 4.0, 462 at 4.4, 501 at 4.8, 613 at 5.2, and **above ~5.3 ft no
+  placement at any standoff or focal length frames the zone at all**. The lever
+  is STANDOFF and FOCAL LENGTH, because the zone's angular size and the
+  release-to-zone separation both fall as 1/z while the ground's depression angle
+  does not. Shipped: `[0, 4, 19.5]`, fov 20°, aim −1.90°. Dirt band **524 px
+  (32.7 %) → 419 px (26.2 %)**, classified dirt **30.5 % → 24.4 %**, turf
+  **16.6 % → 27.6 %**; the zone slides 59.5 % → 62.4 % of frame height and loses
+  4.7 % of its height, and the ball at release doubles from 4.3 px of radius to
+  7.5. The full ladder and the trade are written out on `CAMERAS.batter`;
+  `camera.test.ts` now asserts the zone framing AND the dirt bound, with four
+  mutations watched — including the 5.5 ft one, which is not a strawman but the
+  change the gate recommended.
+
+  **(3) THE BOWL DID NOT CLOSE BEHIND HOME PLATE, AND IT WAS ONE `Math.sign`.**
+  `wallTopFt` held the rail at "the nearer foul line's height" outside fair
+  territory, and `Math.sign(−180)` picks the LEFT line where `Math.sign(+180)`
+  picks the RIGHT — 14 ft 4 in against 12 ft 7 in, a **1.75 ft crack** at the one
+  bearing that is dead centre of the `pitcher` frame (measured on the render as a
+  53 px step in the bowl foot). Two fixes, both wanted: the rail now blends to
+  the MEAN of the two lines across foul ground, so it is periodic; and
+  `geom.ring` closes a full circle on its **own first sample**, so closure is a
+  property of the primitive rather than of the data drawn round it. ⚠ The first
+  version of that closure sorted the closing sample in with the forced extra
+  bearings — its bearing IS `b0`, so an ascending sort moved it to the FRONT and
+  the ring lost its last segment instead of gaining a closure: a ~180 px hole
+  straight through the backstop, found in a PNG and not in a test. `geom.test.ts`
+  now carries all three cases. A separate blend for the RADIUS was written and
+  then **removed for failing to die**: the backstop clamp holds a constant from
+  |β| ≈ 73° to 180° in both parks, so no input can read it near the seam.
+
+  **(4) CROSS-GAME PARITY: THE GROUND HAS GRAIN NOW, AND IT IS SEEDED.** Golf
+  bought grain with ~9,500 `Math.random()` calls and lost determinism; baseball
+  bought byte-identical PNGs with no procedural surface detail at all. One
+  `mulberry32`-seeded two-octave tile (`stadium/grain.ts`), built ONCE and
+  `.clone()`d per surface with a different `repeat` — golf's six identical turf
+  normal maps are the anti-pattern, `PuttGL` is the model. UVs come from world
+  position (`geom.planarUV`) so turf, warning track, clay, the plate circle and
+  the mound all sample the same tile at a material boundary with no seam.
+  Measured (mean |px − 3×3 blur|, luminance levels; golf fairway is 3.43):
+
+  | surface | before | after |
+  | --- | --- | --- |
+  | infield clay (`pitcher`) | **0.0000** (one colour) | **2.89** |
+  | outfield turf (`wide`) | 0.83 | **3.64** |
+  | warning track (`wide`) | 0.97 | **3.88** |
+  | roof TOP surface (`wide`) | 0.14 | 0.26, sd 6.9 → **11.8** |
+  | sky (`homerun`) | **0.0000**, one value | 0.027, range 176.5 → 170.1–174.1 |
+
+  ⚠ **The sky is deliberately NOT grained and that is the finding, not a miss.**
+  A 256 px map over a 360° dome is magnified ~100× at the `batter` lens, so any
+  per-texel noise is filtered to a smooth wobble before it reaches a pixel — and
+  unfiltered it would be sensor noise, which is not what a sky looks like. What
+  it got instead is what a sky has: a zenith-to-horizon gradient, a haze band and
+  seeded cloud banding, on one `BackSide` dome. So "flat fill, identical at five
+  separated points" is answered while the grain number stays near zero.
+
+  **(5) THE CROWD IS KEPT, AND THE MEASUREMENT SAYS WHY.** Deleting it banks no
+  draw call — it has never had one, it is a `map` on a material the bowl needs —
+  so the whole saving is one canvas against a deck that becomes a flat navy slab.
+  The reason it was invisible is diagnosable: at 115 ft one 256 px tile is
+  minified 4:1, and a field of independent 1 px speckles averages to its own mean
+  under exactly the filtering that stops it shimmering. The fix is a SECOND,
+  COARSER octave — 12-texel clumps (~1.4 ft on the ground, a block of seats)
+  that survive minification. Measured at the same sample points, `pitcher`,
+  ~115 ft: sd **1.94 → 3.40** on a clean seating patch and **→ 7.21** over the
+  wider deck. The tile is also four sections wide now with a seeded per-section
+  vomitory offset, which is what breaks the perfectly periodic lattice — it
+  cannot be done with `Texture.repeat`, so the tile had to grow rather than the
+  sampling change. ⚠ And a UV bug rode in with it: `u` was handed to the shader
+  in SECTIONS where a texture wraps every 1.0, so the four-section canvas was
+  squeezed into every single section — four aisles and four vomitories each. It
+  rendered as a plausible bowl and was given away by a residual 2 px line at the
+  seam.
+
+  **(6) THE SMALLER ONES.** The infield's radial **sunburst mow is deleted** —
+  no groundskeeper cuts spokes from the plate, and one pattern rule made the
+  function shorter, not longer. Batter's boxes and a catcher's box are drawn
+  (rule-book 6 × 4 ft and 43 in × 8 ft) and cost **no draw call**, because
+  merging them with the two foul lines takes the chalk from 2 calls to 1. The
+  mound takes a finer grain tile — its geometry was right to 4 px and a 5.3°
+  cone under a near-axial sun has no Lambert term to separate its faces with, so
+  relief had to come from the surface. The roof's top gets per-column panel bays
+  and a retractable-split seam, on a loft that already existed. The skyline's
+  boxes get a shared window map (`stadium/windows.ts`, one implementation, two
+  callers) and the tower samples a **plain lane** in the same map so a concrete
+  mast does not come back covered in office glazing. The tower moved 1150 →
+  1500 ft, which is what un-clips its observation pod in `homerun` (34.5° of
+  elevation against a 55° frame that tips up to hold a ball).
+
+  **(7) TWO HONESTY ITEMS, FLAGGED AND NOT CHANGED.** The fence profile now
+  carries **"reference unverified"**, on the same standard `C_L`'s fit, `C_D`'s
+  subcritical branch and the 95 ft infield arc already carry: no citation is
+  attached to it anywhere, so "published data" is a provenance claim nothing in
+  the tree supports. No number moved — they are inputs to the physics exactly as
+  the ball's mass is, and moving one to chase an unverified reference is the
+  mistake `BREAK_SEGMENT_FT` exists to prevent. And **the roof height is measured
+  now**: `RoofPart.sample` reads the peak and both radii out of the drawn vertex
+  buffer, the harness differences them against `parks.ts` at five bearings and
+  exits non-zero past 0.05 ft. It printed `roofPeak 282 ft` straight from its own
+  input before, which reads as a measurement and is not one — and the ceiling is
+  a real mechanic (`resolveFence` rules a ball that reaches it `'roof'`).
+  Mutation-verified: drawing the roof 40 ft low now prints `worst |Δ| 40.000 ft`
+  and fails the run.
+
+  **(8) THE CENTRE-FIELD STRUCTURE — owner scope, added mid-slice.** Modelled
+  from a reference photo of the real venue's centre-field elevation: a dark
+  structural frame the board array is RECESSED INTO, a step-back soffit, a band
+  of hotel windows over it, and a line of banners and two flags under the roof
+  edge. `stands.ts` cuts a real recess in the deck for it — the whole profile is
+  pushed out past the structure and lifted above it inside `RECESS_HALF_DEG`, and
+  `geom.ring` gained a forced-sample list so the wedge's side walls are vertical
+  at every quality tier rather than landing up to 22 ft off wherever
+  `bowlStepDeg` fell. **Three draw calls** (structure, window band, banners+flags
+  merged), windows as texture rather than geometry, everything seeded.
+  `centrefield.ts` owns the recess and therefore exports the board's real
+  geometry as **`CENTREFIELD_BOARD`** — `{ widthFt: 100, heightFt: 50,
+  faceDistFt: 430, sillFt: 26, bearingDeg: 0 }`, unchanged from the size the
+  gate verified. **No board is mounted here.**
 - **Stage 5 — game & scene.** `derbySim.ts`, `duelSim.ts` (3 innings, 3 outs, no
   steals/errors/subs/shifts), `ai.ts`, the crowd/lights/skyline builders, HUDs,
   and the budget / determinism / IP guard tests.
@@ -1687,7 +2091,8 @@ the render layer; contact resolves at the true physical state.
   out to ~6 in, so there is **no jamming in this model at all**. All three are
   golden-pinned. The fix is a measured `e(z)`, not a nudge.
 - **A 400 ft CARRY is not a 400 ft home run.** A ball carrying exactly 400 ft
-  lands at the base of a 400 ft wall. Clearing a 10 ft wall there needs ~409 ft.
+  lands at the base of a 400 ft wall. Clearing the published 8 ft wall there
+  needs 407.2 ft (it was ~409 against the old uniform 10 ft).
   Every fence assertion says which quantity it means — `distanceAtHeight(flight,
   wallHeight)` is the one the resolver compares — because "a 400 foot homer" has
   no answer until you fix which 400.
@@ -1760,6 +2165,41 @@ the render layer; contact resolves at the true physical state.
   must tolerate `dt === 0`. That is the whole of what lets a moving camera
   coexist with byte-identical PNGs. Golf measured 23 of 25 scenes differing
   between two identical runs before it did this, and the cause was time, not RNG.
+- **A GROUND SURFACE CAN RENDER FACE-DOWN AND PASS THE VISUAL GATE.** The mown
+  turf's first winding faced every normal at −y; a `FrontSide` material drew
+  nothing and every camera photographed the concrete apron underneath the field,
+  and all fifteen scenes came back green. The harness asserts draw calls,
+  triangles, fence distances read out of the vertex buffer, the tracer against
+  the sim, the reveal and the framing — none of which is "is this surface
+  visible". Winding is DERIVED in `geom.ts`'s notes and now ASSERTED in
+  `stadium/field.test.ts`; a new ground mesh gets a normal check or it gets no
+  guard at all.
+- **`mergeGeometries` takes the INTERSECTION of attributes, and that is a
+  feature.** One bowl band authored without UVs dropped the `uv` attribute from
+  all nine and the crowd texture sampled texel (0,0) everywhere — a flat-looking
+  bowl with no error anywhere. Zero-filling would be worse: the parts that had
+  the attribute would render right and the ones that did not would render black,
+  which looks like a lighting bug and is a geometry one. Every part gets every
+  attribute, including the ones that only need a placeholder — that is what the
+  crowd texture's white fascia lane is for.
+- **ANYTHING FACING THE PLATE HAS TO BE AUTHORED BRIGHTER THAN IT SHOULD LOOK.**
+  `StadiumGL` puts the one shadow-casting sun BEHIND home so it lights the
+  outfield wall the batter is looking at; the backstop therefore faces the sun's
+  back and is carried entirely by the hemisphere fill at roughly half weight. A
+  true backstop-pad green of `0x1b3b2c` rendered as pure black across the middle
+  of the `pitcher` frame. The same applies to the roof underside, which came out
+  as a hole punched in the sky at `0x2a2e36`.
+- **A boundary test must BRACKET the boundary, not sit on it.** `resolveFence`'s
+  height test is strict, so bisecting a ball to arrive at exactly wall height at
+  exactly the fence is a coin flip on the last bit — it read `homeRun` under a
+  10 ft wall and `offWall` under the published 8 ft one with nothing in the
+  resolver having changed. Assert a quarter of an inch either side and PRINT the
+  exact row.
+- **A park's SURROUNDINGS are data, exactly like its roof.** The skyline builder
+  reads `park.surroundings` and returns an empty group for anything that is not
+  `'city'`; its first version did not and put a 790 ft downtown communications
+  tower on a mountain park at 5,200 ft. An `if (park.id === …)` in a builder is
+  the failure mode, and `skyline.test.ts` is the guard.
 - **The called zone is the rule zone plus one ball RADIUS a side (19.90 in),
   not a diameter (22.81 in).** A strike is any part of the ball over any part of
   the plate and we integrate the ball's *centre*, so the centre may sit one

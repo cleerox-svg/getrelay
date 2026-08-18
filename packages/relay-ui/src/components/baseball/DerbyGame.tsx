@@ -9,7 +9,9 @@ import type { Park } from '../../lib/baseball/parks';
 import { PITCH_TEMPO } from '../../lib/baseball/tuning';
 import { MONO_NUM, frostedSurface } from '../golf/shared/frosted';
 import { CountChip } from './shared/CountChip';
+import { useDerbyBoard } from './shared/derbyBoard';
 import { ExitVeloTag } from './shared/ExitVeloTag';
+import { useDaylight } from './shared/prefs';
 import { TimingBar } from './shared/TimingBar';
 import { coachSwing, describeSwing, parkCopyNumbers } from './shared/swingCopy';
 import { ZoneReticle } from './shared/ZoneReticle';
@@ -491,6 +493,10 @@ export function DerbyGame({ seed, park, paused = false, onFinish, onExit }: Derb
   const getElapsedS = useCallback(() => elapsedRef.current, []);
   const getBallScreen = useCallback(() => apiRef.current?.ballScreen() ?? null, []);
 
+  // The videoboard. The HUD owns WHAT it says and WHEN that screen appeared;
+  // `StadiumGL` owns `now` and therefore `tS`. See `useDerbyBoard`.
+  const boardFeed = useDerbyBoard(readout, sim.cfg.park, last, stage === 'over');
+  const [daylight] = useDaylight();
   const aiming = stage === 'aim';
   const coachLine = last ? coachSwing(last, gapFt, clearFt) : null;
   // The zone frame and the reticle stay up THROUGH the flight, not just while
@@ -505,8 +511,11 @@ export function DerbyGame({ seed, park, paused = false, onFinish, onExit }: Derb
         <StadiumGL
           park={park}
           mode={mode}
+          daylight={daylight}
+          seed={sim.cfg.seed}
           aiming={showZone}
           flight={flight}
+          board={boardFeed}
           onReady={onReady}
         />
       </Suspense>

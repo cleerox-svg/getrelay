@@ -93,8 +93,32 @@ export interface Park {
   roofPeakFt: number;
   /** Sampled fence, −45 (LF line) … 0 (CF) … +45 (RF line), bearings ASCENDING. */
   fence: FenceSample[];
-  /** Depth of catchable foul ground beyond the lines, ft. */
+  /**
+   * Depth of catchable foul ground beyond the LINES, ft. Read by `fielding.ts`.
+   *
+   * ⚠ THIS IS NOT THE BACKSTOP, AND CONFLATING THE TWO IS A GAMEPLAY BUG. They
+   * were one field until the published profile arrived carrying both numbers,
+   * and setting this to the 60 ft backstop made a 437 ft ball 5° foul down the
+   * line a CATCH — because the fielding model prices foul ground as a uniform
+   * band of this depth running the whole length of the line, where a real park
+   * has the stands almost on the line in the corners. Two published numbers,
+   * two fields.
+   */
   foulTerritoryFt: number;
+  /**
+   * Distance from the plate's rear point to the backstop, ft. GEOMETRY ONLY —
+   * nothing in the physics reads it — but it is park DATA and it lives here for
+   * the same reason the fence does: one file, read by the sim and the scene, so
+   * the backstop you see is the backstop the park data says it has.
+   */
+  backstopFt: number;
+  /**
+   * What stands outside the bowl. GEOMETRY ONLY, and DATA rather than a branch —
+   * exactly like `roof`. A downtown park has a city on its horizon and a park at
+   * 5200 ft does not, and the difference must be a row in this file rather than
+   * an `if (park.id === …)` in a builder.
+   */
+  surroundings: 'city' | 'none';
   /** Open-roof weather. `closed` is null BECAUSE a closed roof has no wind. */
   wind: { open: WindProfile; closed: null };
 }
@@ -336,91 +360,98 @@ export function resolveFence(flight: BattedFlight, park: Park, closed: boolean):
 }
 
 // ---------------------------------------------------------------------------
-// Validation — bad data is a TEST FAILURE
-// ---------------------------------------------------------------------------
-
-/** Plausibility bounds. Wide on purpose: this catches typos, not design taste. */
-const BOUNDS = {
-  elevFt: [-500, 12000],
-  distFt: [200, 600],
-  heightFt: [1, 60],
-  roofPeakFt: [80, 500],
-  foulFt: [5, 200],
-} as const;
-
-/** Every problem with a park, as human-readable strings. Empty ⇒ valid. */
-export function validatePark(p: Park): string[] {
-  const e: string[] = [];
-  const inRange = (v: number, [lo, hi]: readonly [number, number]) =>
-    Number.isFinite(v) && v >= lo && v <= hi;
-
-  if (!p.id.trim()) e.push('id is empty');
-  if (!p.name.trim()) e.push('name is empty');
-  if (!inRange(p.elevationFt, BOUNDS.elevFt)) e.push(`elevationFt ${p.elevationFt} implausible`);
-  if (!inRange(p.foulTerritoryFt, BOUNDS.foulFt)) {
-    e.push(`foulTerritoryFt ${p.foulTerritoryFt} implausible`);
-  }
-
-  // roofPeak > 0 IFF roofed — both directions, because a roofless park carrying
-  // a stale peak would silently enforce an invisible ceiling.
-  const roofed = p.roof === 'retractable' || p.roof === 'fixed';
-  if (roofed && !inRange(p.roofPeakFt, BOUNDS.roofPeakFt)) {
-    e.push(`roofPeakFt ${p.roofPeakFt} implausible for a ${p.roof} roof`);
-  }
-  if (!roofed && p.roofPeakFt !== 0) e.push(`roofPeakFt must be 0 when roof is 'none'`);
-  if (p.wind.closed !== null) e.push('wind.closed must be null — a closed roof has no wind');
-
-  const w = p.wind.open;
-  if (!Number.isFinite(w.bearingCentreDeg)) e.push('wind.open.bearingCentreDeg is not finite');
-  if (!(w.swingDeg >= 0 && w.swingDeg <= 180)) e.push(`wind.open.swingDeg ${w.swingDeg} not 0..180`);
-  if (!(w.gustScale >= 0)) e.push(`wind.open.gustScale ${w.gustScale} is negative`);
-
-  if (p.fence.length < 3) e.push(`fence has ${p.fence.length} samples, needs ≥ 3`);
-  const first = p.fence[0];
-  const last = p.fence[p.fence.length - 1];
-  if (first && first.bearingDeg !== -FOUL_LINE_DEG) {
-    e.push(`fence starts at ${first.bearingDeg}°, must start at the LF line (−45°)`);
-  }
-  if (last && last.bearingDeg !== FOUL_LINE_DEG) {
-    e.push(`fence ends at ${last.bearingDeg}°, must end at the RF line (+45°)`);
-  }
-  p.fence.forEach((s, i) => {
-    const prev = p.fence[i - 1];
-    if (prev && !(s.bearingDeg > prev.bearingDeg)) {
-      e.push(`fence bearing ${s.bearingDeg}° not strictly after ${prev.bearingDeg}°`);
-    }
-    if (!inRange(s.distFt, BOUNDS.distFt)) e.push(`fence ${s.bearingDeg}°: distFt ${s.distFt}`);
-    if (!inRange(s.heightFt, BOUNDS.heightFt)) {
-      e.push(`fence ${s.bearingDeg}°: heightFt ${s.heightFt}`);
-    }
-  });
-  return e;
-}
-
-// ---------------------------------------------------------------------------
 // The parks — DATA. Add a row, add a park.
 // ---------------------------------------------------------------------------
 
 /**
- * M1's home park. A downtown retractable-roof stadium; the city is a city name
- * and the venue name is original (`ip.test.ts` is the mechanical guard on that,
- * not a promise). Symmetric, 328 down the lines, 400 to dead centre, a uniform
- * 10 ft wall — the dimensional class of a modern multi-purpose dome.
+ * ⚠ THE DISPLAY NAME LIVES IN ONE CONSTANT, ON PURPOSE.
+ *
+ * `SkyDome` is the former official name of a real venue. The trademark risk was
+ * raised with the owner — registrations of that mark have historically been
+ * maintained and residual goodwill attaches to it — and the owner considered it
+ * and decided to ship the name anyway (2026-08-17). It is their product and
+ * their risk to price, and this file's job is to make the decision RECORDED and
+ * CHEAP TO REVERSE rather than to re-litigate it: reverting is this one line.
+ *
+ * `ip.test.ts` carries the other half. The guard's real-park list did not
+ * mention this name at all, which would have let the NEXT legacy name through
+ * silently; it is now listed as banned WITH a dated, owner-signed exception, so
+ * a future reader sees a decision instead of an oversight.
+ *
+ * ⚠ THE PARK ID DOES NOT MOVE. `id: 'harbourfront'` is a persistence key —
+ * leaderboards, saved sessions and `?park=` URLs are all written against it —
+ * so only the display name changes. That is also why the exported symbol below
+ * is still `HARBOURFRONT`.
+ */
+export const SKYDOME_NAME = 'SkyDome';
+
+/**
+ * M1's home park. A downtown retractable-roof stadium.
+ *
+ * ⚠ THE FENCE IS ASYMMETRIC AND EVERY NUMBER IN IT IS PUBLISHED DATA — seven
+ * stations of distance AND wall height, plus a 60 ft backstop. A published
+ * dimension is a FACT, the same category as the ball's mass, and nothing in the
+ * physics is ever fitted to one. BASEBALL.md § "The park" carries the profile
+ * table, the argument for the bearings and the gameplay consequence.
+ *
+ * ⚠ **REFERENCE UNVERIFIED — and this flag is owed on the repo's own standard.**
+ * `C_L`'s lift fit, `C_D`'s subcritical branch, the fielder reaction time and
+ * the 95 ft infield arc all carry a "reference unverified" note, because this
+ * repo's rule is that a number promoted to FACT names where it came from. This
+ * profile does not, and it is worth flagging twice over:
+ *
+ *   • no citation is attached to it anywhere, so "published data" is currently a
+ *     claim about provenance that nothing in the tree supports;
+ *   • it is NOT the profile usually quoted for the venue whose name this park
+ *     carries. The commonly-quoted asymmetric figures are 328 / 368 / 381 / 400
+ *     / 372 / 359 / 328 with 8 ft at dead centre and 14 ft 4 in on the left
+ *     line — which is what is written above, so if that IS the intended source
+ *     the discrepancy is nil and only the citation is missing; and if it is not,
+ *     the whole column needs a source before anyone calls it a fact.
+ *
+ * Nothing here is CHANGED on the strength of that: these numbers are inputs to
+ * the physics exactly as the ball's mass is, `parks.test.ts` pins golden fence
+ * distances against them, and moving one to chase an unverified reference would
+ * be the exact mistake `BREAK_SEGMENT_FT`'s note exists to prevent. The flag is
+ * the fix. Confirm the source before publication.
+ *
+ * ⚠ THE BEARINGS ARE OURS, THE DISTANCES ARE NOT. The profile names positions
+ * ("LC alley"), not angles, so the seven are placed at EVEN 15° intervals in
+ * the order the profile lists them — no invented precision. What the ORDER does
+ * fix is that the distances are monotone on each half with dead centre the
+ * strict maximum, so Fritsch–Carlson's zero slope at an extremum puts the
+ * park's deepest point exactly on the published 400 ft.
+ *
+ * ⚠ THE HEIGHT COLUMN INVERTS THE USUAL ASSUMPTION — dead centre is the LOWEST
+ * wall on the field (8 ft) while both corners are over 12 and left is over 14 —
+ * and it is the first park that makes `pchip.ts` earn its keep: every knot used
+ * to carry a uniform 10 ft, so the height interpolant was reproducing a
+ * constant. Four local extrema in this column is the case Fritsch–Carlson was
+ * chosen for, and `parks.test.ts` asserts no bearing reports a wall outside the
+ * envelope of the two knots bounding it.
  */
 export const HARBOURFRONT: Park = {
   id: 'harbourfront',
-  name: 'Harbourfront Dome',
+  name: SKYDOME_NAME,
   elevationFt: 250,
   roof: 'retractable',
   roofPeakFt: 282,
+  // Heights written as ft + in/12 so the published inches stay legible in the
+  // source rather than surviving only as a decimal somebody has to reverse.
   fence: [
-    { bearingDeg: -45, distFt: 328, heightFt: 10 },
-    { bearingDeg: -22, distFt: 375, heightFt: 10 },
-    { bearingDeg: 0, distFt: 400, heightFt: 10 },
-    { bearingDeg: 22, distFt: 375, heightFt: 10 },
-    { bearingDeg: 45, distFt: 328, heightFt: 10 },
+    { bearingDeg: -45, distFt: 328, heightFt: 14 + 4 / 12 }, // LF line
+    { bearingDeg: -30, distFt: 368, heightFt: 11 + 2 / 12 }, // LC
+    { bearingDeg: -15, distFt: 381, heightFt: 12 + 9 / 12 }, // LC alley
+    { bearingDeg: 0, distFt: 400, heightFt: 8 }, // CF
+    { bearingDeg: 15, distFt: 372, heightFt: 10 + 9 / 12 }, // RC alley
+    { bearingDeg: 30, distFt: 359, heightFt: 14 + 4 / 12 }, // RC
+    { bearingDeg: 45, distFt: 328, heightFt: 12 + 7 / 12 }, // RF line
   ],
+  // Little foul ground down the lines (28 ft) but a deep 60 ft backstop — the
+  // two published numbers this park's data used to collapse into one.
   foulTerritoryFt: 28,
+  backstopFt: 60,
+  surroundings: 'city',
   wind: { open: { bearingCentreDeg: 0, swingDeg: 60, gustScale: 1 }, closed: null },
 };
 
@@ -445,6 +476,8 @@ export const ALPINE_HEIGHTS: Park = {
     { bearingDeg: 45, distFt: 350, heightFt: 8 },
   ],
   foulTerritoryFt: 22,
+  backstopFt: 44,
+  surroundings: 'none',
   wind: { open: { bearingCentreDeg: 10, swingDeg: 90, gustScale: 1.2 }, closed: null },
 };
 

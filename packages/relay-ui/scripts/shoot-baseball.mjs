@@ -60,9 +60,11 @@ const outDir = path.join(pkgDir, '.baseball-shots');
 // park, and five flight scenes.
 //
 // `park-alpine` is the proof that a park is data: a different fence row must
-// produce a visibly different wall (347/390/415/375/350 against Harbourfront's
-// symmetric 328/375/400, a 16 ft wall in left-centre against a uniform 10, and
-// NO ROOF at all against a 282 ft ring).
+// produce a visibly different wall (347/390/415/375/350 against the home park's
+// published 328/368/381/400/372/359/328 profile, a 16 ft wall in left-centre
+// against a column that runs 8 ft at dead centre to 14 ft 4 in on the left
+// line, NO ROOF at all against a 282 ft ring, and — since M3 — NO SKYLINE
+// against a city, because `surroundings` is a park field like `roof` is).
 //
 // ⚠ EVERY SCENE CARRIES `t=` OR `bt=`, AND THAT IS A DETERMINISM REQUIREMENT,
 // NOT A FRAMING CHOICE. With neither, `StadiumGL` plays the flight back off
@@ -123,13 +125,22 @@ const SCENES = {
   // about a FIXED axis, so a ball to either corner simply left the picture.
   // At 105 mph / 26.5° / bt = 2.6 s, the ball is drawn at (∓164.65, 93.30,
   // −196.22) scene ft; projected through the PRE-FOLLOW `flight` camera
-  // (pos [−40, 120, 90], look [−40, 60, −380], fov 55, near 4, aspect 900/1600):
+  // (pos [−12, 120, 90], look [34, 60, −380], fov 55, near 4, aspect 900/1600):
   //
-  //     spray   ball on screen (0…1, y down)   what the PNG showed
-  //     −40°    (−0.241, 0.467)                217 px off the LEFT edge; a
-  //                                            sliver of tracer at the border
-  //     +40°    (+1.716, 0.467)                645 px past the RIGHT edge —
-  //                                            no ball, no arc, nothing
+  //     spray   ball on screen (0…1, y down)   what a fixed axis gives
+  //     −40°    (−0.632, 0.473)                569 px off the LEFT edge
+  //     +40°    (+1.334, 0.463)                300 px past the RIGHT edge
+  //
+  // ⚠ THOSE TWO ROWS MOVED WHEN THE CAMERA DID, and the pair below is what they
+  // were measured at BEFORE (pos [−40, 120, 90], look [−40, 60, −380]):
+  // −40° → (−0.241, 0.467), 217 px off the left; +40° → (+1.716, 0.467), 645 px
+  // past the right. The camera has since been re-centred and its static aim
+  // yawed toward the landmark (`camera.ts`, `flight`), which moves BOTH numbers
+  // — the oppo corner is no longer ~3× worse than the pull one, it is now the
+  // BETTER of the two, and the yaw shifts the whole pair left. The defect these
+  // scenes exist for is unchanged in kind and worse in one direction: a fixed
+  // axis loses both corners either way, which is why `expectBallInFrame` is
+  // asserted rather than eyeballed.
   //
   // ⚠ THE PAIR THIS COMMENT USED TO QUOTE — (−0.083, 0.470) and (1.098, 0.470) —
   // DID NOT REPRODUCE, and it understated the defect in two independent ways.
@@ -137,12 +148,12 @@ const SCENES = {
   // arithmetic is not:
   //
   //   (i) IT WAS SYMMETRIC ABOUT u ≈ 0.5075, WHICH ONLY A CAMERA AT x = 0 CAN
-  //       PRODUCE. `CAMERAS.flight` stands at x = −40, so it is nearer the pull
-  //       corner and further from the oppo one, and the true pair is symmetric
+  //       PRODUCE. `CAMERAS.flight` stood at x = −40, so it was nearer the pull
+  //       corner and further from the oppo one, and the true pair was symmetric
   //       about u = 0.738. That asymmetry IS the explanation for the thing the
-  //       old figures made look like a coincidence: the oppo corner is ~3× worse
-  //       than the pull corner (645 px against 217 px). A symmetric pair from an
-  //       asymmetric rig is the tell, and it is cheaper to spot than to
+  //       old figures made look like a coincidence: the oppo corner was ~3× worse
+  //       than the pull corner (645 px against 217 px). A symmetric pair
+  //       from an asymmetric rig is the tell, and it is cheaper to spot than to
   //       re-measure. (From x = 0 the same two balls give −0.479 / +1.479.)
   //  (ii) ITS SPAN WAS 1.181 FRAME WIDTHS AGAINST A TRUE 1.957 — 40 % short —
   //       so it understated BOTH corners regardless of where it was centred. The
@@ -153,9 +164,13 @@ const SCENES = {
   // ⚠ AND HOW TO KEEP A FIGURE LIKE THIS HONEST: validate the method against
   // this harness's OWN PRINTED CONTROL before trusting it on a counterfactual.
   // The `flight` scene has no swing, so its camera never follows and it still
-  // prints the fixed-axis projection every run — `ball on screen (1.074, 1.333)`
-  // for the pitch at t = 0.30 s. The recomputation above reproduces that as
-  // (1.0738, 1.3333) with the same code path that produced the two rows.
+  // prints the fixed-axis projection every run — `ball on screen (0.521, 1.329)`
+  // for the pitch at t = 0.30 s, from the re-centred stand. The recomputation
+  // above reproduces the printed control to four decimals with the same code
+  // path that produced the two rows. (At the old stand the same control read
+  // (1.074, 1.333) and was reproduced as (1.0738, 1.3333); the METHOD is the
+  // reusable part, and validating it against a number this run prints is what
+  // keeps a counterfactual honest.)
   //
   // `expectBallInFrame` turns all of this from a picture a human has to squint
   // at into a number the run exits non-zero on. Both corners, because a follow
@@ -182,6 +197,58 @@ const SCENES = {
     label: 'follow-ease',
     expectBallInFrame: true,
   },
+  // ⚠ THE BOARD ARRAY, FROM THE ONLY CAMERA THAT READS IT. `boardPaint.ts`
+  // derives the whole legibility floor from `CAMERAS.batter`, and at that
+  // camera's real 20° lens a 100 ft board 430 ft out spans 1009 px of a 900 px
+  // frame — i.e. it is now the DOMINANT object in the batter's view and there
+  // was no shot of it. Same camera and same frozen instant as `pitch-4seam`, so
+  // the pair differ by the board's content and nothing else.
+  //
+  // `board=batter` is the derby's own resting card, built by the HUD's own
+  // `derbyBoardArray` rather than authored in the preview — a photograph of a
+  // picture the game cannot produce would be worth nothing.
+  board: { query: 'scene=batter&pitch=ff&t=0.30&board=batter', label: 'board' },
+  // The array's four panels against the frame, from far enough back to see the
+  // whole assembly — the shot that says whether the GAPS read, which is the
+  // entire content of "it is an array, not one rectangle".
+  'board-wide': { query: 'scene=flight&pitch=ff&t=0.30&board=batter', label: 'board-wide' },
+  // The eruption, frozen at 0.5 s — inside `BOARD_ANIM_END_S` (2.6 s) and past
+  // the first strobe, so the board, both columns, the strip and the ribbon are
+  // all in their celebration state at once.
+  'board-homerun': {
+    query: 'scene=batter&pitch=ff&t=0.30&board=homerun&bts=0.5',
+    label: 'board-homerun',
+  },
+  // ⚠ THE DAY / NIGHT PAIR, ON ONE CAMERA. There has never been a night scene at
+  // all, so nothing has ever tested one. These two differ by `?daylight=` and by
+  // nothing else, which is what lets `checkDayNightPairs` below assert the
+  // charter's hard rule mechanically: a cosmetic toggle must not move a single
+  // draw call, triangle, geometry, fence measurement or tracer vertex.
+  'daynight-day': {
+    query: 'scene=wide&pitch=ff&t=0.30&board=batter&daylight=day',
+    label: 'daynight-day',
+    pairWith: 'daynight-night',
+  },
+  'daynight-night': {
+    query: 'scene=wide&pitch=ff&t=0.30&board=batter&daylight=night',
+    label: 'daynight-night',
+  },
+  // The batter's own frame at night: floodlit turf, a dark dome, and the board
+  // and ribbons as the brightest things in the picture.
+  night: {
+    query: 'scene=batter&pitch=ff&t=0.30&board=batter&daylight=night',
+    label: 'night',
+  },
+  // ⚠ THE MONEY MOMENT. Board erupting, ribbons sweeping the ring, tower
+  // flashing — all three from one `(BoardArray, tS)`, all three quantised, and
+  // the ball near its apex so the tower is in frame beside it. `bts=0.6` is a
+  // strobe-ON frame (`STROBE_S` = 0.2 s, so 0.6 s is the start of the fourth
+  // half-period), which is the frame worth photographing.
+  'night-homerun': {
+    query: 'scene=flight&pitch=ff&hit=1&bt=2.6&board=homerun&bts=0.6&daylight=night',
+    label: 'night-homerun',
+    expectBallInFrame: true,
+  },
 };
 
 // Portrait, a phone screen. Same shape as the golf harness so the two sets of
@@ -198,6 +265,67 @@ const READY_TIMEOUT_MS = 30000;
 // Harbourfront and an OFF-KNOT pchip evaluation in Alpine (whose knots are
 // ±20), which is exactly the case a knots-only renderer would get wrong.
 const FENCE_BEARINGS = [-45, -22, 0, 22, 45];
+
+/**
+ * Bearings the ROOF profile is walked at — its own list, and it is finer than
+ * the fence's on purpose.
+ *
+ * The open roof is a STACK OF PARKED PANELS over centre field (`stadium/roof.ts`),
+ * so the thing to measure is a PROFILE — thick behind centre, thinning outward,
+ * gone well before the foul lines — and five bearings cannot see a profile.
+ * ±3/±7/±9/±10 each land inside a DIFFERENT number of panels, which is what
+ * makes the STEP measurable at all; ±12 straddles the outermost panel's edge,
+ * so "it ends" is a measurement rather than an inference from two points either
+ * side of a 90° gap; ±14 is the LANDMARK's own bearing, which must be open sky
+ * or its observation pod goes behind the overhang.
+ */
+const ROOF_BEARINGS = [-45, -22, -14, -12, -10, -9, -7, -3, 0, 3, 7, 9, 10, 12, 14, 22, 45];
+
+/**
+ * The band the stack must have at dead centre, ft — "deeper than the closed
+ * roof was there", as a number.
+ *
+ * ⚠ IT IS THE OLD RING'S OWN DEPTH, NOT A TASTE. The superseded symmetric ring
+ * ran `ROOF_BAND_FT = 120` at every bearing; the whole point of the collapse is
+ * that four panels are piled where one used to lie, so behind centre field the
+ * mass must be materially deeper than that. 200 ft is 1.7× the ring, and the
+ * stack's own table lands at 250 — so this is a floor with 50 ft of headroom,
+ * which is what stops it becoming a golden value that has to be edited every
+ * time a panel row moves by a foot.
+ */
+const ROOF_STACK_MIN_DEPTH_FT = 200;
+
+/**
+ * The fewest panels the stack must have at dead centre.
+ *
+ * "Several arcs nested, with visible steps where panels stack" is the owner's
+ * description, and 3 is the smallest number of arcs that can show a step and
+ * still read as a stack rather than as a lip. `stadium/roof.ts` ships 4.
+ */
+const ROOF_MIN_LAYERS = 3;
+
+/**
+ * How far two readings of the stack's DEPTH may differ before it is a defect, ft.
+ *
+ * ⚠ IT IS NOT `ROOF_TOL_FT`, AND THE FIRST DRAFT USED THAT AND WAS WRONG. Two
+ * things make a constant-depth panel read as a varying one, and neither is slop:
+ *
+ *   • CHORD SAGITTA. Both edges of a panel are polylines through
+ *     `quality.bowlStepDeg` = 3°, and sagitta goes as the radius —
+ *     530·(1 − cos 1.5°) = 0.18 ft on the outer edge against 0.09 ft on the
+ *     inner. Measured worst step within one panel: 0.33 ft.
+ *   • THE PARK IS NOT SYMMETRIC. The stack hangs on the top of the bowl and the
+ *     bowl follows the wall, and Harbourfront's published profile runs
+ *     328/368/381/400/372/359/328 — 375.4 ft at −22° against 365.9 at +22°.
+ *     The panel table is mirrored; the building it is bolted to is not.
+ *     Measured worst |Δdepth| across ±b where the layer counts agree: 0.159 ft.
+ *
+ * 0.5 ft is 1.5× the larger of those and 80× under the 40 ft step between one
+ * panel and the next, which is the signal these two legs measure. `ROOF_TOL_FT`
+ * still governs the HEIGHT, where neither effect exists — a deck is a polyline
+ * through a constant `y`, so there is no sagitta in it at all.
+ */
+const ROOF_PROFILE_TOL_FT = 0.5;
 
 /**
  * How far the DRAWN wall may sit from `parks.ts`, ft — distance and height.
@@ -223,6 +351,9 @@ const FENCE_BEARINGS = [-45, -22, 0, 22, 45];
  * far below anything a player could see: 0.05 ft is 0.6 in on a 10 ft wall.
  */
 const FENCE_TOL_FT = 0.05;
+
+/** See `checkRoof`. Derived from float32 at 282 ft, exactly as FENCE_TOL_FT is. */
+const ROOF_TOL_FT = 0.05;
 
 /**
  * ⚠ THE TRACER GATE, AND ITS TWO DERIVED TOLERANCES.
@@ -310,23 +441,27 @@ const BATTED_TOL_FT = 0.01;
  * The GPU ceiling, per scene. Charter rule 7: "GPU budget with a number", and a
  * number nobody enforces is a comment.
  *
- * M1's worst scene was `wide` at 18 draws / 1,845 triangles. M2b adds at most
- * four: the ball, its contact shadow, the pitch tracer and the batted tracer
- * (three geometries draw nothing when their draw range is 0, which three skips
- * before it counts a call). The two ceilings are deliberately NOT set the same
- * multiple of that, because the two costs do not grow the same way:
+ * M1's worst scene was `wide` at 18 draws / 1,845 triangles; M2b took it to 22
+ * / 2,249 with the ball, its contact shadow and the two tracers; M3's art pass
+ * takes it to 26 / 15,060 — a banded bowl, a roof truss, a mown field and a
+ * whole city for FOUR extra draw calls, which is the merge discipline working
+ * (authored naively they would have been ~40 more). NEITHER CEILING MOVED. The
+ * two are deliberately NOT set to the same multiple of the worst scene, because
+ * the two costs do not grow the same way:
  *
  *   • DRAW CALLS are the dominant mobile cost and the one thing the charter
  *     legislates directly — the crowd is ONE `InstancedMesh`, repeated geometry
  *     is instanced or merged. Draw calls should therefore grow by ones as M2 art
  *     lands (crowd, lights, scoreboard, skyline, bat), not by multiples.
- *     40 is 1.8× today's worst, and sits UNDER 3 × 22 = 66, so the "somebody
- *     gave every seating section its own material" regression trips it. That is
- *     the failure this number exists for.
+ *     40 is 1.5× today's worst, and sits UNDER 3 × 26 = 78, so the "somebody
+ *     gave every seating section its own material" regression trips it — and at
+ *     M3 that regression was one design decision away: the bowl is nine bands
+ *     and the city is seventeen solids, all of which merge to three calls.
  *   • TRIANGLES are cheap per instance and expensive per bad decision. An
  *     instanced crowd legitimately adds six figures of triangles inside ONE draw
  *     call, so a 3× ceiling here would fire on correct M2 art and get raised,
- *     which is how a budget becomes a formality. 120,000 is a real static-scene
+ *     which is how a budget becomes a formality. M3's mown-turf grid alone is
+ *     8,640 of them and it is one call. 120,000 is a real static-scene
  *     budget for a mid-range mobile GPU and still catches what actually goes
  *     wrong — an un-instanced crowd or a 64-segment sphere per seat lands in the
  *     millions, not the tens of thousands.
@@ -531,7 +666,8 @@ function checkReport(report) {
   console.log(
     `  GPU   draws ${String(s.drawCalls).padStart(3)}  tris ${String(s.triangles).padStart(6)}` +
       `  progs ${s.programs}  geos ${s.geometries}  texs ${s.textures}` +
-      `  tier ${s.tier} (${s.shadowMapSize}²) — ${s.qualityReason}`,
+      `  tier ${s.tier} (${s.shadowMapSize}²) — ${s.qualityReason}` +
+      `  light ${s.daylight}`,
   );
   console.log(
     `  SHADOW  volume ±${s.shadowHalfFt.toFixed(0)} ft over ${s.shadowMapSize}² =` +
@@ -574,12 +710,296 @@ function checkReport(report) {
     violations.push(`fence height off by ${worstH.toFixed(3)} ft > tol ${FENCE_TOL_FT} ft`);
   }
 
+  violations.push(...checkBoard(report));
+  violations.push(...checkRoof(report));
   violations.push(...checkPitchTracer(report));
   violations.push(...checkBattedTracer(report));
   violations.push(...checkBall(report));
   violations.push(...checkContactSeam(report));
   violations.push(...checkReveal(report));
   violations.push(...checkFraming(report));
+  return violations;
+}
+
+/**
+ * THE BOARD ARRAY, MEASURED OUT OF THE BUILT GEOMETRY.
+ *
+ * ⚠ FOUR PANELS, ONE DRAW CALL, AND THE GAPS ARE THE POINT. The array's whole
+ * design claim is that it reads as an ARRAY rather than as one rectangle, and
+ * that rests on two things a screenshot alone cannot adjudicate: the four quads
+ * are separated by real gaps in the park, and their UV rects tile the atlas
+ * without overlapping. Both are arithmetic on the rects the geometry was
+ * actually built from, so both are asserted here.
+ *
+ * ⚠ AND THE REPAINT BUDGET, WHICH IS THE ONE PERFORMANCE DECISION THE BOARD
+ * MAKES. A 1024 × 512 RGBA atlas is 2.0 MB per upload. In a FROZEN scene the
+ * board's state and `tS` are both constant, so the count must stop — this
+ * harness renders many frames after the beacon and a board that repainted every
+ * frame would be uploading 2 MB × 60/s for a picture that never changes. The
+ * count is read beside `texture.version`, which three increments inside its own
+ * `needsUpdate` setter: the module's own counter alone is self-referential (its
+ * source says so), so the PAIR is the measurement.
+ */
+const BOARD_MAX_UPLOADS = 3;
+
+function checkBoard(report) {
+  const b = report.board;
+  if (!b) {
+    console.log('  BOARD  none (park has no centre-field structure)');
+    // A park with no board must not be paying for one either — that is the
+    // `scoreboard: null` branch, and its absence here is what proves it taken.
+    return [];
+  }
+  const violations = [];
+  const wFt = b.geometry.widthFt;
+  console.log(
+    `  BOARD  ${wFt}×${b.geometry.heightFt} ft at ${b.geometry.faceDistFt} ft` +
+      `   ribbon ${b.geometry.ribbonHeightFt.toFixed(2)} ft band on a ` +
+      `${(2 * Math.PI * b.geometry.ribbonRadiusFt).toFixed(0)} ft ring` +
+      `   tS ${b.tS.toFixed(3)} s`,
+  );
+  console.log(
+    `         uploads atlas ${b.uploads} (texture.version ${b.textureVersion})` +
+      `  ribbon ${b.ribbonUploads}   frame ${b.current?.frame ?? '—'}` +
+      `  offsetU ${(b.current?.offsetU ?? 0).toFixed(4)}`,
+  );
+  for (const p of b.panels) {
+    console.log(
+      `         ${p.id.padEnd(8)} x ${f2(p.x0)} → ${f2(p.x1)}   y ${f2(p.y0)} → ${f2(p.y1)}` +
+        `   uv ${p.uv.u0.toFixed(3)}–${p.uv.u1.toFixed(3)} × ${p.uv.v0.toFixed(3)}–${p.uv.v1.toFixed(3)}`,
+    );
+  }
+  if (b.panels.length !== 4) {
+    violations.push(`the board built ${b.panels.length} panels, not 4`);
+  }
+  // (1) EVERY PANEL IS INSIDE THE DECLARED FACE. A quad hanging off the board is
+  // a quad hanging in front of the recess's back wall.
+  for (const p of b.panels) {
+    if (p.x0 < -wFt / 2 - 1e-6 || p.x1 > wFt / 2 + 1e-6) {
+      violations.push(`panel ${p.id} runs x ${p.x0} → ${p.x1}, outside the ${wFt} ft face`);
+    }
+  }
+  // (2) NO TWO PANELS OVERLAP, AND EVERY NEIGHBOURING PAIR HAS A REAL GAP.
+  // Both in the PARK, in feet, because that is what a player sees.
+  let minGap = Infinity;
+  for (let i = 0; i < b.panels.length; i++) {
+    for (let j = i + 1; j < b.panels.length; j++) {
+      const a = b.panels[i];
+      const c = b.panels[j];
+      const gapX = Math.max(a.x0 - c.x1, c.x0 - a.x1);
+      const gapY = Math.max(a.y0 - c.y1, c.y0 - a.y1);
+      const gap = Math.max(gapX, gapY);
+      minGap = Math.min(minGap, gap);
+      if (gap <= 0) violations.push(`panels ${a.id} and ${c.id} OVERLAP by ${(-gap).toFixed(2)} ft`);
+    }
+  }
+  console.log(
+    `         smallest gap between two panels ${minGap.toFixed(2)} ft` +
+      `  — the mullion the atlas leaves texels for`,
+  );
+  // (3) THE FROZEN SCENE STOPPED REPAINTING. See BOARD_MAX_UPLOADS.
+  if (b.uploads > BOARD_MAX_UPLOADS) {
+    violations.push(
+      `the board repainted ${b.uploads} times in a frozen scene (budget ${BOARD_MAX_UPLOADS}) — ` +
+        `each one is 2.0 MB of texel traffic for a picture that cannot have changed`,
+    );
+  }
+  // (4) THE MODULE'S COUNTER AND THREE'S AGREE, OFF BY THE CONSTRUCTOR.
+  //
+  // ⚠ THE `+ 1` IS MEASURED, NOT FUDGED. `Texture.needsUpdate`'s setter does
+  // `version++`, and `CanvasTexture`'s CONSTRUCTOR sets `needsUpdate = true` —
+  // so a texture that has never been repainted is already at version 1. The
+  // first draft of this check asserted equality and fired on every scene at
+  // 2 vs 3, which is the check working: it found a wrong assumption about
+  // three's internals on its first run rather than a wrong board.
+  //
+  // This is what kills a mutation that deletes `needsUpdate = true` and leaves
+  // the module's own counter perfectly correct — the board's own source names
+  // that hole and says the counter alone cannot close it.
+  if (b.textureVersion !== b.uploads + 1) {
+    violations.push(
+      `the board counted ${b.uploads} uploads but three's texture.version is ` +
+        `${b.textureVersion} (expected ${b.uploads + 1}) — one of them is not measuring an upload`,
+    );
+  }
+  if (b.uploads < 1) violations.push('the board never painted at all — the atlas is transparent');
+  return violations;
+}
+
+/**
+ * THE ROOF PROFILE, MEASURED OUT OF THE GEOMETRY RATHER THAN PRINTED FROM
+ * `parks.ts`.
+ *
+ * ⚠ THE ORIGINAL CHECK CLOSED A HOLE THE GATE NAMED IN ITS OWN OUTPUT.
+ * `roofPeak 282 ft` was read from the park DATA and printed beside numbers that
+ * had been measured off the vertex buffer, which reads as a measurement and is
+ * not one — the same tautology `checkBall`'s note describes for `ballScene()`.
+ * And it matters more than a cosmetic dimension: `resolveFence` rules a ball
+ * that reaches `roofPeakFt` `'roof'` and never a home run, so the ceiling is a
+ * GAMEPLAY boundary. A roof drawn at 240 ft over a 282 ft rule would have
+ * printed a clean run. That leg is unchanged and is assertion (5) below.
+ *
+ * ⚠⚠ AND IT WAS RE-AUTHORED, BECAUSE IT ASSERTED THE DEFECT. The check demanded
+ * *a measurable roof at every one of the five fence bearings* — which is exactly
+ * the symmetric ring that turned out to be the wrong model. The open roof is a
+ * stack of panels parked over centre field; the foul lines have NO roof, by
+ * design, and the old check would have failed a correct collapse while passing
+ * the incorrect ring it was written against. "Roof is measurable here" was never
+ * the property worth asserting: it is a constant, and a constant tells a gate
+ * nothing, which is the same reason `fence.sample` asserts a VARYING wall.
+ *
+ * So it asserts the PROFILE the scene intends, and every leg fails on a
+ * different way of getting the collapse wrong:
+ *
+ *   (1) DEAD CENTRE IS THE MASS — covered, by at least `ROOF_MIN_LAYERS`
+ *       panels, and by the MOST panels of any bearing measured. Kills a stack
+ *       parked over the wrong side of the park, and a one-panel "collapse" that
+ *       is really just a narrower ring.
+ *   (2) IT IS DEEP THERE — band ≥ `ROOF_STACK_MIN_DEPTH_FT`, i.e. materially
+ *       deeper than the 120 ft ring it replaced. Kills a stack that nests its
+ *       panels into the same footprint instead of piling them.
+ *   (3) BOTH FOUL LINES ARE OPEN SKY — `null`, not "thin". This is the leg the
+ *       owner's note is about: `follow-pull` and `follow-oppo` had roof where
+ *       the reference has city.
+ *   (4) IT IS MONOTONE AND SYMMETRIC — layers and depth never increase as
+ *       |bearing| grows, and ±b agree. Kills a stack with a hole in it, a
+ *       panel table sorted the wrong way, and a mirrored bearing sign.
+ *   (5) THE TOP OF THE STACK IS THE PARK'S CEILING — `peakFt` within
+ *       `ROOF_TOL_FT` of `roofPeakFt` wherever there is any roof at all.
+ *
+ * `ROOF_TOL_FT` is the same class of number as `FENCE_TOL_FT` and is derived the
+ * same way: a deck is a chord polyline through a CONSTANT height, so unlike the
+ * wall there is no sagitta at all in `y` — the only error is float32 at ~282 ft,
+ * i.e. 282·2⁻²³ = 3.4e-5 ft. 0.05 ft is ~1,500× that and 0.6 in on a 282 ft
+ * ceiling, and it is 200× smaller than the smallest error anybody would author
+ * by hand. The DEPTH comparisons in (4) do NOT use it — see
+ * `ROOF_PROFILE_TOL_FT`, which is a different residual for two stated reasons.
+ */
+function checkRoof(report) {
+  const rows = report.roof ?? [];
+  const at = (deg) => rows.find((r) => r.deg === deg)?.geo ?? null;
+  const measured = rows.filter((r) => r.geo);
+  if (report.roofPeakFt > 0 && measured.length === 0) {
+    console.error('    ✗ the park has a roof and none of it could be measured');
+    return ['roof unmeasurable in a park that has one'];
+  }
+  if (report.roofPeakFt <= 0) {
+    console.log('  ROOF   none (park has no roof) — nothing to measure');
+    return measured.length
+      ? [`a roofless park drew roof geometry at ${measured.length} bearing(s)`]
+      : [];
+  }
+
+  const violations = [];
+  const depth = (g) => g.outerFt - g.innerFt;
+  console.log(`  ROOF   parked stack — parks.ts ceiling ${report.roofPeakFt} ft`);
+  console.log('    bearing   layers   band_in→out_ft    depth   peak_ft     Δpeak');
+  let worstPeak = 0;
+  for (const r of rows) {
+    if (!r.geo) {
+      console.log(`      ${String(r.deg).padStart(4)}°        0   — open sky —`);
+      continue;
+    }
+    const dPeak = r.geo.peakFt - report.roofPeakFt;
+    worstPeak = Math.max(worstPeak, Math.abs(dPeak));
+    console.log(
+      `      ${String(r.deg).padStart(4)}°   ${String(r.geo.layers).padStart(6)}` +
+        `   ${r.geo.innerFt.toFixed(1).padStart(6)}→${r.geo.outerFt.toFixed(1).padStart(6)}` +
+        `  ${depth(r.geo).toFixed(1).padStart(7)}  ${r.geo.peakFt.toFixed(2).padStart(8)}` +
+        `  ${dPeak.toFixed(3).padStart(8)}`,
+    );
+  }
+
+  // (1) DEAD CENTRE IS THE MASS.
+  const centre = at(0);
+  if (!centre) {
+    violations.push('no roof at all behind dead centre field — the stack is parked somewhere else');
+  } else {
+    if (centre.layers < ROOF_MIN_LAYERS) {
+      violations.push(
+        `the stack is ${centre.layers} panel(s) deep at 0° (want ≥ ${ROOF_MIN_LAYERS}) — ` +
+          `that is a narrower ring, not a collapse`,
+      );
+    }
+    const deepest = Math.max(...measured.map((r) => r.geo.layers));
+    if (centre.layers < deepest) {
+      violations.push(
+        `the stack is deepest at some bearing other than 0° (${deepest} layers vs ` +
+          `${centre.layers} at dead centre)`,
+      );
+    }
+    // (2) IT IS DEEP THERE.
+    if (depth(centre) < ROOF_STACK_MIN_DEPTH_FT) {
+      violations.push(
+        `the stack is only ${depth(centre).toFixed(1)} ft deep at 0° (want ≥ ` +
+          `${ROOF_STACK_MIN_DEPTH_FT}) — the parked panels are not piled, they are laid out`,
+      );
+    }
+  }
+
+  // (3) BOTH FOUL LINES ARE OPEN SKY.
+  for (const deg of [-45, 45]) {
+    if (at(deg)) {
+      violations.push(
+        `there is roof at the ${deg}° foul line — the corner cameras must look at sky and ` +
+          `skyline there, which is the whole point of the collapse`,
+      );
+    }
+  }
+
+  // (4) MONOTONE OUTWARD, AND SYMMETRIC ABOUT DEAD CENTRE.
+  const degs = rows.map((r) => r.deg).filter((d) => d >= 0).sort((a, b) => a - b);
+  for (let i = 1; i < degs.length; i++) {
+    for (const sign of [1, -1]) {
+      const a = at(sign * degs[i - 1]);
+      const b = at(sign * degs[i]);
+      const la = a?.layers ?? 0;
+      const lb = b?.layers ?? 0;
+      if (lb > la) {
+        violations.push(
+          `the stack GAINS a layer going outward, ${sign * degs[i - 1]}° → ${sign * degs[i]}° ` +
+            `(${la} → ${lb}) — a parked stack thins outward`,
+        );
+      }
+      const da = a ? depth(a) : 0;
+      const db = b ? depth(b) : 0;
+      if (db > da + ROOF_PROFILE_TOL_FT) {
+        violations.push(
+          `the stack gets DEEPER going outward, ${sign * degs[i - 1]}° → ${sign * degs[i]}° ` +
+            `(${da.toFixed(1)} → ${db.toFixed(1)} ft)`,
+        );
+      }
+    }
+  }
+  for (const deg of degs) {
+    if (deg === 0) continue;
+    const l = at(-deg);
+    const r = at(deg);
+    if (!!l !== !!r) {
+      violations.push(`the stack covers ${l ? -deg : deg}° and not ${l ? deg : -deg}°`);
+      continue;
+    }
+    if (!l || !r) continue;
+    if (l.layers !== r.layers) {
+      violations.push(`±${deg}° carry ${l.layers} and ${r.layers} layers — the stack is not symmetric`);
+    }
+    if (Math.abs(depth(l) - depth(r)) > ROOF_PROFILE_TOL_FT) {
+      violations.push(
+        `±${deg}° are ${depth(l).toFixed(2)} and ${depth(r).toFixed(2)} ft deep — ` +
+          `the stack is not symmetric about dead centre`,
+      );
+    }
+  }
+
+  // (5) THE TOP OF THE STACK IS THE PARK'S CEILING.
+  console.log(
+    `    worst |Δpeak| ${worstPeak.toFixed(3)} ft (tol ${ROOF_TOL_FT} ft)` +
+      `   covered at ${measured.length}/${rows.length} bearings` +
+      `   deepest ${centre ? depth(centre).toFixed(1) : '—'} ft over ${centre?.layers ?? 0} panels`,
+  );
+  if (worstPeak > ROOF_TOL_FT) {
+    violations.push(`roof height off by ${worstPeak.toFixed(3)} ft > tol ${ROOF_TOL_FT} ft`);
+  }
   return violations;
 }
 
@@ -1173,6 +1593,85 @@ function checkBattedTracer(report) {
   return violations;
 }
 
+/**
+ * ⚠ THE DAY / NIGHT TOGGLE IS COSMETIC, ASSERTED ACROSS TWO SCENES.
+ *
+ * `stadium/daylight.ts` states the hard rule — a *player-selectable* option that
+ * changed how far the ball carried would be a "pick the easy mode" button on a
+ * leaderboard game — and `shared/prefs.test.ts` asserts the PHYSICS half by
+ * running the published carry ladder with the preference set both ways and
+ * requiring the two byte-identical.
+ *
+ * This is the RENDER half, and it is a different claim: that nothing about the
+ * scene except its lighting moved. The two scenes differ by `?daylight=` alone,
+ * so every number below is one that a lighting change has no business touching.
+ * Draw calls and triangles catch "night quietly added four floodlights"; the
+ * geometry count catches "night built a second sky"; the fence and the tracer
+ * catch a night mode that re-derived anything it should have read.
+ *
+ * ⚠ IT IS NOT A PNG DIFF, ON PURPOSE. The two pictures MUST differ — that is the
+ * whole feature — so a pixel comparison is exactly the wrong instrument. What
+ * has to be identical is everything a pixel comparison cannot see.
+ */
+function checkDayNightPairs(reports) {
+  const violations = [];
+  for (const [id, scene] of Object.entries(SCENES)) {
+    if (!scene.pairWith) continue;
+    const a = reports.get(id);
+    const b = reports.get(scene.pairWith);
+    if (!a || !b) {
+      // Only a complaint when BOTH were asked for — a single-scene run is fine.
+      if (ids.includes(id) && ids.includes(scene.pairWith)) {
+        violations.push(`${id}/${scene.pairWith}: one of the pair produced no report`);
+      }
+      continue;
+    }
+    if (a.stats.daylight === b.stats.daylight) {
+      violations.push(
+        `${id}/${scene.pairWith}: both report light "${a.stats.daylight}" — the pair is not ` +
+          `testing anything, so ?daylight= is not reaching the scene`,
+      );
+    }
+    const rows = [
+      ['draw calls', a.stats.drawCalls, b.stats.drawCalls],
+      ['triangles', a.stats.triangles, b.stats.triangles],
+      ['geometries', a.stats.geometries, b.stats.geometries],
+      ['textures', a.stats.textures, b.stats.textures],
+      ['shadow map', a.stats.shadowMapSize, b.stats.shadowMapSize],
+      ['shadow volume ft', a.stats.shadowHalfFt, b.stats.shadowHalfFt],
+      ['fence @0°', a.fence.find((r) => r.deg === 0)?.geo?.distFt, b.fence.find((r) => r.deg === 0)?.geo?.distFt],
+      ['tracer verts', a.pitchTracerAll.length, b.pitchTracerAll.length],
+      ['board panels', a.board?.panels.length ?? 0, b.board?.panels.length ?? 0],
+    ];
+    console.log(`\n· DAY/NIGHT  ${id} (${a.stats.daylight}) vs ${scene.pairWith} (${b.stats.daylight})`);
+    for (const [name, x, y] of rows) {
+      const same = x === y;
+      console.log(`    ${String(name).padEnd(17)} ${String(x).padStart(9)} ${same ? '=' : '≠'} ${String(y)}`);
+      if (!same) {
+        violations.push(
+          `${id}/${scene.pairWith}: ${name} differs (${x} vs ${y}) — the daylight toggle is ` +
+            `supposed to change LIGHT and nothing else`,
+        );
+      }
+    }
+    // The tracer, float for float. A night mode that rebuilt the flight would
+    // pass every count above and fail here.
+    const n = Math.min(a.pitchTracerAll.length, b.pitchTracerAll.length);
+    let diff = -1;
+    for (let i = 0; i < n; i++) {
+      if (a.pitchTracerAll[i] !== b.pitchTracerAll[i]) {
+        diff = i;
+        break;
+      }
+    }
+    console.log(`    ${'tracer ≡ tracer'.padEnd(17)} ${diff < 0 ? 'yes' : `NO @float ${diff}`}`);
+    if (diff >= 0) {
+      violations.push(`${id}/${scene.pairWith}: the drawn flight differs at float ${diff}`);
+    }
+  }
+  return violations;
+}
+
 async function main() {
   mkdirSync(outDir, { recursive: true });
 
@@ -1188,6 +1687,8 @@ async function main() {
 
   let failed = 0;
   const saved = [];
+  /** Every scene's report, for the CROSS-SCENE checks below. */
+  const reports = new Map();
   let browser;
   try {
     const base = server.resolvedUrls?.local?.[0]?.replace(/\/$/, '');
@@ -1220,7 +1721,7 @@ async function main() {
         // steady-state frame rather than the first one.
         await page.waitForTimeout(200);
 
-        const report = await page.evaluate((bearings) => {
+        const report = await page.evaluate(({ fence: bearings, roof: roofBearings }) => {
           const bb = window.__baseball;
           if (!bb || !bb.stadium) return { err: 'window.__baseball incomplete' };
           const { sim, stadium } = bb;
@@ -1231,11 +1732,13 @@ async function main() {
             foulTerritoryFt: sim.foulTerritoryFt,
             derby: { phase: st.phase, rounds: st.rounds, pitchesPerRound: st.pitchesPerRound },
             stats: stadium.stats(),
+            board: stadium.board(),
             fence: bearings.map((deg) => ({
               deg,
               geo: stadium.measureFence(deg),
               park: sim.fenceAt(deg),
             })),
+            roof: roofBearings.map((deg) => ({ deg, geo: stadium.measureRoof(deg) })),
             pitch: sim.pitch,
             batted: sim.batted,
             ballTimeS: sim.ballTimeS,
@@ -1258,11 +1761,14 @@ async function main() {
             cameraAim: stadium.cameraAim(),
             clockNow: window.__sceneClockNow ? window.__sceneClockNow() : null,
           };
-        }, FENCE_BEARINGS);
+        }, { fence: FENCE_BEARINGS, roof: ROOF_BEARINGS });
 
         // The scene's own claim about itself, carried into the checks. Guarded
         // because `report` is `{ err }` when the handle is broken.
-        if (report && !report.err) report.expectBallInFrame = !!SCENES[id].expectBallInFrame;
+        if (report && !report.err) {
+          report.expectBallInFrame = !!SCENES[id].expectBallInFrame;
+          reports.set(id, report);
+        }
 
         const file = path.join(outDir, `${label}.png`);
         await page.screenshot({ path: file });
@@ -1297,6 +1803,16 @@ async function main() {
   } finally {
     if (browser) await browser.close();
     await server.close();
+  }
+
+  // The CROSS-SCENE checks. They cannot run inside the per-scene loop because
+  // they compare two scenes, and they are counted as failures like everything
+  // else — a check whose verdict is only printed is the defect this file's own
+  // header is about.
+  const pairBad = checkDayNightPairs(reports);
+  if (pairBad.length) {
+    failed++;
+    console.error(`✗ day/night pair FAILED — ${pairBad.join('; ')}`);
   }
 
   // `saved` counts scenes that PASSED, not scenes whose PNG got written — the

@@ -11,6 +11,7 @@
     "test": "vitest run",
     "shoot:golf": "node scripts/shoot-golf.mjs",
     "shoot:baseball": "node scripts/shoot-baseball.mjs",
+    "shoot:board": "node scripts/shoot-board.mjs",
     "icons": "node scripts/build-icons.mjs",
     "store-assets": "node scripts/build-store-assets.mjs",
     "cap:sync": "cap sync android",

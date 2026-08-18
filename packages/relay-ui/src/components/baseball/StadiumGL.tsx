@@ -50,16 +50,26 @@ import type { Park } from '../../lib/baseball/parks';
 import { PITCH_TEMPO } from '../../lib/baseball/tuning';
 import { ZONE_CENTER } from '../../lib/baseball/zone';
 import { sceneNow, tickSceneClock } from '../../lib/scene3d/clock';
+import { buildBoard } from './stadium/board';
+import type { BoardPanelRect } from './stadium/board';
+import type { BoardGeometry } from './stadium/boardAtlas';
+import type { BoardArray } from './stadium/scoreboard';
 import { buildCameraRig } from './stadium/camera';
 import type { CameraMode } from './stadium/camera';
+import { daylightOf } from './stadium/daylight';
+import type { DaylightId } from './stadium/daylight';
 import { buildField } from './stadium/field';
+import { buildCentrefield } from './stadium/centrefield';
 import { buildFence } from './stadium/fence';
 import { buildFlight } from './stadium/flight';
 import type { FlightPaths } from './stadium/flight';
 import { buildMound } from './stadium/mound';
 import { buildReticle } from './stadium/reticle';
 import { buildRoof } from './stadium/roof';
+import type { RoofSample } from './stadium/roof';
 import { buildScaleReference } from './stadium/scale';
+import { buildSky } from './stadium/sky';
+import { buildSkyline } from './stadium/skyline';
 import { buildStands } from './stadium/stands';
 import { pickStadiumQuality } from './stadium/quality';
 import type { StadiumQuality } from './stadium/quality';
@@ -75,18 +85,28 @@ export { CAMERA_MODES, isCameraMode } from './stadium/camera';
 export type { CameraMode } from './stadium/camera';
 
 /**
- * Sun, scene ft. It sits on the POSITIVE-z side (behind home) on purpose: that
- * lights the inward face of the outfield wall, which is the surface `batter`,
- * `flight` and `wide` are all looking at. One sun cannot also light the
- * backstop's inward face — those two normals are opposed — so the backstop is
- * lifted by the hemisphere fill instead. Stated because it is a CHOICE, and the
- * alternative is visible in the `pitcher` shot.
+ * ⚠ THE SUN, THE FILL AND THE SKY ARE A ROW OF `stadium/daylight.ts` NOW.
+ *
+ * They used to be three constants in this file: `SUN_POS` on the positive-z side
+ * (behind home, so that the inward face of the outfield wall — the surface
+ * `batter`, `flight` and `wide` all look at — is lit), a hemisphere fill doing
+ * real work rather than adding a wash, and a `SKY` clear colour behind the dome.
+ * All three still exist and none of the day values moved; they are `DAYLIGHT.day`.
+ *
+ * They moved out because NIGHT IS A SECOND ROW OF THE SAME TABLE and not a
+ * second scene — the same argument the camera MODES make against a second GL
+ * file. The budget is unchanged and is the thing to watch: ONE shadow-casting
+ * directional, ONE hemisphere fill, and emissive geometry doing the rest. There
+ * are no floodlights, and `daylight.ts` says at length why there will not be.
+ *
+ * ⚠ AND IT IS COSMETIC. Nothing in that table reaches `lib/baseball`; the air a
+ * ball flies through is `parkConditions`' and does not know what time it is.
+ * `shared/prefs.test.ts` runs the carry ladder in both modes and requires the
+ * two byte-identical.
+ *
+ * The clear colour survives only as what the dome is drawn OVER, so a frame in
+ * which the dome somehow fails to build is a plausible sky rather than black.
  */
-const SUN_POS: [number, number, number] = [-520, 700, 260];
-const SUN_TARGET: [number, number, number] = [0, 0, -170];
-
-/** Sky, and the scene background. A day game; night is an `exposure` + sun change. */
-const SKY = 0x8fb6dd;
 
 /**
  * Half-extent of the shadow camera, ft. DERIVED at build time from the bowl's
@@ -105,6 +125,13 @@ const SHADOW_MARGIN_FT = 60;
  */
 const REPLAY_GAP_S = 0.8;
 
+/**
+ * Session seed when a caller does not supply one. FIXED, never a clock: this is
+ * read by the tower's LED programme, and the harness's byte-identical guarantee
+ * rests on the standalone scene having one tower rather than a nightly one.
+ */
+const DEFAULT_SEED = 20260816;
+
 export interface StadiumStats {
   drawCalls: number;
   triangles: number;
@@ -118,12 +145,39 @@ export interface StadiumStats {
   shadowHalfFt: number;
   /** ft per shadow texel. The number the ball's contact shadow founders on. */
   shadowTexelFt: number;
+  /** Which row of `daylight.ts` was built. Cosmetic — see that file. */
+  daylight: DaylightId;
+}
+
+/**
+ * What the HUD hands the board, and WHEN THAT SCREEN APPEARED.
+ *
+ * ⚠ `sinceS` IS A SCENE-CLOCK TIMESTAMP, NOT A `dt` AND NOT AN ELAPSED TIME, and
+ * the split is what keeps the HUD off the render loop. The board's animation
+ * needs `tS` sixty times a second; a HUD that computed it would have to re-render
+ * sixty times a second, which the layer rules forbid. So the HUD — which is the
+ * thing that KNOWS when a screen appeared, because it caused it — latches
+ * `sceneNow() / 1000` once per screen, and this file subtracts it from `now`
+ * every frame. Freezing the scene clock therefore freezes `tS`, which is what
+ * makes a celebration frame photographable.
+ */
+export interface BoardFeed {
+  array: BoardArray;
+  sinceS: number;
 }
 
 export interface StadiumApi {
   stats(): StadiumStats;
   /** Distance and height of the DRAWN wall at a bearing, read out of geometry. */
   measureFence(bearingDeg: number): { distFt: number; heightFt: number } | null;
+  /**
+   * The DRAWN roof at a bearing — its top, its band and HOW MANY parked panels
+   * cover it. `null` for a park with no roof AND for every bearing outside the
+   * parked stack, which is most of the ring. See `stadium/roof.ts`'s
+   * `RoofPart.sample` for why this exists beside `measureFence` rather than the
+   * harness trusting `parks.ts`, and why it reports a profile and not a height.
+   */
+  measureRoof(bearingDeg: number): RoofSample | null;
   /**
    * Change camera mode. EASES, it does not cut — see `stadium/camera.ts`. The
    * transition is driven by the scene clock, so a frozen clock holds it exactly
@@ -187,15 +241,52 @@ export interface StadiumApi {
   ballVisible(): boolean;
   /** The ball's DRAWN radius, scene ft — `MIN_BALL_PX`'s claim, measurable. */
   ballScale(): number;
+  /**
+   * The board array AS BUILT and AS PAINTED — the gate's read-back seam for the
+   * biggest object in the batter's view.
+   *
+   * ⚠ IT REPORTS WHAT WAS PAINTED, NOT WHAT WAS PASSED IN. `current()` returns
+   * the keys the paint was actually keyed on, `uploads()` is the module's own
+   * count beside `texture.version`, and `panels` is read off the rects the
+   * geometry was built from. A read-back that echoes the setter's argument
+   * cannot fail — `checkBall`'s note records that exact tautology shipping once.
+   */
+  board(): {
+    panels: BoardPanelRect[];
+    geometry: BoardGeometry;
+    current: { key: string; frame: number; ribbon: string; offsetU: number } | null;
+    uploads: number;
+    ribbonUploads: number;
+    /** The atlas's own version counter, incremented by three on `needsUpdate`. */
+    textureVersion: number;
+    tS: number;
+  } | null;
 }
 
 export interface StadiumGLProps {
   park?: Park;
   mode?: CameraMode;
   /**
-   * Tone-mapping exposure. A PARAMETER, not a baked constant: night games are
-   * coming and a night park is the same geometry under a different exposure and
-   * a different sun, not a second scene.
+   * Day or night. A USER OPTION, and **cosmetic only** — see `stadium/daylight.ts`
+   * for the whole argument and `shared/prefs.test.ts` for the assertion. It
+   * changes one directional light's placement, one hemisphere fill, the dome's
+   * palette and a handful of emissive levels. It does not change the air, so it
+   * does not change the carry, so it cannot be a difficulty setting.
+   *
+   * ⚠ IT REBUILDS THE SCENE, and that is honest rather than lazy: the sky dome's
+   * gradient is baked into a `CanvasTexture` at build time, so a live toggle
+   * would either need a second texture kept alive or a re-generated one, and the
+   * setting changes about as often as the park does. It is in the build effect's
+   * dependency list beside `park` for exactly that reason.
+   */
+  daylight?: DaylightId;
+  /**
+   * Session seed. Only the tower's LED programme reads it (see `geom.StadiumCtx`),
+   * and the harness passes a fixed one so the tower is the same tower twice.
+   */
+  seed?: number;
+  /**
+   * Tone-mapping exposure. A PARAMETER, not a baked constant.
    */
   exposure?: number;
   /** `?quality=` override, plumbed from the URL — see `stadium/quality.ts`. */
@@ -232,6 +323,22 @@ export interface StadiumGLProps {
    * omitted to play the wall clock back at `PITCH_TEMPO`.
    */
   ballTimeS?: number | null;
+  /**
+   * What the videoboard array is showing, and when that screen appeared.
+   *
+   * ⚠ A PROP RATHER THAN AN IMPERATIVE SETTER — unlike `setReticle`, and for the
+   * opposite reason. The reticle moves on `pointermove`, so a prop would mean a
+   * React render per move event. The board's screen changes a handful of times
+   * per pitch, which is exactly what a prop is for; what changes per FRAME is
+   * `tS`, and that is computed here from the scene clock rather than pushed.
+   */
+  board?: BoardFeed | null;
+  /**
+   * Freeze the board at this `tS`, seconds since the screen appeared, or
+   * `null` to run it off the scene clock. The screenshot harness always freezes,
+   * for the same reason it freezes the ball.
+   */
+  boardTimeS?: number | null;
   /** Fired once, after a real frame has been rendered. */
   onReady?: (api: StadiumApi) => void;
 }
@@ -239,18 +346,30 @@ export interface StadiumGLProps {
 export default function StadiumGL({
   park = HARBOURFRONT,
   mode = 'wide',
+  daylight = 'day',
+  seed = DEFAULT_SEED,
   exposure = 1,
   qualityOverride = null,
   scaleReference = false,
   aiming = false,
   flight = null,
   ballTimeS = null,
+  board = null,
+  boardTimeS = null,
   onReady,
 }: StadiumGLProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const apiRef = useRef<StadiumApi | null>(null);
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
+  // ⚠ A LIVE REF, READ BY THE LOOP — not a dependency of the build effect. The
+  // board's content changes several times a pitch and rebuilding a stadium for
+  // it would be `CourseGL`'s remount-per-hole cost arriving per swing.
+  const boardRef = useRef<{ feed: BoardFeed | null; frozen: number | null }>({
+    feed: board,
+    frozen: boardTimeS,
+  });
+  boardRef.current = { feed: board, frozen: boardTimeS };
   const initialRef = useRef({ mode, exposure, flight, ballTimeS, aiming });
   initialRef.current = { mode, exposure, flight, ballTimeS, aiming };
 
@@ -295,14 +414,22 @@ export default function StadiumGL({
     renderer.domElement.style.height = '100%';
     renderer.domElement.style.display = 'block';
 
+    // ⚠ ONE ROW OF THE LIGHTING TABLE, READ ONCE. Everything below that differs
+    // between a day game and a night game reads `light`, and nothing anywhere
+    // branches on `daylight === 'night'` — a second row is data, never a branch.
+    const light = daylightOf(daylight);
+
     const scene = new Scene();
-    scene.background = new Color(SKY);
+    scene.background = new Color(light.clearHex);
     const camera = new PerspectiveCamera(45, 1, 0.5, 6000);
 
     // --- lights. The whole budget: one shadow-casting sun, one hemisphere fill.
-    const sun = new DirectionalLight(0xfff4e0, 2.1);
-    sun.position.set(...SUN_POS);
-    sun.target.position.set(...SUN_TARGET);
+    // ⚠ AT NIGHT IT IS THE SAME TWO. The sun becomes an overhead rig and the
+    // fill goes dim; nothing is added. See `stadium/daylight.ts` for why four
+    // floodlights are refused rather than merely not done yet.
+    const sun = new DirectionalLight(light.sunHex, light.sunIntensity);
+    sun.position.set(...light.sunPos);
+    sun.target.position.set(...light.sunTarget);
     sun.castShadow = quality.shadows;
     sun.shadow.mapSize.set(quality.shadowMapSize, quality.shadowMapSize);
     // ⚠ THE NORMAL BIAS IS IN WORLD FEET AND IT HAS TO BE BIG. A 1024² map over
@@ -351,26 +478,44 @@ export default function StadiumGL({
     sun.shadow.normalBias = 6;
     scene.add(sun, sun.target);
     // The fill carries every surface the one sun cannot reach — chiefly the
-    // backstop, which faces the sun's back. It is doing real work here, not
-    // adding a wash, so it is not a token 0.3.
-    scene.add(new HemisphereLight(0xcfe4f8, 0x7c7264, 1.6));
+    // backstop, which faces the sun's back. It is doing real work in daylight,
+    // not adding a wash, so it is not a token 0.3; at night it drops to 0.45 and
+    // the overhead rig takes over.
+    scene.add(new HemisphereLight(light.hemiSkyHex, light.hemiGroundHex, light.hemiIntensity));
 
-    // --- the park. Six builders, each pure, each returning a handle.
-    const ctx: StadiumCtx = { scene, track, park, quality };
+    // --- the park. Each builder pure, each returning a handle.
+    const ctx: StadiumCtx = { scene, track, park, quality, seed, daylight: light };
     const field = buildField(ctx);
     const fence = buildFence(ctx);
     buildMound(ctx);
+    // The sky, first, so it is behind everything. One BackSide dome, one map.
+    buildSky(scene, track, quality.grainPx, light);
     const stands = buildStands(ctx);
-    buildRoof(ctx, stands);
+    const roof = buildRoof(ctx, stands);
+    // The centre-field structure — the frame, hotel window band, banners, flags
+    // and the dark backing the array's panel gaps show through. It OWNS the
+    // recess `buildStands` cut for it and the board's real geometry
+    // (`CENTREFIELD_BOARD`); the array itself is `buildBoard` below.
+    buildCentrefield(ctx, stands);
+    // Outside the bowl, over the roof opening. One merged mesh, seeded, and it
+    // deliberately does NOT enlarge the shadow volume below — see `skyline.ts`.
+    // Its handle exists for one reason: the tower is the last link of the
+    // home-run chain, and `buildBoard` drives it.
+    const skyline = buildSkyline(ctx);
+    // THE BOARD ARRAY — four quads reading four UV rects of one atlas, merged
+    // into ONE draw call; the ribbon bands `buildStands` already drew, given a
+    // map; and the tower's LED strips. One `update(array, tS)` moves all three,
+    // which is what stops the celebration being half-wired.
+    const boardPart = buildBoard(ctx, { stands, skyline });
     if (scaleReference) buildScaleReference(ctx);
     // The ball, its contact shadow and the two tracers. It takes the sun's
     // direction of travel because it projects the contact shadow itself — see
     // `stadium/flight.ts` and the `normalBias` note above.
     const ballFlight = buildFlight(ctx, {
       sunDir: [
-        SUN_TARGET[0] - SUN_POS[0],
-        SUN_TARGET[1] - SUN_POS[1],
-        SUN_TARGET[2] - SUN_POS[2],
+        light.sunTarget[0] - light.sunPos[0],
+        light.sunTarget[1] - light.sunPos[1],
+        light.sunTarget[2] - light.sunPos[2],
       ],
     });
     if (initialRef.current.flight) ballFlight.setPaths(initialRef.current.flight);
@@ -415,7 +560,7 @@ export default function StadiumGL({
     let raf = 0;
     let frames = 0;
     const shadowTexelFt = (2 * half) / quality.shadowMapSize;
-    let last: StadiumStats = emptyStats(quality, half, shadowTexelFt);
+    let last: StadiumStats = emptyStats(quality, half, shadowTexelFt, light.id);
     // `ballTime` is a frozen TRUE PHYSICAL time when the screenshot harness (or
     // a paused HUD) sets one; the wall clock is then never consulted for the
     // BALL at all, which is what made two harness runs byte-identical before the
@@ -433,10 +578,21 @@ export default function StadiumGL({
     // byte-identical-PNG claim. Golf measured 23 of 25 scenes differing between
     // two identical runs before it did this; see `lib/scene3d/README.md`.
     let lastClockMs = sceneNow();
+    let boardTS = 0;
     const tick = (rafNowMs?: number) => {
       const nowMs = tickSceneClock(rafNowMs);
       const dtS = (nowMs - lastClockMs) / 1000;
       lastClockMs = nowMs;
+      // ⚠ THE BOARD'S CLOCK, AND IT IS A SUBTRACTION OF TWO `sceneNow()`S rather
+      // than an accumulated `dt`. An accumulator drifts with the frame rate and
+      // cannot be frozen without also freezing the camera; this reads the same
+      // clock the camera ease reads, so a frozen scene gives a fixed `tS` and
+      // the celebration's 12 Hz frame is the same frame on both harness runs.
+      const feed = boardRef.current.feed;
+      if (feed) {
+        boardTS = boardRef.current.frozen ?? Math.max(0, nowMs / 1000 - feed.sinceS);
+        boardPart.update(feed.array, boardTS);
+      }
       if (ballTime !== null) {
         ballFlight.setTime(ballTime);
       } else {
@@ -476,6 +632,7 @@ export default function StadiumGL({
         qualityReason: quality.reason,
         shadowHalfFt: half,
         shadowTexelFt,
+        daylight: light.id,
       };
       frames++;
       if (frames === 3) onReadyRef.current?.(api);
@@ -485,6 +642,7 @@ export default function StadiumGL({
     const api: StadiumApi = {
       stats: () => last,
       measureFence: (deg) => fence.sample(deg),
+      measureRoof: (deg) => roof.sample(deg),
       setMode: (m) => rig.setMode(m),
       cameraAim: () => ({ target: rig.target(), progress: rig.progress(), mode: rig.mode() }),
       setExposure: (e) => {
@@ -529,6 +687,23 @@ export default function StadiumGL({
       },
       ballVisible: () => ballFlight.ballVisible(),
       ballScale: () => ballFlight.ballScale(),
+      board: () =>
+        boardPart.scoreboard === null
+          ? null
+          : {
+              panels: boardPart.panels,
+              geometry: boardPart.geometry,
+              current: boardPart.scoreboard.current(),
+              uploads: boardPart.scoreboard.uploads(),
+              ribbonUploads: boardPart.scoreboard.ribbonUploads(),
+              // ⚠ THREE'S OWN COUNTER, BESIDE THE MODULE'S. `scoreboard.ts` says
+              // in as many words that its `uploads()` is self-referential —
+              // deleting `texture.needsUpdate = true` leaves it perfectly
+              // correct and the board frozen. `version` is incremented inside
+              // three's `needsUpdate` setter, so the PAIR is the measurement.
+              textureVersion: boardPart.scoreboard.texture.version,
+              tS: boardTS,
+            },
     };
     apiRef.current = api;
     raf = requestAnimationFrame(tick);
@@ -554,7 +729,10 @@ export default function StadiumGL({
       renderer.forceContextLoss();
       if (renderer.domElement.parentNode === host) host.removeChild(renderer.domElement);
     };
-  }, [park, qualityOverride, scaleReference]);
+    // `daylight` and `seed` are BUILD inputs — the sky's gradient is baked into a
+    // canvas and the tower's programme into a vertex-colour attribute, so both
+    // are decided once. See the `daylight` prop's note.
+  }, [park, qualityOverride, scaleReference, daylight, seed]);
 
   useEffect(() => {
     apiRef.current?.setMode(mode);
@@ -583,7 +761,12 @@ export default function StadiumGL({
   return <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />;
 }
 
-function emptyStats(q: StadiumQuality, shadowHalfFt: number, shadowTexelFt: number): StadiumStats {
+function emptyStats(
+  q: StadiumQuality,
+  shadowHalfFt: number,
+  shadowTexelFt: number,
+  daylight: DaylightId,
+): StadiumStats {
   return {
     drawCalls: 0,
     triangles: 0,
@@ -595,5 +778,6 @@ function emptyStats(q: StadiumQuality, shadowHalfFt: number, shadowTexelFt: numb
     qualityReason: q.reason,
     shadowHalfFt,
     shadowTexelFt,
+    daylight,
   };
 }

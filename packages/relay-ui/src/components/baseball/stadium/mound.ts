@@ -15,8 +15,9 @@
 import { Group, Mesh, MeshLambertMaterial } from 'three';
 import type { BufferGeometry } from 'three';
 import { RUBBER_D_FT } from '../../../lib/baseball/zone';
-import { at, fan, loft, polygon, ring } from './geom';
+import { at, fan, loft, planarUV, polygon, ring } from './geom';
 import type { StadiumCtx, StadiumPart } from './geom';
+import { buildGrainTile, grainAt } from './grain';
 
 /** Mound circle radius, ft. PUBLISHED (rule book: an 18 ft diameter circle). */
 const MOUND_RADIUS_FT = 9;
@@ -45,16 +46,39 @@ const RUBBER_D_DEPTH_FT = 0.5;
 // mound is at 60.5 ft" is a dimension the visual gate has to be able to check.
 const COLORS = { dirt: 0xb07f56, rubber: 0xffffff };
 
+/**
+ * How far the mound's slope is broken up, ft per grain tile. SCENE-ONLY.
+ *
+ * ⚠ THE MOUND READ AS A FLAT BROWN LENS AND THE GEOMETRY WAS NEVER THE PROBLEM.
+ * The visual gate measured the drawn circle correct to 4 px and still called it
+ * a lens: a shallow cone (10 in over 9 ft, i.e. a 5.3° slope) lit by one
+ * near-axial sun has almost no Lambert term to separate its faces with, so
+ * relief has to come from the surface rather than from the light. The tile is
+ * FINER than the infield clay's because the mound is the one piece of dirt the
+ * `batter` camera reads at 40 ft through a 20° lens.
+ */
+const MOUND_GRAIN_TILE_FT = 3;
+
 export function buildMound({ scene, track, quality }: StadiumCtx): StadiumPart {
   const group = new Group();
   group.name = 'mound';
 
   const centreD = RUBBER_D_FT - MOUND_CENTRE_OFFSET_FT;
   const centre = at(0, centreD, 0);
-  const dirt = track(new MeshLambertMaterial({ color: COLORS.dirt }));
+  // ⚠ ITS OWN TILE, NOT `field.ts`'s, AND THAT IS THE ONE PLACE THE "BUILD ONCE"
+  // RULE IS DELIBERATELY BROKEN. Builders are `(ctx) => handle` and are not
+  // handed each other's resources, so sharing one canvas would mean threading it
+  // through `StadiumCtx` — i.e. giving every builder a channel to reach into
+  // every other. The cost of not doing that is ONE extra canvas of the same
+  // size, which is the cheaper mistake; golf's was six of them per mount.
+  const grain = grainAt(buildGrainTile(quality.grainPx), 1);
+  if (grain) track(grain);
+  const dirt = track(
+    new MeshLambertMaterial({ color: COLORS.dirt, ...(grain ? { map: grain } : {}) }),
+  );
 
   const add = (geo: BufferGeometry, mat: MeshLambertMaterial, name: string) => {
-    const m = new Mesh(track(geo), mat);
+    const m = new Mesh(track(planarUV(geo, MOUND_GRAIN_TILE_FT)), mat);
     m.name = name;
     m.castShadow = true;
     m.receiveShadow = true;

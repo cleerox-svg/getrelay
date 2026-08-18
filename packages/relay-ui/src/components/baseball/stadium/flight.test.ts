@@ -25,17 +25,30 @@ import { simulatePitch } from '../../../lib/baseball/pitchSim';
 import { ZONE_CENTER } from '../../../lib/baseball/zone';
 import { buildFlight } from './flight';
 import type { StadiumCtx, Disposable } from './geom';
+import { DAYLIGHT } from './daylight';
+
+/**
+ * The session seed the scene is built with here. FIXED — `StadiumCtx.seed`
+ * exists so the tower's LED programme can differ per session, and a test that
+ * fed it a clock would be the one thing the whole determinism chapter forbids.
+ */
+const TEST_SEED = 20260816;
 
 const ctx = (): StadiumCtx => ({
   scene: new Scene(),
   track: <T extends Disposable>(r: T) => r,
   park: HARBOURFRONT,
+  seed: TEST_SEED,
+  daylight: DAYLIGHT.day,
   quality: {
     tier: 'medium',
     shadows: true,
     shadowMapSize: 1024,
     fenceStepDeg: 1.5,
     bowlStepDeg: 3,
+    seatTexturePx: 256,
+    grainPx: 256,
+    trussCells: 96,
     pixelRatioCap: 1.5,
     reason: 'test',
   },
