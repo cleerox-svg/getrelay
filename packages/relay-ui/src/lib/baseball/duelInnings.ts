@@ -67,6 +67,25 @@ export interface Situation {
 /** Who is batting. `top` is the away team, as in baseball. */
 export const battingTeam = (half: Half): Team => (half === 'top' ? 'away' : 'home');
 
+/**
+ * Project exactly the six fields of a `Situation` out of whatever was passed.
+ *
+ * ⚠ IT EXISTS SO NOTHING IN THIS FILE EVER SPREADS ITS CALLER. `DuelSim`
+ * satisfies `Situation` STRUCTURALLY, so `{ ...sit }` copies the entire live sim
+ * — config, served pitch, last record, the PRNG state — and handing that back
+ * for `Object.assign` writes all of it again. That is a no-op today and a
+ * stale-write the first time a line is inserted between the read and the write.
+ * Six named fields in, six named fields out.
+ */
+const situationOf = (s: Situation): Situation => ({
+  inning: s.inning,
+  half: s.half,
+  outs: s.outs,
+  bases: s.bases,
+  awayScore: s.awayScore,
+  homeScore: s.homeScore,
+});
+
 /** Who is leading, or a tie. Read at the end of a game and by the walk-off test. */
 export function winnerOf(sit: Situation): Winner {
   if (sit.homeScore > sit.awayScore) return 'home';
@@ -103,7 +122,7 @@ export function applyPa(sit: Situation, outcome: PaOutcome): { sit: Situation; r
   const scoring = battingTeam(sit.half);
   return {
     sit: {
-      ...sit,
+      ...situationOf(sit),
       bases,
       outs,
       awayScore: sit.awayScore + (scoring === 'away' ? runs : 0),
@@ -146,20 +165,24 @@ export function advanceHalf(
   sit: Situation,
   innings: number,
 ): { sit: Situation; over: boolean } {
+  const now = situationOf(sit);
+  // ⚠ A GAME THAT ENDS DOES NOT GET A FRESH HALF, and that is a real fix rather
+  // than tidiness. Clearing the outs and the bases on the game-over branches
+  // made a game that ended on the third out report `outs === 0` with empty bases
+  // while a WALK-OFF — which never comes through here — reported the truth. Two
+  // conventions for one final state, and a HUD drawing "3 outs, bases loaded" on
+  // the last play of one game and "0 outs, nobody on" on the last play of
+  // another would have been reading the sim correctly both times.
   const fresh = { outs: 0, bases: EMPTY_BASES };
   const regulation = sit.inning >= innings;
   if (sit.half === 'top') {
     // The home team leads and has no need to bat: the game is over.
-    if (regulation && sit.homeScore > sit.awayScore) {
-      return { sit: { ...sit, ...fresh }, over: true };
-    }
-    return { sit: { ...sit, ...fresh, half: 'bottom' }, over: false };
+    if (regulation && sit.homeScore > sit.awayScore) return { sit: now, over: true };
+    return { sit: { ...now, ...fresh, half: 'bottom' }, over: false };
   }
-  if (regulation && sit.homeScore !== sit.awayScore) {
-    return { sit: { ...sit, ...fresh }, over: true };
-  }
-  if (sit.inning >= MAX_INNINGS) return { sit: { ...sit, ...fresh }, over: true };
-  return { sit: { ...sit, ...fresh, half: 'top', inning: sit.inning + 1 }, over: false };
+  if (regulation && sit.homeScore !== sit.awayScore) return { sit: now, over: true };
+  if (sit.inning >= MAX_INNINGS) return { sit: now, over: true };
+  return { sit: { ...now, ...fresh, half: 'top', inning: sit.inning + 1 }, over: false };
 }
 
 /** Is the half over? RULE: three outs, and `OUTS_PER_HALF` is never scaled. */

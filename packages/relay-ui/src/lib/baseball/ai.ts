@@ -103,9 +103,18 @@ export const AI_CHASE_TILT = 1.5;
 export const AI_EASY_FASTBALL_TILT = 0.8;
 
 /**
- * Aim radius in RETICLE units at an even count. FEEL KNOB. 0.18 is "middle of
- * the plate but not the exact middle" — a pitcher ahead of nobody is trying to
- * throw a strike.
+ * Aim radius in RETICLE units at an even count. FEEL KNOB.
+ *
+ * 0.85 is the corner of the painted plate — near the black, not the middle. A
+ * pitcher ahead of nobody is trying to throw a STRIKE, which is why this sits
+ * inside 1.0 rather than off it; but he works the edge to get one, which is why
+ * it is not near zero. Combined with the command spread it is what sets the
+ * duel's in-zone rate (53–64 % across the difficulty range, printed by the
+ * bench), against MLB's ~48 %.
+ *
+ * ⚠ THE DOC USED TO DESCRIBE 0.18 while the constant said 0.85 — a leftover from
+ * the tuning pass, and exactly the drift the bench's printed "0-0 aim r" column
+ * exists to make visible.
  */
 export const AI_AIM_CENTRE = 0.85;
 
@@ -230,10 +239,16 @@ export const AI_SIGHT_STRONG_FT = 0.05;
 
 /**
  * How far off dead centre the batter SITS, ft. FEEL KNOBS, sized against the
- * pitcher's own target spread: a duel pitcher works a corner at up to ~1.05
- * reticle units, so a batter guessing a location is guessing over roughly the
- * plate's width and the zone's height. It does NOT scale with difficulty — a
- * better hitter does not guess better, he ADJUSTS better, which is `AI_READ_*`.
+ * pitcher's own target spread: a duel pitcher works a corner out to
+ * `AI_AIM_EDGE_STRONG` reticle units before his command miss, so a batter
+ * guessing a location is guessing over roughly the plate's width and the zone's
+ * height. It does NOT scale with difficulty — a better hitter does not guess
+ * better, he ADJUSTS better, which is `AI_READ_*`.
+ *
+ * ⚠ CITED BY SYMBOL, NOT BY VALUE. This sentence used to quote "~1.05", which
+ * was stale the moment `AI_AIM_EDGE_STRONG` moved to 1.2 — and 1.05 is
+ * specifically the value that constant's own note records as having been WRONG
+ * (it read as "past the corner" and was a called strike every time).
  */
 export const AI_GUESS_SPREAD_X_FT = 0.5;
 export const AI_GUESS_SPREAD_H_FT = 0.6;
@@ -328,7 +343,7 @@ export function aiSwingDecision(
 
   // (2) THE HANDS, committed early and therefore on a GUESS he only partly
   // adjusted. This is the reticle, and it is a different number from (1).
-  const guessX = signed(d3) * AI_GUESS_SPREAD_X_FT;
+  const guessX = ZONE_CENTER.x + signed(d3) * AI_GUESS_SPREAD_X_FT;
   const guessH = ZONE_CENTER.h + signed(d4) * AI_GUESS_SPREAD_H_FT;
   const read = lerp(AI_READ_WEAK, AI_READ_STRONG, k);
   const reticleX = guessX + read * (ctx.plateX - guessX);

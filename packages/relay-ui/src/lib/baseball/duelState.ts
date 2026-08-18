@@ -49,7 +49,14 @@ export interface PitchRecord {
   /** The count BEFORE this pitch, so a HUD can caption the row it is drawing. */
   balls: number;
   strikes: number;
-  /** …and after, which is the count the next pitch is thrown in. */
+  /**
+   * …and the count this pitch produced. ⚠ NOT "the count the next pitch is
+   * thrown in", which is what this line used to say and is false on exactly the
+   * pitches that matter: a walk, a strikeout and a ball in play all END the
+   * plate appearance, so the next pitch is thrown 0-0. It is the count AT the
+   * end of THIS pitch — 4-2 on a walk, 1-3 on a strikeout — which is what a HUD
+   * captioning the pitch it is drawing needs.
+   */
   ballsAfter: number;
   strikesAfter: number;
   plateX: number;
@@ -193,6 +200,42 @@ function copyRecord(r: PitchRecord | null): PitchRecord | null {
   };
 }
 
+/**
+ * A `ServedPitch` nothing outside the sim can mutate back into it.
+ *
+ * ⚠ THIS CLOSES AN EXCEPTION RATHER THAN DOCUMENTING ONE. `served` used to go
+ * into the snapshot BY REFERENCE, on the argument that the sim never mutates it
+ * in place — which is true, and which is not the property the ⚠ RULE below
+ * claims. The rule is that nothing the readouts hand back aliases sim state, and
+ * a caller who wrote to `snap.served.result.track.h[i]` would have been editing
+ * the live pitch AND every future restore of it. "Never mutated in place" is a
+ * statement about this file's discipline; the invariant is a statement about
+ * everybody else's, and `derbyState.copySwing` records what it cost to learn
+ * that distinction on `flight`.
+ *
+ * It is cheap: a `PitchTrack` is ~50 samples, and a snapshot is taken at
+ * preview/restore boundaries, not per frame. `getState()` never exposed `served`
+ * at all — it projects scalars off it — so only the snapshot needed this.
+ *
+ * ⚠ `derbyState.ts` still carries the reference version of this shape. Left
+ * alone deliberately: it is the derby's slice and its goldens are the gate on
+ * touching it, but it is the same latent hole and it should follow.
+ */
+function copyServed(v: ServedPitch | null): ServedPitch | null {
+  if (!v) return null;
+  const r = v.result;
+  return {
+    ...v,
+    result: {
+      ...r,
+      track: { t: [...r.track.t], d: [...r.track.d], x: [...r.track.x], h: [...r.track.h] },
+      plate: { ...r.plate, v: { ...r.plate.v } },
+      release: { p: { ...r.release.p }, v: { ...r.release.v } },
+      omega: { ...r.omega },
+    },
+  };
+}
+
 export function duelState(s: DuelCore): DuelState {
   const pr = s.served?.result ?? null;
   const batting = battingTeam(s.half);
@@ -229,12 +272,14 @@ export function duelState(s: DuelCore): DuelState {
 }
 
 /**
- * ⚠ RULE: EVERY own data property of `DuelSim` must appear here. The guard test
- * enumerates `Object.keys(sim)` and fails if one is missing, because a field
+ * ⚠ RULE: EVERY own data property of `DuelSim` must appear here, and NOTHING it
+ * hands back aliases sim state — no exceptions to remember. The guard test
+ * enumerates `Object.keys(sim)` and fails if a field is missing, because a field
  * left out of the pair is a preview that silently leaks into the live session.
- * `served` is never mutated in place, so a reference is a correct copy; `bases`
- * and the two line-score arrays are replaced wholesale but are still ARRAYS on a
- * public surface, so they are copied; `last` goes through `copyRecord`.
+ * `bases` and the two line-score arrays are replaced wholesale but are still
+ * ARRAYS on a public surface, so they are copied; `last` goes through
+ * `copyRecord` and `served` through `copyServed`, both of which copy all the way
+ * down to the sample arrays.
  */
 export function duelSnapshot(s: DuelCore): DuelSnapshot {
   return {
@@ -252,7 +297,7 @@ export function duelSnapshot(s: DuelCore): DuelSnapshot {
     lineAway: [...s.lineAway],
     lineHome: [...s.lineHome],
     phase: s.phase,
-    served: s.served,
+    served: copyServed(s.served),
     last: copyRecord(s.last),
     lastPa: s.lastPa ? { ...s.lastPa } : null,
     reticleX: s.reticleX,
@@ -271,6 +316,7 @@ export function duelSnapshot(s: DuelCore): DuelSnapshot {
  */
 export function duelRestore(s: DuelCore, snap: DuelSnapshot): void {
   Object.assign(s, snap, {
+    served: copyServed(snap.served),
     bases: [snap.bases[0], snap.bases[1], snap.bases[2]] as Bases,
     lineAway: [...snap.lineAway],
     lineHome: [...snap.lineHome],

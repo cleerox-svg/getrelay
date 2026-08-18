@@ -8,25 +8,63 @@
 // lands on the right axis with the right sign, and that a seed replays a game
 // pitch for pitch.
 //
-// It also PRINTS the outcome table and asserts its bands, because a duel can be
-// inside every tolerance and still be a game in which nothing ever happens.
+// It also PRINTS the outcome distribution, because a duel can be inside every
+// tolerance and still be a game in which nothing ever happens. ⚠ The bands on
+// that table are REGRESSION FENCES rather than a calibration — roughly ±50 %
+// around the measured values — and the assertions that actually guard its SHAPE
+// are the monotonicity checks (a better AI strikes out less and walks less) plus
+// `HR per ball in play`, which is the one band known to bite on a real defect.
+// The bench's own comment says so at the assertions; this line and that one have
+// to agree, and an earlier draft of both oversold it.
 //
-// MUTATIONS WATCHED TO FAIL — each applied to the source, the baseball suite
-// run, then reverted. Observed failure counts, not predicted ones; the table is
-// in this file's git history and in the M4 report.
+// TWENTY-ONE MUTATIONS WERE WATCHED — each applied to the source, the duel, AI,
+// budget and determinism suites run, then reverted, with the pristine text
+// byte-compared back and a GREEN BASELINE re-established first. Observed failure
+// counts, not predicted ones, in the convention `derbySim.test.ts` sets.
 //
-//   1. `advanceRunners` advances runners one base too far          → see report
-//   2. `forceWalk` moves every runner, not just the forced ones    → …
-//   3. the foul clause's `Math.min` deleted (2-strike foul = K)    → …
-//   4. `halfIsOver` fires at 2 outs                                → …
-//   5. `advanceHalf` never ends the game at regulation             → …
-//   6. `isWalkOff` reads `>=` instead of `>` (a tying run wins)    → …
-//   7. `pitchLocation`'s lateral term loses `armSideX`             → …
-//   8. `pitchLocation`'s two axes swapped                          → …
-//   9. `DUEL_ASSIST` reverted to the derby's shoulder              → …
-//  10. `rngState` dropped from `duelSnapshot`                      → …
-//  11. `bases` handed out by reference from `getState()`           → …
-//  12. `paOutcomeOf` checks the strikeout before the walk          → …
+//   1. `advanceRunners` advances every runner one base too far        → 1 fail
+//   2. `forceWalk` moves runners who are not forced                   → 1 fail
+//   3. the foul clause's `Math.min` deleted (2-strike foul = K)       → 2 fail
+//   4. `halfIsOver` fires at TWO outs                                 → 2 fail
+//   5. `advanceHalf` never ends the game after the bottom of
+//      regulation                                                     → 2 fail
+//   6. `isWalkOff` reads `>=`, so a TYING run wins the game           → 1 fail
+//   7. `pitchLocation`'s lateral term loses `armSideX` (mirrored)     → 1 fail
+//   8. `pitchLocation`'s two axes swapped                             → 1 fail
+//   9. `DUEL_ASSIST` reverted to the derby's shoulder                 → 2 fail
+//  10. `duelSim` stops passing the duel assist into `aimSwing`        → 1 fail
+//  11. `rngState` dropped from `duelSnapshot`                         → 1 fail
+//  12. `getState` hands out `bases` by reference                      → 1 fail
+//  13. `paOutcomeOf` checks the strikeout before the walk             → 1 fail
+//  14. `aiSwingDecision` ignores its `difficulty` argument            → 3 fail
+//  15. `aiPitchCommand` ignores its `difficulty` argument             → 3 fail
+//  16. the AI's timing draw moves inside a branch (variable draw
+//      count, so the next pitch depends on the last decision)         → 7 fail
+//  17. the count is not reset after a plate appearance                → 5 fail
+//  18. a caught foul pop is scored a FOUL rather than an out          → 1 fail
+//  19. `advanceHalf` clears the outs and bases on a FINISHED game     → 1 fail
+//  20. `duelSnapshot` hands out `served` by reference                 → 1 fail
+//  21. `applyPa` spreads the whole live sim back through `Situation`  → 1 fail
+//
+// ⚠ THREE OF THEM SURVIVED THE FIRST PASS, and those three are the most
+// informative rows in the table, because each exposed a real gap rather than a
+// missing assertion:
+//
+//   • (13) SURVIVED, and it is UNREACHABLE rather than untested: one pitch moves
+//     one number, so no legal count can reach four balls AND three strikes at
+//     once, and the ordering can never be observed. Closed by asserting the
+//     PROPERTY the ordering rests on — exclusivity over all 60 legal
+//     count × outcome pairs — plus the ordering itself on the impossible input,
+//     so the STATEMENT of the rule is pinned. Same category `fielding.ts`
+//     records for its infield cap.
+//   • (19) SURVIVED because the game-over assertion only covered the
+//     BOTTOM-half branch, and the mutation lived in the top-half one (the home
+//     team not batting because it already leads). Two returns, one assertion.
+//     Closed by asserting the final state on BOTH branches.
+//   • (21) SURVIVED because it is behaviourally invisible today — the machine is
+//     handed a superset and writes it back unchanged. Closed STRUCTURALLY, by
+//     asserting the machine returns exactly the six `Situation` keys, since
+//     nothing about the game's behaviour can see it until the day it can.
 
 import { describe, expect, it } from 'vitest';
 import { vLen } from './airPhysics';
@@ -417,12 +455,25 @@ describe('duel — the half-inning state machine', () => {
     const done = advanceHalf(sit({ inning: 3, half: 'bottom', outs: 3, awayScore: 2 }), 3);
     expect(done.over).toBe(true);
     expect(winnerOf(done.sit)).toBe('away');
+    // ⚠ A GAME THAT ENDS KEEPS ITS FINAL STATE. Clearing the outs and the bases
+    // on the game-over branches gave a HUD two conventions for one final frame:
+    // a game ending on the third out reported `outs === 0` with nobody on, while
+    // a walk-off — which never comes through `advanceHalf` — reported the truth.
+    expect(done.sit.outs).toBe(3);
+    expect(advanceHalf(sit({ inning: 3, half: 'bottom', outs: 3, bases: b('12-'), awayScore: 2 }), 3).sit.bases)
+      .toEqual(b('12-'));
+    // …while a half that merely turns over is cleared, which is the case above.
     // (b) NOT after the bottom of the second.
     expect(advanceHalf(sit({ inning: 2, half: 'bottom', outs: 3, awayScore: 2 }), 3).over).toBe(false);
     // (c) the home team does not bat in the bottom of the last if it leads.
-    const skipped = advanceHalf(sit({ inning: 3, half: 'top', outs: 3, homeScore: 1 }), 3);
+    const skipped = advanceHalf(sit({ inning: 3, half: 'top', outs: 3, bases: b('-2-'), homeScore: 1 }), 3);
     expect(skipped.over).toBe(true);
     expect(winnerOf(skipped.sit)).toBe('home');
+    // ⚠ THIS BRANCH KEEPS ITS FINAL STATE TOO, and it is asserted separately
+    // because it is a DIFFERENT return: a mutation that cleared the outs and the
+    // bases here alone survived the bottom-half assertion below completely.
+    expect(skipped.sit.outs).toBe(3);
+    expect(skipped.sit.bases).toEqual(b('-2-'));
     // …but it DOES bat if it trails or is level.
     expect(advanceHalf(sit({ inning: 3, half: 'top', outs: 3, awayScore: 1 }), 3).over).toBe(false);
     expect(advanceHalf(sit({ inning: 3, half: 'top', outs: 3 }), 3).over).toBe(false);
@@ -447,6 +498,26 @@ describe('duel — the half-inning state machine', () => {
     // Nor is a lead in the wrong half, or before regulation.
     expect(isWalkOff(sit({ inning: 3, half: 'top', homeScore: 1 }), 3)).toBe(false);
     expect(isWalkOff(sit({ inning: 2, half: 'bottom', homeScore: 1 }), 3)).toBe(false);
+  });
+
+  it('⚠ the machine returns a SITUATION — six fields, never the caller’s object', () => {
+    // ⚠ THIS TEST EXISTS BECAUSE A MUTATION SURVIVED. `DuelSim` satisfies
+    // `Situation` structurally, so `{ ...sit }` inside `applyPa` copies the
+    // whole live sim — config, served pitch, PRNG state — and `commit` used to
+    // assign all of it straight back. That is a no-op while the machine happens
+    // to be handed a superset and writes it back unchanged, and a stale-write
+    // the first time a line is inserted between the read and the write. Nothing
+    // BEHAVIOURAL can see it, so the assertion is structural: the shape of what
+    // comes back.
+    const KEYS = ['awayScore', 'bases', 'half', 'homeScore', 'inning', 'outs'];
+    const fat = { ...sit(), cfg: { seed: 1 }, rngState: 999, served: {}, pitchCount: 7 };
+    expect(Object.keys(applyPa(fat, 'single').sit).sort()).toEqual(KEYS);
+    expect(Object.keys(applyPa(fat, 'strikeout').sit).sort()).toEqual(KEYS);
+    expect(Object.keys(advanceHalf({ ...fat, outs: 3 }, 3).sit).sort()).toEqual(KEYS);
+    expect(Object.keys(advanceHalf({ ...fat, outs: 3, half: 'bottom' }, 3).sit).sort()).toEqual(KEYS);
+    expect(
+      Object.keys(advanceHalf({ ...fat, inning: 3, outs: 3, half: 'bottom', awayScore: 2 }, 3).sit).sort(),
+    ).toEqual(KEYS);
   });
 
   it('the line score grows to fit, extras included, and is not aliased', () => {
@@ -540,6 +611,18 @@ describe('duel — the reticle assist is a MODULATOR, not a fork', () => {
     // …and the CONTACT edge barely moves, so the duel is not harder to touch.
     expect(duelEdge).toBeGreaterThan(derbyEdge * 0.9);
     expect(duelEdge).toBeLessThan(derbyEdge * 1.1);
+    // ⚠ `fullMissIn` IS THE CALIBRATED ONE, and this is what it was solved
+    // against: at the duel's fade power, the width that reproduces the derby's
+    // contact edge EXACTLY is 12.42 in. 12 is that rounded, and the 2.0 % it
+    // gives up is the rounding, not a second decision. `fadePower` is a FEEL
+    // KNOB and is labelled one — the plateau fraction is a pure function of it,
+    // so no width can be "calibrated" to a plateau target.
+    const exact = 12.42;
+    expect(
+      aimErrorForUndercutIn(edgeIn, { fullMissIn: exact, fadePower: DUEL_ASSIST.fadePower }),
+    ).toBeCloseTo(derbyEdge, 2);
+    expect(DUEL_ASSIST.fullMissIn).toBe(Math.round(exact));
+    expect(100 * (1 - duelEdge / derbyEdge)).toBeCloseTo(2.0, 1);
   });
 
   it('the DERBY shoulder is untouched — golden, and the law still holds for both', () => {
@@ -609,6 +692,17 @@ describe('duel — determinism', () => {
       st.last.flight.track.t.push(1e9);
       expect(sim.getState().last?.flight?.track.t.at(-1)).not.toBe(1e9);
     }
+
+    // ⚠ …AND `served` IS COPIED ALL THE WAY DOWN TOO. It used to go in by
+    // reference on the argument that the sim never mutates it in place — true,
+    // and not the property the ⚠ RULE claims. A caller writing to the snapshot's
+    // sampled track was editing the live pitch and every future restore of it.
+    const snapA = sim.snapshot();
+    const liveH = sim.served!.result.track.h[3]!;
+    snapA.served!.result.track.h[3] = 1e9;
+    snapA.served!.result.plate.v.x = 1e9;
+    expect(sim.served!.result.track.h[3]).toBe(liveH);
+    expect(sim.served!.result.plate.v.x).not.toBe(1e9);
 
     // A dry run restores byte-identically — including the PRNG state, which is
     // the field a preview leaks through if it is left out.
@@ -771,23 +865,55 @@ describe('duel — the outcome bench', () => {
         '  diff   runs/g  pit    PA/g   K/PA%  BB/PA%  HR/PA%  HR/BIP%  maxInn   1B/2B/3B   first five finals\n' +
         rows.join('\n') +
         '\n  MLB reference: K 22 %, BB 8.5 %, HR 3 % of PA, ~5 % of balls in play.\n' +
-        '  This is an ARCADE duel and sits deliberately above the home-run line.\n',
+        '  This is an ARCADE duel and sits deliberately above the home-run line.\n' +
+        '  ⚠ ONLY K/PA AND BB/PA MAY BE READ AGAINST THAT REFERENCE. runs/game and the\n' +
+        '    1B column are dominated by fielding.ts\'s landing-point limitation — every\n' +
+        '    ground ball is a base hit, so ~89 % of the singles above are grounders that\n' +
+        '    should mostly have been outs, and the run environment is HIGHER than a real\n' +
+        '    one. duelRules.ts nets that against the forced-advance rule. Not calibration.\n' +
+        '  Bands below are regression fences (~±50 %); the shape guards are the\n' +
+        '  monotonicity checks and HR/BIP.\n',
     );
 
+    // ⚠ WHAT THESE BANDS ARE AND ARE NOT. They are REGRESSION FENCES, not a
+    // calibration: each is set roughly ±50 % around the measured value, wide
+    // enough that a deliberate feel-knob turn does not fail the suite and narrow
+    // enough that a structural break does. Only the last one is known to bite on
+    // a real defect today — reverting `DUEL_ASSIST` to the derby's shoulder is
+    // caught by `hrBip` and by nothing else here. The MONOTONICITY checks below
+    // are the assertions that actually guard the shape.
+    //
+    // ⚠ AND `runs/game` AND THE 1B COLUMN ARE NOT CALIBRATION EVIDENCE. Both are
+    // dominated by `fielding.ts`'s landing-point limitation — every ground ball
+    // is a base hit, so 89 % of the singles in this table are grounders that
+    // should mostly have been outs. `duelRules.ts`'s base-advancement section
+    // nets that against the forced-advance rule and states the conclusion: the
+    // duel's run environment is HIGHER than a real one until the rolling phase
+    // lands. K/PA and BB/PA are untouched by the artifact and are the two
+    // columns that may honestly be read against MLB.
     for (const r of summary) {
       // A game where nothing happens is the failure this bench exists to catch.
-      expect(r.runs, `diff ${r.d}: runs/game`).toBeGreaterThan(1.5);
-      expect(r.runs, `diff ${r.d}: runs/game`).toBeLessThan(16);
-      expect(r.k, `diff ${r.d}: K/PA`).toBeGreaterThan(8);
-      expect(r.k, `diff ${r.d}: K/PA`).toBeLessThan(60);
-      expect(r.hr, `diff ${r.d}: HR/PA`).toBeGreaterThan(1);
-      expect(r.hr, `diff ${r.d}: HR/PA`).toBeLessThan(18);
-      expect(r.hrBip, `diff ${r.d}: HR per ball in play`).toBeLessThan(28);
+      expect(r.runs, `diff ${r.d}: runs/game`).toBeGreaterThan(3);
+      expect(r.runs, `diff ${r.d}: runs/game`).toBeLessThan(13);
+      expect(r.k, `diff ${r.d}: K/PA`).toBeGreaterThan(12);
+      expect(r.k, `diff ${r.d}: K/PA`).toBeLessThan(52);
+      // ⚠ BB/PA HAD NO BAND AT ALL, which meant "asserts the bands" was false of
+      // the one column with a known weakness in it (the difficulty-0.85 pitcher
+      // walks almost nobody). A floor above zero is the point: a duel in which
+      // the four-ball rule never fires is a duel that has lost a rule.
+      expect(r.bb, `diff ${r.d}: BB/PA`).toBeGreaterThan(0.4);
+      expect(r.bb, `diff ${r.d}: BB/PA`).toBeLessThan(20);
+      expect(r.hr, `diff ${r.d}: HR/PA`).toBeGreaterThan(3);
+      expect(r.hr, `diff ${r.d}: HR/PA`).toBeLessThan(14);
+      expect(r.hrBip, `diff ${r.d}: HR per ball in play`).toBeLessThan(24);
+      expect(r.hrBip, `diff ${r.d}: HR per ball in play`).toBeGreaterThan(4);
     }
     // ⚠ THE CURVE HAS TO POINT THE RIGHT WAY, which no single band can see: a
     // better AI strikes out less and walks less, at every step.
     expect(summary[0]!.k).toBeGreaterThan(summary[1]!.k);
     expect(summary[1]!.k).toBeGreaterThan(summary[2]!.k);
-    expect(summary[0]!.bb).toBeGreaterThan(summary[2]!.bb);
+    expect(summary[0]!.bb).toBeGreaterThan(summary[1]!.bb);
+    expect(summary[1]!.bb).toBeGreaterThan(summary[2]!.bb);
+        expect(summary[0]!.bb).toBeGreaterThan(summary[2]!.bb);
   });
 });

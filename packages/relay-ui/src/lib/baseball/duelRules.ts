@@ -232,7 +232,7 @@ export function pitchLocation(
 // forgiving near the middle: an aim error under ~3.3 in moves the swing's
 // undercut by less than a tenth of an inch, i.e. produces the CALIBRATED
 // reference swing — 101 mph at 27°, 411 ft, over the wall at every bearing at
-// Harbourfront. And 3.3 in is **54 %** of the 6.13 in at which contact is lost
+// Harbourfront. And 3.33 in is **54 %** of the 6.147 in at which contact is lost
 // altogether, so more than half of all contact-making aims are the same
 // home-run swing. In a home run derby that is the design. Played as a DUEL it
 // gave, measured over 24 seeded games: 40 % of balls in play leaving the park,
@@ -245,17 +245,35 @@ export function pitchLocation(
 // whiffs, because `P(home run | contact)` is a ratio the spread cancels out of.
 // The eight AI feel knobs were swept and none of them moves it.
 //
-// So the duel gets its own pair, and BOTH numbers are calibrated against a
-// STATED property rather than chosen for a run total:
+// So the duel gets its own pair. ⚠ THE TWO NUMBERS ARE NOT THE SAME CATEGORY,
+// and an earlier draft of this comment called both of them calibrated, which
+// dressed a knob in a badge it had not earned:
 //
-//   • `fadePower = 1.5` — chosen so the REFERENCE PLATEAU is **29 %** of the
-//     contact range instead of 54 %. Squaring a ball up becomes a smaller
-//     target, which is what a duel is about; the derby's is unchanged, and the
-//     bench asserts both fractions.
-//   • `fullMissIn = 12` — chosen so the CONTACT EDGE does not move: 6.02 in
-//     against the derby's 6.13, a 1.8 % difference. The duel is therefore NOT
-//     harder to make contact with, only harder to SQUARE UP, and separating
-//     those two is the point of having two numbers instead of one.
+//   • `fadePower = 1.5` — **FEEL KNOB, WITH A MEASURED CONSEQUENCE.** It is not
+//     calibrated and cannot be: the plateau's share of the contact range is
+//     `(δ/2.14)^(1/(p+1))` in which `fullMissIn` cancels exactly, so it is a
+//     pure function of `p` and EVERY `p` "is chosen so the plateau is whatever
+//     that `p` gives". Neither the 29 % it lands on nor the δ = 0.10 in that
+//     defines "plateau" is independently motivated — 0.10 in is ~0.35° of launch
+//     angle, i.e. a threshold picked because it is invisible, not because
+//     anything published says so. What IS real is the consequence, and it is
+//     measured rather than asserted: the plateau falls from 54 % to 29 % of the
+//     contact range, and `P(home run | contact)` roughly HALVES. ⚠ That second
+//     figure is protocol-dependent, so the protocol is quoted with it — over an
+//     area-uniform 8 in aim disc against a 4-seamer down the middle at
+//     Harbourfront, it is **40.1 % → 19.0 %** at perfect timing and
+//     **24.2 % → 12.1 %** with the tap swept across ±1.2× the contact window.
+//     The ratio moves with the sampling; the direction and the rough factor of
+//     two do not. The bench prints both plateau fractions every run.
+//   • `fullMissIn = 12` — **CALIBRATED**, and it is the one number here that is,
+//     because it is solved against a target outside itself: the derby's contact
+//     edge. Once `p` is fixed, the `fullMissIn` that reproduces 6.147 in exactly
+//     is **12.42**; 12 is that rounded, and it lands at 6.02 in — **2.0 %**
+//     short. So the duel is NOT harder to make contact with, only harder to
+//     SQUARE UP, and separating those two is the point of having two numbers.
+//     (Measured 2-D rather than on the vertical alone, the duel edge is equal or
+//     WIDER in eleven of twelve directions and narrows only straight up and
+//     down, so that claim is if anything understated.)
 //
 // ⚠ IT IS STILL ONE IMPLEMENTATION. `batterAim.reticleResidual` is the only
 // place the law lives; this is a modulator on it, exactly as `batSpeedMph` is a
@@ -275,16 +293,36 @@ export const DUEL_ASSIST: ReticleAssist = { fullMissIn: 12, fadePower: 1.5 };
 // this game has no baserunner state to hang any of those on and inventing one
 // here is the milestone this file's header refuses.
 //
-// ⚠ WHICH WAY IT BIASES SCORING: **DOWN**, and every one of the missing
+// ⚠ WHICH WAY **THIS** RULE BIASES SCORING: **DOWN**. Every one of the missing
 // mechanics pushes the same way. A real single scores a runner from second more
 // often than not (~55–60 % league-wide); here he stops at third. A real double
 // nearly always scores a runner from first; here he stops at third too. A real
 // fly ball with a runner on third and fewer than two out often scores him; here
-// it never does. Nothing missing from this list ADDS an out or removes a run, so
-// the duel's run environment is systematically lower than a real one and the
-// printed outcome table's runs-per-game figure has to be read with that in mind.
-// It is stated rather than corrected because a fudge factor on runs would be a
-// fifth category of number.
+// it never does. Nothing missing from this list ADDS an out or removes a run.
+//
+// ⚠ BUT THE DUEL'S NET RUN ENVIRONMENT IS **HIGHER** THAN A REAL ONE, NOT
+// LOWER, AND THIS IS THE PLACE THE TWO BIASES ARE NETTED. An earlier draft of
+// this paragraph stated the sign of THIS rule and stopped, which read as a claim
+// about the game — and the countervailing bias is both larger and argued in a
+// different file, so nothing ever put them side by side. The other one is
+// `fielding.ts`'s landing-point limitation, which the derby never exercised
+// because a derby has no defence: the clause capping any unfielded ball landing
+// on the dirt at a SINGLE means **every ground ball is a base hit**. Measured
+// over the bench's own 16 seeds at difficulty 0.50 — 274 balls in play, 87 of
+// them ground balls (launch angle < 10°), of which **84 singles and 3 outs**.
+// That is a **3.4 %** ground-ball out rate against MLB's ~72 %, and **89 % of
+// every single in the printed outcome table is a grounder that should mostly
+// have been an out**. At difficulty 0.85 it is 92 %.
+//
+// Netted: the forced-advance rule withholds perhaps half a run a game; the
+// ground-ball artifact adds several. **So `runs/game` and the 1B column of the
+// outcome table are DOMINATED BY THE ARTIFACT and must not be read as a
+// calibration result** until the rolling phase lands. K/PA and BB/PA are
+// untouched by it and remain legitimate comparisons.
+//
+// Both are stated rather than corrected, because a fudge factor on runs would be
+// a fifth category of number. The fix for the second one is `fielding.ts`'s own
+// stated remedy — a rolling phase — and it is a slice of its own.
 
 /** Occupancy of first, second, third. Immutable — every helper returns a new one. */
 export type Bases = readonly [boolean, boolean, boolean];

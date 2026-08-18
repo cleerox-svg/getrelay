@@ -60,7 +60,7 @@ import {
   paOutcomeOf,
   winnerOf,
 } from './duelInnings';
-import type { PaOutcome } from './duelInnings';
+import type { PaOutcome, Situation } from './duelInnings';
 import { DUEL_ASSIST, EMPTY_BASES, pitchLocation, resolveDuelConfig } from './duelRules';
 import type {
   Bases,
@@ -390,6 +390,23 @@ export class DuelSim {
   // The one place state moves
   // -------------------------------------------------------------------------
 
+  /**
+   * Copy a `Situation` back onto the sim, FIELD BY FIELD.
+   *
+   * ⚠ NOT `Object.assign(this, sit)`. This class satisfies `Situation`
+   * structurally, so a blanket assign is only safe while the machine happens to
+   * return nothing else — and `duelInnings.situationOf` exists on the other side
+   * of the same seam for the same reason. Six fields in, six fields written.
+   */
+  private writeSituation(s: Situation): void {
+    this.inning = s.inning;
+    this.half = s.half;
+    this.outs = s.outs;
+    this.bases = s.bases;
+    this.awayScore = s.awayScore;
+    this.homeScore = s.homeScore;
+  }
+
   private commit(rec: PitchRecord, pa: PaOutcome | null): void {
     this.pitchCount++;
     this.balls = rec.ballsAfter;
@@ -403,7 +420,7 @@ export class DuelSim {
     const scoring = battingTeam(half);
     const basesBefore = this.bases;
     const applied = applyPa(this, pa);
-    Object.assign(this, applied.sit);
+    this.writeSituation(applied.sit);
     const basesAfter = this.bases;
     const outsAfter = this.outs;
     if (scoring === 'away') this.lineAway = addLineRuns(this.lineAway, inning, applied.runs);
@@ -420,7 +437,7 @@ export class DuelSim {
     let over = isWalkOff(this, this.cfg.innings);
     if (!over && halfIsOver(this)) {
       const adv = advanceHalf(this, this.cfg.innings);
-      Object.assign(this, adv.sit);
+      this.writeSituation(adv.sit);
       over = adv.over;
     }
     if (over) {

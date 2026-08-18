@@ -188,49 +188,20 @@ export class DerbySim {
   // -------------------------------------------------------------------------
 
   /**
-   * The reticle/tap → `Swing` mapping. Two player inputs, FOUR geometric axes,
-   * and the geometry decides which is which — nothing here is a channel invented
-   * for the game; every one of them is a field `batSim.Swing` already had:
+   * Resolve one swing. The reticle/tap → `Swing` mapping is NOT written here:
+   * it is `batterAim.aimSwing`, shared with the duel, and the whole argument for
+   * it — the four geometric axes, the two different readings of reticle x, the
+   * resultant overlap test, and the model's missing jamming — lives on that
+   * function. ⚠ IT IS DELIBERATELY NOT REPEATED HERE. A verbatim copy of a
+   * load-bearing argument sitting beside nine lines of delegation drifts from
+   * the code it describes the first time either is edited, and then there are
+   * two accounts of one mechanism and no way to tell which is current.
    *
-   *  • VERTICAL (reticle h). The bat's centre line passes `undercutIn` below the
-   *    ball's. A well-aimed swing carries `SWING_UNDERCUT_IN`; aiming above the
-   *    pitch adds to it, below subtracts. Contact needs the two circles to
-   *    overlap, `|undercut| ≤ LOC_DISTANCE_IN` = R_ball + R_bat = 2.70 in — a
-   *    DERIVED whiff test with no knob in it.
-   *  • ALONG THE BAT (reticle x). At contact the bat is a rod across the plate,
-   *    so a lateral aim error moves contact up or down the barrel: `aimZM`. The
-   *    sign is the batter's, and it is `zone.armSideX`'s mirror read once — a
-   *    RHB stands on the third-base side, so a pitch further out is contact
-   *    further toward the tip.
-   *  • DEPTH (the tap). `timingErrorS` rotates the bat, and `contactGeometry`
-   *    returns where on the bat that lands. Because R_c = d/cos θ_c > d for a
-   *    miss in EITHER direction, ANY mistiming drives contact toward the tip —
-   *    so the SAME "is the ball still over the bat" test closes the timing
-   *    window too, at roughly ±26 ms. The timing window is DERIVED from the bat's
-   *    length; it is not a knob, and it is symmetric early/late exactly as
-   *    stage 3 asserted the collision is.
-   *  • ACROSS THE BALL (reticle x, ABSOLUTE). The reticle's placement in the zone
-   *    is a declared PULL/OPPO INTENT, and it becomes `horizontalOffsetIn` — the
-   *    line-of-centres tilt across the swing plane, which `swingContact` has
-   *    always taken and which `derbySim` never set. It is the ONLY input that
-   *    moves spray without moving where on the bat contact lands, which is what
-   *    lets a player trade direction against exit velocity instead of having
-   *    both handed to him by the tap. `derbyRules.pullIntentOffsetIn` carries
-   *    the argument, the measured sweep and the trough it exists to close.
-   *
-   * ⚠ RETICLE x IS READ TWICE, AND THE TWO READINGS ARE DIFFERENT QUANTITIES.
-   * Its RESIDUAL against where the pitch actually crossed is a miss, and is paid
-   * for along the bat; its ABSOLUTE position is a plan, made before the pitch,
-   * and buys spray. That is the before and after of one placement, not one input
-   * doing two jobs — and it is what makes intent free only when the guess was
-   * right, since a big declared pull on a pitch over the middle is also a big
-   * aim miss.
-   *
-   * ⚠ THE MODEL HAS NO JAMMING, and this mapping inherits that. Contact inside
-   * the sweet spot RAISES exit velocity (BASEBALL.md § "The collision"), so an
-   * aim error toward the hands is rewarded until it runs off the handle bound.
-   * `derbySim.test.ts` measures and prints the asymmetry rather than papering
-   * over it; the fix is a measured `e(z)`, not a knob here.
+   * What IS this file's, and is stated here because the duel does it
+   * differently: the derby uses `batterAim.DERBY_ASSIST` — the wide, forgiving
+   * shoulder that a home run derby wants — where `duelRules.DUEL_ASSIST` uses a
+   * narrower plateau. That is one implementation with a modulator, and the
+   * modulator is the only thing about the mapping that is a derby decision.
    *
    * ⚠ CONTACT IS TAKEN AT THE PLATE CROSSING STATE, not at the contact instant's
    * interpolated height. Sampling the ball lower on a late swing is physically
