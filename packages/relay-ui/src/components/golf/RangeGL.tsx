@@ -84,8 +84,9 @@ interface Props {
   targetId?: string | null;
   paused?: boolean;
   onEvent?: (e: RangeEvent) => void;
-  // Equipped ball skin + tracer colour (golf economy). Read once at scene
-  // build; default equip → stock white ball + red Toptracer, unchanged.
+  // Equipped ball skin + tracer colour (golf economy). LIVE, not baked — the
+  // materials are registered with useGolfSkin (scene/skin.ts), which re-applies
+  // on every change; default equip → stock white ball + red Toptracer, unchanged.
   cosmetics?: GolfCosmetics;
   /**
    * GPU instrumentation — `renderer.info` plus the resolved tier, roughly every

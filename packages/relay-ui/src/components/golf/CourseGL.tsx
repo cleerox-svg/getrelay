@@ -88,10 +88,12 @@ interface Props {
   // the accuracy bar and calls sim.fireArmed().
   onArm?: () => void;
   paused?: boolean;
-  // Equipped ball skin + trail colour (from the golf economy). Read ONCE at
-  // scene build (the ball material + tracer colour are baked in the mount
-  // effect); the default equip leaves both undefined → stock white ball + white
-  // tracer, so the pre-economy render is unchanged.
+  // Equipped ball skin + trail colour (from the golf economy). LIVE, not baked:
+  // the ball material and tracer are registered with useGolfSkin (scene/skin.ts),
+  // which applies synchronously at registration and re-applies on every later
+  // change — so an equip mid-round lands without rebuilding the scene. The
+  // default equip leaves both undefined → stock white ball + white tracer, so
+  // the pre-economy render is unchanged.
   cosmetics?: GolfCosmetics;
   /**
    * GPU instrumentation. Called from the render loop roughly every 30 frames
