@@ -320,11 +320,14 @@ export const api = {
     ),
   // The caller's personal golf profile — aggregate stats, per-course
   // breakdowns and recent rounds. Not contact-scoped (401 if unauthed).
+  // ⚠ A rejection here is UNKNOWN, not "no rounds": GolfProfile renders the
+  // failure with a Retry unless another request proved a history.
   getGolfStats: (game: 'golf' | 'golfrange' | 'golfcourse') =>
     request<GolfStats>(`/game/golf-stats?game=${game}`),
   // Golf personal best-shot records (longest drive, closest-to-pin, longest
-  // holed putt), persisted per-account. GET returns the caller's current bests
-  // (401 if unauthed — callers must tolerate that and skip the records UI).
+  // holed putt), persisted per-account. GET returns the caller's current bests.
+  // A rejection (401 / offline) must not be rendered as "no records" — see
+  // GolfProfile, which reports the failed load and offers a Retry.
   getGolfRecords: () => request<{ records: GolfRecords }>('/game/golf-records'),
   // POST end-of-hole candidates — send ONLY the metrics this hole produced (all
   // optional). The server upserts-on-improve (MAX drive/putt, MIN closest) and
@@ -368,8 +371,8 @@ export const api = {
     request<{ challenge: Challenge }>(`/game/challenge/${encodeURIComponent(id)}`),
   // Today's Daily Challenge — a single seeded Course hole derived from the UTC
   // date server-side, plus the caller's best attempt today (null if unplayed)
-  // and their streak. 401 if unauthed — callers degrade to a "needs connection"
-  // state rather than crashing.
+  // and their streak. A rejection (401 / offline / timeout) renders GolfDaily's
+  // "needs connection" state with a Retry — never an empty challenge.
   getDaily: () => request<DailyChallenge>('/game/daily'),
   // Submit today's finished hole: strokes + to-par. The server trusts its own
   // UTC day (omit the date) and keeps the caller's BEST for the day, so a replay
@@ -387,8 +390,8 @@ export const api = {
   // The live Rapid Tournament — a fixed, seeded 3-hole round shared by everyone,
   // open until `closesAt`. Carries the 3 holes (course + 1-based hole no.), the
   // countdown (`msLeft`), the field size and the caller's current standing
-  // (`entry`, null until they play). 401 if unauthed — callers degrade to a
-  // "needs connection" state rather than crashing.
+  // (`entry`, null until they play). A rejection (401 / offline / timeout)
+  // renders GolfTournaments' "needs connection" state with a Retry.
   getTournament: () => request<Tournament>('/game/tournament'),
   // Submit the caller's finished 3-hole ROUND total (to-par + total strokes).
   // The server keeps the caller's BEST for the event, so a replay is safe, and
@@ -406,12 +409,16 @@ export const api = {
     request<{ entries: TournamentLeaderboardEntry[] }>(
       `/game/tournament/leaderboard?scope=${scope}`,
     ),
-  // The caller's lifetime tournament trophy case + recent placements. 401 if
-  // unauthed — callers must tolerate that and skip the trophies UI.
+  // The caller's lifetime tournament trophy case + recent placements. A
+  // rejection is UNKNOWN, not an empty trophy case — GolfProfile counts it as a
+  // failed load rather than rendering zeros as fact.
   getTournamentMe: () => request<TournamentMe>('/game/tournament/me'),
   // ---- Golf economy (coins wallet, cosmetics, season) -------------------
   // The caller's coin wallet: current balance + newest 20 ledger entries.
-  // 401 if unauthed — callers degrade to a hidden/empty wallet.
+  // ⚠ A rejection is NOT an empty wallet: the economy store marks the slice
+  // 'error' (keeping any balance it already knew) and the UI shows a retryable
+  // failure. "Degrade to a hidden/empty wallet" is what rendered a 670-coin
+  // wallet as "Need more coins" — see lib/golf/economy.ts.
   getWallet: () => request<WalletResponse>('/economy/wallet'),
   // The full cosmetics catalog plus which the caller owns + has equipped per
   // slot. Defaults (ball_classic / trail_none / frame_none) are always owned.
@@ -431,7 +438,8 @@ export const api = {
       { method: 'POST', body: JSON.stringify({ slot, cosmeticId }) },
     ),
   // The current season track: XP, tier ladder, which tiers are claimed /
-  // claimable, and the season end (`endsAt`). 401 if unauthed.
+  // claimable, and the season end (`endsAt`). A rejection is a retryable
+  // 'error' on the season slice, never "no active season".
   getSeason: () => request<SeasonResponse>('/economy/season'),
   // Claim a claimable season tier's reward (coins or a cosmetic). 400
   // unknown_tier | tier_locked | already_claimed. Returns the updated

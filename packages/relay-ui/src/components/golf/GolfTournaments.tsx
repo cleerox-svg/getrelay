@@ -187,6 +187,7 @@ export function GolfTournaments({ onPlay, pendingResult, onResultConsumed }: Pro
       <LoadFailure
         title="Tournaments need a connection."
         detail="Couldn’t reach the live event."
+        retryLabel="Retry loading the live event"
         onRetry={() => setAttempt((a) => a + 1)}
       />
     );
@@ -309,7 +310,11 @@ export function GolfTournaments({ onPlay, pendingResult, onResultConsumed }: Pro
         {submitState === 'error' && current ? (
           <div className="px-4 pb-2 text-[13px]" style={{ color: 'var(--ping)' }}>
             Couldn’t submit.
-            <RetryButton className="ml-2" onClick={() => submitPending(current)} />
+            <RetryButton
+              className="ml-2"
+              ariaLabel="Retry submitting your round"
+              onClick={() => submitPending(current)}
+            />
           </div>
         ) : null}
 
@@ -375,7 +380,11 @@ export function GolfTournaments({ onPlay, pendingResult, onResultConsumed }: Pro
           {boardError ? (
             <div className="text-center py-6 text-sm" style={{ color: 'var(--text-dim)' }}>
               Couldn’t load the leaderboard.
-              <RetryButton className="block mx-auto mt-2" onClick={() => loadBoard(scope)} />
+              <RetryButton
+                className="block mx-auto mt-2"
+                ariaLabel="Retry loading the leaderboard"
+                onClick={() => loadBoard(scope)}
+              />
             </div>
           ) : board === null ? (
             <div className="text-center py-6 text-sm" style={{ color: 'var(--text-dim)' }}>

@@ -17,17 +17,26 @@
 // MUTATIONS WATCHED TO FAIL against this file (counts are failures in THIS
 // file; the economy.ts ones additionally fail in lib/golf/economy.test.ts):
 //   1. `affordability()` → `balance != null && balance >= price ? 'yes' : 'no'`
-//      (the original expression)                        → 1 fail (+1 economy)
+//      (the original expression)                        → 2 fail (+1 economy)
 //   2. `afford === 'no'` → `afford !== 'yes'` on the "Need more coins" line
-//                                                                     → 1 fail
+//                                                                     → 2 fail
 //   3. economy.ts wallet catch arm → `set({ walletState: 'ready' })`
-//                                                       → 1 fail (+5 economy)
+//                                                       → 3 fail (+7 economy)
 //   4. economy.ts cosmetics catch arm → `set({ cosmeticsState: 'ready' })`
-//                                                       → 1 fail (+1 economy)
-//   5. the `cosmeticsState === 'error'` branch removed (falls through to
+//                                                       → 2 fail (+1 economy)
+//   5. the `cosmeticsState === 'error'` PANEL branch removed (falls through to
 //      "The pro shop is closed")                                      → 1 fail
 //   6. the ensure guard made sticky again — `walletState !== 'idle'`
-//                                                       → 2 fail (+1 economy)
+//                                                       → 2 fail (+2 economy)
+//
+// AND the residuals from #266's review, each of which passed 26/26 before:
+//   7. the `cosmeticsState === 'error'` LoadFailureLine (GolfShop.tsx:182)
+//      replaced with `false` — a STALE catalog, i.e. one that loaded and then
+//      failed to refresh, said nothing at all                         → 1 fail
+//   8. the `walletState === 'error'` LoadFailureLine replaced with `false`
+//                                                                     → 1 fail
+//   9. `isFirstLoad` → `s === 'idle'` (loadState.ts) — the shop flashes "The
+//      pro shop is closed" on every mount   → 1 fail (+2 loadState, +2 Clubhouse)
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -80,6 +89,13 @@ function buyButton(): HTMLButtonElement {
   return screen.getByRole('button', { name: /200/ }) as HTMLButtonElement;
 }
 
+// Each Retry is addressed by the thing it retries. Every RetryButton used to be
+// called just "Retry", and the shop can render TWO at once, so the old
+// `getAllByRole(...)[0]` was asserting against whichever came first in the DOM.
+function retry(name: string): HTMLButtonElement {
+  return screen.getByRole('button', { name }) as HTMLButtonElement;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   __resetEconomyInFlight();
@@ -124,7 +140,7 @@ describe('GolfShop — an unreachable wallet', () => {
     expect(buyButton().disabled).toBe(true);
 
     getWallet.mockResolvedValueOnce(WALLET);
-    fireEvent.click(screen.getAllByRole('button', { name: 'Retry' })[0]!);
+    fireEvent.click(retry('Retry loading your wallet'));
 
     await waitFor(() => expect(screen.queryByText('Couldn’t reach your wallet.')).toBeNull());
     expect(screen.getByText('670')).toBeTruthy();
@@ -183,7 +199,7 @@ describe('GolfShop — an unreachable catalog', () => {
     expect(screen.queryByText(/pro shop is closed/)).toBeNull();
 
     getCosmetics.mockResolvedValueOnce(CATALOG);
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(retry('Retry loading the pro shop'));
     await screen.findByText('Sunset');
   });
 
@@ -193,6 +209,55 @@ describe('GolfShop — an unreachable catalog', () => {
 
     render(<GolfShop />);
     await screen.findByText(/pro shop is closed/);
+  });
+
+  it('reports a STALE catalog on the shop itself, without hiding the items', async () => {
+    // The catalog loaded earlier (so the shop has content), and a refresh then
+    // failed. The panel variant would hide items the player can still browse,
+    // so this is the LINE variant — and until now nothing asserted it existed
+    // at all: replacing the condition with `false` passed the whole suite.
+    useEconomy.setState({ ...CATALOG, cosmeticsState: 'error' });
+    getCosmetics.mockRejectedValueOnce(new Error('offline'));
+    getWallet.mockResolvedValue(WALLET);
+
+    render(<GolfShop />);
+    await screen.findByText('Couldn’t refresh your items.');
+    // The content stays up…
+    expect(screen.getByText('Sunset')).toBeTruthy();
+    // …and neither whole-panel copy is used: not the failure panel, and above
+    // all not "closed", which claims the shop is empty.
+    expect(screen.queryByText('The pro shop needs a connection.')).toBeNull();
+    expect(screen.queryByText(/pro shop is closed/)).toBeNull();
+
+    getCosmetics.mockResolvedValueOnce(CATALOG);
+    fireEvent.click(retry('Retry loading your items'));
+    await waitFor(() => expect(screen.queryByText('Couldn’t refresh your items.')).toBeNull());
+    expect(screen.getByText('Sunset')).toBeTruthy();
+  });
+
+  it('says nothing about a catalog that is fine', async () => {
+    // The other direction: the banner must not be permanent furniture.
+    getCosmetics.mockResolvedValue(CATALOG);
+    getWallet.mockResolvedValue(WALLET);
+
+    render(<GolfShop />);
+    await screen.findByText('Sunset');
+    expect(screen.queryByText('Couldn’t refresh your items.')).toBeNull();
+    expect(screen.queryByText('Couldn’t reach your wallet.')).toBeNull();
+  });
+
+  it('shows the loading copy — never "closed" — while the first fetch is in flight', async () => {
+    // `isFirstLoad('loading')` is the only thing between a mount and the copy
+    // that tells the player the shop is empty. Asserted SYNCHRONOUSLY: every
+    // other test here polls with findByText and races past this frame, which is
+    // why mutating isFirstLoad to `s === 'idle'` failed 0 tests.
+    getCosmetics.mockReturnValue(new Promise(() => {}));
+    getWallet.mockReturnValue(new Promise(() => {}));
+
+    render(<GolfShop />);
+    expect(screen.getByText('Loading the pro shop…')).toBeTruthy();
+    expect(screen.queryByText(/pro shop is closed/)).toBeNull();
+    expect(screen.queryByText('The pro shop needs a connection.')).toBeNull();
   });
 
   it('equips from a catalog that loaded, and marks owned items owned', async () => {
