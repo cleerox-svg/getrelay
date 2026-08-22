@@ -112,9 +112,10 @@ test**, or an **explicitly-labelled feel knob**. There is no fifth category.
 | infield dirt edge | `r(β) = d·cos β + √(95² − (d·sin β)²)` | **derived** | plate-centred distance to that arc, `d = RUBBER_D_FT`. 155.5 ft at 0°, 127.6 at the foul line. A FUNCTION: the arc is struck from the rubber and the lookup asks in plate polars |
 | `XB_DEPTH_DATUM_FT` | 155.5 ft | **feel knob** | where extra-base depth credit is measured from. Deliberately FLAT, `= r(0)`, and argued on the constant — the throw back goes to a base, which does not move when the grass line curves |
 | `XB_*`, `DEFENSE_SPAN` | 68/130 ft, ±15 % | **feel knobs** | the fielding lookup's bands — see the fielding section |
-| fielder GROUND reaction | 0.2 s | **published data** | human simple visual reaction; a grounder has no route to read, which is what the other 0.3 s of the 0.5 s above pays for (reference unverified) |
-| `ROLL_DECEL_DIRT_FPS2` | 70 ft/s² | **calibrated** | the ONE free parameter of the rolling phase, solved against MLB's ~72 % ground-ball out rate over 144 seeded games. 2.2 g, and bounce-dominated rather than a rolling resistance — see the rolling-phase section |
-| `ROLL_GRASS_RATIO` | 1.25× | **feel knob** | grass is slower than clay; the ORDERING is real, the magnitude could not be sourced, and it is pinned LOW and held while the constant above is fitted |
+| fielder GROUND reaction | 0.2 s | **published data** | human simple visual reaction; a grounder has no route to read, which is what the other 0.3 s of the 0.5 s above pays for (reference unverified). ⚠ The rolling phase's biggest lever and a SHAPE parameter — sensitivity on the constant |
+| `ROLL_DECEL_DIRT_FPS2` | 70 ft/s² | **calibrated** | the one number in the rolling phase with NO published anchor, solved against MLB's ~72 % ground-ball out rate over 144 seeded games. 2.2 g, and bounce-dominated rather than a rolling resistance — see the rolling-phase section |
+| `ROLL_GRASS_RATIO` | 1.25× | **feel knob** | grass is slower than clay; the ORDERING is real, the magnitude could not be sourced, and it is pinned LOW and held while the constant above is fitted. Its leverage on that fit is measured, not assumed |
+| `ROLL_SAMPLE_S` | 0.005 s | **derived** | the interception search's resolution, from the decision it feeds: a 4.30 s runner and ~0.10 s margins ⇒ 20× finer. Sampled in TIME, not distance — see the constant |
 | infield throw velocity | 80 mph | **published data** | Statcast infield arm-strength average; one number, never a per-position table (reference unverified) |
 | glove-to-release | 0.7 s | **published data** | Statcast's catcher EXCHANGE time, taken unadjusted — see the rolling-phase section for why it is not nudged |
 | home to first | 4.3 s | **published data** | MLB average on a competitive run. One number: handedness and sprint speed are CARD stats, not fielding inputs |
@@ -875,18 +876,44 @@ anywhere in the game.
    "he ran it down".
 3. **He throws to first** — `THROW_RELEASE_S` plus the distance from the pickup
    point at `THROW_SPEED_FPS`. ⚠ The **first baseman fielding it himself** is not
-   a branch: it is the same throw, 21.7 ft long, taking 0.18 s.
+   a branch: it is the same throw, 21.66 ft long, taking 0.18 s.
 4. **The runner is `RUNNER_HOME_TO_FIRST_S`.** Sooner is an out.
 
-⚠ **ONE FREE PARAMETER, AND IT IS LABELLED HONESTLY.**
-`ROLL_DECEL_DIRT_FPS2 = 70` is **calibrated** against a target outside itself —
-MLB's ~72 % ground-ball out rate over 144 seeded duels — with every other number
-published or pinned. Everything else is published in the weak sense (80 mph arm,
-0.7 s exchange, 4.3 s home-to-first, 0.2 s ground reaction, 90 ft base path) or
-derived. `ROLL_GRASS_RATIO = 1.25` is an explicitly-labelled **feel knob**: the
-ordering (grass is slower than clay) is real, the magnitude could not be sourced,
-and an earlier draft of its comment claimed it was unobservable — **measuring it
-proved that false**, so it is pinned low and held.
+⚠ **ONE NUMBER WITHOUT A PUBLISHED ANCHOR — not "one free parameter", which is
+what an earlier draft of this section claimed.** `ROLL_DECEL_DIRT_FPS2 = 70` is
+**calibrated** against a target outside itself — MLB's ~72 % ground-ball out rate
+over 144 seeded duels — with every other number held fixed while it was swept.
+But four of those five (the 80 mph arm, the 0.7 s exchange, the 0.2 s ground
+reaction, the 27 ft/s sprint) carry *reference unverified* on their own lines, so
+the honest statement is that this is the only one with **nothing to point at**,
+not that everything else is published fact. One degree of freedom against one
+target is still what makes the fit mean anything; it is a different claim.
+
+⚠ **AND THE 0.2 s GROUND REACTION IS THE BIGGEST NEW LEVER IN THE SLICE, SO IT
+CARRIES A SENSITIVITY OF ITS OWN.** The reaction SPLIT is new here — before it
+there was one 0.5 s reaction — so "the number was already there" is no defence.
+Measured on the bench at the shipped 70 ft/s²: **72.5 %** of ground balls retired
+at 0.20 s against **56.3 %** at 0.50 s, and refitting the roll constant at 0.50 s
+puts it at **≈105 ft/s²** (70.5 % at 100, 73.2 % at 110). That is a **+35 ft/s²**
+move against the **14 ft/s²** the whole calibration sweep spans — roughly two and
+a half times the fit underneath it. It is also a **shape** parameter rather than
+an offset: it changes which points on the roll are reachable at all, so it moves
+the feasible set before any time comparison happens. Its justification is
+therefore the mechanism (an outfielder reads a route; a ground ball has none) and
+nothing else.
+
+⚠ **`ROLL_GRASS_RATIO = 1.25` is an explicitly-labelled feel knob**, and the
+argument for it took two corrections. The ordering (grass is slower than clay) is
+real; the magnitude could not be sourced. A first draft called it *unobservable*
+— **measuring it proved that false**: over a uniform grid, **36.8 % of balls are
+fielded beyond the grass line and 12.7 % of the OUTS are decided there**. But a
+uniform grid is not the game, and the argument that actually matters is the
+population: **every one of the bench's 185 putouts is an infielder's** (P 48,
+SS 47, 2B 46, 1B 29, 3B 15, zero outfielders), because a fielder who has chased a
+ball onto the grass cannot beat a 4.3 s runner from there. So the knob has
+near-zero leverage on the rate the roll constant is fitted against, and the two do
+not co-vary. Both halves are **computed by the suite**, not quoted at it — the
+grid bound in `groundBall.test.ts`, the population one in `duelSim.test.ts`.
 
 ⚠ **AND WHAT THE FITTED CONSTANT ABSORBS, STATED.** 70 ft/s² is **2.2 g**, which
 is not a rolling resistance: it is a *bounce-dominated effective deceleration
@@ -916,19 +943,38 @@ the left side is 80–100 ft longer:
 | …its mirror, the 1B line (+44°) | 64 ft, 2.77 s | 26 ft | 3.69 s | **OUT** |
 | comebacker to the mound (95/−8°/0°) | 60 ft, 0.48 s | 64 ft | 1.72 s | **OUT** |
 
+⚠ **The asymmetry is real baseball; its SIZE on the right side is not.** The
+bearing sweep finds a 13-step contiguous out band from +10° to +34° against 5
+steps around the shortstop, and the wide half is over-stated: the 3-4 hole row is
+an out because the second baseman intercepts a *moving* ball 31 ft behind his
+post at 176 ft and still throws in time, which real second basemen essentially
+never convert. Same unbounded-fielding-radius simplification the roll constant
+absorbs — but the error is not symmetric, and it lands almost entirely on the
+right side of the diamond, where the throw is short enough for a late pickup to
+survive.
+
 ⚠ **ONE MUTATION SURVIVED AND IT IS UNOBSERVABLE, NOT UNTESTED** — the same
 category the infield cap was recorded in. `groundOut` minimises the whole PLAY
 time rather than the PICKUP time, because charging a slow roller trades a later
 pickup for a shorter throw. Swapping the objective fails nothing: over 7,068
 balls swept across the dirt the two return the same play to within 1e-9 s and 0
-calls differ. That is a small theorem rather than luck — taking the ball a foot
-deeper costs `1/v_ball` and saves at most `1/v_throw`, so a charge can only pay
-while the ball still outruns the 117 ft/s throw, and a ball a fielder has caught
-up with is slower than that. Two attempts to kill it (a named "the defence
-charges" row, then a full optimality sweep over every legal fielder/pickup pair)
-both passed the mutant, so it is **measured every run** instead. The optimality
-sweep stays: it is what kills the shortest-throw objective, which nothing else
-caught.
+calls differ. Two attempts to kill it (a named "the defence charges" row, then a
+full optimality sweep over every legal fielder/pickup pair) both passed the
+mutant, so it is **measured every run** instead. The optimality sweep stays: it is
+what kills the shortest-throw objective, which nothing else caught.
+
+⚠ **And the one-line reason first given for it was wrong**, which is worth more
+than the row. It said: a foot deeper costs `1/v_ball` and saves at most
+`1/v_throw`, so a charge only pays while the ball outruns the 117 ft/s throw —
+and no ball a fielder has caught up with is that fast. **The second clause is
+false**: a 150 ft/s grounder hit straight at the shortstop is first feasible at
+≈122.8 ft/s. The real derivative is
+`d(play)/ds = 1/v_ball + (d·throw/ds)/v_throw`, and the dropped term is what
+saves it — `d·throw/ds ≈ −1` only where the ball rolls *toward* first inside
+first's radial projection (~90 ft), and no fielder in `ALIGNMENT` stands inside
+90 ft on the right side except the pitcher. So the equivalence is a **joint**
+consequence of the speed bound and the alignment geometry, and an `ALIGNMENT`
+change could break it with the speed argument untouched.
 
 ⚠ **WHAT THE ROLLING PHASE DID TO THE DUEL.** Every column moved.
 
@@ -944,12 +990,34 @@ run environment is now plausible for a three-inning game, and `runs/game` and th
 and `duelRules.advanceRunners`'s forced-advance rule still biases them DOWN,
 which is now the only stated bias rather than the smaller of two.
 
-⚠ **ONE THING THE PUTOUT COLUMN SAYS ABOUT A DIFFERENT FILE.** The pitcher leads
-it (P 48, SS 47, 2B 46, 1B 29, 3B 15) where a real pitcher takes ~2 %. That is
-the **batting** model showing through, not the fielding one: 11 % of the bench's
-balls in play leave the bat below −20°, land within a few feet of the plate and
-die in front of the mound. A real spray chart is not that steep. It is a note
-about `batSim`/`ai` and it is not fixable in `groundBall.ts`.
+⚠ **THE PITCHER LEADS THE PUTOUT COLUMN, AND IT HAS TWO CAUSES — the fitted roll
+constant is one of them.** P 48 against a real pitcher's ~2 % of putouts. The
+batting model supplies the balls: 11 % of the bench's balls in play leave the bat
+below −20°, and a real spray chart is not that steep. But what decides they die
+in front of the **mound** rather than reaching the middle infield is
+`ROLL_DECEL_DIRT_FPS2`. At 70 ft/s² a topped ball landing 5 ft out at 100 ft/s
+comes to rest at **76 ft**, inside the pitcher's cover; at a deceleration nearer
+a real skinned infield (roughly half — a 100 ft/s grounder reaches a shortstop at
+~140 ft still doing 60–70 ft/s, where this model has it at 28 ft/s by 1.46 s) the
+same ball stops at **~148 ft**, the pitcher is infeasible anywhere on the path,
+and the play is the shortstop's or a base hit. So it is **not** "a note about
+`batSim` that is not fixable here" — an earlier draft of this paragraph said
+exactly that, and it was wrong by about half. It is fixable by the
+decel-plus-fielding-radius refit named above.
+
+⚠ **AND HOW TO READ THE SMALL-n COLUMNS ACROSS TWO RUNS.** HR/BIP moved 15 → 17
+at difficulty 0.50 and that is **not a result**. Fielding cannot move it, and the
+algebra is exact: outs per game are fixed at 18, so with a fixed batted-ball
+distribution `18 − K = q·BIP` ⇒ `BIP = (18 − K)/q`, and `HR = h·BIP` ⇒
+**`HR/BIP = h`, invariant to the fielding conversion rate `q`.** What moved is
+the SAMPLE: the harness runs two seeded streams whose roles swap by half-inning,
+so when half-innings change length the streams re-phase and the whole
+batted-ball population re-draws. The noise floor calibrates itself from
+quantities fielding provably cannot touch — at difficulty 0.85, BB/PA moved
+1.5 → 2.6 % and K/PA 21.0 → 22.7 %, both pitch-sequence-only, at n ≈ 390 PA.
+A 2 pp move in HR/BIP at n = 233 (binomial SE ≈ 2.5 pp) is inside that floor, and
+it did not move at all at 0.15. **Cross-run comparison of the small-n columns is
+unreliable**, and a 2 pp wobble in any of them is not evidence.
 
 
 ⚠ **The infield edge is an arc struck from the RUBBER — fixed in the geometry,
@@ -957,8 +1025,9 @@ after two goes at fixing the label.** Stage 4 shipped `INFIELD_DEPTH_FT =
 RUBBER_D_FT + 95 = 155.5 ft` and used it as a **plate-centred** radius; stage 4b
 noticed and corrected the *comment*. M1 then drew it, and the visual gate
 measured the rendered dirt/grass boundary at **155.6 ft** — the renderer adding
-no error of its own, because `stadium/field.ts` imports the constant rather than
-copying it. The real thing is a 95 ft arc struck from the rubber, so the
+no error of its own, because `stadium/field.ts` imports the FUNCTION
+(`infieldDepthFt`, now from `fielders.ts`) rather than copying it — at the time
+of that finding it was a constant, and the shared-source point is the same one. The real thing is a 95 ft arc struck from the rubber, so the
 plate-centred distance is
 
 ```

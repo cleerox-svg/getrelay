@@ -8,7 +8,7 @@
 // was hit. The two halves together are the claim; either one alone is not.
 //
 // SIXTEEN MUTATIONS WERE WATCHED — each applied to the source, the fielders,
-// groundBall, fielding, duel, budget and determinism suites run, then reverted
+// roll, groundBall, fielding, duel, budget and determinism suites run, then reverted
 // with the pristine text byte-compared back and a green baseline re-established
 // first. OBSERVED failure counts, not predicted ones, in `derbySim.test.ts`'s
 // convention.
@@ -70,19 +70,13 @@ import {
 import {
   BASE_PATH_FT,
   FIRST_BASE,
-  MAX_ROLL_FT,
-  ROLL_DECEL_DIRT_FPS2,
-  ROLL_SAMPLE_FT,
-  ROLL_DECEL_TURF_FPS2,
-  ROLL_GRASS_RATIO,
   RUNNER_HOME_TO_FIRST_S,
   THROW_RELEASE_S,
   THROW_SPEED_FPS,
   THROW_SPEED_MPH,
   groundOut,
-  rollPath,
-  rollTimeS,
 } from './groundBall';
+import { ROLL_SAMPLE_S, rollDistFt, rollPath, rollTimeS } from './roll';
 import { FOUL_LINE_DEG, HARBOURFRONT, resolveFence } from './parks';
 import { GAME_AIR } from './pitchSim';
 import { MPH_TO_FPS } from './units';
@@ -111,127 +105,6 @@ function hit(evMph: number, laDeg: number, sprayDeg: number, defense = 0.5) {
 
 // ---------------------------------------------------------------------------
 
-describe('the roll', () => {
-  it('is the closed-form solution of constant deceleration, on each surface', () => {
-    // ⚠ THE DEFINING PROPERTY, NOT A TABLE. `v² = v₀² − 2as` on each surface and
-    // the crossing between them is exact — the same standard every other event
-    // in this game is held to. Asserted by re-deriving the speed at a sampled
-    // point from the TIME the model reports, which is the inverse of what the
-    // model computes and so cannot pass on a mis-stated formula.
-    for (const bearing of [0, -20, 38, -44]) {
-      const edge = infieldDepthFt(bearing);
-      for (const [d0, v0] of [[10, 60], [10, 140], [90, 120], [edge - 1, 100], [edge + 20, 90]]) {
-        const p = rollPath(d0!, bearing, v0!);
-        expect(rollTimeS(p, 0)).toBe(0);
-        expect(rollTimeS(p, p.rollFt)).toBeCloseTo(p.stopS, 6);
-        expect(p.stopDistFt).toBeCloseTo(d0! + p.rollFt, 12);
-        // Monotone in distance, and never past the stop.
-        let prev = -1;
-        for (let s = 0; s <= p.rollFt + 5; s += 0.5) {
-          const t = rollTimeS(p, s);
-          expect(t).toBeGreaterThanOrEqual(prev);
-          prev = t;
-        }
-        // Speed at a mid-dirt sample, two ways.
-        if (p.dirtFt > 4) {
-          const s = p.dirtFt / 2;
-          const v = Math.sqrt(v0! ** 2 - 2 * ROLL_DECEL_DIRT_FPS2 * s);
-          expect(rollTimeS(p, s)).toBeCloseTo((v0! - v) / ROLL_DECEL_DIRT_FPS2, 9);
-        }
-      }
-    }
-    // A ball with no ground speed left does not roll, and never NaNs.
-    const dead = rollPath(40, 12, 0);
-    expect(dead.rollFt).toBe(0);
-    expect(dead.stopS).toBe(0);
-    expect(rollTimeS(dead, 50)).toBe(0);
-    expect(rollPath(40, 12, -30).rollFt).toBe(0);
-    // The bound bites instead of scanning forever.
-    expect(rollPath(1, 0, 400).rollFt).toBe(MAX_ROLL_FT);
-    // ⚠ THE SEARCH IS SAMPLED, SO THE SPACING HAS TO BE ARGUED RATHER THAN
-    // ASSUMED. The out/safe verdict is a comparison against a 4.30 s runner and
-    // the plays that matter land within ~0.1 s of it. One foot of roll is at
-    // most `1 / v₀` seconds — 0.0067 s on the fastest ball this game produces —
-    // so the discretisation is an order of magnitude finer than the decision it
-    // feeds. It is asserted as that inequality, not as the number 1.
-    expect(ROLL_SAMPLE_FT / 150).toBeLessThan(0.01);
-  });
-
-  it('⚠ crosses the grass line and slows THERE, not at the landing point', () => {
-    // ⚠ THE TEST IS THE SAME BALL AT TWO BEARINGS, because the grass line is a
-    // FUNCTION of bearing (`fielders.infieldDepthFt`) and a model that used one
-    // radius would roll both the same distance. Down the line the ball reaches
-    // grass 27.9 ft sooner than it does to centre, so it stops sooner.
-    // Fast enough to CROSS the line at both bearings — a ball that stops on the
-    // dirt never sees the second surface and would pass this test vacuously.
-    const centre = rollPath(20, 0, 150);
-    const line = rollPath(20, 45, 150);
-    expect(ROLL_DECEL_TURF_FPS2).toBeCloseTo(ROLL_GRASS_RATIO * ROLL_DECEL_DIRT_FPS2, 12);
-    expect(ROLL_GRASS_RATIO).toBeGreaterThan(1);
-    expect(centre.dirtFt).toBeCloseTo(infieldDepthFt(0) - 20, 9);
-    expect(line.dirtFt).toBeCloseTo(infieldDepthFt(45) - 20, 9);
-    expect(centre.rollFt).toBeGreaterThan(centre.dirtFt);
-    expect(line.rollFt).toBeGreaterThan(line.dirtFt);
-    expect(line.rollFt).toBeLessThan(centre.rollFt);
-    // …and it really is the SURFACE doing it, not the shorter dirt run: with one
-    // deceleration everywhere the same ball would roll `v²/2a` from wherever it
-    // landed, identically at both bearings.
-    expect(centre.rollFt).toBeLessThan((150 * 150) / (2 * ROLL_DECEL_DIRT_FPS2));
-    let table =
-      '\n[ROLL — a 150 ft/s ground ball from 20 ft out, by bearing]\n' +
-      '  bearing   grass line   dirt run   total roll   stops at   time to rest\n';
-    for (const b of [0, 20, 38, 45]) {
-      const p = rollPath(20, b, 150);
-      table += `  ${String(b).padStart(5)}°   ${infieldDepthFt(b).toFixed(1).padStart(10)}   ${p.dirtFt
-        .toFixed(1)
-        .padStart(8)}   ${p.rollFt.toFixed(1).padStart(10)}   ${p.stopDistFt
-        .toFixed(1)
-        .padStart(8)}   ${p.stopS.toFixed(2).padStart(12)}\n`;
-    }
-    table +=
-      `\n  ⚠ The tail is over-decelerated and the constant's own comment says so: a\n` +
-      `  91 mph ground ball comes to rest ${rollPath(26, 0, 133).stopDistFt.toFixed(
-        0,
-      )} ft out, where a real one is still moving\n  when the outfielder picks it up. Not observable in this milestone's outcome\n  set — every ball that gets through the infield is a single either way.\n`;
-    log(table);
-  });
-
-  it('⚠ the roll starts at the GROUND speed, which is where the angle lives', () => {
-    // A topped chopper and a grazing screamer can land at the same SPEED and
-    // roll at wildly different ones, because one of them is spending most of its
-    // velocity going down. That is the whole angle dependence of the model and it
-    // arrives free, out of the integrator, with no bounce-retention knob.
-    const fps = (mph: number) => mph * MPH_TO_FPS;
-    let table =
-      '\n[GROUND SPEED — what the bounce keeps, by launch angle]\n' +
-      '  LA    lands at   speed ft/s   GROUND ft/s   kept    roll ft (from 20 ft out)\n';
-    for (const la of [-45, -30, -15, -5, 2, 10]) {
-      const f = simulateBattedBall(launchFromAngles(95, la, 0, 1500), GAME_AIR);
-      const v = fps(f.landingSpeedMph);
-      table += `  ${String(la).padStart(3)}°  ${f.carryFt.toFixed(0).padStart(8)}   ${v
-        .toFixed(0)
-        .padStart(10)}   ${f.landingGroundFps.toFixed(0).padStart(11)}   ${(
-        (100 * f.landingGroundFps) / v
-      )
-        .toFixed(0)
-        .padStart(3)} %   ${rollPath(20, 0, f.landingGroundFps).rollFt.toFixed(0).padStart(6)}\n`;
-    }
-    log(table);
-    // The steeper the ball comes in, the smaller the fraction the ground keeps —
-    // and the ROLL is the thing that shrinks with it. ⚠ It is NOT the same claim
-    // as "a chopper lands slower than a screamer": a topped ball lands almost at
-    // once and barely decelerates in the air, so it can land FASTER and still
-    // roll less. The decomposition, not the speed, is the mechanism.
-    const steep = simulateBattedBall(launchFromAngles(95, -45, 0, 1500), GAME_AIR);
-    const graze = simulateBattedBall(launchFromAngles(95, -2, 0, 1500), GAME_AIR);
-    expect(steep.landingGroundFps / fps(steep.landingSpeedMph)).toBeLessThan(0.8);
-    expect(graze.landingGroundFps / fps(graze.landingSpeedMph)).toBeGreaterThan(0.99);
-    expect(rollPath(20, 0, steep.landingGroundFps).rollFt).toBeLessThan(
-      rollPath(20, 0, graze.landingGroundFps).rollFt,
-    );
-  });
-});
-
 // ---------------------------------------------------------------------------
 
 describe('the race, the throw and the runner', () => {
@@ -243,11 +116,22 @@ describe('the race, the throw and the runner', () => {
     // outs, hard balls BETWEEN people are hits, slow rollers are decided by how
     // far the throw is, and the pitcher fields comebackers.
     //
-    // ⚠ AND THE MIRRORED PAIRS ARE THE SHARPEST ROWS IN IT. Rows 1/2, 3/4 and
-    // 6/7 are the same batted ball at ±the same bearing, and they are called
+    // ⚠ AND THE MIRRORED PAIRS ARE THE SHARPEST ROWS IN IT. Rows 1/2, 4/5 and
+    // 7/8 are the same batted ball at ±the same bearing, and they are called
     // DIFFERENTLY — because first base is on one side of the diamond and the
     // throw from the left side is 80–100 ft longer. A model that decided
     // grounders on speed alone would call every pair the same way.
+    //
+    // ⚠ THE ASYMMETRY IS REAL BASEBALL; ITS SIZE ON THE RIGHT SIDE IS NOT, AND A
+    // READER FORMS THEIR IMPRESSION OF IT HERE, SO IT IS SAID HERE. The bearing
+    // sweep below finds a 13-step contiguous out band from +10° to +34° against
+    // 5 steps around the shortstop, and the wide half is over-stated: the 3-4
+    // hole row is an out because the second baseman intercepts a MOVING ball
+    // 31 ft behind his post at 176 ft and still throws in time, which real
+    // second basemen essentially never convert. It is the same unbounded-fielding-
+    // radius simplification `ROLL_DECEL_DIRT_FPS2` absorbs, but the error is not
+    // symmetric — it lands almost entirely on the RIGHT side of the diamond,
+    // where the throw is short enough for a late pickup to survive.
     const cases: Array<[string, number, number, number, string]> = [
       ['sharp two-hopper right at the SS', 95, -6, -19, 'OUT'],
       ['…the mirror of it, at the 2B', 95, -6, 19, 'OUT'],
@@ -260,7 +144,7 @@ describe('the race, the throw and the runner', () => {
       ['comebacker to the mound', 95, -8, 0, 'OUT'],
       ['chopper over the mound', 80, 2, 2, 'SAFE'],
       ['topped dribbler in front of the plate', 60, -35, -10, 'OUT'],
-      ['scorched one-hopper down the 3B line', 108, 1, -43, 'SAFE'],
+      ['scorched one-hopper down the 3B line', 108, -2, -43, 'SAFE'],
       ['soft grounder to first', 70, -8, 36, 'OUT'],
       ['high chopper to third', 85, -25, -36, 'OUT'],
     ];
@@ -275,6 +159,18 @@ describe('the race, the throw and the runner', () => {
     for (const [name, ev, la, spray, want] of cases) {
       const { fence, flight, play } = hit(ev, la, spray);
       const got = play.out ? 'OUT' : 'SAFE';
+      // ⚠ EVERY ROW HAS TO BE A BALL `fieldBattedBall` WOULD ACTUALLY ROUTE
+      // HERE. This ladder calls `groundOut` directly, so a row that landed past
+      // the grass line would agree with the model by luck and read as coverage
+      // it is not — one row did, at 134.4 ft against a 129.8 ft arc down the
+      // third-base line. Asserted rather than eyeballed, for all fourteen.
+      if (fence.distFt >= infieldDepthFt(fence.bearingDeg)) {
+        wrong.push(
+          `${name}: lands at ${fence.distFt.toFixed(1)} ft, PAST the ${infieldDepthFt(
+            fence.bearingDeg,
+          ).toFixed(1)} ft arc — the roll would never see it`,
+        );
+      }
       table +=
         `  ${name.padEnd(38)}${String(ev).padStart(4)}${String(la).padStart(6)}${String(spray).padStart(7)}` +
         `${fence.distFt.toFixed(0).padStart(8)}${fence.hangS.toFixed(2).padStart(6)}` +
@@ -366,7 +262,7 @@ describe('the race, the throw and the runner', () => {
       expect(l).toBeGreaterThan(r);
     }
     log(table);
-    // A first baseman standing on the ball IS the throw, 21.6 ft of it, and that
+    // A first baseman standing on the ball IS the throw, 21.66 ft of it, and that
     // is why "he steps on the bag himself" needs no branch anywhere.
     const at1B = polarGapFt(38, 108, FIRST_BASE.bearingDeg, FIRST_BASE.distFt);
     expect(at1B).toBeCloseTo(21.65, 2);
@@ -397,16 +293,23 @@ describe('the race, the throw and the runner', () => {
     }
   });
 
-  it('⚠ the reported play is the BEST one available — the minimisation, checked', () => {
-    // ⚠ THIS IS THE ASSERTION THAT KILLED THE "MINIMISE THE PICKUP" MUTATION,
-    // and the charge test below did NOT: on the balls that test names, the two
-    // objectives happen to agree, so it passed the mutant. What is asserted here
-    // is the SPEC instead of an example — for every fielder and every point on
-    // the roll that he could legally take the ball at, the play the model
-    // reports must be no worse. Any other objective (earliest pickup, nearest
-    // fielder, shortest throw) violates it somewhere in the grid.
+  it('⚠ the reported play is the best available, to within the sampling bound', () => {
+    // ⚠ TWO CLAIMS IN ONE SWEEP, AND THE SECOND IS WHY IT IS A REFINEMENT RATHER
+    // THAN A REPLAY. (a) The OBJECTIVE: no legal (fielder, pickup) pair beats
+    // the reported play — which is what kills a shortest-throw or nearest-
+    // fielder objective. (b) The RESOLUTION: the enumeration below runs on a
+    // grid four times finer than `ROLL_SAMPLE_S`, so the shortfall it finds IS
+    // the model's discretisation error, measured rather than argued.
+    //
+    // The analytic bound on that error: between two samples the play time moves
+    // by at most `dt·(1 + v_ball/v_throw)`, so with `dt = 0.005` and a ball
+    // never above ~150 ft/s it is 0.011 s — a tenth of the ~0.10 s margins the
+    // ladder decides on. The sweep has to come in under it.
+    const FINE = ROLL_SAMPLE_S / 4;
+    const bound = ROLL_SAMPLE_S * (1 + 150 / THROW_SPEED_FPS);
     let checked = 0;
-    let bestAlt = 0;
+    let worstShortfallS = 0;
+    let at = '';
     for (let b = -44; b <= 44; b += 7) {
       for (const d0 of [5, 40, 90, 130]) {
         for (const v0 of [50, 80, 120, 150]) {
@@ -414,21 +317,28 @@ describe('the race, the throw and the runner', () => {
             const got = groundOut(d0, b, hang, v0, 0.5);
             const path = rollPath(d0, b, v0);
             const mul = reachMultiplier(0.5);
+            const steps = Math.max(1, Math.ceil(path.stopS / FINE));
             for (const f of ALIGNMENT) {
-              for (let s = 0; s <= path.rollFt + 1e-9; s += 2) {
-                const at = d0 + Math.min(s, path.rollFt);
-                const tBall = hang + rollTimeS(path, Math.min(s, path.rollFt));
+              for (let i = 0; i <= steps; i++) {
+                const tRoll = i === steps ? path.stopS : i * FINE;
+                const p = d0 + rollDistFt(path, tRoll);
+                const tBall = hang + tRoll;
                 const tCover = timeToCoverS(
-                  polarGapFt(b, at, f.bearingDeg, f.distFt) / mul,
+                  polarGapFt(b, p, f.bearingDeg, f.distFt) / mul,
                   FIELDER_GROUND_REACTION_S,
                 );
-                const stopped = Math.min(s, path.rollFt) >= path.rollFt - 1e-9;
+                const stopped = i === steps;
                 if (!stopped && tCover > tBall) continue; // the ball has gone past
                 const fieldedS = stopped ? Math.max(tBall, tCover) : tBall;
-                const throwFt = polarGapFt(b, at, FIRST_BASE.bearingDeg, FIRST_BASE.distFt);
-                const alt = fieldedS + THROW_RELEASE_S + throwFt / THROW_SPEED_FPS;
+                const alt =
+                  fieldedS +
+                  THROW_RELEASE_S +
+                  polarGapFt(b, p, FIRST_BASE.bearingDeg, FIRST_BASE.distFt) / THROW_SPEED_FPS;
                 checked++;
-                if (alt < got.playS - 1e-9) bestAlt++;
+                if (got.playS - alt > worstShortfallS) {
+                  worstShortfallS = got.playS - alt;
+                  at = `${d0} ft / ${b}° / ${v0} fps / hang ${hang}`;
+                }
               }
             }
           }
@@ -436,13 +346,16 @@ describe('the race, the throw and the runner', () => {
       }
     }
     log(
-      `\n[OPTIMAL] ${checked} legal (fielder, pickup point) pairs across the grid; ` +
-        `${bestAlt} of them beat the play the model reported.\n` +
+      `\n[OPTIMAL] ${checked} legal (fielder, pickup) pairs on a ${FINE} s grid — ` +
+        `${(FINE / ROLL_SAMPLE_S).toFixed(2)}× the shipped resolution.\n` +
+        `  Worst the model is beaten by: ${worstShortfallS.toFixed(
+          5,
+        )} s (analytic bound ${bound.toFixed(4)} s)${at ? ` at ${at}` : ''}.\n` +
         '  (Only FEASIBLE pairs are counted — a fielder who arrives after the ball has\n' +
         '   gone past is not an alternative, he is a fielder who has missed it.)\n',
     );
     expect(checked).toBeGreaterThan(2000);
-    expect(bestAlt).toBe(0);
+    expect(worstShortfallS).toBeLessThan(bound);
   });
 
   it('⚠ the objective is the PLAY — and the counterfactual says it cannot be TOLD', () => {
@@ -454,14 +367,21 @@ describe('the race, the throw and the runner', () => {
     // reason is not a missing assertion: swept over the grid below, the two
     // objectives return the SAME PLAY every time.
     //
-    // ⚠ AND IT IS A SMALL THEOREM RATHER THAN LUCK, WHICH IS WHY THIS IS
-    // RECORDED INSTEAD OF PAPERED OVER. Taking the ball one foot deeper costs
-    // `1/v_ball` seconds and saves at most `1/v_throw` — so charging can only pay
-    // while the ball is still moving FASTER than the throw. `THROW_SPEED_FPS` is
-    // 117.3, and any ball a fielder has actually caught up with is slower than
-    // that by then. The charge is real physics that this game's numbers happen
-    // to price at zero; the day an arm gets weaker or a surface gets faster the
-    // margin closes, and this test is what says so.
+    // ⚠ AND THE REASON IS TWO THINGS, NOT ONE — the correction that makes this
+    // worth recording. The play time along the path moves as
+    // `d(play)/ds = 1/v_ball + (d·throw/ds)/v_throw`. A charge pays only when the
+    // second term is negative enough to beat the first, which needs BOTH a ball
+    // slower than the 117.3 ft/s throw AND a throw that is actually shortening.
+    // Neither clause carries it alone: a 150 ft/s grounder straight at the
+    // shortstop is first feasible at ≈122.8 ft/s, FASTER than the throw — what
+    // saves it there is that `d·throw/ds ≈ −1` only where the ball rolls toward
+    // first base inside first's radial projection (~90 ft), and no fielder in
+    // `ALIGNMENT` stands inside 90 ft on the right side except the pitcher. So
+    // this is a joint consequence of a speed bound and the ALIGNMENT, and an
+    // alignment change could break it with the speed argument untouched. The
+    // charge is real physics that this game's numbers happen to price at zero;
+    // the day an arm gets weaker, a surface gets faster or a fielder moves in,
+    // the margin closes — and this test is what says so.
     //
     // The objective STAYS the play time, because it is the correct statement of
     // what a defence is doing and because the equivalence is an artefact of
@@ -550,6 +470,60 @@ describe('the race, the throw and the runner', () => {
         0,
       )} ft — ${play.playS.toFixed(2)} s.\n`,
     );
+  });
+
+  it('⚠ ROLL_GRASS_RATIO — the bound on what a FEEL KNOB can reach, computed', () => {
+    // ⚠ THE MEASUREMENT LIVES HERE, NOT IN A COMMENT, and that is the whole
+    // reason this test exists. `ROLL_GRASS_RATIO` is the one number in the
+    // rolling phase with no source at all, so the two things a reader needs are
+    // (a) an upper bound on what it can possibly touch and (b) whether it
+    // co-varies with the constant fitted underneath it.
+    //
+    // (a) is exactly "how many plays are decided beyond the grass line", because
+    // a play resolved entirely on the dirt cannot see the grass deceleration at
+    // any value. (b) is answered by POPULATION rather than by grid, next door in
+    // `duelSim.test.ts`: every putout the bench records is an infielder's.
+    let n = 0;
+    let beyond = 0;
+    let outs = 0;
+    let outsBeyond = 0;
+    let outsByOutfielder = 0;
+    for (let b = -45; b <= 45; b += 3) {
+      const edge = infieldDepthFt(b);
+      for (let d = 2; d < edge; d += 6) {
+        for (let v = 40; v <= 150; v += 10) {
+          for (const hang of [0.05, 0.3, 0.8, 1.3]) {
+            for (const def of [0, 0.5, 1]) {
+              const g = groundOut(d, b, hang, v, def);
+              n++;
+              const past = g.fieldedAtFt > edge;
+              if (past) beyond++;
+              if (!g.out) continue;
+              outs++;
+              if (past) outsBeyond++;
+              if (!g.infield) outsByOutfielder++;
+            }
+          }
+        }
+      }
+    }
+    const pc = (a: number, b2: number) => `${((100 * a) / b2).toFixed(1)} %`;
+    log(
+      `\n[GRASS LEVERAGE] ${n} balls on the dirt, uniform grid.\n` +
+        `  fielded beyond the grass line   ${beyond} (${pc(beyond, n)})   ← the most this knob can reach\n` +
+        `  OUTS decided beyond it          ${outsBeyond} of ${outs} (${pc(outsBeyond, outs)})\n` +
+        `  OUTS credited to an outfielder  ${outsByOutfielder} (${pc(outsByOutfielder, outs)})\n` +
+        '  ⚠ A UNIFORM GRID IS NOT THE GAME. The duel bench, which is the population the\n' +
+        '    ~72 % target is measured over, records ZERO outfielder putouts — see\n' +
+        "    duelSim.test.ts. That is why this knob does not co-vary with the fit.\n",
+    );
+    // It is NOT decorative: a first draft of the constant's comment claimed no
+    // call could move, and this is the assertion that would have caught it.
+    expect(beyond / n).toBeGreaterThan(0.2);
+    expect(outsBeyond).toBeGreaterThan(0);
+    // …and it is still nearly powerless over the population that matters: an
+    // outfielder essentially never throws anybody out at first.
+    expect(outsByOutfielder / outs).toBeLessThan(0.01);
   });
 
   it('⚠ the ONE defender rating reaches the ground race, monotonically', () => {

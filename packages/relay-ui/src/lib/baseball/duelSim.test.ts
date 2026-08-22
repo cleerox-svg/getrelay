@@ -110,6 +110,7 @@ import {
 } from './duelRules';
 import type { Bases, DuelConfig } from './duelRules';
 import { DuelSim } from './duelSim';
+import { ALIGNMENT } from './fielders';
 import { simDraw } from './rng';
 import { CALL_ZONE, ZONE_CENTER, isStrike } from './zone';
 
@@ -933,13 +934,26 @@ describe('duel — the outcome bench', () => {
           .sort((a, b) => b[1] - a[1])
           .map(([k, v]) => `${k} ${v}`)
           .join(', ')}\n` +
-        `  ⚠ THE PITCHER LEADING THAT COLUMN IS THE *BATTING* MODEL SHOWING THROUGH, not\n` +
-        `    the fielding one: ${((100 * gbAll.steep) / gbAll.bip).toFixed(
-          0,
-        )} % of this bench's balls in play leave the bat below −20°,\n` +
-        '    land within a few feet of the plate and die in front of the mound. A real\n' +
-        '    spray chart is not that steep and a real pitcher takes ~2 % of putouts. That\n' +
-        '    is a note about `batSim`/`ai`, and it is not fixable in `groundBall.ts`.\n' +
+        `  ⚠ EVERY ONE OF THOSE PUTOUTS IS AN INFIELDER'S — zero outfielders — and that is\n` +
+        '    the measurement that says `ROLL_GRASS_RATIO` does not co-vary with the roll\n' +
+        '    constant fitted against this rate: a fielder who has chased a ball onto the\n' +
+        '    grass cannot beat a 4.3 s runner from there, so the grass deceleration has\n' +
+        '    near-zero leverage on the number above. `groundBall.ts` argues it; this\n' +
+        '    counts it.\n' +
+        `  ⚠ THE PITCHER LEADING THAT COLUMN HAS TWO CAUSES AND THE FITTED ROLL CONSTANT\n` +
+        `    IS ONE OF THEM. The batting model supplies the balls — ${(
+          (100 * gbAll.steep) /
+          gbAll.bip
+        ).toFixed(0)} % of this bench's\n` +
+        '    balls in play leave the bat below −20°, and a real spray chart is not that\n' +
+        '    steep. But what decides they die in front of the MOUND rather than reaching\n' +
+        '    the middle infield is `ROLL_DECEL_DIRT_FPS2`: at 70 ft/s² a topped ball\n' +
+        '    landing 5 ft out at 100 ft/s comes to rest at 76 ft, inside the pitcher\u2019s\n' +
+        '    cover. At a deceleration nearer a real skinned infield the same ball stops\n' +
+        '    around 148 ft, the pitcher is infeasible anywhere on the path, and the play\n' +
+        '    is the shortstop\u2019s or a base hit. A real pitcher takes ~2 % of putouts. So\n' +
+        '    this IS fixable here — by the decel-plus-fielding-radius refit `groundBall.ts`\n' +
+        '    already names as the follow-up — and not by the batting model alone.\n' +
         "  ⚠ BEFORE THE ROLLING PHASE: 3.4 % at difficulty 0.50 (84 singles, 3 outs from\n" +
         '    87 ground balls) and 6.5 % at 0.85 — there was no 6-3 groundout in the game.\n' +
         '  ⚠ AND THE RATE IS NOT THE CLAIM ON ITS OWN. `ROLL_DECEL_DIRT_FPS2` is fitted\n' +
@@ -968,8 +982,31 @@ describe('duel — the outcome bench', () => {
     // ⚠ AND THE PUTOUTS HAVE TO BE SPREAD. One fielder making every play would
     // be a geometry bug that the aggregate rate cannot see — and it is exactly
     // what a broken throw-distance or a deleted alignment row would look like.
-    const infieldGloves = ['P', '3B', 'SS', '2B', '1B'].filter((p) => (gloves[p] ?? 0) > 0);
-    expect(infieldGloves, `putouts: ${JSON.stringify(gloves)}`).toHaveLength(5);
+    const infieldGloves = ALIGNMENT.filter((f) => f.infield && (gloves[f.pos] ?? 0) > 0);
+    expect(infieldGloves.map((f) => f.pos), `putouts: ${JSON.stringify(gloves)}`).toEqual([
+      'P',
+      '3B',
+      'SS',
+      '2B',
+      '1B',
+    ]);
+    // ⚠ AND NONE OF THEM MAY BE AN OUTFIELDER'S, WHICH IS A CLAIM ABOUT A
+    // DIFFERENT CONSTANT. `groundBall.ROLL_GRASS_RATIO` is the one number in the
+    // rolling phase with no source, and the reason it does not contaminate the
+    // roll constant fitted against the rate above is that it can only touch a
+    // play decided beyond the grass line — and no such play beats a 4.3 s
+    // runner. A non-zero count here is not a bug; it is the signal that the
+    // knob has acquired leverage over the fit and the fit needs re-examining.
+    const outfieldPutouts = ALIGNMENT.filter((f) => !f.infield).reduce(
+      (t, f) => t + (gloves[f.pos] ?? 0),
+      0,
+    );
+    const totalPutouts = Object.values(gloves).reduce((t, v) => t + v, 0);
+    expect(totalPutouts).toBe(gbAll.outs);
+    expect(
+      outfieldPutouts / totalPutouts,
+      `outfielder putouts: ${outfieldPutouts} of ${totalPutouts}`,
+    ).toBeLessThan(0.02);
 
     // ⚠ WHAT THESE BANDS ARE AND ARE NOT. They are REGRESSION FENCES, not a
     // calibration: each is set roughly ±50 % around the measured value, wide
@@ -989,6 +1026,31 @@ describe('duel — the outcome bench', () => {
     // `duelRules.ts`'s forced-advance rule still biases them DOWN, which is now
     // the only stated bias rather than the smaller of two. K/PA and BB/PA remain
     // the two columns with a published number to be read against.
+    //
+    // ⚠ AND HOW TO READ THE SMALL-n COLUMNS ACROSS TWO RUNS, BECAUSE HR/BIP
+    // MOVED 15 → 17 AT DIFFICULTY 0.50 AND THAT IS NOT A RESULT. Two things,
+    // and the first rules out the obvious explanation:
+    //
+    //   • FIELDING CANNOT MOVE HR/BIP, ALGEBRAICALLY. Outs per game are FIXED at
+    //     18. With a fixed batted-ball distribution, batted-ball outs are
+    //     `18 − K = q·BIP` where `q` is the rate at which balls in play become
+    //     outs, so `BIP = (18 − K)/q`; home runs are `HR = h·BIP`, so
+    //     `HR/BIP = h` — INVARIANT to `q`. Improving the fielding conversion
+    //     rate shortens innings and shrinks BIP and HR together. "Plate
+    //     appearances fell 16 %" is therefore not an explanation of anything.
+    //   • WHAT MOVED IS THE SAMPLE. `autoGame` runs TWO seeded streams whose
+    //     roles swap by half-inning, so when half-innings change length the
+    //     streams RE-PHASE and the whole batted-ball population re-draws. The
+    //     noise floor calibrates itself from quantities fielding provably cannot
+    //     touch: at difficulty 0.85, BB/PA moved 1.5 → 2.6 % and K/PA
+    //     21.0 → 22.7 %, both pitch-sequence-only statistics, at n ≈ 390 PA.
+    //     Against that scale, HR/BIP moving 2 pp at n = 233 (binomial SE
+    //     ≈ 2.5 pp) is inside the floor — and it did not move at all at 0.15.
+    //
+    // So: CROSS-RUN COMPARISON OF THE SMALL-n COLUMNS IS UNRELIABLE, and a 2 pp
+    // wobble in any of them is not evidence of anything. The bands below are set
+    // wide for exactly this reason, and the monotonicity checks are what guard
+    // the shape.
     for (const r of summary) {
       // A game where nothing happens is the failure this bench exists to catch.
       expect(r.runs, `diff ${r.d}: runs/game`).toBeGreaterThan(3);

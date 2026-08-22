@@ -133,7 +133,19 @@ export interface FieldingPlay {
    * nobody was asked (HR, uncatchable foul).
    */
   nearest: string;
-  /** Fielder → landing point, ft; ground he could cover; how far short he was. */
+  /**
+   * `nearest` → the LANDING POINT, ft; ground he could cover in the hang time;
+   * how far short he was.
+   *
+   * ⚠ THE THREE OF THEM DESCRIBE THE BALL IN THE AIR AND NOTHING ELSE, and on a
+   * ground ball they are ZERO rather than stale. They used to be left populated
+   * from the air pass while `nearest` was overwritten with the fielder who
+   * actually made the play, so a HUD reading the pair got a coherent-looking
+   * sentence that was false: the chopper over the mound reported `nearest: '2B'`
+   * beside the PITCHER's 27.6 ft gap. Nothing outside this module reads them
+   * yet, which is exactly why it was worth fixing before something did. The
+   * ground ball's own distances live in `ground`, where they mean what they say.
+   */
   gapFt: number;
   reachFt: number;
   missFt: number;
@@ -197,7 +209,17 @@ export function fieldBattedBall(inp: FieldingInput, defense = 0.5): FieldingPlay
     // gets through the infield on the ground is a base hit, and the batter does
     // not take second on it without a baserunning model this milestone does not
     // have.
-    return { ...base, nearest: g.fielder, ground: g, result: g.out ? 'OUT' : 'SINGLE' };
+    // ⚠ THE AIR TRIO IS ZEROED, NOT CARRIED OVER — see `FieldingPlay.gapFt`. The
+    // fielder who made this play is not the fielder the gap was measured to, and
+    // a number that describes a different man is worse than no number.
+    return {
+      result: g.out ? 'OUT' : 'SINGLE',
+      nearest: g.fielder,
+      gapFt: 0,
+      reachFt: 0,
+      missFt: 0,
+      ground: g,
+    };
   }
 
   // Depth is credited from `XB_DEPTH_DATUM_FT` — a flat datum, argued on its own

@@ -13,7 +13,13 @@
 
 import { describe, expect, it } from 'vitest';
 import { launchFromAngles, simulateBattedBall } from './battedBallSim';
-import { ALIGNMENT, DEFENSE_SPAN, infieldDepthFt, sprintFt } from './fielders';
+import {
+  ALIGNMENT,
+  DEFENSE_SPAN,
+  infieldDepthFt,
+  nearestFielder,
+  sprintFt,
+} from './fielders';
 import {
   CORNER_DEG,
   fieldBattedBall,
@@ -104,7 +110,8 @@ describe('the batted-ball ladder', () => {
     ];
     let table =
       '\n[FIELDING LADDER — defence 0.5. ⚠ GOLDEN: every call is model output]\n' +
-      '  batted ball                   dist  bear  hang  ft/s   near   gap   reach   miss   edge   call\n';
+      '  batted ball                   dist  bear  hang  ft/s   who    gap   reach   miss   edge   call\n' +
+      '  (gap/reach/miss are AIR numbers and are 0 on the two rows the roll resolves)\n';
     // ⚠ EVERY ROW IS EVALUATED AND THE TABLE IS PRINTED BEFORE ANYTHING IS
     // ASSERTED. An `expect` inside the loop aborts on the first bad row, so a
     // change that moves two calls reports one, gets "fixed", and reports the
@@ -189,35 +196,47 @@ describe('the batted-ball ladder', () => {
           for (const g of [0, 60, 110, 145]) {
             const p = fieldBattedBall(ball(d, b, h, g), 0.5);
             checked++;
-            if (p.missFt === 0) {
+            // ⚠ THE DISCRIMINATOR IS `ground`, NOT `missFt`. A ground play now
+            // reports `missFt: 0` too — see `FieldingPlay.gapFt` — so keying
+            // this on the zero would silently start asserting the wrong branch,
+            // which is exactly what it did on the first run of this edit.
+            if (p.ground === null) {
               // Caught in the air — the one way a dirt ball skips the roll.
               expect(p.result).toBe('OUT');
-              expect(p.ground).toBeNull();
+              expect(p.missFt).toBe(0);
               continue;
             }
             expect(['OUT', 'SINGLE'], `${d}/${b}/${h}/${g}`).toContain(p.result);
-            expect(p.ground).not.toBeNull();
             expect(p.result === 'OUT').toBe(p.ground!.playS <= RUNNER_HOME_TO_FIRST_S);
             // The reported fielder is the one who made the play, not the one
-            // nearest the spot the ball first touched.
+            // nearest the spot the ball first touched — and the AIR trio is
+            // zeroed with him, because `gapFt` was measured to somebody else.
             expect(p.nearest).toBe(p.ground!.fielder);
+            expect([p.gapFt, p.reachFt, p.missFt]).toEqual([0, 0, 0]);
           }
         }
       }
     }
     const routine = fieldBattedBall(ball(120, -20, 1.05, 118), 0.5);
+    // The 25.1 ft is a fact about the LANDING POINT and the nearest fielder to
+    // it, so it is read from `fielders.nearestFielder` rather than from a play
+    // that no longer claims to report it.
+    const near = nearestFielder(-20, 120);
     log(
       `\n[DIRT] ${checked} balls landing inside the arc, all OUT or SINGLE, all with a roll.\n` +
-        `  The routine grounder to short: the SS covers ${sprintFt(1.05).toFixed(
+        `  The routine grounder to short: he is ${near.gapFt.toFixed(
           1,
-        )} ft under his own power in the air, and the ball\n  rolls to him — the ${routine.ground?.fielder} gloves it at ${routine.ground?.fieldedAtFt.toFixed(
+        )} ft from where it landed and covers ${sprintFt(1.05).toFixed(
+          1,
+        )} ft under his own power in the air,\n  and the ball rolls to him — the ${routine.ground?.fielder} gloves it at ${routine.ground?.fieldedAtFt.toFixed(
           0,
         )} ft, ${routine.ground?.fieldedS.toFixed(2)} s, throws ${routine.ground?.throwFt.toFixed(
           0,
         )} ft: ${routine.ground?.playS.toFixed(2)} s against ${RUNNER_HOME_TO_FIRST_S} → ${routine.result}.\n`,
     );
     expect(routine.result).toBe('OUT');
-    expect(routine.gapFt).toBeCloseTo(25.1, 1);
+    expect(near.pos).toBe('SS');
+    expect(near.gapFt).toBeCloseTo(25.1, 1);
     expect(sprintFt(1.05)).toBeLessThan(3);
   });
 });

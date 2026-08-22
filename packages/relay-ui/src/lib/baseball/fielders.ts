@@ -3,7 +3,7 @@
 //
 // ⚠ EXTRACTED FROM `fielding.ts` WHEN THE ROLLING PHASE LANDED, and extracted
 // rather than copied. `fielding.ts` (the ball in the AIR) and `groundBall.ts`
-// (the ball on the GROUND) both need the same seven standing positions, the same
+// (the ball on the GROUND) both need the same eight standing positions, the same
 // acceleration ramp and the same infield arc, and two modules reaching for those
 // through each other is an import cycle. One module underneath both is the seam:
 // nothing here knows what an OUT is, and both layers above read exactly one
@@ -91,9 +91,33 @@ export const FIELDER_REACTION_S = 0.5;
  * over his head — before he knows which way to run. A ground ball has no route
  * to read. It is on the ground, it is coming, and the only decision is a first
  * step. Charging the infielder the outfielder's route tax is what made a
- * one-second play unplayable: on a 1.0 s grounder it spends HALF the play
- * standing still, and `fielding.test.ts` prints both legs so the claim is
+ * one-second play unplayable: on a 1.05 s grounder it spends HALF the play
+ * standing still, and `fielders.test.ts` prints both legs so the claim is
  * arithmetic rather than an assertion.
+ *
+ * ⚠ AND IT IS THE BIGGEST NEW LEVER IN THE ROLLING PHASE, SO IT GETS THE SAME
+ * SENSITIVITY PARAGRAPH `groundBall.THROW_RELEASE_S` GETS. This split is NEW —
+ * before it there was one reaction — so "the number was already there" is not a
+ * defence. Measured on the duel bench, holding `ROLL_DECEL_DIRT_FPS2` at its
+ * shipped 70 ft/s²:
+ *
+ *     ground reaction 0.20 s  →  72.5 % of ground balls retired  (shipped)
+ *     ground reaction 0.50 s  →  56.3 %
+ *
+ * and refitting the roll constant against the same ~72 % target at 0.50 s puts
+ * it at **≈105 ft/s²** (70.5 % at 100, 73.2 % at 110). That is a **+35 ft/s²**
+ * move in the calibrated constant against the **14 ft/s²** that the whole
+ * published calibration sweep (58 → 72) spans — so this 0.3 s is worth about
+ * two and a half times the fit it sits underneath.
+ *
+ * ⚠ AND IT IS A SHAPE PARAMETER, NOT AN OFFSET, WHICH MAKES IT MORE
+ * CONSEQUENTIAL RATHER THAN LESS. `THROW_RELEASE_S` adds the same tenth of a
+ * second to every play and shifts the whole distribution past the runner.
+ * This one changes which points on the roll are REACHABLE AT ALL — it moves the
+ * feasible set, so it decides which balls are in play for a fielder before any
+ * time comparison happens. The justification is therefore the mechanism above
+ * and nothing else: it is what is left of the 0.5 s when the route is taken out,
+ * and if that decomposition is wrong the number is wrong, whatever the fit says.
  */
 export const FIELDER_GROUND_REACTION_S = 0.2;
 
