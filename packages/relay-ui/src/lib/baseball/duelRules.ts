@@ -300,29 +300,25 @@ export const DUEL_ASSIST: ReticleAssist = { fullMissIn: 12, fadePower: 1.5 };
 // fly ball with a runner on third and fewer than two out often scores him; here
 // it never does. Nothing missing from this list ADDS an out or removes a run.
 //
-// ⚠ BUT THE DUEL'S NET RUN ENVIRONMENT IS **HIGHER** THAN A REAL ONE, NOT
-// LOWER, AND THIS IS THE PLACE THE TWO BIASES ARE NETTED. An earlier draft of
-// this paragraph stated the sign of THIS rule and stopped, which read as a claim
-// about the game — and the countervailing bias is both larger and argued in a
-// different file, so nothing ever put them side by side. The other one is
+// ⚠ AND IT IS NOW THE ONLY BIAS ON THE RUN ENVIRONMENT, WHICH IS A CHANGE. This
+// paragraph used to net it against a much larger one pushing the other way —
 // `fielding.ts`'s landing-point limitation, which the derby never exercised
-// because a derby has no defence: the clause capping any unfielded ball landing
-// on the dirt at a SINGLE means **every ground ball is a base hit**. Measured
-// over the bench's own 16 seeds at difficulty 0.50 — 274 balls in play, 87 of
-// them ground balls (launch angle < 10°), of which **84 singles and 3 outs**.
-// That is a **3.4 %** ground-ball out rate against MLB's ~72 %, and **89 % of
-// every single in the printed outcome table is a grounder that should mostly
-// have been an out**. At difficulty 0.85 it is 92 %.
+// because a derby has no defence, and which made **every ground ball a base
+// hit**: 274 balls in play at difficulty 0.50, 87 of them ground balls, of which
+// **84 singles and 3 outs**, a **3.4 %** ground-ball out rate against MLB's
+// ~72 %. That is gone. `groundBall.ts` is the rolling phase `fielding.ts`
+// predicted for itself, the bench now retires **72.5 %** of ground balls, and
+// runs/game fell from 5.06/6.19/8.25 to 4.69/3.50/3.13 across the three
+// difficulties.
 //
-// Netted: the forced-advance rule withholds perhaps half a run a game; the
-// ground-ball artifact adds several. **So `runs/game` and the 1B column of the
-// outcome table are DOMINATED BY THE ARTIFACT and must not be read as a
-// calibration result** until the rolling phase lands. K/PA and BB/PA are
-// untouched by it and remain legitimate comparisons.
+// So the netting is over and what is left is this rule, on its own, biasing
+// scoring **DOWN** by perhaps half a run a game. The outcome table's `runs/game`
+// and 1B columns are READABLE now rather than dominated — they are still not
+// calibrated to anything, because nothing in this game is fitted to a run
+// environment, and this rule is the reason they should read a little low.
 //
-// Both are stated rather than corrected, because a fudge factor on runs would be
-// a fifth category of number. The fix for the second one is `fielding.ts`'s own
-// stated remedy — a rolling phase — and it is a slice of its own.
+// It is stated rather than corrected, because a fudge factor on runs would be a
+// fifth category of number.
 
 /** Occupancy of first, second, third. Immutable — every helper returns a new one. */
 export type Bases = readonly [boolean, boolean, boolean];

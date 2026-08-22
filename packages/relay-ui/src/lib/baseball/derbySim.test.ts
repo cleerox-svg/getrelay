@@ -149,7 +149,7 @@ import {
   validateDerbyPayout,
   validatePayoutCap,
 } from './derbyScoring';
-import { infieldDepthFt } from './fielding';
+import { infieldDepthFt } from './fielders';
 import { DerbySim } from './derbySim';
 import type { DerbySim as DerbySimType } from './derbySim';
 import type { SwingResult } from './derbyState';

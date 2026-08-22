@@ -31,7 +31,7 @@ import { Scene } from 'three';
 import type { BufferGeometry, Mesh, MeshLambertMaterial } from 'three';
 import { ALPINE_HEIGHTS, fenceAt, FOUL_LINE_DEG, HARBOURFRONT } from '../../../lib/baseball/parks';
 import type { Park } from '../../../lib/baseball/parks';
-import { infieldDepthFt } from '../../../lib/baseball/fielding';
+import { infieldDepthFt } from '../../../lib/baseball/fielders';
 import { buildField } from './field';
 import { bearingOf } from './geom';
 import type { StadiumCtx } from './geom';
@@ -156,7 +156,7 @@ describe('the skinned infield', () => {
     const dirt = polar(byName.get('infieldDirt')!.geometry);
     const fair = dirt.filter((p) => Math.abs(p.b) < FOUL_LINE_DEG - 1);
 
-    // The OUTER edge is `fielding.ts`'s own arc — the same function the fielder
+    // The OUTER edge is `fielders.ts`'s own arc — the same function the fielder
     // model asks "did this land on the dirt". Asserted at EVERY outer vertex
     // against the arc evaluated at THAT vertex's own bearing, rather than at a
     // handful of round numbers: the sampling step is 0.5°, so a vertex "near
@@ -174,7 +174,7 @@ describe('the skinned infield', () => {
       worstArc = Math.max(worstArc, Math.abs(p.r - infieldDepthFt(p.b)));
     }
     expect(outerCount, 'no outer-edge vertices were measured').toBeGreaterThan(50);
-    expect(worstArc, 'the dirt edge is not fielding.ts’s arc').toBeLessThan(1e-3);
+    expect(worstArc, 'the dirt edge is not fielders.ts’s arc').toBeLessThan(1e-3);
 
     // …and there is a HOLE in it, which is the whole point. The annulus's INNER
     // edge is the base-path diamond inset by 8 ft, so at a given bearing the
