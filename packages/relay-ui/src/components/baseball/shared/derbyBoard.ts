@@ -38,6 +38,7 @@ import { sceneNow } from '../../../lib/scene3d/clock';
 import type { BoardFeed } from '../StadiumGL';
 import { boardScreenKey } from '../stadium/boardState';
 import type { BoardArray, BoardSide, BoardTone } from '../stadium/scoreboard';
+import { pitchSide } from './boardSides';
 import { describeSwing } from './swingCopy';
 
 /**
@@ -112,7 +113,11 @@ function toneOf(r: SwingResult): BoardTone {
  * prints the measurement — so a longer value truncates with a visible mark
  * rather than shrinking out of the rule. Everything below is well inside it.
  */
-export const SIDE_ROWS = 2;
+// ⚠ THE BUDGET AND THE PITCH COLUMN MOVED TO `shared/boardSides.ts` when the
+// duel wanted both. Re-exported here because this file's own test asserts
+// SIDE_ROWS against `boardPanels.sideRowBudget`, and because the argument above
+// is the DERBY's reason for spending its two rows the way it does.
+export { SIDE_ROWS } from './boardSides';
 
 function statsSide(st: DerbyState): BoardSide {
   return {
@@ -124,16 +129,6 @@ function statsSide(st: DerbyState): BoardSide {
   };
 }
 
-/** The right column: the pitch just thrown, or about to be. */
-function pitchSide(st: DerbyState): BoardSide {
-  return {
-    heading: 'PITCH',
-    rows: [
-      { label: 'TYPE', value: (st.pitchId ?? '—').toUpperCase() },
-      { label: 'MPH', value: st.plate ? `${Math.round(st.plate.speedMph)}` : '—' },
-    ],
-  };
-}
 
 /**
  * The wide strip: the derby's round-by-round line score.
@@ -177,7 +172,7 @@ export function derbyBoardArray(
 ): BoardArray {
   const ribbon = { items: ribbonItems(park, st) };
   const left = statsSide(st);
-  const right = pitchSide(st);
+  const right = pitchSide(st.pitchId, st.plate?.speedMph ?? null);
   const strip = roundStrip(st);
 
   if (over) {

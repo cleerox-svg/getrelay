@@ -2324,11 +2324,36 @@ the render layer; contact resolves at the true physical state.
   ordering on the impossible input; the final state asserted on BOTH game-over
   branches; and a STRUCTURAL assertion that the machine returns exactly the six
   `Situation` keys. All twenty-one now fail.
-- **M4 stage 2 — the duel's HUD and scene.** The pitching slingshot
-  (`pullAim` released into an `AccuracyBar` sweep, handed to `servePitch` as an
-  intended location plus a stop error), the batting HUD reusing the derby's
-  reticle and timing bar, the videoboard wiring, and the camera modes for a
-  pitcher's half. None of it exists yet; stage 1 is headless on purpose.
+- **M4 stage 2 — the duel's HUD.** → **Done.** `DuelGame.tsx` (564) is ONE
+  screen that alternates: the human's half at bat is Sit-and-Swing exactly as the
+  derby plays it, and his half on the mound is `MoundControl.tsx` (192) — a pitch
+  chip, a slingshot pull, and golf's `AccuracyBar` reused verbatim, producing a
+  `PitchCommand` and nothing else. Six modules came out of the seams rather than
+  being written twice: `playClock.ts` (93, THE wall→true map, extracted from
+  `DerbyGame` so the tempo multiply has one implementation), `moundAim.ts` (108),
+  `duelCopy.ts` (101), `duelBoard.ts` (214), `boardSides.ts` (52, the PITCH column
+  both modes share) and `StatChip.tsx` (72, the pill under `CountChip` and
+  `DuelChip`). `ExitVeloTag` now takes a five-field structural subset so both a
+  `SwingResult` and a `PitchRecord` fit it.
+  ⚠ **THE MOUND'S AIM MATH IS BASEBALL'S OWN, BY DECISION.** Golf's `pullAim` is
+  a private method of `CourseSim` that maps a drag onto a single aim ANGLE;
+  pitching maps a drag onto a POINT in the plate window, whose two axes have
+  different sensitivities (0.0079 ft/px lateral against 0.0100 vertical, because
+  the zone is not square). One returns a bearing, the other a location; sharing
+  them would force a lowest-common-denominator abstraction and drag a mid-audit
+  golf into a baseball slice. `AccuracyBar` IS shared — it is a UI widget with no
+  physics in it.
+  ⚠ **AND THE VIDEOBOARD'S LEFT COLUMN WAS DARK BECAUSE NOBODY FILLED IT.**
+  `boardArrayOps` falls back to `boardPanels.defaultSides(main)` for a null
+  column, and `defaultSides` has branches for `derbyBatter` and `roundSummary`
+  and none for `duelScore` — so the duel painted an unlit 18 ft panel beside a
+  live screen. Fixed at the CALLER; not one line of paint code moved.
+  `duelBoard.test.ts` asserts the TEXT OPS INSIDE THE STATS PANEL'S OWN
+  RECTANGLE and re-asserts that the fallback is still empty, because "the mapper
+  returned a well-formed object the board then dropped" is how the derby's
+  four-row columns shipped. Eighteen mutants were watched to fail.
+  Still to come: the camera work for a pitcher's half beyond selecting the
+  existing `pitcher` mode, and a duel result that means something to the ladder.
 
 ## Gotchas
 

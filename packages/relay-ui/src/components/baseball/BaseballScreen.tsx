@@ -4,8 +4,11 @@ import { unlockAudio } from '../../lib/audio';
 import { useStore } from '../../lib/store';
 import { PARKS } from '../../lib/baseball/parks';
 import { DERBY_ROUNDS, PITCHES_PER_ROUND } from '../../lib/baseball/derbyRules';
+import { REGULATION_INNINGS } from '../../lib/baseball/duelRules';
 import { DerbyGame } from './DerbyGame';
 import type { DerbyGameResult } from './DerbyGame';
+import { DuelGame } from './DuelGame';
+import type { DuelGameResult } from './DuelGame';
 
 // Baseball's standalone screen: menu → derby → results, mounted by the Games
 // hub as component state. It is the same shape every other game on the tab uses,
@@ -32,10 +35,24 @@ function Stat({ k, v }: { k: string; v: string }) {
   );
 }
 
+/**
+ * Which game the one play screen is running.
+ *
+ * ⚠ A MODE, NOT A SECOND FLOW. `useGameFlow`'s back-gesture machine is subtle
+ * enough that its own file documents the history depth across five presses, and
+ * a second copy of it is a second set of ways to trap the user in a tab. Both
+ * games take the same props — a seed, a park, `paused`, two callbacks — so the
+ * only thing that varies is which component is mounted and which result card is
+ * shown afterwards.
+ */
+type Mode = 'derby' | 'duel';
+
 export function BaseballScreen({ onExitToHub }: { onExitToHub: () => void }) {
   const { screen, setScreen, paused, setPaused, startGame, consumeHistoryEntry, markAbandoned } =
     useGameFlow();
+  const [mode, setMode] = useState<Mode>('derby');
   const [result, setResult] = useState<DerbyGameResult | null>(null);
+  const [duelResult, setDuelResult] = useState<DuelGameResult | null>(null);
 
   // Full-bleed 3D runs IMMERSIVE, the same as golf's putting round and range
   // challenge. The `zIndex: 60` wrapper below already covers the z-20 tab bar
@@ -53,20 +70,37 @@ export function BaseballScreen({ onExitToHub }: { onExitToHub: () => void }) {
   if (screen === 'guess') {
     return (
       <div style={{ position: 'fixed', inset: 0, zIndex: 60 }}>
-        <DerbyGame
-          park={RANKED_PARK}
-          paused={paused}
-          onFinish={(r) => {
-            setResult(r);
-            setScreen('results');
-            consumeHistoryEntry('guess');
-          }}
-          onExit={() => {
-            markAbandoned();
-            setScreen('menu');
-            consumeHistoryEntry('guess');
-          }}
-        />
+        {mode === 'derby' ? (
+          <DerbyGame
+            park={RANKED_PARK}
+            paused={paused}
+            onFinish={(r) => {
+              setResult(r);
+              setScreen('results');
+              consumeHistoryEntry('guess');
+            }}
+            onExit={() => {
+              markAbandoned();
+              setScreen('menu');
+              consumeHistoryEntry('guess');
+            }}
+          />
+        ) : (
+          <DuelGame
+            park={RANKED_PARK}
+            paused={paused}
+            onFinish={(r) => {
+              setDuelResult(r);
+              setScreen('results');
+              consumeHistoryEntry('guess');
+            }}
+            onExit={() => {
+              markAbandoned();
+              setScreen('menu');
+              consumeHistoryEntry('guess');
+            }}
+          />
+        )}
         {paused && (
           <div className="bb-pause">
             <div className="bb-pause-card">
@@ -89,6 +123,40 @@ export function BaseballScreen({ onExitToHub }: { onExitToHub: () => void }) {
             </div>
           </div>
         )}
+      </div>
+    );
+  }
+
+  if (screen === 'results' && duelResult) {
+    return (
+      <div className="bb-menu">
+        <h2 className="bb-title">
+          {duelResult.outcome === 'win'
+            ? 'You win'
+            : duelResult.outcome === 'tie'
+              ? 'Tie game'
+              : 'You lose'}
+        </h2>
+        <div className="bb-score">
+          {duelResult.runsFor} – {duelResult.runsAgainst}
+        </div>
+        <div className="bb-stats">
+          <Stat k="Innings" v={String(duelResult.inningsPlayed)} />
+          <Stat k="Pitches" v={String(duelResult.pitchCount)} />
+        </div>
+        <button
+          type="button"
+          className="bb-btn bb-btn--go"
+          onClick={() => {
+            setDuelResult(null);
+            startGame();
+          }}
+        >
+          Play again
+        </button>
+        <button type="button" className="bb-btn" onClick={() => setScreen('menu')}>
+          Menu
+        </button>
       </div>
     );
   }
@@ -139,10 +207,29 @@ export function BaseballScreen({ onExitToHub }: { onExitToHub: () => void }) {
           // First user gesture — the WebAudio context can only be unlocked here.
           unlockAudio();
           setResult(null);
+          setDuelResult(null);
+          setMode('derby');
           startGame();
         }}
       >
         Play Derby
+      </button>
+      <p className="bb-sub">
+        Or take both sides of it: {REGULATION_INNINGS} innings, three outs. You pitch the top —
+        pick a pitch, drag back from the mound to aim, then tap to release — and bat the bottom.
+      </p>
+      <button
+        type="button"
+        className="bb-btn bb-btn--go"
+        onClick={() => {
+          unlockAudio();
+          setResult(null);
+          setDuelResult(null);
+          setMode('duel');
+          startGame();
+        }}
+      >
+        Play Duel
       </button>
     </div>
   );
