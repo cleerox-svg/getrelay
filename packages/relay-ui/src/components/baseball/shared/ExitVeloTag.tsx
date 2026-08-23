@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react';
 import { MONO_NUM, frostedSurface } from '../../golf/shared/frosted';
-import type { SwingResult } from '../../../lib/baseball/derbyState';
 
 // The broadcast tag — `104.2 MPH · 28° · 418 FT` — that flies with the ball.
 //
@@ -26,8 +25,27 @@ import type { SwingResult } from '../../../lib/baseball/derbyState';
 // null branch above already had; `follow` just lets the HUD say when the play is
 // over, which is knowledge this widget has no other way to get.
 
+/**
+ * The five numbers the tag prints — and NOT `SwingResult`, deliberately.
+ *
+ * ⚠ IT IS A STRUCTURAL SUBSET SO THE DUEL DOES NOT NEED A SECOND TAG. The derby
+ * reports a `SwingResult` and the duel a `PitchRecord`; both carry these five
+ * fields with the same meanings and the same units, because both come out of
+ * `swingContact` and `simulateBattedBall`. Naming the union of two sim types
+ * here, or forking the widget, would be the charter's rule 5 failing over five
+ * scalars. Both callers still type-check structurally, so nothing is cast.
+ */
+export interface BattedTag {
+  /** Where on the bat it landed, m from the knob. null = no contact was made. */
+  contactZM: number | null;
+  evMph: number;
+  laDeg: number;
+  distFt: number;
+  barrel: boolean;
+}
+
 export interface ExitVeloTagProps {
-  result: SwingResult | null;
+  result: BattedTag | null;
   /** Track the ball, or hold the last position. See the note above. */
   follow: boolean;
   /** `StadiumApi.ballScreen()` — 0…1 viewport, y down, or null. */

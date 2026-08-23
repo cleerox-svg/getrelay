@@ -172,6 +172,27 @@ function playOnePitch() {
   advance(14000, 48);
 }
 
+describe('BaseballScreen — two games, one flow', () => {
+  it('⚠ THE MENU BUTTON PICKS THE GAME, and the duel really mounts', () => {
+    // A screen nobody can reach is not shipped. The two entries mount two
+    // different HUDs through the SAME `useGameFlow` machine — one mode, not a
+    // second flow — and the way to tell them apart from outside is the input
+    // surface each one puts up.
+    mount();
+    act(() => screen.getByText('Play Duel').click());
+    // `humanBats` defaults to `home`, so the player pitches the top of the first:
+    // the mound's drag surface is up and the derby's serve button is not.
+    expect(document.querySelector('[data-mound-surface]')).toBeTruthy();
+    expect(screen.queryByText('Pitch it in')).toBeNull();
+
+    // Back out, and the other entry still mounts the derby.
+    act(() => screen.getByText('‹ Exit').click());
+    act(() => screen.getByText('Play Derby').click());
+    expect(document.querySelector('[data-mound-surface]')).toBeNull();
+    expect(screen.getByText('Pitch it in')).toBeTruthy();
+  });
+});
+
 describe('BaseballScreen — leaving is not finishing', () => {
   it('⚠ "‹ Exit" mid-session lands on the MENU, in /games, with the run banked', () => {
     mount();
