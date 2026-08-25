@@ -30,7 +30,15 @@ import { fileURLToPath } from 'node:url';
 import { launchFromAngles, simulateBattedBall } from '../../../lib/baseball/battedBallSim';
 import { vec3 } from '../../../lib/baseball/airPhysics';
 import { HARBOURFRONT, parkConditions } from '../../../lib/baseball/parks';
-import { DEFAULT_DAYLIGHT, loadDaylight, saveDaylight } from './prefs';
+import {
+  DEFAULT_DAYLIGHT,
+  DEFAULT_MOUND_GESTURE,
+  loadDaylight,
+  loadMoundGesture,
+  saveDaylight,
+  saveMoundGesture,
+} from './prefs';
+import type { MoundGesture } from './prefs';
 import type { DaylightId } from '../stadium/daylight';
 
 const SIM_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'lib', 'baseball');
@@ -201,6 +209,29 @@ describe('the preference persists, and survives a hostile store', () => {
     expect(loadDaylight()).toBe(DEFAULT_DAYLIGHT);
     localStorage.setItem('relay.bb.daylight', '{"night":true}');
     expect(loadDaylight()).toBe(DEFAULT_DAYLIGHT);
+  });
+
+  // ⚠ A/B, TEMPORARY — this whole `it` goes when one mound gesture does.
+  it('the mound gesture switch round-trips, and defaults to `tap`', () => {
+    expect(loadMoundGesture()).toBe(DEFAULT_MOUND_GESTURE);
+    // The default is `tap` on purpose: it is Baseball Clash's grammar, this
+    // game's named north star, and the thing the owner actually did on the
+    // slingshot. Removing the A/B should be a deletion, not a flip.
+    expect(DEFAULT_MOUND_GESTURE).toBe('tap');
+    for (const v of ['drag', 'tap'] as MoundGesture[]) {
+      saveMoundGesture(v);
+      expect(loadMoundGesture()).toBe(v);
+    }
+    // Untrusted input, validated on the way OUT — the same rule as daylight.
+    localStorage.setItem('relay.bb.moundgesture', 'slingshot');
+    expect(loadMoundGesture()).toBe(DEFAULT_MOUND_GESTURE);
+
+    // ⚠ AND THE TWO PREFERENCES ARE SEPARATE KEYS, NOT A BLOB. Writing one must
+    // not disturb the other; a blob would make every write a read-modify-write.
+    saveDaylight('night');
+    saveMoundGesture('drag');
+    expect(loadDaylight()).toBe('night');
+    expect(loadMoundGesture()).toBe('drag');
   });
 
   it('does not take the game down when storage throws', () => {

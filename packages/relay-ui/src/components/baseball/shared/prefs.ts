@@ -39,6 +39,7 @@ import { isDaylightId } from '../stadium/daylight';
 import type { DaylightId } from '../stadium/daylight';
 
 const KEY_DAYLIGHT = 'relay.bb.daylight';
+const KEY_MOUND_GESTURE = 'relay.bb.moundgesture';
 
 /**
  * The default. DAY, and it is a deliberate default rather than a coin flip: the
@@ -86,6 +87,71 @@ export function useDaylight(): [DaylightId, (v: DaylightId) => void] {
   const [value, setValue] = useState<DaylightId>(loadDaylight);
   const set = useCallback((v: DaylightId) => {
     saveDaylight(v);
+    setValue(v);
+  }, []);
+  return [value, set];
+}
+
+// ===========================================================================
+// ⚠⚠ TEMPORARY — THE MOUND GESTURE A/B. DELETE ONE ARM AND THEN DELETE THIS.
+// ===========================================================================
+//
+// WHY IT EXISTS. The mound's first control was a slingshot — a pull delta from
+// wherever the finger went down — and the owner tapped, because that is what
+// every shipping mobile baseball game trains you to do. A tap is a zero-length
+// pull, the slingshot honoured it as a deliberate one, and every pitch went
+// middle-middle: reported as "you tap in the strikezone although it doesn't seem
+// to do high low or anything other than right down the middle". Two grammars are
+// in the field and the owner asked to play both and choose:
+//
+//   `tap`   — Baseball Clash's, and this game's stated north star: choose the
+//             location, choose the pitch, throw. One tap places the spot.
+//   `drag`  — MLB 9 Innings': press, the marker follows the finger, release to
+//             lock. More precise, more expensive, one extra beat per pitch.
+//
+// ⚠ IT IS NOT A SETTING AND MUST NOT BECOME ONE. The charter's rule is
+// delete-on-supersede, and a permanent A/B toggle is exactly the dead mode that
+// rule forbids: two control grammars means two things to keep working, two
+// tutorials, and a split in every future measurement of how well players aim.
+//
+// ⚠ HOW TO REMOVE IT, once the owner has decided (it should be one small edit):
+//   1. this block, `MoundGesture`, `isMoundGesture`, `DEFAULT_MOUND_GESTURE`,
+//      `loadMoundGesture`, `saveMoundGesture`, `useMoundGesture`, `KEY_MOUND_GESTURE`;
+//   2. in `MoundControl.tsx`: the `useMoundGesture()` call, the `gesture ===`
+//      test inside `move`, the toggle's JSX block and the two-armed copy line
+//      (each is marked `⚠ A/B`);
+//   3. `prefs.test.ts`'s "the mound gesture switch" describe, and
+//      `MoundControl.test.tsx`'s "the switch selects a different gesture" test.
+// Nothing else branches on it: `aimAtPoint` is one mapping and both arms sample
+// the same one, which is deliberate — see `moundAim.ts`.
+
+/** Which gesture places the pitcher's aim. TEMPORARY — see above. */
+export type MoundGesture = 'tap' | 'drag';
+
+export const isMoundGesture = (v: unknown): v is MoundGesture => v === 'tap' || v === 'drag';
+
+/**
+ * The default. TAP — the arm with the evidence behind it: it is Baseball Clash's
+ * grammar, this game's named north star, and it is what the owner actually did
+ * on the shipped slingshot. Losing the A/B should be a deletion, not a flip, so
+ * the default is the arm most likely to survive.
+ */
+export const DEFAULT_MOUND_GESTURE: MoundGesture = 'tap';
+
+export function loadMoundGesture(): MoundGesture {
+  const v = read(KEY_MOUND_GESTURE);
+  return isMoundGesture(v) ? v : DEFAULT_MOUND_GESTURE;
+}
+
+export function saveMoundGesture(v: MoundGesture): void {
+  write(KEY_MOUND_GESTURE, v);
+}
+
+/** As React state, persisted on every set. Lazy initialiser, as above. */
+export function useMoundGesture(): [MoundGesture, (v: MoundGesture) => void] {
+  const [value, setValue] = useState<MoundGesture>(loadMoundGesture);
+  const set = useCallback((v: MoundGesture) => {
+    saveMoundGesture(v);
     setValue(v);
   }, []);
   return [value, set];
