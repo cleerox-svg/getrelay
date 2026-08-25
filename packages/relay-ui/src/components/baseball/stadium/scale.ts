@@ -67,15 +67,25 @@
 // The box stays in all four modes because building it per-mode would be a
 // branch in a builder for no gain, not because it can be read in all four.
 //
-// Delete it the milestone a real batter model lands — not before, and see rule
-// 10 about deleting on supersede.
+// ⚠ THE REAL BATTER HAS NOW LANDED AND THIS FILE SURVIVES ON A NARROWER CLAIM.
+// The old header said "delete it the milestone a real batter model lands".
+// `stadium/figures.ts` is that milestone — but it did NOT supersede this object,
+// it gave it something to measure. The magenta box stands in the LEFT-handed
+// box at x = +3.2 and the drawn batter stands in the right-handed box at
+// x = −3.2, the same 6.00 ft, at the same depth, either side of the plate in the
+// one frame this marker is legible in. That is a paired A/B check a single
+// object could never be: if the figure rig's proportions drift, the two stop
+// matching in the picture rather than only in a test. The height itself is now
+// IMPORTED from `figures.ts` rather than declared here, so there is one stature
+// in this game and the instrument cannot disagree with its subject.
+//
+// It stays OPT-IN — only `baseballpreview.tsx` passes `scaleReference` — so the
+// shipping HUD never sees it. Delete it when the visual gate stops needing a
+// magenta object to read a distance off, not before.
 
 import { BoxGeometry, Group, Mesh, MeshLambertMaterial } from 'three';
-import { M_PER_FT } from '../../../lib/baseball/bat';
+import { FIGURE_STATURE_FT } from './figures';
 import type { StadiumCtx, StadiumPart } from './geom';
-
-/** Reference height, m. The brief's figure: 1.83 m. Converted, never retyped. */
-const FIGURE_M = 1.83;
 
 /** Shoulder width and depth, ft. SCENE-ONLY — only the HEIGHT is the reference. */
 const FIGURE_W_FT = 1.5;
@@ -110,7 +120,7 @@ export function buildScaleReference({ scene, track }: StadiumCtx): StadiumPart {
   const group = new Group();
   group.name = 'scaleReference';
 
-  const h = FIGURE_M / M_PER_FT;
+  const h = FIGURE_STATURE_FT;
   const mesh = new Mesh(
     track(new BoxGeometry(FIGURE_W_FT, h, FIGURE_D_FT)),
     track(new MeshLambertMaterial({ color: COLOR })),
