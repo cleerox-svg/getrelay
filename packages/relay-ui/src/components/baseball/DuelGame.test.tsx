@@ -3,11 +3,11 @@
 // THE DUEL'S FIXTURE PROOF, and the three things about it that no type-check and
 // no printed table can see.
 //
-//   1. THE MOUND'S INPUT → A `PitchCommand`. A pull in CSS pixels and a stop on
-//      a sweeping bar become an intended plate location in REPORT feet plus a
-//      signed error in [−1, 1]. Every step of that is arithmetic with a sign in
-//      it, and a wrong one produces a game that runs perfectly and aims the
-//      wrong way.
+//   1. THE MOUND'S INPUT → A `PitchCommand`. A placement in CSS pixels and a
+//      stop on a sweeping bar become an intended plate location in REPORT feet
+//      plus a signed error in [−1, 1]. Every step of that is arithmetic with a
+//      sign in it, and a wrong one produces a game that runs perfectly and aims
+//      the wrong way.
 //   2. THE HALVES ALTERNATE, and the whole input surface swaps with them. The
 //      duel is the first mode in this game where the player's controls change
 //      mid-session; a HUD that kept the mound up while the AI pitched would
@@ -28,7 +28,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { DuelGame } from './DuelGame';
 import { DuelSim } from '../../lib/baseball/duelSim';
-import { aimFromPull } from './shared/moundAim';
+import { aimAtPoint } from './shared/moundAim';
 import { PITCH_LEAD_MS } from './shared/playClock';
 import { PITCH_TEMPO } from '../../lib/baseball/tuning';
 
@@ -38,6 +38,12 @@ vi.mock('../../lib/audio', () => ({ play: vi.fn(), unlockAudio: vi.fn() }));
 const SWEEP_MS = 950;
 
 const SEED = 20260823;
+
+/** The mound panel's stubbed screen rect. See the `getBoundingClientRect` note. */
+const PANEL_W = 227;
+const PANEL_H = 288;
+const PANEL_CX = 200;
+const PANEL_CY = 420;
 
 let now = 0;
 let frames: FrameRequestCallback[] = [];
@@ -63,10 +69,27 @@ beforeEach(() => {
   vi.stubGlobal('clearInterval', (id: number) => {
     intervals = intervals.filter((t) => t.id !== id);
   });
-  // jsdom has `PointerEvent` but no pointer CAPTURE. The drag surface calls it
+  // jsdom has `PointerEvent` but no pointer CAPTURE. The aim surface calls it
   // on every `pointerdown`, so without this the very first gesture throws.
   Element.prototype.setPointerCapture = () => undefined;
   Element.prototype.releasePointerCapture = () => undefined;
+  // ⚠ AND jsdom LAYS NOTHING OUT, so every rect is 0×0 at the origin. The mound
+  // panel maps a client point RELATIVE TO ITS OWN CENTRE, so the centre has to
+  // be a real number or the whole mapping collapses onto (0, 0) and every
+  // assertion below would be about a rect that does not exist. Stated, not
+  // inherited: the panel sits at (PANEL_CX, PANEL_CY).
+  Element.prototype.getBoundingClientRect = () =>
+    ({
+      left: PANEL_CX - PANEL_W / 2,
+      top: PANEL_CY - PANEL_H / 2,
+      width: PANEL_W,
+      height: PANEL_H,
+      right: PANEL_CX + PANEL_W / 2,
+      bottom: PANEL_CY + PANEL_H / 2,
+      x: PANEL_CX - PANEL_W / 2,
+      y: PANEL_CY - PANEL_H / 2,
+      toJSON: () => ({}),
+    }) as DOMRect;
 });
 
 afterEach(() => {
@@ -114,18 +137,17 @@ function pointer(el: HTMLElement, type: string, x = 0, y = 0) {
   });
 }
 
-/** Drag the slingshot by (dx, dy) from an arbitrary origin, and let go. */
-function pull(dx: number, dy: number) {
+/** Place the aim at (dx, dy) px from the panel's centre, and let go. */
+function place(dx: number, dy: number) {
   const el = mound();
   expect(el, 'no mound surface — the pitching half is not up').toBeTruthy();
-  pointer(el!, 'pointerdown', 200, 300);
-  pointer(el!, 'pointermove', 200 + dx, 300 + dy);
-  pointer(el!, 'pointerup', 200 + dx, 300 + dy);
+  pointer(el!, 'pointerdown', PANEL_CX + dx, PANEL_CY + dy);
+  pointer(el!, 'pointerup', PANEL_CX + dx, PANEL_CY + dy);
 }
 
 /** Throw one pitch from the mound and let the play run out to the next aim. */
 function throwOne(sweepMs = 200) {
-  pull(-30, 20);
+  place(-30, 20);
   advance(sweepMs, 8);
   const marker = bar();
   expect(marker, 'the sweep never armed').toBeTruthy();
@@ -151,21 +173,21 @@ describe('DuelGame — the fixture seam', () => {
 });
 
 describe('DuelGame — the mound: a gesture becomes a PitchCommand', () => {
-  it('⚠ the pull and the sweep reach the sim as TWO NUMBERS, in the sim’s units', () => {
+  it('⚠ the placement and the sweep reach the sim as TWO NUMBERS, in the sim’s units', () => {
     const serve = vi.spyOn(DuelSim.prototype, 'servePitch');
     render(<DuelGame seed={SEED} />);
 
-    // A pull with BOTH components non-zero and unequal, chosen so that the
+    // A placement with BOTH components non-zero and unequal, chosen so that the
     // normalised (u, v) and the REPORT (x, h) are four different numbers —
     // passing `u` where `x` was meant would otherwise be invisible.
     const DX = -45;
     const DY = 25;
-    const aim = aimFromPull(DX, DY);
+    const aim = aimAtPoint(DX, DY);
     expect(Math.abs(aim.u - aim.x)).toBeGreaterThan(0.1);
     expect(Math.abs(aim.v - aim.h)).toBeGreaterThan(0.1);
 
-    pull(DX, DY);
-    // The sweep is armed but nothing has been thrown: a release is not a pitch.
+    place(DX, DY);
+    // The sweep is armed but nothing has been thrown: a placement is not a pitch.
     expect(serve).not.toHaveBeenCalled();
     expect(bar()).toBeTruthy();
 
@@ -196,7 +218,7 @@ describe('DuelGame — the mound: a gesture becomes a PitchCommand', () => {
 
     // eslint-disable-next-line no-console
     console.log(
-      `\n[MOUND → SIM]  pull (${DX}, ${DY}) px  →  intent x ${cmd.intentX.toFixed(3)} ft, ` +
+      `\n[MOUND → SIM]  placed (${DX}, ${DY}) px from centre  →  intent x ${cmd.intentX.toFixed(3)} ft, ` +
         `h ${cmd.intentH.toFixed(3)} ft  ·  stop ${cmd.stopError.toFixed(4)} after ${ELAPSED_MS} ms\n`,
     );
   });
@@ -205,24 +227,35 @@ describe('DuelGame — the mound: a gesture becomes a PitchCommand', () => {
     const serve = vi.spyOn(DuelSim.prototype, 'servePitch');
     render(<DuelGame seed={SEED} />);
     act(() => screen.getByLabelText('Sweeper').click());
-    pull(0, 0);
+    place(0, 0);
     advance(120, 8);
     pointer(bar()!, 'pointerdown');
     expect(serve.mock.calls[0]![0]!.id).toBe('st');
   });
 
-  it('a released slingshot cannot be pulled again, and fires exactly once', () => {
+  it('a released aim cannot be re-placed, and the pitch fires exactly once', () => {
     const serve = vi.spyOn(DuelSim.prototype, 'servePitch');
     render(<DuelGame seed={SEED} />);
-    pull(-20, 0);
+    place(-20, 0);
+    const aim = aimAtPoint(-20, 0);
     advance(100, 8);
-    // The drag surface is gone the moment the sweep arms — one live capture
-    // layer, never two, so a stray drag cannot re-aim a pitch already released.
-    expect(mound()).toBeNull();
+
+    // ⚠ THE PANEL STAYS UP THROUGH THE SWEEP — that is the point of it, since the
+    // player is timing a release against a spot they chose — so it is INERTNESS
+    // that has to be asserted now, not absence. A live second surface under the
+    // bar is how a stray touch re-aims a pitch already released.
+    const panel = mound();
+    expect(panel, 'the panel vanished with the sweep — the mark went with it').toBeTruthy();
+    expect(panel!.style.pointerEvents).toBe('none');
+    pointer(panel!, 'pointerdown', PANEL_CX + 60, PANEL_CY - 60);
+
     const marker = bar()!;
     pointer(marker, 'pointerdown');
     pointer(marker, 'pointerdown');
     expect(serve).toHaveBeenCalledTimes(1);
+    // …and what it threw is what was placed BEFORE the sweep, not the stray.
+    expect(serve.mock.calls[0]![0]!.intentX).toBeCloseTo(aim.x, 10);
+    expect(serve.mock.calls[0]![0]!.intentH).toBeCloseTo(aim.h, 10);
   });
 });
 

@@ -43,7 +43,10 @@ import type { FlightPaths } from './stadium/flight';
 //                             EXACTLY as the derby plays it, and the AI on the
 //                             mound decides its own pitch (`servePitch()` with
 //                             no command).
-//   the human's half pitching `MoundControl` — a pitch, a pull, a sweep — and
+//   the human's half pitching `MoundControl` — a pitch, a placed spot, a sweep —
+//                             the spot being ABSOLUTE (tap it or drag it into
+//                             place; `prefs.MoundGesture` is a temporary A/B) —
+//                             and
 //                             `DuelSim.aiBat()` resolves the swing at the plate
 //                             crossing.
 //
