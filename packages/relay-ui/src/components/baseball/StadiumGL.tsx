@@ -60,6 +60,7 @@ import type { CameraMode } from './stadium/camera';
 import { daylightOf } from './stadium/daylight';
 import type { DaylightId } from './stadium/daylight';
 import { buildField } from './stadium/field';
+import { buildFigures } from './stadium/figures';
 import { buildCentrefield } from './stadium/centrefield';
 import { buildFence } from './stadium/fence';
 import { buildFlight } from './stadium/flight';
@@ -525,6 +526,10 @@ export default function StadiumGL({
     const field = buildField(ctx);
     const fence = buildFence(ctx);
     buildMound(ctx);
+    // The people: the defensive nine (positioned from `fielders.ALIGNMENT`, so
+    // the defence you see is the defence that fields the ball), the batter and
+    // the plate umpire. ONE merged mesh, one material, one draw call.
+    buildFigures(ctx);
     // The sky, first, so it is behind everything. One BackSide dome, one map.
     buildSky(scene, track, quality.grainPx, light);
     const stands = buildStands(ctx);

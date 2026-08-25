@@ -66,6 +66,7 @@ import { PLATE_DEPTH_FT, PLATE_WIDTH_FT } from '../../../lib/baseball/zone';
 import { at, fan, loft, mergeGeometries, planarUV, polygon, quad, ring } from './geom';
 import type { StadiumCtx, StadiumPart } from './geom';
 import { buildGrainTile, grainAt } from './grain';
+import { GROUND_Y } from './ground';
 import { bowlInnerRadiusFt } from './bowlEdge';
 
 /**
@@ -152,13 +153,8 @@ const COLORS = {
   plate: 0xffffff,
 };
 
-/**
- * Vertical stacking of the coplanar ground layers, ft. Z-FIGHTING, NOT DESIGN —
- * and the gaps are 0.06 ft rather than the 0.02 they started at because the
- * `wide` camera reads them from 1200 ft. Even so the real fix was the per-mode
- * near plane in StadiumGL; this only buys margin.
- */
-const Y = { apron: 0, grass: 0.06, track: 0.12, dirt: 0.18, chalk: 0.24, plate: 0.3 };
+/** The coplanar layer stack. `stadium/ground.ts` owns it — two builders read it. */
+const Y = GROUND_Y;
 
 export interface FieldPart extends StadiumPart {
   /** Radius of the ground plane, ft — the bowl and roof build outside this. */

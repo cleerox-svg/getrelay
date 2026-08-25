@@ -22,8 +22,13 @@ import { buildGrainTile, grainAt } from './grain';
 /** Mound circle radius, ft. PUBLISHED (rule book: an 18 ft diameter circle). */
 const MOUND_RADIUS_FT = 9;
 
-/** Mound height above home-plate level, ft. PUBLISHED (rule book: 10 in). */
-const MOUND_HEIGHT_FT = 10 / 12;
+/**
+ * Mound height above home-plate level, ft. PUBLISHED (rule book: 10 in).
+ * EXPORTED because `stadium/figures.ts` stands the pitcher on the table rather
+ * than in the grass beside it, and a second `10 / 12` over there is exactly the
+ * copy this codebase refuses — the drawn mound and the man on it move together.
+ */
+export const MOUND_HEIGHT_FT = 10 / 12;
 
 /**
  * Distance from the rubber's front edge back to the mound circle's centre, ft.
