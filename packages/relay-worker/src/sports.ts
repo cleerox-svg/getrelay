@@ -407,20 +407,25 @@ export function sportsRoutes() {
       if (detail.status !== 'live' && !pregameStartPassed(detail.status, detail.startTime))
         return cached;
     }
-    const detail = await fetchNhlDetail(id, ourAbbr);
-    if (!detail) return c.json({ error: 'not found' }, 404);
-    const live = detail.status === 'live';
+    const fetched = await fetchNhlDetail(id, ourAbbr);
+    if (!fetched) return c.json({ error: 'not found' }, 404);
+    const { detail, gameState } = fetched;
+    // OVER (post-horn, pre-FINAL/OFF) maps to 'final' but the landing is
+    // still settling (late scoring changes, three stars, final stats), so
+    // treat it like live: no cache, or the detail page would freeze on the
+    // OVER snapshot for the 5-minute final TTL.
+    const noCache = detail.status === 'live' || gameState === 'OVER';
     const resp = new Response(JSON.stringify(detail), {
       headers: {
         'content-type': 'application/json',
-        'cache-control': live
+        'cache-control': noCache
           ? 'no-store'
           : detail.status === 'pre'
             ? `public, max-age=${todayCacheMaxAge([detail.startTime], 30)}`
             : 'public, max-age=300',
       },
     });
-    if (!live) c.executionCtx.waitUntil(cache.put(cacheKey, resp.clone()));
+    if (!noCache) c.executionCtx.waitUntil(cache.put(cacheKey, resp.clone()));
     return resp;
   });
 
@@ -1053,12 +1058,7 @@ async function fetchNhlForTeam(
     // at 10s so this is cheap.
     if (ev.id != null) {
       const live = await fetchNhlLiveState(String(ev.id));
-      if (live) {
-        game.status = live.status;
-        game.homeTeam.score = live.homeScore;
-        game.awayTeam.score = live.awayScore;
-        if (live.statusDetail !== null) game.statusDetail = live.statusDetail;
-      }
+      if (live) return overlayNhlLiveState(game, live);
     }
     return game;
   } catch {
@@ -1073,11 +1073,50 @@ interface LiveNhlState {
   statusDetail: string | null;
 }
 
+// Copy of `game` with the boxscore's status / scores / statusDetail laid
+// over it. Non-mutating so the cron's live sub-passes can reuse the
+// pass-1 Game (schedule, series, records already resolved) as a base.
+function overlayNhlLiveState(game: Game, live: LiveNhlState): Game {
+  return {
+    ...game,
+    status: live.status,
+    statusDetail: live.statusDetail ?? game.statusDetail,
+    homeTeam: { ...game.homeTeam, score: live.homeScore },
+    awayTeam: { ...game.awayTeam, score: live.awayScore },
+  };
+}
+
+// NHL gameState → our status. The single source of truth for every
+// mapping site (list card, live overlay, detail page, previous-game and
+// head-to-head lookups) so they can't drift apart.
+//   FUT / PRE        → pre
+//   LIVE / CRIT      → live
+//   OVER / FINAL / OFF → final
+// OVER is the post-horn window before the league stamps FINAL/OFF; the
+// boxscore sits on it for a while at end of game. Treating it as 'pre'
+// flipped finished games back to a pre-game card and held the final push
+// until FINAL — so it counts as final.
+export function nhlStatusFromGameState(gameState: unknown): 'pre' | 'live' | 'final' {
+  const gs = String(gameState ?? '');
+  if (gs === 'LIVE' || gs === 'CRIT') return 'live';
+  if (gs === 'OVER' || gs === 'FINAL' || gs === 'OFF') return 'final';
+  return 'pre';
+}
+
+// Per-fetch cap for the cron's live reads. A hung upstream would
+// otherwise hold the invocation open past the next minute's tick (the
+// hard stop is only checked between games). Callers already treat a
+// throw as a miss and return null.
+export const LIVE_FETCH_TIMEOUT_MS = 5_000;
+
 async function fetchNhlLiveState(gameId: string): Promise<LiveNhlState | null> {
   try {
     const r = await fetch(
       `https://api-web.nhle.com/v1/gamecenter/${gameId}/boxscore`,
-      { cf: { cacheTtl: 10 } } as RequestInit,
+      {
+        cf: { cacheTtl: 10 },
+        signal: AbortSignal.timeout(LIVE_FETCH_TIMEOUT_MS),
+      } as RequestInit,
     );
     if (!r.ok) return null;
     const data = (await r.json()) as {
@@ -1088,13 +1127,7 @@ async function fetchNhlLiveState(gameId: string): Promise<LiveNhlState | null> {
       periodDescriptor?: { number?: number };
       clock?: { timeRemaining?: string; inIntermission?: boolean };
     };
-    const gs = String(data.gameState ?? '');
-    const status: 'pre' | 'live' | 'final' =
-      gs === 'LIVE' || gs === 'CRIT'
-        ? 'live'
-        : gs === 'OFF' || gs === 'FINAL'
-          ? 'final'
-          : 'pre';
+    const status = nhlStatusFromGameState(data.gameState);
     const homeScore = Number(data.homeTeam?.score ?? 0);
     const awayScore = Number(data.awayTeam?.score ?? 0);
     if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) return null;
@@ -1123,8 +1156,8 @@ async function fetchNhlPrevious(
 ): Promise<Game | null> {
   try {
     // Full-season schedule. The "previous" definition is "most recent
-    // game that has finished" — gameState in (OFF, FINAL) and gameDate
-    // < today. We sort the result client-side rather than trusting the
+    // game that has finished" — gameState maps to final (OVER, FINAL,
+    // OFF) and gameDate < today. We sort the result client-side rather than trusting the
     // API to give them back in any particular order.
     const r = await fetch(
       `https://api-web.nhle.com/v1/club-schedule-season/${abbr}/now`,
@@ -1136,7 +1169,7 @@ async function fetchNhlPrevious(
       (g) =>
         g?.gameDate &&
         g.gameDate < beforeYmd &&
-        (g.gameState === 'OFF' || g.gameState === 'FINAL'),
+        nhlStatusFromGameState(g.gameState) === 'final',
     );
     if (candidates.length === 0) return null;
     candidates.sort((a, b) => (a.gameDate ?? '').localeCompare(b.gameDate ?? ''));
@@ -1241,13 +1274,7 @@ function parseNhlGame(
   ourAbbr: string,
   records: Record<string, string> = {},
 ): Game {
-  const state = String(ev.gameState ?? '');
-  const status: 'pre' | 'live' | 'final' =
-    state === 'LIVE' || state === 'CRIT'
-      ? 'live'
-      : state === 'OFF' || state === 'FINAL'
-        ? 'final'
-        : 'pre';
+  const status = nhlStatusFromGameState(ev.gameState);
   const home = ev.homeTeam ?? {};
   const away = ev.awayTeam ?? {};
   const ourSide: 'home' | 'away' = home.abbrev === ourAbbr ? 'home' : 'away';
@@ -1301,14 +1328,30 @@ function parseNhlTeam(t: NhlRawTeam, records: Record<string, string> = {}): Team
 // Exported for tests: the pregame/live overlay logic here is what
 // decides whether a "game starting" push fires, so it's worth a
 // regression test against MLB's pregame linescore quirk.
-export async function fetchMlbForTeam(teamKey: string, ymd: string): Promise<Game | null> {
+//
+// `opts` is for the cron's live re-poll: a shorter schedule cacheTtl
+// (the default 30s would make most 15s re-polls read the same edge copy)
+// and a per-fetch timeout on both the schedule and linescore reads.
+export interface MlbFetchOpts {
+  cacheTtl?: number;
+  timeoutMs?: number;
+}
+
+export async function fetchMlbForTeam(
+  teamKey: string,
+  ymd: string,
+  opts: MlbFetchOpts = {},
+): Promise<Game | null> {
   const teamId = Number(teamKey);
   if (!Number.isFinite(teamId)) return null;
   try {
     const url =
       'https://statsapi.mlb.com/api/v1/schedule?sportId=1' +
       `&teamId=${teamId}&date=${ymd}&hydrate=linescore,team(record),venue,seriesStatus,broadcasts(all)`;
-    const r = await fetch(url, { cf: { cacheTtl: 30 } } as RequestInit);
+    const r = await fetch(url, {
+      cf: { cacheTtl: opts.cacheTtl ?? 30 },
+      ...(opts.timeoutMs ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}),
+    } as RequestInit);
     if (!r.ok) return null;
     const data = (await r.json()) as { dates?: { games?: MlbRawGame[] }[] };
     const game = data.dates?.[0]?.games?.[0];
@@ -1324,7 +1367,7 @@ export async function fetchMlbForTeam(teamKey: string, ymd: string): Promise<Gam
     // authoritative for MLB, so it owns the pre→live transition and the
     // linescore only refines the numbers while the game is genuinely on.
     if (parsed.status === 'live' && game.gamePk != null) {
-      const live = await fetchMlbLiveState(String(game.gamePk));
+      const live = await fetchMlbLiveState(String(game.gamePk), opts.timeoutMs);
       if (live) {
         parsed.homeTeam.score = live.homeScore;
         parsed.awayTeam.score = live.awayScore;
@@ -1344,11 +1387,17 @@ interface LiveMlbState {
   statusDetail: string | null;
 }
 
-async function fetchMlbLiveState(gamePk: string): Promise<LiveMlbState | null> {
+async function fetchMlbLiveState(
+  gamePk: string,
+  timeoutMs?: number,
+): Promise<LiveMlbState | null> {
   try {
     const r = await fetch(
       `https://statsapi.mlb.com/api/v1/game/${gamePk}/linescore`,
-      { cf: { cacheTtl: 10 } } as RequestInit,
+      {
+        cf: { cacheTtl: 10 },
+        ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
+      } as RequestInit,
     );
     if (!r.ok) return null;
     const data = (await r.json()) as {
@@ -1661,6 +1710,18 @@ function parseMlbTeam(t: MlbRawTeam, score: number | null): Team {
 // broadcasts a Web Push to every subscriber with sports notifications
 // enabled. Persisting state *before* sending means a transient push
 // failure won't re-fire the same notification next minute.
+//
+// One minute is Cloudflare's minimum cron granularity, which on its own
+// put goal pushes ~50-80s behind the NHL feed. So when any followed game
+// is live after the first pass, the same invocation keeps re-polling just
+// the live games every LIVE_POLL_INTERVAL_MS. No live game → one pass, no
+// extra work. Two bounds make it unlikely an invocation overlaps the next
+// minute's tick (cron start jitter can't be ruled out, so duplicates are
+// actually prevented by processGameUpdate's compare-and-set write):
+//   - LIVE_POLL_DEADLINE_MS: no sub-pass STARTS after this;
+//   - LIVE_POLL_HARD_STOP_MS: inside a sub-pass, remaining games are
+//     skipped once this has elapsed (slow first pass / cron start jitter
+//     — prod writes land ~20s after the minute).
 
 interface PersistedState {
   status: 'pre' | 'live' | 'final';
@@ -1675,7 +1736,47 @@ interface SportsEvent {
   url?: string; // deep-link path for the SW's notificationclick handler
 }
 
-export async function runSportsCron(env: Env): Promise<void> {
+// Live sub-pass cadence inside one cron invocation, all measured from the
+// invocation's start. A sub-pass only STARTS if it's due no later than
+// DEADLINE (so with 15s / 40s, passes land at ~0s, 15s, 30s), and no
+// game is re-polled once HARD_STOP has elapsed — the last fetch in
+// flight then has ~10s to finish before the next tick at 60s.
+export const LIVE_POLL_INTERVAL_MS = 15_000;
+export const LIVE_POLL_DEADLINE_MS = 40_000;
+export const LIVE_POLL_HARD_STOP_MS = 50_000;
+
+// The push send seam. Production is broadcastSportsPush (the shared
+// Web Push + FCM fan-out); tests inject a recorder.
+export type SportsPushFn = (
+  env: Env,
+  league: 'NHL' | 'MLB',
+  teamKey: string,
+  kind: 'start' | 'score' | 'final',
+  payload: SportsEvent,
+) => Promise<void>;
+
+// Injectable clock + sleep so tests can drive the sub-pass loop without
+// actually waiting. Production uses Date.now and a real setTimeout.
+export interface SportsCronDeps {
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  push?: SportsPushFn;
+}
+
+const realSleep = (ms: number): Promise<void> =>
+  new Promise((r) => setTimeout(r, ms));
+
+interface LivePoll {
+  league: 'NHL' | 'MLB';
+  teamKey: string;
+  game: Game; // last-seen Game; base for the NHL boxscore overlay
+}
+
+export async function runSportsCron(env: Env, deps: SportsCronDeps = {}): Promise<void> {
+  const now = deps.now ?? Date.now;
+  const sleep = deps.sleep ?? realSleep;
+  const update = { push: deps.push };
+  const startedAt = now();
   const ymd = todayInToronto();
   // Union of every (league, team) that at least one user follows. The
   // cron does zero work for a team nobody follows.
@@ -1685,21 +1786,89 @@ export async function runSportsCron(env: Env): Promise<void> {
   const subs = subRows.results ?? [];
   if (subs.length === 0) return;
 
+  // Pass 1 — full fetch for every followed team (unchanged behavior).
+  let live: LivePoll[] = [];
   for (const sub of subs) {
     const g =
       sub.league === 'NHL'
         ? await fetchNhlForTeam(sub.team_key, ymd)
         : await fetchMlbForTeam(sub.team_key, ymd);
-    if (g) await processGameUpdate(env, ymd, sub.team_key, g);
+    if (!g) continue;
+    await processGameUpdate(env, ymd, sub.team_key, g, update);
+    // NHL sub-passes need the gameId for the boxscore re-read.
+    if (g.status === 'live' && (sub.league === 'MLB' || g.id)) {
+      live.push({ league: sub.league, teamKey: sub.team_key, game: g });
+    }
+  }
+
+  // Sub-passes — only while something is live, only for the live games.
+  let passStartedAt = startedAt;
+  while (live.length > 0) {
+    const dueAt = Math.max(passStartedAt + LIVE_POLL_INTERVAL_MS, now());
+    if (dueAt - startedAt > LIVE_POLL_DEADLINE_MS) break;
+    const wait = dueAt - now();
+    if (wait > 0) await sleep(wait);
+    passStartedAt = now();
+
+    const stillLive: LivePoll[] = [];
+    let hitHardStop = false;
+    for (const p of live) {
+      // Hard stop: skip the rest of this pass rather than run into the
+      // next tick. The skipped games are picked up by next minute's pass 1.
+      if (now() - startedAt > LIVE_POLL_HARD_STOP_MS) {
+        hitHardStop = true;
+        break;
+      }
+      const g = await repollLiveGame(p, ymd);
+      if (!g) {
+        // Transient upstream miss — keep the last-seen game and retry
+        // on the next sub-pass rather than dropping it.
+        stillLive.push(p);
+        continue;
+      }
+      await processGameUpdate(env, ymd, p.teamKey, g, update);
+      // Went final (or flapped off live) → processed above, stop polling.
+      if (g.status === 'live') stillLive.push({ ...p, game: g });
+    }
+    if (hitHardStop) break;
+    live = stillLive;
   }
 }
 
-async function processGameUpdate(
+// Cheap re-fetch of a game already known to be live. NHL reuses the
+// pass-1 Game and only re-reads the boxscore (the canonical status/score
+// source the overlay already uses). MLB re-runs fetchMlbForTeam because
+// the schedule's abstractGameState owns status — one schedule fetch +
+// one linescore, with a 10s schedule edge TTL (the default 30s would
+// serve the same cached copy to most 15s re-polls) and per-fetch
+// timeouts. fetchNhlLiveState always carries its own timeout.
+async function repollLiveGame(p: LivePoll, ymd: string): Promise<Game | null> {
+  if (p.league === 'NHL') {
+    const liveState = await fetchNhlLiveState(p.game.id);
+    return liveState ? overlayNhlLiveState(p.game, liveState) : null;
+  }
+  return fetchMlbForTeam(p.teamKey, ymd, {
+    cacheTtl: 10,
+    timeoutMs: LIVE_FETCH_TIMEOUT_MS,
+  });
+}
+
+export interface ProcessGameUpdateDeps {
+  push?: SportsPushFn;
+  // Test seam: awaited between the kv_state read and the write so a test
+  // can line two updates up on the same stale read.
+  afterRead?: () => Promise<void>;
+}
+
+// Exported for tests (the compare-and-set race).
+export async function processGameUpdate(
   env: Env,
   ymd: string,
   teamKey: string,
   g: Game,
+  deps: ProcessGameUpdateDeps = {},
 ): Promise<void> {
+  const push = deps.push ?? broadcastSportsPush;
   // Per-team kv key so multiple followed teams don't clobber each
   // other's state in the same league on the same date.
   const key = `sports:${g.league}:${teamKey}:${ymd}`;
@@ -1736,16 +1905,35 @@ async function processGameUpdate(
     prev.awayScore === cur.awayScore;
   if (unchanged) return;
 
+  if (deps.afterRead) await deps.afterRead();
+
+  // Compare-and-set, still *before* any push. Two overlapping cron
+  // invocations (or a sub-pass racing the next tick's pass 1) can both
+  // read the same old value and both see a change; only the one whose
+  // write actually lands may push. The loser's write matches 0 rows.
   const value = JSON.stringify(cur);
   const now = Date.now();
-  await env.DB.prepare(
-    `INSERT INTO kv_state (key, value, updated_at) VALUES (?, ?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+  if (!prevRow) {
+    // First sighting — set the baseline; never push on cold start, so a
+    // lost INSERT race needs no special handling.
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO kv_state (key, value, updated_at) VALUES (?, ?, ?)`,
+    )
+      .bind(key, value, now)
+      .run();
+    return;
+  }
+  // Bind prevRow.value exactly as read (not re-serialized) so the
+  // comparison is byte-for-byte against what this invocation saw.
+  const res = await env.DB.prepare(
+    `UPDATE kv_state SET value = ?, updated_at = ? WHERE key = ? AND value = ?`,
   )
-    .bind(key, value, now)
+    .bind(value, now, key, prevRow.value)
     .run();
+  if ((res.meta?.changes ?? 0) === 0) return; // Lost the race — the winner pushes.
 
-  if (!prev) return; // First sighting — set baseline; never push on cold start.
+  // Unparseable prev row: overwritten above as the new baseline, no push.
+  if (!prev) return;
 
   interface QueuedEvent {
     payload: SportsEvent;
@@ -1814,7 +2002,7 @@ async function processGameUpdate(
   }
 
   for (const ev of events) {
-    await broadcastSportsPush(env, g.league, teamKey, ev.kind, ev.payload);
+    await push(env, g.league, teamKey, ev.kind, ev.payload);
   }
 }
 
@@ -1936,7 +2124,12 @@ function vapidKeys(env: Env): VapidKeys | null {
 
 // ---- NHL detail ---------------------------------------------------------
 
-async function fetchNhlDetail(gameId: string, ourAbbr: string): Promise<GameDetail | null> {
+// Returns the raw landing gameState alongside the parsed detail so the
+// route can tell OVER apart from FINAL/OFF (both map to 'final').
+async function fetchNhlDetail(
+  gameId: string,
+  ourAbbr: string,
+): Promise<{ detail: GameDetail; gameState: string } | null> {
   try {
     const [landingResp, boxResp] = await Promise.all([
       fetch(`https://api-web.nhle.com/v1/gamecenter/${gameId}/landing`, {
@@ -1999,7 +2192,7 @@ async function fetchNhlDetail(gameId: string, ourAbbr: string): Promise<GameDeta
         };
       }
     }
-    return detail;
+    return { detail, gameState: String(landing.gameState ?? '') };
   } catch {
     return null;
   }
@@ -2023,7 +2216,7 @@ async function fetchNhlRecentMatchups(
     const candidates = (data.games ?? []).filter((g) => {
       const home = g.homeTeam?.abbrev ?? '';
       const away = g.awayTeam?.abbrev ?? '';
-      const isFinal = g.gameState === 'OFF' || g.gameState === 'FINAL';
+      const isFinal = nhlStatusFromGameState(g.gameState) === 'final';
       // Either side matched against the other abbr.
       const includesOther = home === otherAbbr || away === otherAbbr;
       return isFinal && includesOther;
@@ -2184,13 +2377,7 @@ function parseNhlDetail(
   box: NhlBoxscore | null,
   ourAbbr: string,
 ): GameDetail {
-  const state = String(landing.gameState ?? '');
-  const status: 'pre' | 'live' | 'final' =
-    state === 'LIVE' || state === 'CRIT'
-      ? 'live'
-      : state === 'OFF' || state === 'FINAL'
-        ? 'final'
-        : 'pre';
+  const status = nhlStatusFromGameState(landing.gameState);
   const homeRaw = landing.homeTeam ?? {};
   const awayRaw = landing.awayTeam ?? {};
   const ourSide: 'home' | 'away' = homeRaw.abbrev === ourAbbr ? 'home' : 'away';

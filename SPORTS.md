@@ -52,7 +52,7 @@ data (rosters, standings) has long TTLs.
 |---|---|
 | `GET /sports?date=YYYY-MM-DD` | `{ games: SportsGame[], subs: SportsSub[] }` — flat list plus per-team current + previous for the requested date (Toronto). `?date` is optional; defaults to today. Per-user-per-day cached for 5min when no live games; the live-bypass only applies to the today view. |
 | `GET /sports/teams?v=2` | Selectable teams per league (cached 24h). |
-| `GET /sports/nhl/:id?abbr=XXX` | `SportsGameDetail`. Bypasses our cache on live games. |
+| `GET /sports/nhl/:id?abbr=XXX` | `SportsGameDetail`. Bypasses our cache on live games and while the landing `gameState` is `OVER`. |
 | `GET /sports/mlb/:id?teamId=N` | `SportsGameDetail`. Bypasses our cache on live games. |
 | `GET /sports/news` | `{ articles: SportsNewsArticle[] }` — NHL + MLB headlines merged newest-first, proxied from ESPN's public news API (edge-cached 10min). Powers the **News** sub-page. |
 | `GET /sports/stats` | `{ standings: SportsStandingGroup[], leaders: SportsLeaderList[] }` — NHL + MLB division standings plus a few league leaders (edge-cached 10min). Powers the **Stats** sub-page. Each upstream is best-effort; a bad response degrades to an empty section. |
@@ -236,6 +236,20 @@ Driven by `runSportsCron(env)` which fires every minute (Worker
 user, it fetches the current game and compares it to the last-seen state
 in the `kv_state` D1 table. Changes (pre → live, score delta, status → final)
 queue a push to every subscriber with the matching per-event toggle on.
+While any followed game is live, the same invocation re-polls just the live
+games every 15s (NHL: boxscore only; MLB: schedule at a 10s edge TTL +
+linescore), each re-poll fetch capped at 5s. No new pass starts more than
+40s after the tick began, and no game is re-polled more than 50s after it
+(hard stop). That deadline makes overlapping invocations unlikely; it
+doesn't rule them out (cron start jitter). A compare-and-set write stops
+two overlapping runs that read the same state from both pushing:
+`kv_state` is updated only `WHERE value = <the value this run read>`
+(first sighting is `INSERT OR IGNORE`), and only the run whose write lands
+pushes. It does not stop a run holding an older upstream snapshot from
+overwriting newer state (rare: needs an overlap plus a stale edge copy). State is
+still persisted before the push. NHL gameState `OVER` (post-horn, before
+`FINAL`/`OFF`) counts as final; the NHL detail endpoint doesn't cache a
+game while its landing is still `OVER`.
 
 | Toggle | Trigger |
 |---|---|
